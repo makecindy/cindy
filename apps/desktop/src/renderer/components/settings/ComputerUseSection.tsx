@@ -17,6 +17,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   Check,
   ChevronDown,
@@ -44,14 +46,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
+import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
+import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { useAutomationSettingsRead } from './useAutomationSettingsRead';
 import { ComputerPermissionRow } from './ComputerPermissionRow';
 import { BrowserRealProfileSubsection } from './BrowserRealProfileSubsection';
 import {
+  RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
+import { ghostInstallApprovalToken } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
   browserOpenForLoginErrorCode,
   browserOpenForLoginToastKey,
@@ -95,7 +103,9 @@ const ACTION_BUTTON_CLASS = cn(
 );
 const ANDROID_AUTO_DEVICE_VALUE = '__auto__';
 
-function browserBackendHealthFallback(active: 'external' | 'rsb-webview'): BrowserBackendHealth {
+function browserBackendHealthFallback(
+  active: 'external' | 'rsb-webview' | 'user-browser',
+): BrowserBackendHealth {
   return {
     active,
     status: 'error',
@@ -430,7 +440,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const { value: backendConfig, setValue: setBackendConfig } = backendRead;
   const browserBackendKind = backendConfig?.active ?? null;
   const setBrowserBackendKind = useCallback(
-    (active: 'external' | 'rsb-webview' | null) => {
+    (active: 'external' | 'rsb-webview' | 'user-browser' | null) => {
       setBackendConfig((current) => (current && active ? { ...current, active } : current));
     },
     [setBackendConfig],
@@ -447,12 +457,113 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     },
     [setBackendConfig],
   );
-  const [useRealProfilePending, setUseRealProfilePending] = useState(false);
-  const confirmDialog = useOptionalConfirmDialog();
+  const navigate = useNavigate();
+  const userBrowserPlugin =
+    // Only the root instance can provide My browser (an organization copy with the same id cannot),
+    // so that is the one the setup steps install, enable and open.
+    useInstalledGhosts().find(
+      (ghost) => ghost.manifest.id === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID && ghost.namespace == null,
+    ) ?? null;
+  const [userBrowserSetupBusy, setUserBrowserSetupBusy] = useState(false);
   // Health can include an automatic embedded-browser recovery and therefore
   // take several seconds. Track the latest health owner so a late initial
   // probe cannot overwrite a newer user-initiated switch or recovery result.
   const browserBackendHealthSeqRef = useRef(0);
+  const browserBackendKindRef = useRef(browserBackendKind);
+  browserBackendKindRef.current = browserBackendKind;
+  const refreshUserBrowserHealth = useCallback(async () => {
+    const seq = browserBackendHealthSeqRef.current;
+    const next = await window.electronAPI.browserBackend?.getHealth?.().catch(() => null);
+    // A switch, recovery or newer read may have landed meanwhile (one read can take seconds);
+    // a late "My browser" answer must not replace the sidebar browser's state.
+    if (seq !== browserBackendHealthSeqRef.current || browserBackendKindRef.current !== 'user-browser') return;
+    if (next?.active === 'user-browser') {
+      browserBackendHealthSeqRef.current += 1;
+      setBrowserBackendHealth(next);
+    }
+  }, []);
+  // Step 1 happens right here: install the plugin from the market (Main still shows its usual
+  // permission confirmation) or turn it on, then re-check so the guidance moves on to step 2.
+  // Step 2, an installed version too old to connect, and anything unexpected open the plugin's own
+  // page, which has the update button and the extension install entry.
+  const handleSetUpUserBrowser = useCallback(async () => {
+    const openPluginPage = () =>
+      navigate(
+        userBrowserPlugin
+          ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(userBrowserPlugin))}`
+          : '/plugins',
+      );
+    if (browserBackendHealth?.reason === 'extension-disconnected') {
+      // Open the store page in the user's own browser; the page polls and turns connected once the
+      // extension is added. Without a Chromium browser, the plugin page explains the other routes.
+      setUserBrowserSetupBusy(true);
+      const opened = await window.electronAPI.browserBackend
+        .openExtensionStore?.()
+        .catch(() => null);
+      setUserBrowserSetupBusy(false);
+      if (opened?.ok) toast.success(t('settings.computerUse.browserBackend.userBrowserSetup.storeOpened'));
+      else openPluginPage();
+      return;
+    }
+    if (browserBackendHealth?.reason !== 'plugin-missing' || userBrowserPlugin?.enabled) {
+      openPluginPage();
+      return;
+    }
+    setUserBrowserSetupBusy(true);
+    try {
+      if (userBrowserPlugin) {
+        await window.electronAPI.ghosts.setEnabled(
+          installedGhostStoragePart(userBrowserPlugin),
+          true,
+          ghostInstallApprovalToken(userBrowserPlugin.approval),
+        );
+      } else {
+        // Market ids are opaque; the plugin is found by the ghost id it installs as.
+        const item = (await window.electronAPI.pluginMarket.snapshot()).items.find(
+          (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
+        );
+        const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
+        if (detail?.installState !== 'not-installed') {
+          openPluginPage();
+          return;
+        }
+        const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
+          expectedReleaseId: detail.releaseId,
+          expectedManifest: detail.manifest,
+          allowSourceReplacement: false,
+        });
+        toast.success(t('settings.ghosts.toast.installed', { name: result.ghost.manifest.name }));
+      }
+      await refreshUserBrowserHealth();
+    } catch (error) {
+      const code = extractIpcError(error)?.code;
+      // Cancelling the install confirmation is not a failure.
+      if (code !== 'MUTATION_CANCELLED') {
+        toast.error(t(userBrowserPlugin ? ghostInstallErrorKey(code) : pluginMarketErrorKey(error)));
+      }
+    } finally {
+      setUserBrowserSetupBusy(false);
+    }
+  }, [browserBackendHealth?.reason, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  // While "My browser" still lacks its plugin or extension, check again every few seconds so the
+  // guidance turns into "connected" as soon as the user finishes a step elsewhere.
+  useEffect(() => {
+    if (browserBackendKind !== 'user-browser' || browserBackendHealth?.status !== 'error') return;
+    // Schedule the next check only after the previous one finished, so slow reads never pile up.
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      await refreshUserBrowserHealth();
+      if (!stopped) timer = setTimeout(() => void tick(), 3000);
+    };
+    timer = setTimeout(() => void tick(), 3000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [browserBackendKind, browserBackendHealth?.status, refreshUserBrowserHealth]);
+  const [useRealProfilePending, setUseRealProfilePending] = useState(false);
+  const confirmDialog = useOptionalConfirmDialog();
 
   useEffect(() => {
     let cancelled = false;
@@ -583,10 +694,12 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
 
   // Phase 5: 用户点 segmented chip 切换 backend。乐观更新 + IPC 失败回滚。
   const handleSelectBackend = useCallback(
-    async (kind: 'external' | 'rsb-webview') => {
+    async (kind: 'external' | 'rsb-webview' | 'user-browser') => {
       if (browserBackendPending) return;
       if (browserBackendKind === kind) return;
       const prev = browserBackendKind;
+      // Results of reads started for the previous browser no longer apply.
+      browserBackendHealthSeqRef.current += 1;
       setBrowserBackendKind(kind);
       setBrowserBackendPending(true);
       try {
@@ -640,7 +753,14 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         );
       } catch (err) {
         log.error('browserBackend.setUseRealProfile failed', err);
-        toast.error(t('settings.computerUse.realProfile.toast.failed'));
+        const errorCode = browserOpenForLoginErrorCode(err);
+        toast.error(
+          t(
+            errorCode
+              ? browserOpenForLoginToastKey(errorCode, 'settings.computerUse.realProfile.toast.failed')
+              : 'settings.computerUse.realProfile.toast.failed',
+          ),
+        );
       } finally {
         setUseRealProfilePending(false);
       }
@@ -1462,13 +1582,22 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             health={browserBackendHealth}
             onSelect={(kind) => void handleSelectBackend(kind)}
             onRecover={() => void handleRecoverBrowserBackend()}
+            userBrowserPluginState={
+              userBrowserPlugin === null
+                ? 'not-installed'
+                : userBrowserPlugin.enabled
+                  ? 'enabled'
+                  : 'disabled'
+            }
+            userBrowserSetupBusy={userBrowserSetupBusy}
+            onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
           />
         ) : null}
-        {browserBackendKind !== null ? (
+        {/* 拷贝登录文件只对独立浏览器有用,其它浏览器下一律隐藏;要删除拷贝时切回独立浏览器再关。 */}
+        {browserBackendKind === 'external' ? (
           <BrowserRealProfileSubsection
             enabled={useRealProfile}
             pending={useRealProfilePending}
-            available={browserBackendKind === 'external'}
             onToggle={(next) => void handleToggleRealProfile(next)}
           />
         ) : null}

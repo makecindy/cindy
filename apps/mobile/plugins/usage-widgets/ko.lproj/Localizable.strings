@@ -1,0 +1,5 @@
+"Data source" = "데이터를 가져올 컴퓨터";
+"Choose which computer this widget shows." = "이 위젯에 표시할 컴퓨터를 선택해요.";
+"Computer" = "컴퓨터";
+"Automatic" = "자동";
+"The computer that answered last" = "마지막으로 응답한 컴퓨터 우선";

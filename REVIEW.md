@@ -63,7 +63,8 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/database-and-migrations.md`。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名——这类 PR 需要把关人对冷更单独确认。见
+  命中就在评论里点名——这类 PR 合并前需要把关人对冷更单独确认；可保持 Ready 并正常
+  审查，不因冷更要求新建讨论 issue 或转为 draft。见
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
   等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-compatibility.md`。
@@ -104,6 +105,10 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   措辞当作保留它的理由；新条款自身的实际矛盾、遗漏与越界仍须报告。
 - **跨平台**：macOS 与 Windows 的路径、进程、文件系统差异。
 - **测试**：是否通过 skip、删除或弱化断言制造通过。
+- **罕见边界不要求加机制**：只在极端时序下触发、后果是降级而非数据损坏或安全问题的边界
+  （例如 App 恰好在某几秒内被杀），作者在 PR 描述里登记为已知边界即可；不要据此要求新增
+  持久化、恢复、状态标记、重试这类机制。正确性、安全与常见路径照常要求修
+  （2026-09-27 用户裁决，#5143：「可以简单点，不用那么追求完美」）。
 
 ## 5. 评审环境的已知限制
 

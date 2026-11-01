@@ -70,6 +70,7 @@ type SendImpl = (
 
 interface FakeSessionHarness {
   session: Session;
+  cancelPendingSend: ReturnType<typeof vi.fn>;
   emit(event: AgentEvent): void;
   emitStatus(status: 'active' | 'aborting' | 'closed' | 'error'): void;
   setContinuationState(
@@ -92,6 +93,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     number,
     'awaiting' | 'active' | 'cancelled'
   >();
+  const cancelPendingSend = vi.fn(() => false);
   const session = {
     id: 'scheduler-session',
     agentKind: 'claude-code',
@@ -126,11 +128,13 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
       });
     },
     abort: vi.fn(async () => undefined),
+    cancelPendingSend,
     close: vi.fn(async () => undefined),
   } as unknown as Session;
 
   return {
     session,
+    cancelPendingSend,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -300,7 +304,6 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     const { runner, maker, notifier } = createRunnerHarness(h.session, {
       beforeDispatchUserTurn: async () => { valid = false; },
     });
-    vi.mocked(h.session.abort).mockImplementation(() => new Promise(() => undefined));
     vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
     const result = await runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), {
@@ -308,8 +311,35 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     });
     expect(result).toMatchObject({ deferred: true });
     expect(vendor).not.toHaveBeenCalled();
-    expect(h.session.abort).toHaveBeenCalledOnce();
+    expect(h.session.abort).not.toHaveBeenCalled();
     expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('pause/delete during direct onAccepted cancels the pending send without aborting the session', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    h.cancelPendingSend.mockReturnValue(true);
+    Object.assign(h.session, { stablePermissionModeState: { mode: 'ask', generation: 0 } });
+    const abortController = new AbortController();
+    const ctx = { ...createFireContext(), signal: abortController.signal };
+    const beforeDispatch = vi.fn(async () => { abortController.abort(); });
+    const { runner, maker } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: beforeDispatch,
+    });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
+    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
+
+    const fire = runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), {
+      ...ctx,
+      deferToCaller: true,
+    }).catch((error: unknown) => error);
+
+    await vi.waitFor(() => expect(beforeDispatch).toHaveBeenCalled());
+    await vi.waitFor(() => expect(h.cancelPendingSend).toHaveBeenCalled());
+    expect(h.session.abort).not.toHaveBeenCalled();
+    expect(await fire).toBeInstanceOf(Error);
   });
 
   it.each(['before create', 'before send'])('rechecks routine permission changes %s after async preparation', async (stage) => {

@@ -225,7 +225,7 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
   自己，所有在途请求收到结构化失败，下次请求可重新启动；
 - **最重要的安全事实**：Node 进程不是浏览器沙箱，它拥有当前登录系统账号能拿到的
   本机权限，能读写文件、联网、起别的进程。Cindy 会在插件详情中显著展示这项能力，
-  但安装不会追加确认弹窗；不需要本机能力的插件不要声明 node，用户也只应安装可信来源。
+  安装确认弹窗也会独立列出 Node / stdio MCP 高风险项；不需要本机能力的插件不要声明 node，用户也只应安装可信来源。
 - macOS 的 Node 工作进程及宿主代启的 Node 子进程保留 Cindy 的系统权限责任归属，
   可在系统允许范围内使用 Cindy 已获得的系统授权。尚未取得的权限仍由系统决定是否需要
   授权；原生子进程的签名与用途声明也会影响结果。这不额外开放 Cindy IPC 或托管凭证。
@@ -325,3 +325,26 @@ undefined；不支持时明确报错，远程流程不能回退到在执行设�
 断开控制端或事务到期会取消该 Node RPC 及其绑定子进程。不要把 URL、轮询码或 token 放进
 stdout 的 RPC 结果、通知、模型回复或错误；业务状态返回固定摘要。此卡片不改变 Host 的
 network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置已完成。
+
+交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
+
+### 4.12.6 Node 短期鉴权票据上传（未发布）
+
+逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
+Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
+明确返回不支持，不发送替代请求。凭据由插件自己的安全存储管理，本接口不保存凭据。
+
+返回对象包含 signal 及 authenticatedFetch(request, authorization)。authorization 为
+短期 Bearer；request 必须使用 method:'POST' 和 uploadDir:{token,fields?,fileField?}，
+不接受 body、upload 或任意文件路径。只消费当前插件、原工具调用的 dir_deposit 票据；
+Host 覆盖 callId，复用文件数量/大小/一次性消费约束及声明 network.hosts，拒绝重定向，
+401/超时不自动重放。信号与 RPC 结束、取消、账号和安装失效绑定。
+
+Bearer 只经 bootstrap 私有通道进入网络槽，不交给页面或模型。不要写入日志或结果；
+Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每个 worker 最多 8 项待处理，
+每个 RPC 最多 4 项，超时 120 秒。
+
+设置页可经已有 BroadcastChannel 请求 main.js 发起独立 Node RPC，由插件 SDK 自己
+领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
+bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
+兑换结果和密钥留在 Node，不进入页面、KV 或模型。

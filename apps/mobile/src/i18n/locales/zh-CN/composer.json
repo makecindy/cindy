@@ -99,6 +99,7 @@
     "incomplete": "语音输入未完成，请重试。",
     "missingRefinerTargetProvider": "语音润色暂不可用，请重新登录 {{appName}} 后重试。",
     "emptyTranscript": "语音识别未返回文字，请重新录音。",
+    "speakerFiltered": "已忽略其他人的声音",
     "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",

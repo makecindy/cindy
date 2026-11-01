@@ -41,6 +41,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { acquireGhostDepositLock } from './ghostDepositQuota.js';
 
 import {
   GHOST_CINDY_DEPOSIT_BURST,
@@ -888,7 +889,7 @@ export class GhostCindySlot {
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
     // 交集,单个型号支持的时长/帧率差异很大(seedance 2.0 是 4/6/8/10 秒,
-    // seedance 2.5 是 4–30 秒且没有 1080p,happyhorse 只有 5 秒)。不支持即
+    // seedance 2.5 是 4–30 秒,happyhorse 只有 5 秒)。不支持即
     // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
     // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
@@ -2072,69 +2073,79 @@ export class GhostCindySlot {
       };
     }
 
-    // 配额:保守预判(已用 + 本次最坏情况)。内容去重命中时本次其实不占额,
-    // 但入库前算不出是否命中——因此临界处可能误拒一次"其实免费"的重复寄存,
-    // 代价是配额永远是硬上限、绝不超发。释放口是 release_media。
-    let used: number;
+    const ownerScopeKey = this.deps.getOwnerScopeKey();
+    const release = await acquireGhostDepositLock(ghostId);
     try {
-      used = await readUsage(ghostId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.log?.warn('ghost cindy-request deposit_media quota read failed', {
+      // The newly introduced queue must not carry a request into another account.
+      if (this.deps.isOwnerBoundaryPending() || this.deps.getOwnerScopeKey() !== ownerScopeKey) {
+        return { ok: false, message: '媒体任务期间账号已切换,本次结果已丢弃' };
+      }
+      const deniedAfterWait = this.gateMediaCapability(ghostId);
+      if (deniedAfterWait) return deniedAfterWait;
+      // 配额:保守预判(已用 + 本次最坏情况)。内容去重命中时本次其实不占额,
+      // 但入库前算不出是否命中——因此临界处可能误拒一次"其实免费"的重复寄存,
+      // 代价是配额永远是硬上限、绝不超发。释放口是 release_media。
+      let used: number;
+      try {
+        used = await readUsage(ghostId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn('ghost cindy-request deposit_media quota read failed', {
+          ghostId,
+          callId,
+          error: message,
+        });
+        return { ok: false, message: `寄存失败:配额查询出错(${message})` };
+      }
+      if (used + buffer.byteLength > GHOST_CINDY_DEPOSIT_QUOTA_BYTES) {
+        return {
+          ok: false,
+          message:
+            `寄存配额已满(本插件上限 ${GHOST_CINDY_DEPOSIT_QUOTA_BYTES} 字节,已用 ${used})。` +
+            '请对不再需要的寄存物调用 release_media 释放后重试,并如实告知用户。',
+        };
+      }
+
+      let saved: { url: string; hash: string; ext: string; bytes: number; deduplicated: boolean };
+      try {
+        saved = await deposit({ ghostId, buffer, mimeType, ...(label ? { label } : {}) });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.deps.log?.warn('ghost cindy-request deposit_media failed', {
+          ghostId,
+          callId,
+          error: message,
+        });
+        return { ok: false, message: `寄存失败:${message}` };
+      }
+
+      // 落仓后重读一次真实占用:deduplicated 只说明"字节此前已在总仓",不代表
+      // 本意识此前已有这条寄存引用(可能是别的意识存过),不能据它推算。
+      let usedAfter = used + saved.bytes;
+      try {
+        usedAfter = await readUsage(ghostId);
+      } catch {
+        // 回读失败不影响本次成功;返回的是估算值,仅供作者提示用户。
+      }
+      this.deps.log?.info('ghost cindy-request deposit_media done', {
         ghostId,
         callId,
-        error: message,
+        hash: saved.hash,
+        mime: mimeType,
+        bytes: saved.bytes,
+        ...(saved.deduplicated ? { deduplicated: true } : {}),
       });
-      return { ok: false, message: `寄存失败:配额查询出错(${message})` };
-    }
-    if (used + buffer.byteLength > GHOST_CINDY_DEPOSIT_QUOTA_BYTES) {
       return {
-        ok: false,
-        message:
-          `寄存配额已满(本插件上限 ${GHOST_CINDY_DEPOSIT_QUOTA_BYTES} 字节,已用 ${used})。` +
-          '请对不再需要的寄存物调用 release_media 释放后重试,并如实告知用户。',
+        ok: true,
+        url: saved.url,
+        hash: saved.hash,
+        ext: saved.ext,
+        bytes: saved.bytes,
+        deduplicated: saved.deduplicated,
+        quotaUsedBytes: usedAfter,
+        quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
       };
-    }
-
-    let saved: { url: string; hash: string; ext: string; bytes: number; deduplicated: boolean };
-    try {
-      saved = await deposit({ ghostId, buffer, mimeType, ...(label ? { label } : {}) });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.log?.warn('ghost cindy-request deposit_media failed', {
-        ghostId,
-        callId,
-        error: message,
-      });
-      return { ok: false, message: `寄存失败:${message}` };
-    }
-
-    // 落仓后重读一次真实占用:deduplicated 只说明"字节此前已在总仓",不代表
-    // 本意识此前已有这条寄存引用(可能是别的意识存过),不能据它推算。
-    let usedAfter = used + saved.bytes;
-    try {
-      usedAfter = await readUsage(ghostId);
-    } catch {
-      // 回读失败不影响本次成功;返回的是估算值,仅供作者提示用户。
-    }
-    this.deps.log?.info('ghost cindy-request deposit_media done', {
-      ghostId,
-      callId,
-      hash: saved.hash,
-      mime: mimeType,
-      bytes: saved.bytes,
-      ...(saved.deduplicated ? { deduplicated: true } : {}),
-    });
-    return {
-      ok: true,
-      url: saved.url,
-      hash: saved.hash,
-      ext: saved.ext,
-      bytes: saved.bytes,
-      deduplicated: saved.deduplicated,
-      quotaUsedBytes: usedAfter,
-      quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
-    };
+    } finally { release(); }
   }
 
   /**

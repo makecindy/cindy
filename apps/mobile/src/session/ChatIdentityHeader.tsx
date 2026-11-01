@@ -58,7 +58,7 @@ export function ChatIdentityHeader({
       accessibilityLabel={identityLabel} accessibilityHint={identityAction ? identityHint : undefined}
       accessibilityState={identityAction ? { disabled: !controlsReady } : undefined}
       disabled={!controlsReady || !identityAction} onPress={openIdentity} testID={`${testIDPrefix}.identity`}>
-      <View style={styles.mark}>{mark}</View>
+      {mark ? <View style={styles.mark}>{mark}</View> : null}
       <View style={styles.identityText}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
         {typeof subtitle === 'string' ? <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text> : subtitle}

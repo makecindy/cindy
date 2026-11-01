@@ -2,22 +2,16 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const PHASE_LABEL = {
-  waiting: "等待",
-  requesting_elevation: "请求授权",
-  backing_up: "备份",
-  extracting: "解压中",
-  replacing: "替换文件",
-  launching: "启动新版",
-  rolling_back: "回滚",
-  done: "完成",
-  failed: "失败",
-};
+const copy = window.updaterCopy(navigator.language);
 
 const INDETERMINATE_PHASES = new Set(["waiting", "launching", "requesting_elevation"]);
 const retryCopy = window.retryCopy(navigator.language);
 
 const els = {
+  title: document.getElementById("title"),
+  details: document.getElementById("error-details"),
+  detailsLabel: document.getElementById("error-details-label"),
+  diagnostic: document.getElementById("error-diagnostic"),
   chip: document.getElementById("phase-chip"),
   message: document.getElementById("message"),
   fill: document.getElementById("progress-fill"),
@@ -30,20 +24,32 @@ const els = {
 };
 
 els.btnRetry.textContent = retryCopy.retry;
+document.title = copy.title;
+document.documentElement.lang = copy.locale;
+els.title.textContent = copy.title;
+els.chip.textContent = copy.waiting;
+els.message.textContent = copy.waitingMessage;
+els.btnLog.textContent = copy.log;
+els.btnQuit.textContent = copy.close;
+els.detailsLabel.textContent = copy.details;
 
 let retrying = false;
 let canRetry = false;
 
 function applyStatus(payload) {
   const phase = payload.phase || "waiting";
-  els.chip.textContent = PHASE_LABEL[phase] || phase;
+  els.chip.textContent = copy[phase] || copy.waiting;
   els.chip.className = `chip phase-${phase}`;
-  els.message.textContent = payload.message || "";
+  els.message.textContent = window.updaterMessage(copy, { ...payload, phase });
+  els.details.hidden = true;
+  els.diagnostic.textContent = "";
 
   if (phase === "failed") {
     els.track.hidden = true;
     els.errorBar.hidden = !payload.error;
-    els.errorText.textContent = retryCopy[payload.error] || payload.error || "";
+    els.errorText.textContent = payload.error ? retryCopy[payload.error] || copy.failureAdvice : "";
+    els.details.hidden = !payload.error || Boolean(retryCopy[payload.error]);
+    els.diagnostic.textContent = els.details.hidden ? "" : payload.error;
   } else {
     els.track.hidden = false;
     els.errorBar.hidden = true;

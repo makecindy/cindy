@@ -38,7 +38,15 @@ const r = await cindy.fetch({
 //   识别失败的真实 UTF-8 文本继续回落文本形态,未知二进制拒绝。
 //   媒体模式下 2xx 的文本响应(如轮询"生成中"JSON)自动
 //   回落文本形态给你看;非 2xx 同样回落文本,方便诊断。
-// 失败:{ ok:false, message: '原因' }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+// 失败:{ ok:false, message: '原因', errorCode? }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+//   请求已发出后的网络层失败带 errorCode,message 形如「请求失败:<原因>(<底层码>)」:
+//   NETWORK_TIMEOUT(超时,含主机到点中断「请求失败:请求超时(30000ms)」)/
+//   TLS_ERROR(证书过期、域名不匹配等,多为服务端问题)/ DNS_FAILED / CONNECTION_REFUSED /
+//   CONNECTION_RESET(连接中途断开)/ NETWORK_UNREACHABLE / NETWORK_ERROR(其余网络错误)。
+//   主机守门类失败(白名单外、凭证未配置等)不带 errorCode,message 自带处理指引。
+//   旧版主机不带 errorCode:以 errorCode 优先,缺省时按 message 处理。
+//   非幂等请求(POST 等)遇到 NETWORK_TIMEOUT / CONNECTION_RESET 时,服务端可能已执行,
+//   不要自动重放,提示用户先确认结果。
 ```
 
 **凭证语义(必读)**:你在详单里只声明"需要一条叫什么的凭证、注入到哪个请求头";
@@ -220,6 +228,9 @@ identity.displayTemplate 时,`/oauth` 回查与连接结果里 account.label 给
   经 broker exchange 透传服务端),不吃 PKCE 的服务商显式 `"pkce": false`;
   设置页的 `/oauth/<key>/client` 自填通道返回 405(settingsHtml 不要再画
   client 输入区)。
+  `"tokenBroker": "feishu"` 的企业应用由服务端按企业配置:主机每次连接开始时向服务端
+  取企业当前的 App ID 与一次性授权事务,不用清单里的 `clientId`(可省略;旧版主机
+  仍按清单 `clientId` 连接)。
 - `brokerBounce`:双地址弹跳回调(随 tokenBroker,资格与 tokenBroker 相同)。部分
   服务商后台只收 https redirect、不收 http loopback——声明后报给服务商的
   redirect_uri 是「broker 服务的 https 弹跳路由」(主机用 broker 基地址 + `path`
@@ -357,3 +368,34 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 处理一单(忙时返回结构化"正忙",稍后重试即可);重定向最多 3 跳且逐跳重验
 白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
+
+### Library 下载与上传
+
+下载到本插件 Library 用 as:'library' 和库内 path；上传用 upload.library 相对路径数组。
+两者需要 library:true，域名和凭证按本章声明；检查 ok、HTTP status 和 truncated。
+
+```js
+const downloaded = await cindy.fetch({
+  url: 'https://api.example.com/report', as: 'library', path: 'downloads/report.pdf',
+  callId: msg.callId
+});
+const uploaded = await cindy.fetch({
+  url: 'https://api.example.com/upload', method: 'POST',
+  upload: { library: ['exports/result.pdf'], field: 'file' }, callId: msg.callId
+});
+```
+
+下载成功时从 downloaded.library 取 path、bytes、sha256 和 ref，失败不提供半个文件。
+upload.library 与 upload.hashes 二选一，最多 4 个文件，单件 64 MiB、总量 128 MiB。
+对话交接的副本用 `upload.handoff:['handoff:<uuid>']`，与两者三选一，见 4.10.3。
+超限返回 TOO_LARGE；下载到 Library 单件上限 8 GiB，仍受磁盘空间约束。
+401 时的令牌重试按本章各凭证规则（exchange / OAuth 对写请求也会重试一次）；插件代码不要再自行重试
+有副作用的调用，后端仍按请求编号去重。页面调用及文件预览见[§4.23](plugin-interactive-pages.md)。
+
+### MCP Apps 页面生成手册头
+
+主机给 `cindy.fetch` 自动加 `Cindy-MCP-Apps-Manual`（手册 CDN 地址，
+`mcp-apps/manual/<客户端版本号>/<sha256>.md`）与 `Cindy-MCP-Apps-Manual-Sha256`，供后端生成页面的模型使用。
+缺省仅当 `callId` 对应工具在 `mcpApps.ui.tools` 中对模型可见（`visibility` 含 `"model"` 或省略）时带；
+`mcpAppsManual: true` 强制带（如 `load_view` 要片段），`false` 不带。只发往已声明主机，跳到其它主机即删；
+自带的同名头被剥除。开发版（0.0.0）、Node 工作进程与旧版 Cindy 不带：后端缺头时用缓存手册，按 sha256 缓存与校验。

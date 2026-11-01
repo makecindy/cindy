@@ -191,6 +191,8 @@ export interface ContextSheetRowProps {
   destructive?: boolean;
   /** 标签下方的次要说明(如 Worker 的 Agent · 模型)。 */
   detail?: string;
+  /** 次要说明最多显示几行；默认 1 行。 */
+  detailLines?: number;
 }
 
 export function ContextSheetRow({
@@ -208,6 +210,7 @@ export function ContextSheetRow({
   testID,
   destructive = false,
   detail,
+  detailLines = 1,
 }: ContextSheetRowProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
@@ -229,7 +232,7 @@ export function ContextSheetRow({
         {detail ? (
           <View style={styles.rowTextColumn}>
             <Text numberOfLines={1} style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
-            <Text numberOfLines={1} style={styles.rowDetail}>{detail}</Text>
+            <Text numberOfLines={detailLines} style={styles.rowDetail}>{detail}</Text>
           </View>
         ) : (
           <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>

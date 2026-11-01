@@ -6,7 +6,60 @@
 // 特征是"没有任何输出":curl 下载、CocoaPods 安装日志都会持续产生 stdout/stderr。
 // 所以这里用**输出空转看门狗**——连续 idleTimeoutMs 无任何输出才 SIGKILL,
 // 把"无限等"变成"分钟级失败",同时不影响慢速但健康的下载。
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
+
+export const COCOAPODS_SETUP_HINT = '已查过当前 PATH 和用户 gem 目录（Gem.user_dir/bin）。pod=missing 才表示未安装，请按 docs/dev-rules/environment-setup.md 的 iOS 工具链说明准备 CocoaPods：已有 Homebrew 可用 brew install cocoapods，否则使用独立 Ruby 的 gem install cocoapods --user-install。pod=failed 或 timeout 表示已找到但运行失败，先修复现有安装。';
+
+const probeOptions = (env) => ({
+  env: { ...env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+  encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
+  killSignal: 'SIGKILL',
+});
+
+// `gem install --user-install` 把 pod 放进用户 gem 目录,但 Agent 子进程的 PATH 通常不含它,
+// 只看 PATH 会把已装好的 CocoaPods 误判成未安装。只读探测;追加到 PATH 末尾,不遮蔽已有命令。
+/** @param {{ env?: NodeJS.ProcessEnv, run?: typeof execFileSync, exists?: (path: string) => boolean }} options */
+export function withUserGemPodOnPath({ env = process.env, run = execFileSync, exists = existsSync } = {}) {
+  try {
+    run('pod', ['--version'], probeOptions(env));
+    return env;
+  } catch (error) {
+    if (error.code !== 'ENOENT') return env;
+  }
+  let userDir;
+  try {
+    userDir = run('ruby', ['-r', 'rubygems', '-e', 'puts Gem.user_dir'], probeOptions(env)).trim();
+  } catch {
+    return env;
+  }
+  if (!userDir) return env;
+  const binDir = join(userDir, 'bin');
+  if (!exists(join(binDir, 'pod'))) return env;
+  return { ...env, PATH: env.PATH ? `${env.PATH}${delimiter}${binDir}` : binDir };
+}
+
+// Only call after a cache miss: installing a compatible cached app does not need CocoaPods.
+// Version/SDK probes are read-only; never install tools or accept Xcode licenses here.
+/** @param {{ env?: NodeJS.ProcessEnv, run?: (command: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string }} options */
+export function inspectIOSBuildTools({ env = process.env, run = execFileSync } = {}) {
+  const checks = [
+    ['xcodebuild', ['-version']],
+    ['xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path']],
+    ['pod', ['--version']],
+  ].map(([tool, args]) => {
+    try {
+      run(tool, args, probeOptions(env));
+      return { tool, healthy: true, code: 'ready' };
+    } catch (error) {
+      // Do not return arbitrary child output or environment values in the receipt.
+      return { tool, healthy: false, code: error.code === 'ENOENT' ? 'missing'
+        : error.code === 'ETIMEDOUT' ? 'timeout' : 'failed' };
+    }
+  });
+  return { healthy: checks.every((check) => check.healthy), checks };
+}
 
 // 连续无输出判挂死的窗口。CocoaPods 有静默阶段(依赖解析、Generating Pods
 // project),实测在分钟级以内;5 分钟静默基本只剩死连接一种解释。
@@ -130,7 +183,7 @@ export async function podInstallBounded({ iosDir, env = process.env, idleTimeout
     return;
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const missing = new Error('找不到 `pod`(CocoaPods)。先 `brew install cocoapods` 再重试。');
+      const missing = new Error(`找不到 pod（CocoaPods）。${COCOAPODS_SETUP_HINT}`);
       missing.podMissing = true;
       missing.cause = error;
       throw missing;

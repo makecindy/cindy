@@ -14,6 +14,11 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 
 ## 事实来源
 
+用户主动录制的性能报告见 [Desktop 性能跟踪](performance-tracing.md)：2026-10-29 用户明确要求
+通过日志链路提交完整性能文件。专用上传入口只读取该次录制的四个固定文件，将 JSON 值用现有
+脱敏器处理后压缩、分片，复用本模块的目标、授权和发送器。原始文件保留在本地；这不扩充普通
+日志来源白名单、不进入崩溃自动上传，界面明确告知路径和性能标记仍可能包含在上传副本中。
+
 | 内容 | 权威来源 |
 |---|---|
 | 记录边界格式（写侧＋读侧共用） | `apps/desktop/src/shared/mainLogRecordFormat.ts` |

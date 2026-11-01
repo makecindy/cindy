@@ -8,7 +8,8 @@ import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeSchedul
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
+import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
@@ -50,6 +51,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   lastActivityAt?: string | null;
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -259,7 +261,8 @@ export function summarizeRemoteSessionOverview(
     if (session.pinnedAt) pinned += 1;
     // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
     // 否则概览里的项目数会比列表里的项目分区多出来。
-    if (session.workingDir) projects.add(collapseWorktreeDirForGrouping(session.workingDir));
+    const projectDir = sessionProjectDirectory(session);
+    if (projectDir) projects.add(normalizeProjectOrderPath(projectDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
   }
@@ -388,9 +391,18 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
   if (searchQuery) return '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。';
   if (statusFilter === 'waiting') return '这里集中显示需要在手机端确认的权限、计划和问题。';
   if (statusFilter === 'automation') return '自动化生成的任务会按计划聚合，展开后可以进入单次运行。';
-  if (statusFilter === 'archived') return '长按归档任务可进入批量选择，然后恢复或删除。';
+  if (statusFilter === 'archived') return '长按归档任务可进入批量选择，然后取消归档或删除。';
   if (statusFilter === 'all') return '活跃、归档和自动化生成的任务会一起显示，适合快速查找。';
   return '点开任务继续控制，长按任务进入批量选择。';
+}
+
+/**
+ * 项目分区的分组键。与首页 projectGroupKey、项目顺序表、conversationSearch 同一套归一化:
+ * Windows 盘符 / UNC 路径统一正斜杠并小写,worktree 折到 base repo。只折 worktree 会让
+ * `C:\Repo\App` 与 `c:/repo/app` 落成两个分区，概览的 projectCount 也会重复计数。
+ */
+function projectGroupKey(session: RemoteSession): string {
+  return normalizeProjectOrderPath(sessionProjectDirectory(session) ?? 'unknown');
 }
 
 function buildProjectSections(
@@ -407,7 +419,7 @@ function buildProjectSections(
   if (options.projectAliases) {
     for (const session of allSessions) {
       if (session.status === 'deleted' || isDialogueSession(session)) continue;
-      const key = session.workingDir ? collapseWorktreeDirForGrouping(session.workingDir) : 'unknown';
+      const key = projectGroupKey(session);
       const members = projectMembers.get(key) ?? [];
       members.push(session);
       projectMembers.set(key, members);
@@ -424,16 +436,20 @@ function buildProjectSections(
     if (isDialogueSession(item.session)) continue;
     // worktree 会话按 base repo 归组(与首页 projectGroupKey、桌面侧栏同一口径),
     // 否则每个 worktree 会单独成一个随机名分区。
-    const key = item.session.workingDir ? collapseWorktreeDirForGrouping(item.session.workingDir) : 'unknown';
+    const key = projectGroupKey(item.session);
     const list = projectGroups.get(key) ?? [];
     list.push(item);
     projectGroups.set(key, list);
   }
   for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => compareSessionListStrings(a, b))) {
+    // 标题用组内首条会话的原始目录(只折 worktree),保留用户自己的大小写与分隔符风格。
+    // 折叠前先去掉外围空白:分组键按 trim 后的路径归一,若标题仍用原串,
+    // ` /repo/app/ ` 这种受支持的输入会让 projectTitle() 只剩一个空格,分区标题变成空白。
+    const displayDir = collapseWorktreeDirForGrouping((sessionProjectDirectory(data[0].session) ?? workingDir).trim());
     sections.push({
       key: `project:${workingDir}`,
       title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
-        ?? projectTitle(workingDir),
+        ?? projectTitle(displayDir),
       data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
     });
   }
@@ -920,7 +936,7 @@ export function automationGroupKey(item: RemoteSessionListItem): string | null {
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;
   const workspace = item.session.workspaceKind ?? 'project';
-  const dir = item.session.workingDir ?? '__no_working_dir__';
+  const dir = sessionProjectDirectory(item.session) ?? '__no_working_dir__';
   return `fallback:${workspace}:${dir}:${item.title}`;
 }
 

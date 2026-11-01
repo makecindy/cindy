@@ -8,7 +8,33 @@ export interface SessionPrRef {
   url: string;
   firstSeenAt: number;
   lastSeenAt: number;
+  /** Explicit user choices; absent on older hosts. */
+  pinned?: boolean;
+  priority?: number;
+  manuallyAdded?: boolean;
+  removedAt?: number | null;
+  /** Absent on older hosts. Legacy references require explicit confirmation. */
+  associationSource?: string;
+  associationOrigin?: string | null;
 }
+
+/** Counts for the current PR head, across check runs and commit statuses. */
+export interface PrChecksSummary {
+  total: number;
+  failed: number;
+  passed: number;
+  pending: number;
+  /** Neutral/skipped checks are complete, but are not reported as passing. */
+  skipped: number;
+}
+
+export type SessionPrRefAction =
+  | { action: 'add'; url: string }
+  | { action: 'reorder'; ids: string[] }
+  | {
+      action: 'remove' | 'restore' | 'pin' | 'unpin';
+      id: string;
+    };
 
 export type PrStatusKind = 'open' | 'draft' | 'merged' | 'closed';
 
@@ -26,6 +52,14 @@ export type PrStatusResult =
       branch: string;
       /** 未解决 review thread 数;null = 查询失败 / token 不支持 GraphQL。 */
       unresolvedCount: number | null;
+      /** Missing on older hosts; null means unavailable, not zero. */
+      checks?: PrChecksSummary | null;
+      headSha?: string;
+      baseBranch?: string;
+      reviewDecision?: string | null;
+      observedAt?: number;
+      revision?: string;
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;

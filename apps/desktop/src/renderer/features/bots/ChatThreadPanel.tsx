@@ -12,14 +12,16 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
+import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { useAttachments } from '@/hooks/useAttachments';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
-import { botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
+import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
@@ -164,11 +166,12 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
   sharedReplies?: BotGroupSharedReplies;
+  onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
   onClose: () => void;
@@ -177,6 +180,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
+  const readLocatedMention = useReadLocatedMention(group.id);
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -276,9 +280,10 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const anchorId = before ? shown[0]?.id : undefined;
     const anchored = (replies: BotGroupMessageView[]) => !anchorId || replies.some(reply => reply.id === anchorId);
     try {
-      // Reading the latest page marks the Thread read only while the reader is at the newest reply:
-      // a reply that arrives while they read further up stays unread until they scroll down to it.
-      const markRead = !before && stickToBottomRef.current;
+      // Background updates (including a companion's replies) never consume human unread.
+      // Match the main timeline: only a focused, visible reader at the newest reply acknowledges it.
+      const markRead = !before && stickToBottomRef.current
+        && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
       const result = await api().thread({ groupId: group.id, rootId, before,
@@ -418,15 +423,25 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   useEffect(() => {
     aliveRef.current = true;
     refreshRef.current();
+    const acknowledgeVisible = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus() && stickToBottomRef.current)
+        refreshRef.current();
+    };
+    window.addEventListener('focus', acknowledgeVisible);
+    document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
       if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
     });
-    return () => { aliveRef.current = false; stop(); };
+    return () => {
+      aliveRef.current = false; stop();
+      window.removeEventListener('focus', acknowledgeVisible);
+      document.removeEventListener('visibilitychange', acknowledgeVisible);
+    };
   }, [group.id, rootId]);
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -476,18 +491,25 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const search = focusSearch.current;
     if (search.pages < 0) return;
     const target = findThreadMessageElement(contentRef.current, focus.messageId);
-    if (target) { stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target); return; }
+    if (target) {
+      stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target);
+      if (!replies.find(reply => reply.id === focus.messageId)?.deleted) readLocatedMention(focus.messageId, target);
+      return;
+    }
     if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore]);
+  }, [focus, replies, hasMore, readLocatedMention]);
 
   /** One server operation per reply and person, so a retry never posts twice. */
-  async function postToMain(messageId: string, fromComposer: boolean) {
+  async function postToMain(messageId: string, fromComposer: boolean, acceptedSource?: BotGroupMessageView) {
     if (readOnly || postingRef.current.has(messageId)) return false;
     postingRef.current.add(messageId); setPosting(new Set(postingRef.current));
     const owner = getDataOwnerGeneration();
+    const source = acceptedSource ?? repliesRef.current.find(message => message.id === messageId);
+    const settlePending = source ? onPostPending?.({ ...source, threadRootId: rootId }) : undefined;
+    let receipt: string | null = null;
     const failed = (code?: string) => {
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (code === 'SHARE_UNAVAILABLE') {
@@ -500,13 +522,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       const result = await api().shareToMain({ groupId: group.id, messageId });
       if (!isDataOwnerGenerationCurrent(owner)) return false;
       if (!result.ok) { failed(result.errorCode); return false; }
+      receipt = result.messageId;
       setPosted(previous => new Map(previous).set(messageId, result.messageId));
       setUnposted(previous => { const next = new Set(previous); next.delete(messageId); return next; });
       if (result.alreadyShared && !fromComposer) toast.info(t(key('thread.alreadyPosted')));
       refreshBotGroups();
       return true;
     } catch { failed(); return false; }
-    finally { postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
+    finally { settlePending?.(receipt); postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
   }
   async function retryUnposted() {
     // The queue belongs to the account that started the retry; stop once it is switched.
@@ -527,13 +550,19 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revealShare = (shareId: string) => {
     if (!onRevealShare?.(shareId)) toast.info(t(key('thread.shareNotLoaded')));
   };
-  const sendReply = async (input: { text: string; clientId: string; mentions: BotGroupMessageView['mentions'] }) => {
+  const attachmentScope = botGroupThreadDraftKey(group.id, rootId);
+  const attachmentState = useAttachments(attachmentScope);
+  const sendReply = async (input: Omit<Parameters<ChatServerApi['reply']>[0], 'groupId' | 'rootId'>) => {
     const owner = getDataOwnerGeneration();
     const toMain = alsoSend;
     const result = await api().reply({ groupId: group.id, rootId, ...input });
     if (result.ok && isDataOwnerGenerationCurrent(owner)) {
       setAlsoSend(false);
-      if (toMain) await postToMain(result.messageId, true);
+      // The topic receipt settles its own send; the optional main-chat copy has its own retry.
+      if (toMain) void postToMain(result.messageId, true, { ...pendingBotGroupMessage({
+        clientId: input.clientId, text: input.text, mentions: input.mentions,
+        attachments: (input.attachments ?? []).map(file => botGroupAttachmentPreview({ ...file, ext: file.ext ?? '', size: file.size ?? 0 })), quote: null,
+        createdAt: Date.now(), afterSequence: lastRealSequenceRef.current }), id: result.messageId, threadRootId: rootId });
     }
     return result;
   };
@@ -644,11 +673,12 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-          <div className="border-t border-[var(--border-default)]">
-            <BotGroupComposer
+            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
-              draftKey={botGroupThreadDraftKey(group.id, rootId)}
+              draftKey={attachmentScope}
+              attachmentScope={attachmentScope}
+              attachments={attachmentState}
               members={members}
               running={false}
               disabled={readOnly}
@@ -660,7 +690,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
                     alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
                     {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
                   </span>
-                  <span className="min-w-0 truncate">{t(key('thread.alsoSend'))}</span>
+                  <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
                 </button>
               )}
               sendReply={sendReply}
@@ -668,7 +698,6 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               onSendSettled={onSendSettled}
               onSent={onSent}
             />
-          </div>
         </>}
   </ThreadPanel>;
 }

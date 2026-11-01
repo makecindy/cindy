@@ -2210,7 +2210,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2229,7 +2229,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2248,7 +2248,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2267,7 +2267,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2291,9 +2291,9 @@
           "wireProtocol": "openai-responses"
         },
         "pi": {
-          "baseUrl": "https://apihub.agnes-ai.com",
+          "baseUrl": "https://apihub.agnes-ai.com/v1",
           "modelsUrl": "https://apihub.agnes-ai.com/v1/models",
-          "wireProtocol": "anthropic-messages"
+          "wireProtocol": "openai-chat"
         }
       }
     }

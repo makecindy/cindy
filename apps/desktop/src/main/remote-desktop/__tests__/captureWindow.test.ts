@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DesktopCaptureWindow } from '../captureWindow';
 import { denyAppDesktopCapture, markPlaybackFullscreenWindow } from '../capturePermissions';
+import { isCaptureWindowWebContents } from '../captureWindowRegistry';
 import { buildContentSecurityPolicy } from '../../security/csp';
 
 const fake = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ vi.mock('electron', () => ({
       mainFrame: { url: '', parent: null },
       isDestroyed: () => this.destroyed,
       setWindowOpenHandler: vi.fn(),
+      setWebRTCIPHandlingPolicy: vi.fn(),
     });
     constructor(public options: any) {
       fake.windows.push(this);
@@ -100,7 +102,12 @@ it('only admits the registered top frame and kills the whole process on stop', a
     },
   });
   expect(win.webContents.setWindowOpenHandler.mock.calls[0][0]()).toEqual({ action: 'deny' });
+  expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   owner.dispose();
+  // Unit regression: native gone may reach app after local destroyed cleanup.
+  // Keep this factory's identity so a capture crash cannot tear down device-link.
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   expect(win.destroyed).toBe(true);
   expect(owner.contents).toBeNull();
   expect(() => owner.assertSender(valid)).toThrow('PERMISSION_DENIED');
@@ -274,6 +281,16 @@ it.each(['files', 'direct'] as const)('keeps %s transport separate and denies ca
   const owner = new DesktopCaptureWindow(vi.fn(), mode);
   const ready = owner.start();
   const win = fake.windows[0], ses = fake.sessions[0];
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
+  // Unit regression: routed private networks cannot resolve Chromium's default
+  // mDNS candidates. Exercise the real window factory: opt in only the direct
+  // data window, before navigation, without granting media or changing files/video.
+  // Actual ICE and byte transfer are covered by provider-share-direct-smoke.mjs.
+  if (mode === 'direct') {
+    expect(win.webContents.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith('default_public_and_private_interfaces');
+    expect(win.webContents.setWebRTCIPHandlingPolicy.mock.invocationCallOrder[0])
+      .toBeLessThan(win.loadURL.mock.invocationCallOrder[0]);
+  } else expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
   expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;

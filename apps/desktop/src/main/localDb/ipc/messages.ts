@@ -7,6 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import {
   and,
   asc,
@@ -25,7 +26,7 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../../mcp-apps/history.js';
 
 import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
 import type { DbClient } from '../client/DbClient';
@@ -48,17 +49,17 @@ import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
 } from '../../cindy-media/ledger';
-import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
-import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
+import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
-import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
-import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
+import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
+import { readSessionCostDetails } from '../../usage/sessionCostDetails.js';
 import {
   addCompatibleRegionalMoney,
   asValueEstimateMoney,
@@ -91,7 +92,6 @@ function notAutoResumeAgentMetaSql() {
 
 // Normal publication stays non-blocking. Authoritative corrections/retractions
 // settle the exact row's create/update hooks before reconciling derived state.
-const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
 const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
 
 function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
@@ -255,6 +255,7 @@ export interface EstimatedSessionValueEntry {
  * scoped; callers use this value only to produce a user-facing round total.
  */
 export interface PriorUserRoundCost {
+  additionalCosts?: RegionalMoney[];
   money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
@@ -666,8 +667,16 @@ export function registerMessageIpc(
     },
   );
 
-  ipcMain.handle('local-db:messages:estimatedSessionValue', async (_e, sessionId: unknown) => {
+  ipcMain.handle('local-db:messages:estimatedSessionValue', async (_e, sessionId: unknown, options?: { includeBreakdown?: boolean; clientId?: unknown }) => {
     const sid = requireString(sessionId, 'sessionId');
+    // Message panels request only their own round; avoid the task-wide estimate scan as well.
+    if (options?.includeBreakdown === true && options.clientId !== undefined) {
+      return {
+        costBreakdown: await readSessionCostDetails(getDbClient(), sid, requireString(options.clientId, 'clientId')),
+        totalValueMoney: null,
+        entries: [],
+      };
+    }
     const db = getDbClient().drizzle;
 
     const [sessionRow] = await db
@@ -696,6 +705,9 @@ export function registerMessageIpc(
     const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
+      ...(options?.includeBreakdown === true ? { costBreakdown: await readSessionCostDetails(
+        getDbClient(), sid, options.clientId === undefined ? undefined : requireString(options.clientId, 'clientId'),
+      ) } : {}),
       totalValueMoney,
       ...(hasCompleteUsdProjection
         ? {
@@ -813,11 +825,11 @@ export function registerMessageIpc(
 }
 
 /**
- * messages:list 的「按需导入外部 CLI 会话历史」副作用。
+ * messages:list 的副作用：旧版导入的任务（codex- / claude- 前缀）第一次打开时接入新导入器。
  *
- * 普通 Cindy 任务不需要外部 CLI 历史导入；只有带有明确来源前缀的任务才运行对应 importer。
- * 这样可以避免每次切换普通任务都先为两个 importer 各做一次 sessions 查询。device-link 远程读
- * 仍遵循首页/分页语义，但首页也只对 Codex/Claude 来源任务运行对应 importer。
+ * 新导入器在导入时就把完整历史写进 Cindy，打开任务不再读取来源文件（只导入、不同步）。
+ * 这里只处理升级前导入、还没接入的旧任务：同步接入正在打开的这一条（与旧版「打开时导入」
+ * 同等的等待），其余旧任务在后台一次性接入。普通任务直接返回，不做任何查询。
  *
  * 抽成可注入函数仅为单测(规则 14):默认依赖即生产实现,Electron `ipcMain.handle` 只做 adapter。
  */
@@ -825,37 +837,21 @@ export async function runMessagesListImportSideEffects(
   sessionId: string,
   deps: {
     isDeviceLink?: () => boolean;
-    importCodex?: (id: string) => Promise<void>;
-    importClaude?: (id: string) => Promise<void>;
+    adoptLegacy?: (id: string) => Promise<void>;
   } = {},
   opts: { deviceLinkFirstPage?: boolean } = {},
 ): Promise<void> {
   const isDeviceLink = deps.isDeviceLink ?? isDeviceLinkInvoke;
-  // device-link **分页**请求跳过导入(#318 性能语义:每页重跑 importer 会把
-  // 导入延迟串接到查询前,拖慢手机端);**首页**请求照跑(review P2):被控端
-  // 可能从未本机打开该会话,rollout/transcript 从未导入 —— 崩溃前 CLI 已写的
-  // 产出不进 DB,中断行滞留尾部,控制端会看到可「继续」的假中断。首页一次
-  // 导入与本机路径的既有成本同水平。
+  // device-link 分页请求跳过（#318 性能语义）；首页照常接入。
   if (isDeviceLink() && !opts.deviceLinkFirstPage) return;
-  const importCodex = deps.importCodex ?? importExternalCodexMessagesForSession;
-  const importClaude = deps.importClaude ?? importExternalClaudeCodeMessagesForSession;
-  if (sessionId.startsWith('codex-')) {
-    await importCodex(sessionId).catch((err) => {
-      log.warn('external Codex message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+  if (!sessionId.startsWith('codex-') && !sessionId.startsWith('claude-')) return;
+  const adopt = deps.adoptLegacy ?? adoptLegacySessionBeforeOpen;
+  await adopt(sessionId).catch((err) => {
+    log.warn('legacy imported session adoption failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
     });
-    return;
-  }
-  if (sessionId.startsWith('claude-')) {
-    await importClaude(sessionId).catch((err) => {
-      log.warn('external Claude Code message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }
+  });
 }
 
 /**
@@ -887,7 +883,7 @@ export function broadcastMessageRow(
 ): void {
   // Main-created rows may bypass the DB mapper. Never broadcast View-only data
   // to top-level renderers or same-account control devices.
-  const content = projectMcpAppContent(msg.content, msg.agentMeta?.mcpApp === true);
+  const content = projectMcpAppHistory(msg.content, msg.agentMeta?.mcpApp === true);
   const message = content === msg.content ? msg : { ...msg, content };
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
@@ -1103,7 +1099,6 @@ export async function commitMessageDeletion(
   preview: string | null;
 }> {
   const now = Date.now();
-  const db = getDbClient().drizzle;
   const result = await getDbClient().tx('message.delete', {
     sessionId,
     clientIds,
@@ -1135,7 +1130,6 @@ export async function commitMessageDeletion(
       error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
     });
   }
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
   // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
@@ -1364,7 +1358,6 @@ export async function rewindPersistedUserMessageAfterClear(
     });
   }
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
 export async function dismissErrorMessage(
@@ -1525,15 +1518,6 @@ async function reconcileAssistantDerivedState(
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  await pendingPrRefWrites.get(dbClient)?.get(row.id);
-  try {
-    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
-  } catch (error) {
-    log.warn('assistant correction PR reference reconciliation failed', {
-      sessionId: row.sessionId, clientId: row.clientId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
   if (!refreshPreview || !isCurrent()) return;
   try {
     const latest = await latestVisiblePreviewRow(row.sessionId);
@@ -1974,20 +1958,6 @@ export async function createMessage(
     // 双保险: chat-history-embedder.onMessageCreated 内部已 try/catch,
     // 此处 .catch 仅防御该函数将来被 refactor 时漏掉的异常路径。
   });
-  // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
-  // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
-  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
-    // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
-  });
-  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
-  if (!pendingPrRefs) {
-    pendingPrRefs = new Map();
-    pendingPrRefWrites.set(dbClient, pendingPrRefs);
-  }
-  pendingPrRefs.set(msg.id, prRefsWrite);
-  void prRefsWrite.then(() => {
-    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
-  });
   return msg;
 }
 
@@ -2024,7 +1994,13 @@ export function extractEstimatedSessionValueEntries(
     } catch {
       continue;
     }
-    if (meta?.turnCostIsEstimate !== true) continue;
+    if (meta?.turnCostIsEstimate !== true) {
+      const estimate = addCompatibleRegionalMoney((normalizeTurnUsageDetails(meta?.turnUsageDetails)?.perModelCost ?? [])
+        .filter(item => item.money.kind === 'value-estimate').map(item => item.money));
+      if (estimate?.amount) entries.push({ clientId: row.clientId, money: estimate,
+        ...(estimate.currency === 'USD' ? { costUsd: estimate.amount } : {}) });
+      continue;
+    }
     const structured = normalizeRegionalMoney(meta.turnCost);
     if (structured && structured.amount > 0) {
       const recomputed =
@@ -2267,11 +2243,15 @@ export async function readPriorUserRoundCost(
     );
 
   const values: RegionalMoney[] = [];
+  const additionalCosts: RegionalMoney[] = [];
   const mediaCosts = parseAgentMetaRecord(boundary.agentMeta)?.mediaCosts;
   if (Array.isArray(mediaCosts)) {
     for (const value of mediaCosts) {
       const cost = normalizeRegionalMoney(value);
-      if (cost?.kind === 'actual-cost' && cost.amount > 0) values.push(cost);
+      if (cost?.kind === 'actual-cost' && cost.amount > 0) {
+        values.push(cost);
+        additionalCosts.push(cost);
+      }
     }
   }
   const estimatedCurrencies = new Set<RegionalMoney['currency']>();
@@ -2287,6 +2267,10 @@ export async function readPriorUserRoundCost(
     const rawSegment = structured ?? legacy;
     const isEstimate = rawSegment?.kind === 'value-estimate' || meta?.turnCostIsEstimate === true;
     const segment = rawSegment && isEstimate ? asValueEstimateMoney(rawSegment) : rawSegment;
+    for (const estimate of supplementalConversationEstimates(meta)) {
+      values.push(estimate);
+      estimatedCurrencies.add(estimate.currency);
+    }
     if (!segment || segment.amount <= 0) continue;
     values.push(segment);
     if (isEstimate) estimatedCurrencies.add(segment.currency);
@@ -2297,6 +2281,7 @@ export async function readPriorUserRoundCost(
     money,
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,
+    ...(additionalCosts.length ? { additionalCosts } : {}),
   };
 }
 
@@ -2305,14 +2290,19 @@ export async function readPriorUserRoundCost(
  *
  * This is deliberately read-only: a history page can immediately display the
  * correct user-round total without rewriting legacy data or changing the raw
- * segment values used by every billing aggregate. New messages already carry
- * the persisted field and skip this path.
+ * segment values used by every billing aggregate. Media charges are committed
+ * on the user row before the assistant follow-up. Rebuild their display snapshot
+ * from that ledger: missing metadata and existing totals/snapshots cannot prove
+ * that the latest fee was projected.
  *
  * Scan only from the oldest row on this page back to the previous real user
  * boundary. A full-session walk here used to re-read tens of thousands of
  * agent_meta blobs on every history page.
  */
 async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]> {
+  const pageAssistantClientIds = new Set(history.filter(message => message.role === 'assistant')
+    .map(message => message.clientId));
+  if (pageAssistantClientIds.size === 0) return history;
   const legacyClientIds = new Set(
     history.flatMap((message) => {
       const agentMeta = message.agentMeta;
@@ -2328,8 +2318,6 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
         : [];
     }),
   );
-  if (legacyClientIds.size === 0) return history;
-
   const sessionId = history[0]?.sessionId;
   if (!sessionId) return history;
   const oldestOnPage = oldestHistoryMessage(history);
@@ -2403,18 +2391,40 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
   const totalsByClientId = new Map<string, PriorUserRoundCost>();
+  const additionalByClientId = new Map<string, RegionalMoney[]>();
+  const roundMoneyByClientId = new Map<string, { money: RegionalMoney; isEstimate: boolean }>();
+  let roundValues: RegionalMoney[] = [];
+  let additionalCosts: RegionalMoney[] = [];
   let hasRealUserBoundary = false;
   let costUsd = 0;
   let hasEstimatedValue = false;
   for (const row of rows) {
     if (row.role === 'user' && !isAutoResumeUserMessage(row.agentMeta)) {
       hasRealUserBoundary = true;
-      costUsd = 0;
+      const recorded = parseAgentMetaRecord(row.agentMeta)?.mediaCosts;
+      additionalCosts = Array.isArray(recorded) ? recorded.map(normalizeRegionalMoney)
+        .filter((value): value is RegionalMoney => !!value && value.amount > 0) : [];
+      roundValues = [...additionalCosts];
+      costUsd = additionalCosts.filter(value => value.currency === 'USD').reduce((sum, value) => sum + value.amount, 0);
       hasEstimatedValue = false;
       continue;
     }
     if (row.role !== 'assistant') continue;
+    if (additionalCosts.length) additionalByClientId.set(row.clientId, additionalCosts);
     const meta = parseAgentMetaRecord(row.agentMeta);
+    const rawMoney = normalizeRegionalMoney(meta?.turnCost) ??
+      (typeof meta?.turnCostUsd === 'number' && Number.isFinite(meta.turnCostUsd) && meta.turnCostUsd > 0
+        ? legacyUsdMoney(meta.turnCostUsd) : null);
+    const segmentMoney = rawMoney && meta?.turnCostIsEstimate === true ? asValueEstimateMoney(rawMoney) : rawMoney;
+    if (segmentMoney) roundValues.push(segmentMoney);
+    roundValues.push(...supplementalConversationEstimates(meta));
+    // Only calculate recovery totals for messages on this history page, not every older segment.
+    const roundMoney = additionalCosts.length && pageAssistantClientIds.has(row.clientId)
+      ? addCompatibleRegionalMoney(roundValues, segmentMoney?.currency) : null;
+    if (hasRealUserBoundary && roundMoney) roundMoneyByClientId.set(row.clientId, {
+      money: roundMoney,
+      isEstimate: roundValues.some(value => value.currency === roundMoney.currency && value.kind === 'value-estimate'),
+    });
     const segmentCost = meta?.turnCostUsd;
     if (
       !hasRealUserBoundary ||
@@ -2439,6 +2449,22 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
   for (let index = 0; index < history.length; index++) {
     const message = history[index];
     const agentMeta = message.agentMeta;
+    const additional = additionalByClientId.get(message.clientId);
+    if (additional) {
+      const round = roundMoneyByClientId.get(message.clientId);
+      hydrated ??= history.slice();
+      hydrated[index] = { ...message, agentMeta: { ...agentMeta,
+        ...(round ? {
+          userTurnCost: round.money,
+          userTurnCostUsd: round.money.currency === 'USD' ? round.money.amount : undefined,
+          userTurnCostIsEstimate: round.isEstimate,
+        } : {}),
+        turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(agentMeta?.turnUsageDetails), additionalCosts: additional }) ?? undefined,
+      } };
+      // The ledger projection already includes legacy USD segments and estimates.
+      // Do not overwrite it with the older USD-only compatibility subtotal.
+      continue;
+    }
     if (
       message.role !== 'assistant' ||
       !agentMeta ||
@@ -2457,7 +2483,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     hydrated[index] = {
       ...message,
       agentMeta: {
-        ...agentMeta,
+        ...(hydrated[index].agentMeta ?? agentMeta),
         ...(total.money ? { userTurnCost: total.money } : {}),
         userTurnCostUsd: total.costUsd,
         userTurnCostIsEstimate: total.hasEstimatedValue,
@@ -2807,6 +2833,10 @@ export async function listMessagesForAgentHandoff(
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
         return null;
       }
+      // 任务导入的时间线标记只用于显示。
+      if (agentMeta && typeof agentMeta.sessionImport === 'object' && agentMeta.sessionImport) {
+        return null;
+      }
       return {
         clientId: r.clientId,
         role: r.role,
@@ -2916,12 +2946,17 @@ export interface ParkedEngineSession {
  * 已被后来的全新会话取代,续接它会让引擎拿到与消息流矛盾的记忆。
  * 消息删除写入的 context_rebuild 行会使它之前的全部停泊绑定失效；否则
  * 用户稍后切回旧引擎时仍会 resume 含被删消息的 transcript，绕过本次上下文重建。
+ * 传 fromAgentDeviceId 时只认在该设备离场的边界:另一台电脑上的原生线程在本机
+ * 不存在,误续接会合成一份来源身份错误的恢复历史。缺省不按设备过滤。普通设备 ID
+ * 以边界与当前设备相等为准(A→B→A 可继续原生接续);share: 绑定与旧版缺字段边界
+ * 在后续换电脑后失效,因为逻辑 ID 无法证明原生线程仍在当前物理机。
  * content 是 JSON,无法在 SQL 里按字段过滤,取有界条数(边界行数量 = 切换次数,
  * 天然很小)在 JS 里扫。
  */
 export async function findParkedEngineSession(
   sessionId: string,
   targetDbKind: 'cc' | 'codex' | 'pi',
+  fromAgentDeviceId?: string | null,
 ): Promise<ParkedEngineSession | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
@@ -2954,14 +2989,50 @@ export async function findParkedEngineSession(
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(50);
+  // Older boundaries did not record their departure device. Keep resuming them
+  // only while the task has stayed on one computer; a later relocation makes the
+  // missing evidence unsafe to interpret locally.
+  let deviceMovedAfterBoundary = false;
   for (const row of rows) {
-    let parsed: { fromAgentKind?: unknown; fromSdkSessionId?: unknown };
+    let parsed: {
+      fromAgentKind?: unknown;
+      fromSdkSessionId?: unknown;
+      fromAgentDeviceId?: unknown;
+      toAgentDeviceId?: unknown;
+    };
     try {
       parsed = JSON.parse(row.content) as typeof parsed;
     } catch {
       continue;
     }
-    if (parsed.fromAgentKind !== targetDbKind) continue;
+    if (parsed.fromAgentKind !== targetDbKind) {
+      // toAgentDeviceId exists only on relocation boundaries. Forced provider
+      // relocations can keep the same logical share/group id while moving to a
+      // different physical computer, so presence (not id inequality) is the
+      // safe signal that an older native binding may have changed owners.
+      if (parsed.toAgentDeviceId !== undefined) deviceMovedAfterBoundary = true;
+      continue;
+    }
+    // A cross-device switch leaves the native thread on the computer it ran on.
+    // This is still the engine's most recent departure, so do not fall back to
+    // an older local thread: resuming it would skip the remote interval's native
+    // memory and synthesize a lossy history with the wrong client identity.
+    if (fromAgentDeviceId !== undefined) {
+      const boundaryDeviceId = parsed.fromAgentDeviceId === null
+        ? null
+        : typeof parsed.fromAgentDeviceId === 'string'
+          ? parsed.fromAgentDeviceId
+          : undefined;
+      // A share binding can hide a physical move behind the same logical id.
+      // Legacy boundaries have no device evidence at all, so a later relocation
+      // also makes them unsafe. Ordinary device ids can be trusted when they
+      // match the current device, including an A -> B -> A return.
+      if (deviceMovedAfterBoundary
+        && (boundaryDeviceId === undefined || isProviderShareAgentDeviceId(boundaryDeviceId))) {
+        return null;
+      }
+      if (boundaryDeviceId !== undefined && boundaryDeviceId !== fromAgentDeviceId) return null;
+    }
     if (
       contextRebuild &&
       (contextRebuild.createdAt > row.createdAt ||

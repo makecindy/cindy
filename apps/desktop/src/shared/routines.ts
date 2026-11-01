@@ -1,4 +1,4 @@
-import type { Routine, RoutineInput, RoutineRun, RoutineSource } from '@cindy/maker-scheduler';
+import type { Routine, RoutineInput, RoutineRun, RoutineSource, RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import type { NightlyLearningFrequency, NightlyLearningView } from './botNightlyLearning';
 
 /** Fixed desktop bridge; event publishing is reserved for authenticated host sources. */
@@ -9,6 +9,7 @@ export interface RoutinesAPI {
   runNow(botId: string, id: string): Promise<void>;
   history(botId: string, id: string): Promise<RoutineRun[]>;
   sources(): Promise<RoutineSource[]>;
+  deliveryTargets?(botId: string): Promise<RoutineDeliveryTarget[]>;
   /** 伙伴设置「例行任务 → 夜间学习」。 */
   nightlyLearning: {
     get(botId: string): Promise<NightlyLearningView>;

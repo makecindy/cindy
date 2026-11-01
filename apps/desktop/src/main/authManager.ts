@@ -46,6 +46,7 @@ import {
   type SocialProvider,
 } from '@cindy/auth-client';
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
+import { linuxCredentialFailureFields } from './linuxPasswordStore.js';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -554,10 +555,44 @@ function isCredentialEncryptionAvailable(): boolean {
     } catch {
       // Diagnostics must not change credential read behavior.
     }
+    let backend: string | undefined;
+    try {
+      backend = (
+        safeStorage as { getSelectedStorageBackend?: () => string }
+      ).getSelectedStorageBackend?.();
+    } catch {
+      backend = 'unavailable';
+    }
+    let passwordStoreSwitch: string | undefined;
+    try {
+      const commandLine = (app as {
+        commandLine?: {
+          hasSwitch?: (name: string) => boolean;
+          getSwitchValue?: (name: string) => string;
+        };
+      }).commandLine;
+      if (commandLine?.hasSwitch?.('password-store')) {
+        const fromCommandLine = commandLine.getSwitchValue?.('password-store');
+        if (typeof fromCommandLine === 'string') passwordStoreSwitch = fromCommandLine;
+      }
+    } catch {
+      passwordStoreSwitch = undefined;
+    }
+    if (passwordStoreSwitch === undefined) {
+      const prefix = '--password-store=';
+      const arg = process.argv.find((item) => item.startsWith(prefix));
+      if (arg) passwordStoreSwitch = arg.slice(prefix.length);
+    }
     log.warn('credential encryption backend unavailable', {
       appReady: app.isReady(),
       screenState,
       electronVersion: process.versions.electron,
+      ...linuxCredentialFailureFields({
+        platform: process.platform,
+        env: process.env,
+        backend,
+        passwordStoreSwitch,
+      }),
     });
   }
   return available;
@@ -722,16 +757,31 @@ function writeAtomicSafeCiphertext(key: string, ciphertext: string): boolean {
 
 function isAtomicPersistedSecretAbsent(key: string): boolean {
   if (!isCredentialEncryptionAvailable()) return false;
-  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-  for (const candidate of [filepath, `${filepath}.bak`]) {
+  return atomicPersistedSecretPresence(key) === 'absent';
+}
+
+/** File presence only. Encryption availability must not turn a missing file into an existing one. */
+function atomicPersistedSecretPresence(key: string): 'absent' | 'present' | 'unknown' {
+  const filepath = path.join(SAFE_STORAGE_DIR(), key + '.enc');
+  for (const candidate of [filepath, filepath + '.bak']) {
     try {
       fs.accessSync(candidate, fs.constants.F_OK);
-      return false;
+      return 'present';
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return 'unknown';
     }
   }
-  return true;
+  return 'absent';
+}
+
+function logUnreadableEncryptedRecord(
+  key: string,
+  presentMessage: string,
+  absentMessage: string,
+): void {
+  const absentAndUnavailable =
+    !isCredentialEncryptionAvailable() && atomicPersistedSecretPresence(key) === 'absent';
+  log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
 function writeAtomicSafe(key: string, value: string): boolean {
@@ -861,7 +911,11 @@ function readAuthAccountLogoutTombstones(options: { recoverInvalid?: boolean } =
   const raw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   if (raw === null) {
     if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)) return [];
-    log.warn('encrypted auth logout tombstones are temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+      'encrypted auth logout tombstones are temporarily unreadable',
+      'encrypted auth logout tombstones are absent and the credential backend is unavailable',
+    );
     if (options.recoverInvalid) return [];
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -972,7 +1026,11 @@ function readAuthAccountVault(
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
     }
-    log.warn('encrypted auth account vault exists but is temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_VAULT_KEY,
+      'encrypted auth account vault exists but is temporarily unreadable',
+      'encrypted auth account vault is absent and the credential backend is unavailable',
+    );
     if (options.allowUnreadable) return emptyAuthAccountVault();
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -5514,6 +5572,16 @@ async function runLoginAction(
   const loginRealm = startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm);
   const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
+  // User-triggered check of the already selected backend. Empty desktop identity
+  // is not itself a reason to refuse a code request or browser login.
+  const assertLoginCredentialStoreReady = (): void => {
+    if (isCredentialEncryptionAvailable()) return;
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account credentials are temporarily unavailable',
+    );
+  };
   try {
     // Cancellation is intercepted by dispatchLoginAction so it can settle the
     // already-running browser action instead of starting a second action.
@@ -5697,6 +5765,7 @@ async function runLoginAction(
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
+      assertLoginCredentialStoreReady();
       await client.requestCode(action.kind, action.identifier, {
         captchaToken: action.captchaToken,
       });
@@ -5712,6 +5781,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'verify-code') {
+      assertLoginCredentialStoreReady();
       return {
         success: true,
         state: await acceptLoginOutcome(
@@ -5722,6 +5792,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'start-browser') {
+      assertLoginCredentialStoreReady();
       if (action.kind === 'social') {
         const provider = action.providerOrConnectionId as SocialProvider;
         if (!providerConfig?.social.includes(provider)) {

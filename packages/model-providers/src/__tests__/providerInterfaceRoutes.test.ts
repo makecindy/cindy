@@ -16,7 +16,7 @@ describe('documented supplier interfaces', () => {
     for (const agent of provider.agents) {
       expect(provider.models[agent]?.[0]).toMatchObject({
         contextWindow: 512000, maxOutput: 65536, supportsImageInput: true,
-        selectedInterface: { api: agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
+        selectedInterface: { api: agent === 'pi' ? 'openai-completions' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
       });
     }
     for (const contextWindow of [undefined, 510000]) {
@@ -26,6 +26,20 @@ describe('documented supplier interfaces', () => {
       } } }, { modelRegistry: catalog.modelRegistry });
       expect(saved.models.pi?.[0]).toMatchObject({ contextWindow: contextWindow ?? 512000, defaultEnabled: false });
       expect(saved.routing.pi?.upstream).toBe('https://apihub.agnes-ai.com/v1');
+    }
+    // Pi auto follows the Chat default even on an old Messages connection;
+    // explicit V6 selections and legacy per-model API choices remain intact.
+    for (const [selection, api] of [
+      [{ interfaceId: 'auto' }, 'openai-completions'],
+      [{ interfaceId: 'agnes-anthropic-messages' }, 'anthropic-messages'],
+      [{ interfaceId: 'agnes-openai-responses' }, 'openai-responses'],
+      [{ piApi: 'anthropic-messages' }, 'anthropic-messages'],
+    ] as const) {
+      const saved = buildUserProvider({ id: 'saved-agnes', name: 'Agnes', runtimes: { pi: {
+        catalogPresetId: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', wireProtocol: 'anthropic-messages',
+        models: [{ id: 'agnes-3.0-flash', name: 'Agnes', ...selection }],
+      } } }, { presets: catalog.presets, modelRegistry: catalog.modelRegistry });
+      expect(saved.models.pi?.[0]).toMatchObject({ api, selectedInterface: { api }, userModelConfig: selection });
     }
   });
   // r4365890304 (unit): import saved Model Studio connections through the
@@ -42,7 +56,8 @@ describe('documented supplier interfaces', () => {
         models: [{ id: 'qwen3.7-flash', contextWindow: 64000, defaultEnabled: false }],
       }])) });
     for (const agent of provider.agents) {
-      const api = agent === 'codex' ? 'openai-completions' : 'anthropic-messages';
+      // Codex uses Model Studio's official Responses API for the documented models.
+      const api = agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
       expect(provider.models[agent]![0]).toMatchObject({
         api, contextWindow: 64000, defaultEnabled: false,
         selectedInterface: { profileId: `${presetId}-${api}`, route: {
@@ -51,10 +66,9 @@ describe('documented supplier interfaces', () => {
       });
     }
   });
-  it.each([
-    ['zhipu-glm-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
-    ['zhipu-glm-global', 'https://api.z.ai/api/coding/paas/v4'],
-  ])('declares the server %s Coding endpoint without redirecting public API connections', (presetId, codingBase) => {
+  it('declares the server zhipu-glm-cn Coding endpoint without redirecting public API connections', () => {
+    const presetId = 'zhipu-glm-cn';
+    const codingBase = 'https://open.bigmodel.cn/api/coding/paas/v4';
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === presetId)!;
     for (const [baseUrl, profileId] of [
       [codingBase, `${presetId}-coding-openai-completions`],
@@ -67,6 +81,21 @@ describe('documented supplier interfaces', () => {
       expect(provider.models.codex![0]).toMatchObject({
         api: 'openai-completions', contextWindow: 64000, defaultEnabled: false,
         selectedInterface: { profileId, route: { baseUrl, wireProtocol: 'openai-chat' } },
+      });
+    }
+  });
+  // Z.ai documents a dedicated Responses endpoint for Codex; both saved bases share its credential origin.
+  it('moves saved zhipu-glm-global Codex connections to the official Responses endpoint', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'zhipu-glm-global')!;
+    for (const baseUrl of ['https://api.z.ai/api/coding/paas/v4', 'https://api.z.ai/api/paas/v4']) {
+      const provider = buildUserProvider({ id: 'glm', name: 'GLM', runtimes: { codex: {
+        ...preset.runtimes.codex!, baseUrl, catalogPresetId: 'zhipu-glm-global',
+        models: [{ id: 'glm-5.3-flash', name: 'GLM', contextWindow: 64000, defaultEnabled: false }],
+      } } }, { presets: BUNDLED_CATALOG.presets });
+      expect(provider.models.codex![0]).toMatchObject({
+        api: 'openai-responses', contextWindow: 64000, defaultEnabled: false,
+        selectedInterface: { profileId: 'zhipu-glm-global-openai-responses',
+          route: { baseUrl: 'https://api.z.ai/api/v1', wireProtocol: 'openai-responses' } },
       });
     }
   });
@@ -83,24 +112,26 @@ describe('documented supplier interfaces', () => {
       });
     }
   });
-  it('keeps every preset HTTP API consistent with the actual route after import', () => {
-    for (const preset of BUNDLED_CATALOG.presets ?? []) {
-      const provider = buildUserProvider({ id: 'audit', name: preset.id, runtimes:
-        Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
-          ...runtime, catalogPresetId: preset.id,
-          models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
-        }])) }, { presets: BUNDLED_CATALOG.presets });
-      for (const agent of provider.agents) for (const model of provider.models[agent] ?? []) {
-        const api = model.api ?? model.piApi;
-        if (!api || !['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai', 'google-vertex', 'azure-openai-responses'].includes(api)) continue;
-        if (model.route?.requestPath || provider.routing[agent]?.requestPath) continue;
-        const expected = api === 'openai-completions' ? 'openai-chat'
-          : api === 'azure-openai-responses' ? 'openai-responses'
-          : api === 'google-vertex' ? 'google-generative-ai' : api;
-        const actual = model.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol
-          ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
-        expect(actual, `${preset.id}/${agent}/${model.id}`).toBe(expected);
-      }
+  // Unit: buildUserProvider must preserve each preset's API/route agreement.
+  // PR #7832's Windows CI exceeded 5s with all presets in one test; one preset is
+  // the independent input. Keep every preset, engine and model assertion, with
+  // the default timeout applying separately to each imported connection.
+  it.each(BUNDLED_CATALOG.presets ?? [])('keeps $id HTTP APIs consistent with the actual routes after import', preset => {
+    const provider = buildUserProvider({ id: 'audit', name: preset.id, runtimes:
+      Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+        models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
+      }])) }, { presets: BUNDLED_CATALOG.presets });
+    for (const agent of provider.agents) for (const model of provider.models[agent] ?? []) {
+      const api = model.api ?? model.piApi;
+      if (!api || !['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai', 'google-vertex', 'azure-openai-responses'].includes(api)) continue;
+      if (model.route?.requestPath || provider.routing[agent]?.requestPath) continue;
+      const expected = api === 'openai-completions' ? 'openai-chat'
+        : api === 'azure-openai-responses' ? 'openai-responses'
+        : api === 'google-vertex' ? 'google-generative-ai' : api;
+      const actual = model.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol
+        ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
+      expect(actual, `${preset.id}/${agent}/${model.id}`).toBe(expected);
     }
   });
   it.each(['claude-code', 'codex', 'pi'] as const)('repairs saved Responses/Chat disagreement for %s without resetting user choices', agent => {
@@ -121,7 +152,7 @@ describe('documented supplier interfaces', () => {
     ['huggingface', 'codex', 'https://router.huggingface.co/v1', 'https://router.huggingface.co/v1', 'openai-responses'],
     ['lmstudio', 'codex', 'http://127.0.0.1:1234/v1', 'http://127.0.0.1:1234/v1', 'openai-responses'],
     ['litellm', 'claude-code', 'http://127.0.0.1:4000/v1', 'http://127.0.0.1:4000', 'anthropic-messages'],
-    ['longcat', 'codex', 'https://api.longcat.chat/openai/v1', 'https://api.longcat.chat/openai/v1', 'openai-completions'],
+    ['longcat', 'codex', 'https://api.longcat.chat/openai/v1', 'https://api.longcat.chat/openai/v1', 'openai-responses'],
   ] as const)('imports newly discovered %s models using the declared %s interface', (preset, agent, base, target, api) => {
     const provider = buildUserProvider({ id: 'account', name: 'Account', runtimes: {
       [agent]: { catalogPresetId: preset, baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: 'new-model', name: 'New', contextWindow: 64000, defaultEnabled: false }] },

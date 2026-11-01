@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-22T00:00:00.000Z",
+  "generatedAt": "2026-10-30T00:00:00.000Z",
   "source": "pi",
   "providers": {
     "amazon-bedrock": [
@@ -954,7 +954,7 @@
       },
       {
         "id": "deepseek.v3.2",
-        "name": "DeepSeek-V3.2",
+        "name": "DeepSeek V3.2",
         "upstream": "https://bedrock-runtime.us-east-1.amazonaws.com",
         "contextWindow": 163840,
         "maxOutput": 81920,
@@ -6948,14 +6948,11 @@
         "supportsImageInput": false,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
           "max"
         ],
-        "defaultEffort": "medium",
+        "defaultEffort": "high",
         "cost": {
           "input": 0.13,
           "output": 0.26,
@@ -6967,20 +6964,21 @@
             "api": "openai-completions",
             "thinkingLevelMap": {
               "off": "none",
-              "minimal": "minimal",
+              "minimal": null,
               "low": "low",
-              "medium": "medium",
+              "medium": null,
               "high": "high",
-              "xhigh": "xhigh",
+              "xhigh": null,
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "supportsLongCacheRetention": false,
               "thinkingFormat": "openai"
             }
@@ -7068,7 +7066,7 @@
         "cost": {
           "input": 1.32,
           "output": 3.96,
-          "cacheRead": 0,
+          "cacheRead": 0.132,
           "cacheWrite": 0
         },
         "execution": {
@@ -7084,12 +7082,13 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "supportsLongCacheRetention": false,
               "thinkingFormat": "openai"
             }
@@ -8040,6 +8039,226 @@
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
               "supportsStrictMode": true,
+              "supportsLongCacheRetention": false,
+              "thinkingFormat": "openai"
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://inference.baseten.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 32768,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.007,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "sendSessionAffinityHeaders": true,
+              "supportsLongCacheRetention": false,
+              "thinkingFormat": "openai"
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://inference.baseten.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 262144,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.007,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "sendSessionAffinityHeaders": true,
+              "supportsLongCacheRetention": false,
+              "thinkingFormat": "openai"
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast",
+        "name": "DeepSeek V4.1 Flash 1017 Fast",
+        "upstream": "https://inference.baseten.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 262144,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.6,
+          "output": 2.4,
+          "cacheRead": 0.014,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "sendSessionAffinityHeaders": true,
+              "supportsLongCacheRetention": false,
+              "thinkingFormat": "openai"
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash-Fast",
+        "name": "DeepSeek V4.1 Flash Fast",
+        "upstream": "https://inference.baseten.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 32768,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.6,
+          "output": 2.4,
+          "cacheRead": 0.014,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens",
+              "sendSessionAffinityHeaders": true,
               "supportsLongCacheRetention": false,
               "thinkingFormat": "openai"
             }
@@ -9600,7 +9819,7 @@
         "id": "workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731",
         "name": "DeepSeek V4 Flash 0731",
         "upstream": "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
-        "contextWindow": 1310720,
+        "contextWindow": 1048576,
         "maxOutput": 1048576,
         "modalities": {
           "input": [
@@ -9638,7 +9857,6 @@
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": false,
               "maxTokensField": "max_tokens",
-              "supportsStrictMode": false,
               "supportsLongCacheRetention": false,
               "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true,
@@ -9689,7 +9907,57 @@
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": false,
               "maxTokensField": "max_tokens",
-              "supportsStrictMode": false,
+              "supportsLongCacheRetention": false,
+              "sendSessionAffinityHeaders": true,
+              "requiresReasoningContentOnAssistantMessages": true,
+              "thinkingFormat": "deepseek"
+            }
+          }
+        }
+      },
+      {
+        "id": "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+        "name": "Deepseek V4.1 Flash 1017",
+        "upstream": "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+        "contextWindow": 1048576,
+        "maxOutput": 1048576,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": "high",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": false,
+              "maxTokensField": "max_tokens",
               "supportsLongCacheRetention": false,
               "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true,
@@ -10394,7 +10662,7 @@
         "id": "@cf/deepseek-ai/deepseek-v4-flash-0731",
         "name": "DeepSeek V4 Flash 0731",
         "upstream": "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
-        "contextWindow": 1310720,
+        "contextWindow": 1048576,
         "maxOutput": 1048576,
         "modalities": {
           "input": [
@@ -10430,6 +10698,7 @@
             "compat": {
               "supportsStore": false,
               "supportsDeveloperRole": false,
+              "supportsStrictMode": true,
               "supportsLongCacheRetention": false,
               "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true,
@@ -10478,6 +10747,57 @@
             "compat": {
               "supportsStore": false,
               "supportsDeveloperRole": false,
+              "supportsStrictMode": true,
+              "supportsLongCacheRetention": false,
+              "sendSessionAffinityHeaders": true,
+              "requiresReasoningContentOnAssistantMessages": true,
+              "thinkingFormat": "deepseek"
+            }
+          }
+        }
+      },
+      {
+        "id": "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+        "name": "Deepseek V4.1 Flash 1017",
+        "upstream": "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 1048576,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": "high",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": true,
               "supportsLongCacheRetention": false,
               "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true,
@@ -11203,6 +11523,56 @@
     ],
     "deepseek": [
       {
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://api.deepseek.com",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "maxTokensField": "max_tokens",
+              "requiresReasoningContentOnAssistantMessages": true,
+              "thinkingFormat": "deepseek",
+              "supportsStrictMode": true
+            }
+          }
+        }
+      },
+      {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
         "upstream": "https://api.deepseek.com",
@@ -11321,9 +11691,9 @@
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.435,
-          "output": 0.87,
-          "cacheRead": 0.003625,
+          "input": 1.32,
+          "output": 3.96,
+          "cacheRead": 0.044,
           "cacheWrite": 0
         },
         "execution": {
@@ -11341,7 +11711,9 @@
               "supportsDeveloperRole": false,
               "maxTokensField": "max_tokens",
               "requiresReasoningContentOnAssistantMessages": true,
-              "thinkingFormat": "deepseek"
+              "thinkingFormat": "deepseek",
+              "supportsStrictMode": true,
+              "supportsMidConvoSystemMessages": true
             }
           }
         }
@@ -11468,6 +11840,110 @@
               "supportsEagerToolInputStreaming": false,
               "supportsCacheControlOnTools": false,
               "supportsLongCacheRetention": false
+            }
+          }
+        }
+      },
+      {
+        "id": "accounts/fireworks/models/deepseek-v4p1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://api.fireworks.ai/inference",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "allowEmptySignature": true,
+              "sendSessionAffinityHeaders": true,
+              "supportsEagerToolInputStreaming": false,
+              "supportsCacheControlOnTools": false,
+              "supportsLongCacheRetention": false,
+              "forceAdaptiveThinking": true
+            }
+          }
+        }
+      },
+      {
+        "id": "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://api.fireworks.ai/inference",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "allowEmptySignature": true,
+              "sendSessionAffinityHeaders": true,
+              "supportsEagerToolInputStreaming": false,
+              "supportsCacheControlOnTools": false,
+              "supportsLongCacheRetention": false,
+              "forceAdaptiveThinking": true
             }
           }
         }
@@ -12128,6 +12604,58 @@
               "supportsEagerToolInputStreaming": false,
               "supportsCacheControlOnTools": false,
               "supportsLongCacheRetention": false
+            }
+          }
+        }
+      },
+      {
+        "id": "accounts/fireworks/routers/deepseek-flash-latest",
+        "name": "DeepSeek Flash Latest",
+        "upstream": "https://api.fireworks.ai/inference",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "allowEmptySignature": true,
+              "sendSessionAffinityHeaders": true,
+              "supportsEagerToolInputStreaming": false,
+              "supportsCacheControlOnTools": false,
+              "supportsLongCacheRetention": false,
+              "forceAdaptiveThinking": true
             }
           }
         }
@@ -15454,6 +15982,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15464,7 +15993,7 @@
         "name": "DeepSeek-R1-0528",
         "upstream": "https://router.huggingface.co/v1",
         "contextWindow": 163840,
-        "maxOutput": 163840,
+        "maxOutput": 32768,
         "modalities": {
           "input": [
             "text"
@@ -15492,6 +16021,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15525,6 +16055,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15558,6 +16089,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15596,6 +16128,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15634,6 +16167,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15672,6 +16206,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15717,6 +16252,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15764,6 +16300,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15808,6 +16345,7 @@
               "max": null
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -15854,6 +16392,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -18210,6 +18749,103 @@
               "max": "max"
             },
             "compat": {
+              "supportsDeveloperRole": false
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://router.huggingface.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsDeveloperRole": false
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://router.huggingface.co/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
               "supportsDeveloperRole": false
             }
           }
@@ -20602,6 +21238,60 @@
               "maxTokensField": "max_tokens",
               "supportsStrictMode": false,
               "supportsLongCacheRetention": false,
+              "requiresReasoningContentOnAssistantMessages": true,
+              "thinkingFormat": "deepseek"
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://integrate.api.nvidia.com/v1",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "headers": {
+              "NVCF-POLL-SECONDS": "3600"
+            },
+            "thinkingLevelMap": {
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": "high",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": false,
+              "maxTokensField": "max_tokens",
+              "supportsLongCacheRetention": false,
+              "supportsStrictMode": false,
               "requiresReasoningContentOnAssistantMessages": true,
               "thinkingFormat": "deepseek"
             }
@@ -28148,10 +28838,10 @@
       },
       {
         "id": "~deepseek/deepseek-v4-flash-latest",
-        "name": "DeepSeek V4 Flash Latest",
+        "name": "DeepSeek: DeepSeek V4 Flash Latest",
         "upstream": "https://openrouter.ai/api/v1",
         "contextWindow": 1048576,
-        "maxOutput": 131072,
+        "maxOutput": 943718,
         "modalities": {
           "input": [
             "text"
@@ -28163,14 +28853,15 @@
         "supportsImageInput": false,
         "reasoning": true,
         "efforts": [
+          "low",
           "high",
-          "xhigh"
+          "max"
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.04998,
-          "output": 0.09996,
-          "cacheRead": 0.009996,
+          "input": 0.0422,
+          "output": 0.1729,
+          "cacheRead": 0.0275,
           "cacheWrite": 0
         },
         "execution": {
@@ -28179,15 +28870,17 @@
             "thinkingLevelMap": {
               "off": "none",
               "minimal": null,
-              "low": null,
+              "low": "low",
               "medium": null,
               "high": "high",
-              "xhigh": "xhigh",
-              "max": null
+              "xhigh": null,
+              "max": "max"
             },
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -30544,8 +31237,8 @@
         "id": "deepseek/deepseek-chat",
         "name": "DeepSeek: DeepSeek V3",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 163840,
-        "maxOutput": 16384,
+        "contextWindow": 128000,
+        "maxOutput": 16000,
         "modalities": {
           "input": [
             "text"
@@ -30559,8 +31252,8 @@
         "efforts": [],
         "defaultEffort": null,
         "cost": {
-          "input": 0.32,
-          "output": 0.89,
+          "input": 0.2574,
+          "output": 1.0287,
           "cacheRead": 0,
           "cacheWrite": 0
         },
@@ -30569,7 +31262,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30578,8 +31273,8 @@
         "id": "deepseek/deepseek-chat-v3-0324",
         "name": "DeepSeek: DeepSeek V3 0324",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 163840,
-        "maxOutput": 147456,
+        "contextWindow": 128000,
+        "maxOutput": 115200,
         "modalities": {
           "input": [
             "text"
@@ -30593,9 +31288,9 @@
         "efforts": [],
         "defaultEffort": null,
         "cost": {
-          "input": 0.25,
-          "output": 1,
-          "cacheRead": 0,
+          "input": 0.29,
+          "output": 1.14,
+          "cacheRead": 0.11,
           "cacheWrite": 0
         },
         "execution": {
@@ -30603,7 +31298,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30612,8 +31309,8 @@
         "id": "deepseek/deepseek-chat-v3.1",
         "name": "DeepSeek: DeepSeek V3.1",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 161000,
-        "maxOutput": 144900,
+        "contextWindow": 163840,
+        "maxOutput": 32768,
         "modalities": {
           "input": [
             "text"
@@ -30632,9 +31329,9 @@
         ],
         "defaultEffort": "medium",
         "cost": {
-          "input": 0.55,
-          "output": 1.65,
-          "cacheRead": 0.55,
+          "input": 0.25,
+          "output": 0.95,
+          "cacheRead": 0.13,
           "cacheWrite": 0
         },
         "execution": {
@@ -30642,7 +31339,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30726,7 +31425,9 @@
             },
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30735,8 +31436,8 @@
         "id": "deepseek/deepseek-v3.1-terminus",
         "name": "DeepSeek: DeepSeek V3.1 Terminus",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 131072,
-        "maxOutput": 32768,
+        "contextWindow": 163840,
+        "maxOutput": 147456,
         "modalities": {
           "input": [
             "text"
@@ -30757,7 +31458,7 @@
         "cost": {
           "input": 0.27,
           "output": 1,
-          "cacheRead": 0.135,
+          "cacheRead": 0,
           "cacheWrite": 0
         },
         "execution": {
@@ -30765,7 +31466,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30774,7 +31477,7 @@
         "id": "deepseek/deepseek-v3.2",
         "name": "DeepSeek: DeepSeek V3.2",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 163840,
+        "contextWindow": 131072,
         "maxOutput": 65536,
         "modalities": {
           "input": [
@@ -30794,9 +31497,9 @@
         ],
         "defaultEffort": "medium",
         "cost": {
-          "input": 0.269,
-          "output": 0.4,
-          "cacheRead": 0.1345,
+          "input": 0.28,
+          "output": 0.42,
+          "cacheRead": 0.028,
           "cacheWrite": 0
         },
         "execution": {
@@ -30804,7 +31507,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30814,7 +31519,7 @@
         "name": "DeepSeek: DeepSeek V3.2 Exp",
         "upstream": "https://openrouter.ai/api/v1",
         "contextWindow": 163840,
-        "maxOutput": 65536,
+        "maxOutput": 147456,
         "modalities": {
           "input": [
             "text"
@@ -30843,7 +31548,9 @@
             "api": "openai-completions",
             "compat": {
               "supportsDeveloperRole": false,
-              "thinkingFormat": "openrouter"
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
             }
           }
         }
@@ -30852,8 +31559,8 @@
         "id": "deepseek/deepseek-v4-flash",
         "name": "DeepSeek: DeepSeek V4 Flash 0423",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 1024000,
-        "maxOutput": 384000,
+        "contextWindow": 1048575,
+        "maxOutput": 943717,
         "modalities": {
           "input": [
             "text"
@@ -30870,9 +31577,9 @@
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.08498,
-          "output": 0.16996,
-          "cacheRead": 0.016996,
+          "input": 0.091,
+          "output": 0.182,
+          "cacheRead": 0.0182,
           "cacheWrite": 0
         },
         "execution": {
@@ -30890,6 +31597,8 @@
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -30900,7 +31609,7 @@
         "name": "DeepSeek: DeepSeek V4 Flash 0731",
         "upstream": "https://openrouter.ai/api/v1",
         "contextWindow": 1048576,
-        "maxOutput": 943718,
+        "maxOutput": 131072,
         "modalities": {
           "input": [
             "text"
@@ -30912,14 +31621,15 @@
         "supportsImageInput": false,
         "reasoning": true,
         "efforts": [
+          "low",
           "high",
-          "xhigh"
+          "max"
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.065,
-          "output": 0.18,
-          "cacheRead": 0.016,
+          "input": 0.04444,
+          "output": 0.13332,
+          "cacheRead": 0.001414,
           "cacheWrite": 0
         },
         "execution": {
@@ -30928,15 +31638,17 @@
             "thinkingLevelMap": {
               "off": "none",
               "minimal": null,
-              "low": null,
+              "low": "low",
               "medium": null,
               "high": "high",
-              "xhigh": "xhigh",
-              "max": null
+              "xhigh": null,
+              "max": "max"
             },
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -30994,7 +31706,7 @@
         "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
         "upstream": "https://openrouter.ai/api/v1",
         "contextWindow": 1048576,
-        "maxOutput": 384000,
+        "maxOutput": 262144,
         "modalities": {
           "input": [
             "text",
@@ -31007,14 +31719,15 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
+          "low",
           "high",
-          "xhigh"
+          "max"
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.22,
-          "output": 0.66,
-          "cacheRead": 0.007,
+          "input": 0.2156,
+          "output": 0.6468,
+          "cacheRead": 0.00686,
           "cacheWrite": 0
         },
         "execution": {
@@ -31023,15 +31736,17 @@
             "thinkingLevelMap": {
               "off": "none",
               "minimal": null,
-              "low": null,
+              "low": "low",
               "medium": null,
               "high": "high",
-              "xhigh": "xhigh",
-              "max": null
+              "xhigh": null,
+              "max": "max"
             },
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -31059,9 +31774,9 @@
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 0.880266,
-          "output": 1.760532,
-          "cacheRead": 0.073356,
+          "input": 0.388716,
+          "output": 0.777432,
+          "cacheRead": 0.032393,
           "cacheWrite": 0
         },
         "execution": {
@@ -31079,6 +31794,8 @@
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -31088,8 +31805,8 @@
         "id": "deepseek/deepseek-v4-pro-0813",
         "name": "DeepSeek: DeepSeek V4 Pro 0813",
         "upstream": "https://openrouter.ai/api/v1",
-        "contextWindow": 1024000,
-        "maxOutput": 384000,
+        "contextWindow": 1048576,
+        "maxOutput": 393216,
         "modalities": {
           "input": [
             "text"
@@ -31101,14 +31818,15 @@
         "supportsImageInput": false,
         "reasoning": true,
         "efforts": [
+          "low",
           "high",
-          "xhigh"
+          "max"
         ],
         "defaultEffort": "high",
         "cost": {
-          "input": 1.12068,
-          "output": 3.36204,
-          "cacheRead": 0.037356,
+          "input": 0.66,
+          "output": 1.98,
+          "cacheRead": 0.022,
           "cacheWrite": 0
         },
         "execution": {
@@ -31117,15 +31835,17 @@
             "thinkingLevelMap": {
               "off": "none",
               "minimal": null,
-              "low": null,
+              "low": "low",
               "medium": null,
               "high": "high",
-              "xhigh": "xhigh",
-              "max": null
+              "xhigh": null,
+              "max": "max"
             },
             "compat": {
               "supportsDeveloperRole": false,
               "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
               "requiresReasoningContentOnAssistantMessages": true
             }
           }
@@ -43343,6 +44063,258 @@
             }
           }
         }
+      },
+      {
+        "id": "~deepseek/deepseek-flash-latest",
+        "name": "DeepSeek: DeepSeek Flash Latest",
+        "upstream": "https://openrouter.ai/api/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 943718,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.07,
+          "output": 0.5,
+          "cacheRead": 0.008,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsDeveloperRole": false,
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
+            }
+          }
+        }
+      },
+      {
+        "id": "~deepseek/deepseek-pro-latest",
+        "name": "DeepSeek: DeepSeek Pro Latest",
+        "upstream": "https://openrouter.ai/api/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 393216,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": false,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.1307,
+          "output": 8,
+          "cacheRead": 0.13,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsDeveloperRole": false,
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "name": "DeepSeek: DeepSeek V4.1 Flash",
+        "upstream": "https://openrouter.ai/api/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 393216,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.0342,
+          "output": 0.1368,
+          "cacheRead": 0.000684,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsDeveloperRole": false,
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
+              "requiresReasoningContentOnAssistantMessages": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash-1017",
+        "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+        "upstream": "https://openrouter.ai/api/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 393216,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.15,
+          "output": 0.6,
+          "cacheRead": 0.003,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsDeveloperRole": false,
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
+              "requiresReasoningContentOnAssistantMessages": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash:batch",
+        "name": "DeepSeek: DeepSeek V4.1 Flash (batch)",
+        "upstream": "https://openrouter.ai/api/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.05,
+          "output": 0.15,
+          "cacheRead": 0.004,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsDeveloperRole": false,
+              "thinkingFormat": "openrouter",
+              "supportsStrictMode": true,
+              "sendSessionAffinityHeaders": true,
+              "requiresReasoningContentOnAssistantMessages": true
+            }
+          }
+        }
       }
     ],
     "qwen-token-plan": [
@@ -43379,6 +44351,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -43427,6 +44400,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -43475,6 +44449,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -43523,6 +44498,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -43571,6 +44547,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44147,6 +45124,108 @@
               "max": null
             },
             "compat": {
+              "thinkingFormat": "qwen",
+              "supportsDeveloperRole": false,
+              "supportsStore": false,
+              "supportsReasoningEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "thinkingFormat": "qwen",
+              "supportsDeveloperRole": false,
+              "supportsStore": false,
+              "supportsReasoningEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-v4.1-flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44190,6 +45269,7 @@
           "pi": {
             "api": "openai-completions",
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44238,6 +45318,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44286,6 +45367,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44334,6 +45416,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44382,6 +45465,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -44958,6 +46042,108 @@
               "max": null
             },
             "compat": {
+              "thinkingFormat": "qwen",
+              "supportsDeveloperRole": false,
+              "supportsStore": false,
+              "supportsReasoningEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "thinkingFormat": "qwen",
+              "supportsDeveloperRole": false,
+              "supportsStore": false,
+              "supportsReasoningEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-v4.1-flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "contextWindow": 1000000,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -45008,6 +46194,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -45056,6 +46243,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -45104,6 +46292,7 @@
               "max": "max"
             },
             "compat": {
+              "supportsStrictMode": true,
               "thinkingFormat": "qwen",
               "supportsDeveloperRole": false,
               "supportsStore": false,
@@ -45513,16 +46702,18 @@
             "thinkingLevelMap": {
               "minimal": null,
               "low": null,
-              "medium": null
+              "medium": null,
+              "high": "high",
+              "xhigh": null
             },
             "compat": {
               "supportsStore": false,
               "supportsDeveloperRole": false,
-              "supportsReasoningEffort": false,
+              "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
               "thinkingFormat": "together",
-              "supportsStrictMode": false,
-              "supportsLongCacheRetention": false
+              "supportsLongCacheRetention": false,
+              "supportsStrictMode": false
             }
           }
         }
@@ -46349,6 +47540,53 @@
               "thinkingFormat": "together",
               "supportsStrictMode": false,
               "supportsLongCacheRetention": false
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://api.together.ai/v1",
+        "contextWindow": 1048576,
+        "maxOutput": 384000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "high"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 0.3,
+          "output": 1.2,
+          "cacheRead": 0.006,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-completions",
+            "thinkingLevelMap": {
+              "minimal": null,
+              "low": null,
+              "medium": null
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": false,
+              "maxTokensField": "max_tokens",
+              "thinkingFormat": "together",
+              "supportsLongCacheRetention": false,
+              "supportsStrictMode": false
             }
           }
         }
@@ -48371,7 +49609,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48406,7 +49647,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48464,14 +49708,17 @@
         "efforts": [],
         "defaultEffort": null,
         "cost": {
-          "input": 0.28,
-          "output": 0.42,
-          "cacheRead": 0.028,
+          "input": 0.62,
+          "output": 1.85,
+          "cacheRead": 0,
           "cacheWrite": 0
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48501,7 +49748,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48536,7 +49786,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48571,7 +49824,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48600,14 +49856,17 @@
         ],
         "defaultEffort": "medium",
         "cost": {
-          "input": 0.22,
-          "output": 0.66,
-          "cacheRead": 0.007,
+          "input": 0.2156,
+          "output": 0.6468,
+          "cacheRead": 0.0068,
           "cacheWrite": 0
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48642,7 +49901,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -48677,7 +49939,166 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "upstream": "https://ai-gateway.vercel.sh",
+        "contextWindow": 1048576,
+        "maxOutput": 32768,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.075,
+          "output": 0.3,
+          "cacheRead": 0.0015,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash-1017",
+        "name": "DeepSeek V4.1 Flash 1017",
+        "upstream": "https://ai-gateway.vercel.sh",
+        "contextWindow": 1048576,
+        "maxOutput": 1048576,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.075,
+          "output": 0.3,
+          "cacheRead": 0.0015,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash-1017-fast",
+        "name": "DeepSeek V4.1 Flash 1017 Fast",
+        "upstream": "https://ai-gateway.vercel.sh",
+        "contextWindow": 1048576,
+        "maxOutput": 262144,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.6,
+          "output": 2.4,
+          "cacheRead": 0.014,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
+          }
+        }
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash-fast",
+        "name": "DeepSeek V4.1 Flash Fast",
+        "upstream": "https://ai-gateway.vercel.sh",
+        "contextWindow": 1048576,
+        "maxOutput": 32768,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 0.6,
+          "output": 2.4,
+          "cacheRead": 0.014,
+          "cacheWrite": 0
+        },
+        "execution": {
+          "pi": {
+            "api": "anthropic-messages",
+            "compat": {
+              "allowEmptySignature": true
+            }
           }
         }
       },
@@ -56172,6 +57593,13 @@
         "deepseek-v4.1-flash"
       ],
       "checkedAt": "2026-09-13"
+    },
+    {
+      "url": "https://github.com/earendil-works/pi/releases/tag/v1.4.0",
+      "modelIds": [
+        "*deepseek*"
+      ],
+      "checkedAt": "2026-10-30"
     }
   ]
 }

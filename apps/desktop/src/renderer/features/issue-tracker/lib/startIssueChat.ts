@@ -1,7 +1,7 @@
 /**
  * startIssueChat —— 从 Issue 页一键开一个预填了 `/issue` 的新对话。
  *
- * 复用 contacts / Skillhub 的「不预创建会话」模式:只把命令预填进系统原生的
+ * 复用 Skillhub 的「不预创建会话」模式:只把命令预填进系统原生的
  * New Maker 草稿(composerDraftStore 以 NEW_MAKER_DRAFT_KEY 为键),调用方随后
  * navigate('/cc-agent/new')。用户在那里自己选 agent / 模型后回车,走正常建会话
  * 路径 —— 不绕过任何会话创建逻辑,也**不自动发送**(他还要补充描述)。

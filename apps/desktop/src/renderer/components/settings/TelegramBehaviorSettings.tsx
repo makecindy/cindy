@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { contactsService } from '@/lib/contactsService';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import type {
@@ -419,67 +418,6 @@ export function TelegramPersonaSettings() {
   );
 }
 
-/**
- * 智能通讯录接线状态引导(Chris 2026-07-30: 通讯录关着时自动记人静默失效,
- * 没有任何引导 — 在群聊节明示状态, 关着给一键开启)。
- */
-function ContactsAutoRegisterHint({ root }: { root: string }) {
-  const { t } = useTranslation();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void contactsService
-      .settingsGet()
-      .then((s) => {
-        if (!cancelled) setEnabled(s.enabled);
-      })
-      .catch(() => {
-        /* 通讯录服务不可用时不渲染引导 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (enabled === null) return null;
-  if (enabled) {
-    return (
-      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
-        {t(`${root}.groups.contactsOn`)}
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-11 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t(`${root}.groups.contactsOff`)}
-      </span>
-      <Button
-        variant="primary"
-        size="sm"
-        compact
-        loading={busy}
-        type="button"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void contactsService
-            .settingsSet(true)
-            .then(() => setEnabled(true))
-            .catch(() => {
-              /* 失败保持关闭态, 用户可去通讯录设置页重试 */
-            })
-            .finally(() => setBusy(false));
-        }}
-      >
-        {t(`${root}.groups.contactsEnable`)}
-      </Button>
-    </div>
-  );
-}
-
 /** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
 export function TelegramGroupActivationSettings({
   source = 'personal',
@@ -671,7 +609,6 @@ export function TelegramGroupActivationSettings({
           onRetry={() => setReloadToken((value) => value + 1)}
         />
       )}
-      <ContactsAutoRegisterHint root={root} />
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
           {t(`${root}.groups.empty`)}

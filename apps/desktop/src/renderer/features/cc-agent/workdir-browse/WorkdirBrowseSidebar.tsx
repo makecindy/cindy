@@ -37,6 +37,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 
@@ -202,8 +203,8 @@ export function WorkdirBrowseSidebar({
     if (mode !== 'search') return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      // 让位:DocSearchBar 在,先让它的 Esc handler 处理,自己跳过。
-      if (document.querySelector('[data-doc-search-bar]')) return;
+      // 前景文档预览或 DocSearchBar 先处理 Esc，保留后台项目搜索。
+      if (getTextPreviewSearchHost() || document.querySelector('[data-doc-search-bar]')) return;
       e.preventDefault();
       e.stopPropagation();
       setMode('tree');

@@ -1311,6 +1311,20 @@ describe('Agent Island display state', () => {
     expect(silent && completedReplySummary(silent)).toBe('');
   });
 
+  // Unit regression #7972: first events and later metadata must display the
+  // selected project even when execution occurs in an unrelated checkout.
+  it('uses explicit project membership for initial and updated island metadata', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandUserPrompt(state, {
+      sessionId: 'project-task', workingDir: '/tmp/checkout', projectDir: '/products/Chosen', workspaceKind: 'project',
+    }, 'Work', 1000);
+    expect(buildAgentIslandDisplayState(state, 1001).sessions[0]?.projectName).toBe('Chosen');
+    applyAgentIslandMetadata(state, {
+      sessionId: 'project-task', workingDir: '/tmp/checkout', projectDir: '/products/Moved', workspaceKind: 'project',
+    }, 1002);
+    expect(buildAgentIslandDisplayState(state, 1003).sessions[0]?.projectName).toBe('Moved');
+  });
+
   it('does not display managed dialogue workspace folders as projects', () => {
     const state = createAgentIslandState();
 
@@ -1683,17 +1697,23 @@ describe('Agent Island display state', () => {
     });
   });
 
-  it('keeps ask_user waiting after a successful done instead of completing', () => {
+  // Waits that outlive the turn: a Codex question can be detached by task_complete,
+  // and an input handoff never blocks the turn (the agent ends it right after asking).
+  // Clearing them on done drops the session's waiting state (task dot, teammate status, phone).
+  it.each([
+    ['ask_user_question', askUserQuestionRequest('r1')],
+    ['input_handoff', { kind: 'input_handoff', requestId: 'r1', detail: 'Sign in' }],
+  ] as const)('keeps %s waiting after a successful done instead of completing', (kind, request) => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_000);
-    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, askUserQuestionRequest('r1'), 1_100);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, request, 1_100);
     applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, doneEvent(), 1_200);
 
     const display = buildAgentIslandDisplayState(state, 1_300);
     expect(display.sessions[0]).toMatchObject({
       sessionId: 'ask',
       phase: 'needs-interaction',
-      interactionKind: 'ask_user_question',
+      interactionKind: kind,
     });
     expect(display.pillSnapshot.pendingInteractionCount).toBe(1);
   });

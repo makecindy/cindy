@@ -130,6 +130,7 @@ export interface UseSidebarFilterReturn {
   creatorOptions: readonly TaskBotIdentity[];
   toggleCreator: (key: string) => void;
   setCreatorsAll: () => void;
+  setCreatorsNone: () => void;
   /** Project 维度。'all' = 全部；string[] = 仅显示其中的 normalized workingDir。 */
   projects: FilterProjects;
   /** projects === 'all' 时返回 null，方便 render 阶段做"是否在集合内"判定。 */
@@ -254,6 +255,10 @@ export function useSidebarFilter(
       return next;
     });
   }, [ownerId, normalizeCreators]);
+  const setCreatorsNone = useCallback(() => {
+    setCreators('none');
+    persistCreators('none', ownerId);
+  }, [ownerId]);
   const setCreatorsAll = useCallback(() => {
     setCreators('all');
     persistCreators('all', ownerId);
@@ -645,6 +650,7 @@ export function useSidebarFilter(
     creatorOptions,
     toggleCreator,
     setCreatorsAll,
+    setCreatorsNone,
     status,
     projects,
     projectsAsSet,

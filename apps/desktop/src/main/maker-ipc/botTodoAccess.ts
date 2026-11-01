@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   TodoError,
   todoActionText,
@@ -14,7 +14,8 @@ import {
 } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { saveCancelledInputDelivery } from '../localDb/agentInputQueueSnapshots.js';
-import { botProfiles } from '../localDb/schema.js';
+import { botProfiles, botProfileVersions } from '../localDb/schema.js';
+import { readSystemSkillsOff } from '../bot-autonomy/follower.js';
 import { botProfileDir } from './botProfileFolder.js';
 import { broadcastBotWorkbenchChanged, readLegacyWorkbenchJudgments } from './botWorkbenchService.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
@@ -22,6 +23,8 @@ import { resolveWorkbenchCaller } from './botWorkbenchTools.js';
 import { createBotTodoStore, type TodoIngestInput, type TodoIngestResult } from './botTodoStore.js';
 
 export interface BotTodoAccess {
+  /** The owner turned off this teammate's Todos system Skill: `act` refuses; reading and editing still work. */
+  readonly todoOff: boolean;
   list(): Promise<{ items: TeammateTodo[]; version: 1 }>;
   patch(input: TodoPatch): Promise<TeammateTodo>;
   ingest(input: TodoIngestInput): Promise<TodoIngestResult>;
@@ -89,12 +92,19 @@ export async function todoAccess(botId: string, ownerAuthored = () => true): Pro
       id: botProfiles.id,
       status: botProfiles.status,
       sessionId: botProfiles.canonicalSessionId,
+      capabilities: botProfileVersions.capabilitiesJson,
     })
     .from(botProfiles)
+    .leftJoin(
+      botProfileVersions,
+      and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)),
+    )
     .where(eq(botProfiles.id, botId))
     .limit(1);
   assertCurrent();
   if (!bot || bot.status !== 'active') throw new TodoError('NOT_FOUND');
+  // 主人关掉了系统技能「待办」：已有待办照常可看可改，只是不再把待办交给伙伴去推进。
+  const todoOff = readSystemSkillsOff(bot.capabilities).includes('todo');
   const store = createBotTodoStore(
     path.join(botProfileDir(root, botId), 'todos.v1.json'),
     () => readLegacyWorkbenchJudgments(root, botId),
@@ -152,6 +162,7 @@ export async function todoAccess(botId: string, ownerAuthored = () => true): Pro
       changed();
   };
   return {
+    todoOff,
     list: async () => {
       const state = await recoverReceived();
       return { items: state.items, version: 1 as const };
@@ -184,6 +195,7 @@ export async function todoAccess(botId: string, ownerAuthored = () => true): Pro
       });
     },
     act: async (id: string, revision: number, requestId: string, locale?: string) => {
+      if (todoOff) throw new TodoError('SYSTEM_SKILL_OFF');
       if (!bot.sessionId || !dispatch) throw new TodoError('HOST_NOT_READY');
       await recoverReceived();
       const key = attemptKey(requestId);

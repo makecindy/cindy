@@ -18,6 +18,7 @@ vi.mock('../bots.js', () => ({
 }));
 
 import { remoteResourceRegistry } from '../../../device-link/remoteResourceRegistry.js';
+import { createIpcError } from '../../../../shared/ipc-errors.js';
 import { setBotRemoteMessageService } from '../../../maker-ipc/botRemoteMessageReceiver.js';
 import { registerBotRemoteResourceProvider } from '../botRemoteResourceProvider.js';
 
@@ -59,6 +60,12 @@ it('rejects a previously discovered hidden companion and allows it again after r
     notify({ sessionId: 'session-1', previous, current });
     expect((await list()).items[0].display.generation).toEqual({ phase: workingPhase, startedAt: 123 });
     expect(activity.invalidate).toHaveBeenCalledWith('session-1');
+  }
+  // Previously the roster dropped waiting/error/completion and only sent generation.
+  for (const phase of ['needs-interaction', 'error', 'completed']) {
+    activity.snapshot.mockReturnValue({ phase });
+    expect((await list()).items[0].display.teammateActivity).toEqual({ phase });
+    expect((await list()).items[0].display.generation).toBeUndefined();
   }
   activity.snapshot.mockReturnValue({ phase: 'idle' });
   expect((await list()).items[0].display.generation).toBeUndefined();
@@ -152,4 +159,31 @@ it('projects and polishes a running delegation, with canonical priority and term
   activity.snapshots.mockReturnValue([running('archived'), running('foreign')]);
   expect((await list()).items[0].display.generation).toBeUndefined();
   await expect(getCopy()).rejects.toMatchObject({ code: 'NOT_FOUND' });
+});
+
+it('reports a teammate this computer no longer has as not found, without failing the rest of the roster', async () => {
+  const present = {
+    id: 'bot-1', name: 'Sora', description: '', avatar: '', avatarColor: 'teal', status: 'active' as const,
+    canonicalSessionId: 'session-1', hiddenAt: null, pinnedAt: null, currentVersion: 1, updatedAt: 1, activityAt: 1,
+  };
+  db.list.mockImplementation(async () => [present]);
+  db.get.mockImplementation(async (id: string) => {
+    if (id === 'gone') throw createIpcError('NOT_FOUND', 'Bot 不存在');
+    return { ...present, id };
+  });
+  const context = { controllerDeviceId: 'remote-mac' };
+  const client = { protocolVersion: 1, primitives: ['markdown'] };
+  const listed = await remoteResourceRegistry.list(context, { client, collectionId: 'teammates' });
+  expect(listed.items.map((item) => item.ref.id)).toEqual(['bot-1']);
+  await expect(remoteResourceRegistry.get(context, { client,
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'gone' } }))
+    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
+  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
+    actionId: 'send-message', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'gone' },
+    input: { senderBotId: 'sender', messageId: 'delivery-1', message: 'hello' } }))
+    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
+  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
+    actionId: 'todo-daily-check', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' },
+    input: { enabled: true } }))
+    .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Teammate unavailable' });
 });

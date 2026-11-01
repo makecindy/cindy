@@ -22,6 +22,7 @@ Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回�
 - `UI_MOCK_TASKS`：运行中、等待确认、排队、置顶、超长标题、英文、无文件夹对话、自动化、
   已归档等任务；`登录页窄窗口错位排查` 一条覆盖标题、表格、代码块、列表、引用、思考与工具
   调用。
+  两条 `插件模型：…` 任务覆盖新任务选了插件模型后的说明行（选了模型、插件没回应）。
 - `buildUiMockRows()`：按 Desktop 数据库行的格式生成任务与消息。Mobile 平时从电脑收到的
   也是这些行，所以两端看到的是同一份内容。
 
@@ -73,6 +74,9 @@ pnpm mobile:sim:whoami -- --mock --json
 - 首页「伙伴」中同时提供单聊和「界面对比演示群」（`visual-comparison-group`）；群聊与单聊复用
   `ui-mock-rich-answer` 的消息内容，可返回首页切换，比较气泡与正文。数据入口为
   `apps/mobile/src/debug/teammateVisualFixture.ts`，无需真实账号或电脑。
+- 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
+  地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
+- 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 
 ## 可复用的展示项目：Orbit Garden
 
@@ -108,6 +112,12 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
 手机文件一致性回归：`apps/mobile/src/__tests__/visualMock.test.ts`。
 
 ## 数据边界
+
+手机 B2B 回归入口（仅 `--mock`）：
+`cindy://sessions/visual-teammate-b2b?deviceId=cindy-visual-mock-mac&resourceCollectionId=teammates&resourceKind=bot&resourceId=visual-bot-b2b`。
+该合成场景按收件、处理工具、发件、主人后续回复排列，内部助手正文 `B2B-INTERNAL-HIDDEN` 必须不可见；
+收发入口与处理记录沿正文左侧对齐，入口可打开两条完整往来并返回。用于 iOS/Android 真实界面及交互验收，
+不代表已验证真实设备同步或 APNs/FCM 送达。
 
 - 模拟数据只用于开发与界面验收，不进安装包逻辑，不上传，不触发真实 Agent。
 - 不在模拟数据里放真实姓名、邮箱、路径或聊天内容；要用真实数据预览手机界面时用

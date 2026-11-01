@@ -96,7 +96,9 @@ import {
   cancelProviderImport,
   finishProviderImportConfirm,
   previewProviderImport,
+  createProviderImportDraftsFromFile,
 } from '../provider-import/providerImport.js';
+import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
   builtinApiKeyPresentationId,
@@ -339,6 +341,8 @@ export interface ProviderHandlerDeps {
   accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Main's native file picker; no renderer-supplied paths or file contents. */
+  selectProviderImportFile?(event: unknown): Promise<string | null>;
   detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
@@ -481,6 +485,8 @@ export interface ProviderHandlerDeps {
    */
   readCodexContextWindowInfo?(target: ModelPriceOverrideTarget, sessionId?: string): Promise<CodexContextWindowInfo | null>;
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
+  readModelImageInputOverride?(target: ModelPriceOverrideTarget): boolean | null;
+  writeModelImageInputOverride?(targets: readonly ModelPriceOverrideTarget[], value: boolean | null): Promise<void>;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
   readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
@@ -1268,6 +1274,32 @@ export function registerProviderHandlers(
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
 
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
+    if (!deps.selectProviderImportFile) throwIpcError('INTERNAL', 'file picker unavailable');
+    const owner = providerImportScope();
+    let filePath: string | null;
+    try {
+      filePath = await deps.selectProviderImportFile(event);
+    } catch {
+      throwIpcError('PROVIDER_IMPORT_FILE_READ_FAILED', 'could not select provider import file');
+    }
+    if (!filePath) return null;
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    const bytes = await readProviderImportFile(filePath);
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    try {
+      const ids = createProviderImportDraftsFromFile(bytes, owner);
+      return ids.length === 1 ? ids[0] : ids;
+    } catch {
+      // JSON/schema errors may quote arbitrary secret-bearing input, including field names.
+      throwIpcError('PROVIDER_IMPORT_FILE_INVALID', 'invalid provider import configuration');
+    }
+  });
+
   registry.handle(
     MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW,
     async (event, importId: unknown, target?: unknown) => {
@@ -1912,6 +1944,37 @@ export function registerProviderHandlers(
     return { read: deps.readModelContextLimit, write: deps.writeModelContextLimit };
   };
 
+  const readImageInputTargets = (targets: ModelPriceOverrideTarget[]) => {
+    if (!deps.readModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    const values = targets.map((target) => deps.readModelImageInputOverride!(target));
+    return { value: values[0]!, mixed: values.some((value) => value !== values[0]) };
+  };
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return readImageInputTargets(parseContextTargets(input));
+  });
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, async (event, input: unknown, value: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    assertContextOwner(ownerInput);
+    const targets = parseContextTargets(input);
+    if (value !== null && typeof value !== 'boolean') throwIpcError('INVALID_PARAMS', 'image input must be boolean or null');
+    if (!deps.writeModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    if (deps.isOrganizationManagedProviderId(targets[0]!.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Model capabilities are managed by your organization');
+    }
+    const owner = captureProviderOwnerSession();
+    // Metadata does not mutate credentials or transport. Holding the provider
+    // route gate here would make Pi's refresh preview reject its own provider.
+    return enqueuePriceMutation(async () => {
+      if (value !== null) for (const target of targets) await requirePriceTargetModel(target);
+      assertProviderMutationOwner(owner, 'active account changed before setting image input');
+      await deps.writeModelImageInputOverride!(targets, value as boolean | null);
+      assertProviderMutationOwner(owner, 'active account changed after setting image input');
+      deps.broadcastChanged();
+      return readImageInputTargets(targets);
+    });
+  });
+
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const targets = parseContextTargets(input);
@@ -2421,7 +2484,8 @@ export function registerProviderHandlers(
   );
 
   // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
-  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const parsed = parseAccountUsageInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
     return deps.accountUsage(parsed);

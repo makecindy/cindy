@@ -6,7 +6,7 @@
  *     + 软删 messages + 重置 sessions
  *   - SESSION_RUNNING 守卫 (session.isTurnRunning() = true)
  *   - NO_LIVE_QUERY 守卫 (maker.getSession() = undefined)
- *   - NO_PRIOR_ASSISTANT
+ *   - 目标之前没有可续接的回复 → 只回滚文件、关闭会话、事务清原生会话并留交接
  *   - 老消息 user uuid 缺失 → 仍调 commitRewindFiles 但 userUuid='', maker 内部跳过
  *     SDK 文件回滚, forkSession=true 在下次 send 时兜底
  *   - commitRewindFiles 抛错 → DB tx 不跑 (commitRewindFiles 内部已经 try/catch
@@ -92,11 +92,20 @@ function useFakeSession(agentKind: 'claude-code' | 'codex' | 'pi') {
   getSessionMock.mockImplementation(() => fakeSession);
 }
 
+const closeSessionMock = vi.fn(async () => undefined);
 vi.mock('../maker-host/index.js', () => ({
   getMaker: () => ({
     getSession: getSessionMock,
     getSessionMeta: getSessionMetaMock,
+    closeSession: closeSessionMock,
   }),
+  withRehydrateCloseSuppressed: (_sessionId: string, fn: () => Promise<unknown>) => fn(),
+}));
+
+const listMessagesForAgentHandoffMock = vi.fn();
+vi.mock('../localDb/ipc/messages.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../localDb/ipc/messages.js')>()),
+  listMessagesForAgentHandoff: listMessagesForAgentHandoffMock,
 }));
 
 vi.mock('../git-context/prRefsStore.js', () => ({
@@ -169,7 +178,7 @@ const txMock = vi.fn((name: string, args: unknown) => {
   txCalls.push({ name, args });
   return Promise.resolve({});
 });
-const queryOneMock = vi.fn(async () => ({ cleared_at: null as number | null }));
+const queryOneMock = vi.fn(async (_sql?: string, _params?: unknown[]) => ({ cleared_at: null as number | null, created_at: null as number | null }));
 
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ drizzle: fakeDb, tx: txMock, queryOne: queryOneMock }),
@@ -188,7 +197,7 @@ beforeEach(async () => {
   txCalls.length = 0;
   txMock.mockClear();
   queryOneMock.mockReset();
-  queryOneMock.mockResolvedValue({ cleared_at: null });
+  queryOneMock.mockResolvedValue({ cleared_at: null, created_at: null });
   setLastAssistantTranscriptUuidMock.mockClear();
   previewRewindFilesMock.mockReset();
   commitRewindFilesMock.mockReset();
@@ -235,6 +244,9 @@ beforeEach(async () => {
   isTurnRunningMock.mockReturnValue(false);
   getSessionMock.mockReset();
   getSessionMetaMock.mockReset();
+  closeSessionMock.mockClear();
+  listMessagesForAgentHandoffMock.mockReset();
+  listMessagesForAgentHandoffMock.mockResolvedValue([]);
   // restore default fake Session
   useFakeSession('claude-code');
   getSessionMetaMock.mockImplementation(async () =>
@@ -885,19 +897,87 @@ describe('commitRewindAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('throws NO_PRIOR_ASSISTANT when target user msg has no preceding assistant with uuid', async () => {
+  it('no preceding reply: restores files, restarts the native session and carries the stopped message as handoff', async () => {
+    // 首条消息发出就停掉、再发第二条：第二条之前没有 Claude 回复可作续接点。
     selectQueue.push([makeUserMessageRow({
       agentMeta: JSON.stringify({ uuid: 'sdk-msg-uuid-target', sdkSessionId: 'sdk-uuid-old' }),
     })]); // target without transcript parent
     selectQueue.push([]); // agent_switch 边界守卫:无边界
-    selectQueue.push([]);                     // prior assistants — empty
+    selectQueue.push([]); // prior assistants — empty
+    selectQueue.push([makeSessionRow({ sdkSessionId: null })]); // post-update select
+    listMessagesForAgentHandoffMock.mockResolvedValue([
+      { clientId: 'stopped-id', role: 'user', content: { text: '先前被停掉的问题' }, createdAt: 2000, agentMeta: null, toolUseId: null },
+      { clientId: 'client-id', role: 'user', content: { text: 'hello' }, createdAt: 3000, agentMeta: null, toolUseId: null },
+    ]);
 
-    await expect(
-      commitRewindAtMessage('sess-1', 'client-id'),
-    ).rejects.toMatchObject({ code: 'NO_PRIOR_ASSISTANT' });
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledTimes(1);
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('sdk-msg-uuid-target', '', { rewindsToNativeThreadStart: true });
+    expect(closeSessionMock).toHaveBeenCalledWith('sess-1');
+    const txCall = txCalls.find((c) => c.name === 'rewind.commit');
+    if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
+    const reset = (txCall.args as { nativeContextReset?: { markerContent: string } }).nativeContextReset;
+    if (!reset) throw new Error('缺少 nativeContextReset');
+    const marker = JSON.parse(reset.markerContent) as { handoff: string; consumed: boolean };
+    expect(marker.consumed).toBe(false);
+    expect(marker.handoff).toContain('先前被停掉的问题');
+    expect(marker.handoff).not.toContain('hello');
+    expect(setLastAssistantTranscriptUuidMock).toHaveBeenCalledWith('sess-1', undefined);
+  });
+
+  it('ignores assistant replies from a native session abandoned by a context rebuild', async () => {
+    // 重建后的第一条消息：重建前的 assistant 仍可见，但它的 uuid 不在当前原生会话里。
+    selectQueue.push([makeUserMessageRow({
+      agentMeta: JSON.stringify({ uuid: 'sdk-msg-uuid-target', sdkSessionId: 'sdk-uuid-old' }),
+    })]);
+    selectQueue.push([]); // agent_switch 边界守卫:无边界
+    selectQueue.push([makeAssistantMessageRow({ createdAt: 2500 })]); // 重建前的 assistant
+    selectQueue.push([makeSessionRow({ sdkSessionId: null })]);
+    queryOneMock.mockImplementation(async (sql?: string) => ({
+      cleared_at: null,
+      created_at: sql?.includes('context_rebuild') ? 2800 : null,
+    }));
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('sdk-msg-uuid-target', '', { rewindsToNativeThreadStart: true });
+    expect(closeSessionMock).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('keeps rewinding after the session was closed by a previous restart (no live session, no native id)', async () => {
+    fakeSession = undefined;
+    selectQueue.push([{ agentKind: 'cc', sdkSessionId: null }]); // 脱离会话判定
+    selectQueue.push([makeUserMessageRow()]);
+    selectQueue.push([]); // agent_switch 边界守卫:无边界
+    selectQueue.push([]); // prior assistants
+    selectQueue.push([makeSessionRow({ sdkSessionId: null })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
 
     expect(commitRewindFilesMock).not.toHaveBeenCalled();
-    expect(txCalls).toHaveLength(0);
+    const txCall = txCalls.find((c) => c.name === 'rewind.commit');
+    expect(txCall?.args).toMatchObject({ nativeContextReset: expect.any(Object) });
+  });
+
+  it('first message: restarts the native session with an empty handoff', async () => {
+    selectQueue.push([makeUserMessageRow({
+      agentMeta: JSON.stringify({ uuid: 'sdk-msg-uuid-target', sdkSessionId: 'sdk-uuid-old' }),
+    })]);
+    selectQueue.push([]); // agent_switch 边界守卫:无边界
+    selectQueue.push([]); // prior assistants — empty
+    selectQueue.push([makeSessionRow({ sdkSessionId: null })]);
+    listMessagesForAgentHandoffMock.mockResolvedValue([
+      { clientId: 'client-id', role: 'user', content: { text: 'hello' }, createdAt: 3000, agentMeta: null, toolUseId: null },
+    ]);
+
+    await commitRewindAtMessage('sess-1', 'client-id', { allowFileRestore: false });
+
+    expect(commitRewindFilesMock).not.toHaveBeenCalled();
+    expect(closeSessionMock).toHaveBeenCalledWith('sess-1');
+    const txCall = txCalls.find((c) => c.name === 'rewind.commit');
+    const reset = (txCall?.args as { nativeContextReset?: { markerContent: string } }).nativeContextReset;
+    expect(JSON.parse(reset!.markerContent)).toMatchObject({ handoff: '', consumed: false });
   });
 
   it('OLD message (user uuid missing) still commits, calls commitRewindFiles with empty userUuid', async () => {
@@ -1105,7 +1185,7 @@ describe('commitRewindAtMessage', () => {
     enqueueCodexClearGeneration();
     selectQueue.push([]); // target 之前没有任何行
     selectQueue.push([]); // 时间线上也没有属于当前线程的 user 行
-    queryOneMock.mockResolvedValueOnce({ cleared_at: 4000 });
+    queryOneMock.mockResolvedValueOnce({ cleared_at: 4000, created_at: null });
 
     await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toMatchObject({
       code: 'REWIND_UNSUPPORTED_HISTORY',

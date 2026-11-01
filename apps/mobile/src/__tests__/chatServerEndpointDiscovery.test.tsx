@@ -32,7 +32,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
   return { mobileDurableOutbox: createDurableOutbox(storage) };
 });
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 
 const bases = { cn: 'https://hotfix.cindy.com.cn/cindy', global: 'https://hotfix.cindy.app/cindy' };
 const texts = Object.fromEntries(Object.entries(bases).map(([region, base]) => [region,

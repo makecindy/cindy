@@ -98,7 +98,7 @@ async function freezePackage(instanceId: string, expected: LocalPluginShareBindi
   const filePath = path.join(directory, 'plugin.cindy');
   try {
     await fs.writeFile(filePath, snapshot.bytes, { flag: 'wx', mode: 0o600 });
-    const inspected = await getGhostManager().inspect(filePath);
+    const inspected = await getGhostManager().inspect(filePath, 'stored-release');
     assertCurrent();
     const current = localInstallation(instanceId);
     const sha256 = createHash('sha256').update(snapshot.bytes).digest('hex');

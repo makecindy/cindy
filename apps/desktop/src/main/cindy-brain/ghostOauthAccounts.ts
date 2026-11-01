@@ -44,6 +44,7 @@ import {
   type GhostOauthFlowError,
   type GhostOauthLogger,
 } from './ghostOauthFlow.js';
+import { tokenBrokerIssuesClientId } from './ghostOauthBroker.js';
 import {
   changedBuiltinOauthClientSecretKeys,
   type GhostManifest,
@@ -390,8 +391,12 @@ export class GhostOauthAccountManager {
 
   /** client 凭证是否可用(用户自填或清单内置任一即可;设置页状态展示,不回明文)。 */
   clientConfigured(instanceKey: string, secretKey: string, decl?: GhostOauthDecl): boolean {
-    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置)。
-    if (decl?.tokenBroker) return typeof decl.clientId === 'string' && decl.clientId.length > 0;
+    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置);
+    // 由服务端签发应用身份的 broker 连 clientId 也不需要。
+    if (decl?.tokenBroker) {
+      return tokenBrokerIssuesClientId(decl.tokenBroker)
+        || (typeof decl.clientId === 'string' && decl.clientId.length > 0);
+    }
     if (this.clientCustomized(instanceKey, secretKey)) return true;
     return typeof decl?.clientId === 'string' && decl.clientId.length > 0;
   }
@@ -743,7 +748,7 @@ export class GhostOauthAccountManager {
       clientId = decl.clientId ?? null;
       clientSecret = decl.clientSecret;
     }
-    if (!clientId) return null;
+    if (!clientId && !tokenBrokerIssuesClientId(decl.tokenBroker)) return null;
     // brokerBounce → 双地址模型:公网弹跳地址由接线处解析器现拼(broker 基
     // 地址来自端点清单;当前 region 提供该服务时应为非空)。null 仅剩一种
     // 来源:宿主未接线
@@ -759,7 +764,7 @@ export class GhostOauthAccountManager {
       ...(decl.scopeDelimiter !== undefined ? { scopeDelimiter: decl.scopeDelimiter } : {}),
       pkce: decl.pkce,
       extraAuthorizeParams: decl.extraAuthorizeParams,
-      clientId,
+      ...(clientId ? { clientId } : {}),
       ...(clientSecret ? { clientSecret } : {}),
       ...(decl.redirectPort !== undefined ? { redirectPort: decl.redirectPort } : {}),
       ...(decl.tokenBroker !== undefined ? { tokenBroker: decl.tokenBroker } : {}),

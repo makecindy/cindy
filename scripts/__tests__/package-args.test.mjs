@@ -5,6 +5,7 @@
 // 被测逻辑以纯函数为主，版本占位契约包含少量仓库内文件 IO。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +14,10 @@ import { spawnSync } from 'node:child_process';
 import {
   PLATFORM_ARCHS,
   VERSIONLESS_VERSION,
+  assertPageManualCommitted,
+  buildBuildInfo,
   debianArch,
+  pageManualBuildInfo,
   parsePackageArgs,
   packageNodeOptions,
 } from '../../apps/desktop/scripts/ci/package-lib.mjs';
@@ -223,4 +227,26 @@ test('debianArch: deb 架构名与 maker-deb 一致', () => {
   assert.equal(debianArch('ia32'), 'i386');
   assert.equal(debianArch('armv7l'), 'armhf');
   assert.equal(debianArch('arm'), 'armel');
+});
+
+// build-info.mcpAppsManual 是发布侧(publish-page-manual.mjs)核对上传字节的依据:
+// 记的必须是安装包里实际打进去的手册;版本无关包与没有内置手册的构建记 null。
+// 有版本打包时手册有未提交改动必须拒绝,否则安装包内置的手册和发版提交对不上。
+test('build-info 记录安装包内手册,打包拒绝未提交的手册', () => {
+  const bytes = new TextEncoder().encode('# manual\n');
+  const manual = pageManualBuildInfo(bytes);
+  assert.deepEqual(manual, {
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    size: bytes.length,
+  });
+  assert.equal(pageManualBuildInfo(null), null);
+  const base = { version: '1.2.3', region: 'global', platform: 'darwin', arch: 'arm64', files: [], signing: {} };
+  assert.deepEqual(buildBuildInfo({ ...base, versionless: false, mcpAppsManual: manual }).mcpAppsManual, manual);
+  assert.equal(buildBuildInfo({ ...base, versionless: false, mcpAppsManual: null }).mcpAppsManual, null);
+  assert.equal(buildBuildInfo({ ...base, versionless: true, mcpAppsManual: manual }).mcpAppsManual, null);
+
+  const manualPath = 'apps/desktop/resources/system-skills/x/PAGE-GENERATION.md';
+  assert.doesNotThrow(() => assertPageManualCommitted({ porcelain: '', versionless: false, manualPath }));
+  assert.throws(() => assertPageManualCommitted({ porcelain: ' M x/PAGE-GENERATION.md\n', versionless: false, manualPath }), /未提交改动/);
+  assert.doesNotThrow(() => assertPageManualCommitted({ porcelain: ' M x/PAGE-GENERATION.md\n', versionless: true, manualPath }));
 });

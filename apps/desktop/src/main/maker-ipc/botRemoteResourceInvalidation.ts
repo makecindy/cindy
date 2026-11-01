@@ -19,6 +19,8 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { readTaskResponsibilities } from './botTaskResponsibility.js';
+import { parseBotGroupIdFromRouteKey } from '../../shared/botGroupChat.js';
+import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 
 const log = createLogger('maker-ipc:bot-remote-resource');
 
@@ -91,17 +93,20 @@ export function scheduleBotRemoteResourceChangedForSession(
     scheduledSessionLookups.delete(key);
     if (!isOwnerScopeCurrent(ownerScope)) return;
     void getDbClient().drizzle
-      .select({ botId: botSessionLinks.botId })
+      .select({ botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey })
       .from(botSessionLinks)
       .where(and(
         eq(botSessionLinks.sessionId, sessionId),
-        inArray(botSessionLinks.role, ['canonical', 'delegation']),
+        inArray(botSessionLinks.role, ['canonical', 'delegation', 'group']),
         isNull(botSessionLinks.archivedAt),
       ))
       .limit(1)
       .then(([link]) => {
         if (!link || !isOwnerScopeCurrent(ownerScope)) return;
-        broadcastBotRemoteResourceChanged(link.botId);
+        if (link.role === 'group') {
+          const groupId = parseBotGroupIdFromRouteKey(link.routeKey);
+          if (groupId) broadcastBotGroupRemoteResourceChanged(groupId);
+        } else broadcastBotRemoteResourceChanged(link.botId);
       })
       .catch((error: unknown) => {
         log.warn('resolve teammate Session invalidation failed', {

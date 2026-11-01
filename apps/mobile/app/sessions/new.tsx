@@ -1,3 +1,4 @@
+import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   reconcileNewSessionCatalogDraft,
@@ -379,6 +380,7 @@ import {
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -958,6 +960,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const {
+    visible: voiceSpeakerFiltered,
+    show: showVoiceSpeakerFiltered,
+    clear: clearVoiceSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
   // 内容即生效、一行文字也不收(composerVoiceHoldActive);下拉收起 / 失焦 / 草稿清空解除。
   const [composerVoiceHoldArmed, setComposerVoiceHoldArmed] = useState(false);
@@ -1565,9 +1572,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   });
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
-  // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
+  // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
+  const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
       // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
@@ -1612,12 +1620,22 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setComposerVoiceHoldArmed(false);
     firstMessageInputRef.current?.blur();
   }, [collapseComposerImages]);
+  const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
+  const composerCardMaxHeight = Math.max(COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, windowDimensions.height
+    - (keyboardState.visible ? keyboardState.height : safeAreaInsets.bottom)
+    - safeAreaInsets.top - navigationChrome.target - spacing.xl);
+  // 附件托盘与文字同在卡片里:计入 chrome,文字超出时由输入框自己滚、裁掉上方文字。
+  const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
+    + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
-    autoMaxContentHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
+    autoMaxContentHeight: Math.max(
+      MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
+      Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
+    ),
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,
-    composerChromeHeight: composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT,
+    composerChromeHeight,
     contentHeight: composerInputContentHeight,
     keyboardHeight: keyboardState.visible ? keyboardState.height : 0,
     onSnapToAuto: handleComposerSnapToAuto,
@@ -2997,6 +3015,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       || voiceIsProcessing
     ) return;
     setVoiceError(null);
+    clearVoiceSpeakerFiltered();
     let permissionRequestSeq: number | null = null;
     let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
@@ -3099,7 +3118,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           credential.settings?.language,
           CINDY_MANAGED_REFINER_PROVIDER,
         );
-      const audioGate = createMobileSpeakerGate();
+      const audioGate = createMobileSpeakerGate(() => {
+        if (voiceStartupSeqRef.current === startupSeq) showVoiceSpeakerFiltered();
+      });
       if (voiceStartupSeqRef.current !== startupSeq) {
         // This run never opened the microphone; release only its claimed ASR.
         void prewarmedVoice?.asr.stop().catch(() => undefined);
@@ -3203,7 +3224,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [openLink, selectedDeviceId, setFirstMessageDraft, voiceIsProcessing, voiceState]);
+  }, [clearVoiceSpeakerFiltered, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     return finishNewSessionVoiceRecording({ voiceStopInFlightRef, voiceControllerSessionRef, voiceRecordingActiveRef, voiceState, voiceStartupSeqRef, voiceStartupInFlightRef, firstMessageSelectionRef, firstMessageInputRef, setVoiceState, setVoiceError, requestAnimationFrame, formatRemoteError });
@@ -5465,11 +5486,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
 
           </ScrollView>
             <View style={[styles.composerCard, {
-              maxHeight: Math.max(COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, windowDimensions.height
-                - (keyboardState.visible ? keyboardState.height : safeAreaInsets.bottom)
-                - safeAreaInsets.top - navigationChrome.target - spacing.xl),
+              maxHeight: composerCardMaxHeight,
               paddingBottom: composerDock.enabled ? 0 : spacing.md,
             }]} testID="newSession.composer">
+              <PluginUiEnablePrompt deviceId={selectedDeviceId || undefined} deviceName={selectedDeviceLabel}
+                online={deviceLinkStatus === 'online' && !!selectedDeviceId && getPresenceAvailability(selectedDeviceId) !== false}
+                active={isShareTargetFocused && !creating} />
               <ComposerPluginPalette
                 deviceId={selectedDeviceId || undefined}
                 workingDir={draft.workspaceKind === 'project' ? draft.workingDir.trim() : undefined}
@@ -5527,7 +5549,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               {voiceStatusVisible ? (
                 <View style={styles.voiceStatusRow}>
                   <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
-                    {voiceError}
+                    {voiceStatusText}
                   </Text>
                   {canOpenVoiceSettings ? (
                     <Pressable
@@ -5551,6 +5573,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
+                  onAccessoryAboveHeightChange={setComposerAttachmentTrayHeight}
                   autoFocus={visualFocusComposer}
                   entryTransitionId={entryMorph?.id}
                   collapsedHeight={composerDock.enabled ? composerDock.pillHeight : undefined}

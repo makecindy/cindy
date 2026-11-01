@@ -9,9 +9,9 @@
  *   - Pinned Items 容器：padding [4, 12, 0, 12], gap 2
  *
  * 段标题右侧的 chevron（hover 时浮现）折叠/展开整段，与 DialogueSection 同款。
- * 段头另带"显示样式"弹层（ViewStyleMenu，文字版 / 卡片版）：卡片模式下挂在
- * 图钉 icon 上，列表模式下挂在 hover 浮现的 LayoutGrid 钮上——双向均可一键
- * 切换 sidebar.cardMode，与 Settings → 外观 的开关同源。
+ * 段头为纯文字标题，与伙伴、全部任务保持相同的文字起点与颜色。
+ * 右侧 hover 浮现的显示样式钮打开 ViewStyleMenu（文字 / 卡片 / 列表），
+ * 与 Settings → 外观 的开关同源。
  * 置顶**不做"最多显示 N 条"折叠**——置顶是用户主动钉住的内容,三种模式都全部显示。
  *
  * 拖拽：文字 / list 模式通过 SortableList 整行可拖；card 模式由 CardMasonry 在多列时
@@ -29,7 +29,6 @@ import {
   LayoutGrid,
   LayoutList,
   Check,
-  Pin,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -56,19 +55,17 @@ import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
-import { aggregateSessionLamps } from '../../lib/sessionLampAggregation';
+import {
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
+} from '../../hooks/helpers/sidebarFilterCore';
 import {
   getRemoteSessionActivity,
   isRemoteSessionActivityActive,
   subscribeRemoteSessionActivity,
-  useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
-
-// This header consumes only running state; unread tones remain on task rows.
-const EMPTY_ATTENTION_KINDS = new Map<string, never>();
-const EMPTY_SESSION_IDS = new Set<string>();
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -203,11 +200,14 @@ export function PinnedSection({
   const { mode, setMode } = useSidebarCardMode();
   // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadPinnedSectionCollapsed);
+  const toggleCollapsed = useCallback(() => {
+    const next = !collapsed;
+    setCollapsed(next);
+    persistPinnedSectionCollapsed(next);
+  }, [collapsed]);
 
   const visibleEntries = entries;
-  // 聚合不受段级折叠影响；远程状态与 rail 入口复用同一设备隔离的灯语。
-  const remoteActivityRevision = useRemoteSessionActivityRevision();
   const pinnedSessions = useMemo(
     () =>
       visibleEntries.flatMap((entry) =>
@@ -232,17 +232,6 @@ export function PinnedSection({
         }
       }),
     [pinnedSessions],
-  );
-  const hasRunningSession = useMemo(
-    () =>
-      aggregateSessionLamps(pinnedSessions, {
-        runningSessionIds,
-        notifications: EMPTY_SESSION_IDS,
-        attentionKinds: EMPTY_ATTENTION_KINDS,
-        urgentSessionIds: EMPTY_SESSION_IDS,
-      }).running,
-    // revision tracks the shared aggregate's remote store reads.
-    [pinnedSessions, runningSessionIds, remoteActivityRevision],
   );
   const visibleSessions = useMemo(
     () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),
@@ -358,23 +347,12 @@ export function PinnedSection({
           右侧固定的"显示样式"切换钮(justify-between 推到最右,与 DialogueSection
           等对话列表段头的右侧动作同款 hover 行为)。cardMode 只影响菜单里的勾选项,
           不改变段头文字样式或按钮位置。 */}
-      <div className="group/sidebar-header relative flex h-6 items-center justify-between pr-3 pl-6">
-        <span
-          aria-hidden
-          className={cn(
-            'absolute left-1.5 inline-flex shrink-0',
-            collapsed && hasRunningSession
-              ? 'text-[var(--status-bar-accent)] session-status-breathing'
-              : 'text-[var(--sidebar-list-muted)]',
-          )}
-        >
-          <Pin size={13} strokeWidth={2} />
-        </span>
+      <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={toggleCollapsed}
             aria-expanded={!collapsed}
             className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
@@ -384,7 +362,7 @@ export function PinnedSection({
             <Tip text={toggleLabel} side="bottom">
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
+                onClick={toggleCollapsed}
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(

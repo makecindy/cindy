@@ -24,6 +24,19 @@ describe('account-scoped home navigation overrides', () => {
     expect(await readHomeNavigationPreferences('account-a')).toEqual({});
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
+  // Unit: old collapsed records do not acquire an explicit avatar override; explicit false survives account switches.
+  // No prior test covered an independently persisted avatar setting.
+  it('keeps explicit avatar choices per account without inferring them from an old collapsed state', async () => {
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
+    expect((await readHomeNavigationPreferences('account-a')).showCollapsedTeammateAvatars).toBeUndefined();
+    await Promise.all([
+      saveHomeNavigationPreferences('account-a', { showCollapsedTeammateAvatars: true }),
+      saveHomeNavigationPreferences('account-b', { showCollapsedTeammateAvatars: false }),
+    ]);
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true, showCollapsedTeammateAvatars: true });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(await readHomeNavigationPreferences('account-c')).toEqual({});
+  });
   it('serializes overlapping patches and isolates accounts even when resource ids match', async () => {
     await Promise.all([
       saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) }),

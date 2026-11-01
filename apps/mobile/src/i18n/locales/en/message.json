@@ -162,6 +162,7 @@
     "mediaErrorLine": "Error: {{message}}",
     "mediaDeviceLinkHint": "Before opening, your phone asks the remote device to upload this media.",
     "controlDelete": "Delete message",
+    "controlEdit": "Edit",
     "controlRewind": "Back to here",
     "controlFork": "Start new session from here",
     "markdownDocAriaLabel": "Message body",
@@ -261,6 +262,14 @@
     "waitingMessage": "Waiting to send: {{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} chose {{model}} for this task",
+      "kept": {
+        "no-opinion": "{{plugin}} kept your choice for this task: {{model}}",
+        "failed": "{{plugin}} didn’t answer in time, so this task uses {{model}}",
+        "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Context reorganized, continuing",
       "labelTimeout": "Last turn didn't respond; context reorganized to continue",
@@ -420,8 +429,26 @@
     "sent": "Submitted",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
+    "downloadVideo": "Download video",
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."
+  },
+  "usageCost": {
+    "title": "Cost details",
+    "conversation": "Conversation",
+    "additional": "Additional fees",
+    "unknownModel": "Model not recorded",
+    "estimate": "Estimated value",
+    "charged": "Usage charge",
+    "loading": "Loading details…",
+    "unavailable": "Details are unavailable for this record.",
+    "explanation": "Grouped by model and channel. Subscription value is an estimate, not an extra charge. Only recorded costs are included; older records may have incomplete details.",
+    "source": {
+      "subscription": "Subscription",
+      "cindy-ai": "Cindy AI",
+      "provider": "API provider",
+      "unknown": "Channel not recorded"
+    }
   }
 }

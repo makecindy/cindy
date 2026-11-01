@@ -47,8 +47,12 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getResolvedMainLocale } from '../i18n.js';
-import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
+import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.js';
+import {
+  buildUiLanguageErrorNote,
+  turnClassicalStyleFromSendOpts,
+  turnUiLanguageFromSendOpts,
+} from './uiLanguageErrorNote.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -222,6 +226,8 @@ export function stampTrustedDeviceLinkQueuedOrigin(
   const stamped = { ...item };
   if (deviceLinkInvoke) stamped.fromDeviceLinkClient = true;
   else delete stamped.fromDeviceLinkClient;
+  // 跳过插件消息钩子只能由本机界面发起；手机/其它电脑的请求一律经执行电脑上的插件过一遍。
+  if (deviceLinkInvoke) delete stamped.bypassGhostHooks;
   delete stamped.sourceDevice;
   delete stamped.sourcePlugin;
   delete stamped.agentOmitsTriggerPrefix;
@@ -295,6 +301,8 @@ type MakerSendOptions = {
   fromMobileClient?: boolean;
   /** Coordinator-stamped interface language. Direct wire values are stripped. */
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage. Direct wire values are stripped. */
+  classicalStyle?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -1587,7 +1595,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildCindyMakeTaskNote()
           : null;
       const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+          })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
       // (原生上下文刚重建)整体重发;只有引擎接受后才记为已发送。斜杠命令轮次本来就不带

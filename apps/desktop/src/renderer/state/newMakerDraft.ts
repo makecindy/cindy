@@ -43,6 +43,8 @@ export interface VendorPrefs {
   model: string;
   effort: Effort;
   permissionMode: PermissionMode;
+  /** Explicit picker choice; absent legacy non-auto values are preserved. */
+  permissionModeCustomized?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交)。草稿开着时,发送建会话透传
    * planModeEnabled 落库 + createOpts.planMode 生效。老 localStorage 缺字段 → false。
@@ -186,11 +188,19 @@ export interface NewMakerDraft {
    * false 才允许连接态为新任务下放产品默认；目录热更与登录变化不得覆盖 true。
    */
   defaultTupleCustomized: boolean;
+  /** Local new-task default. null follows the product default (auto). */
+  newChatDefaultPermissionMode?: PermissionMode | null;
   /**
    * 自定义里是否包含 Harness / 来源 / 模型选择。与只调 effort / Fast 分开记，
    * 这样「恢复推荐」只能撤销调档意图，不会顺手清掉真正的路由选择。
    */
   defaultTupleSelectionCustomized: boolean;
+  /**
+   * 新任务「让插件选」(2026-10-31)：选中后新任务第一条消息发出前问一次这个插件用哪个模型；
+   * 记住为新任务默认，用户手动选任何模型即清除。null = 不用。
+   */
+  /** 选中的插件模型；底下的模型设置保留，插件没给结果时用它们。 */
+  pluginModel: { pluginId: string; modelId: string } | null;
 }
 
 /**
@@ -207,6 +217,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       effort: 'high',
       // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
       permissionMode: 'auto',
+      permissionModeCustomized: false,
       planMode: false,
       providerId: null,
     };
@@ -216,6 +227,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       model: getDefaultModelForVendor('codex').id,
       effort: 'high',
       permissionMode: 'auto',
+      permissionModeCustomized: false,
       planMode: false,
       providerId: null,
     };
@@ -226,6 +238,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
     // 三种 vendor 都保留 Auto-review 种子默认；已有用户落盘的
     // lastByVendor 记忆不受影响(sanitize 只在缺失 / 脏值时回落本默认)。
     permissionMode: 'auto',
+    permissionModeCustomized: false,
     planMode: false,
     providerId: null,
   };
@@ -261,7 +274,9 @@ function makeDefault(): NewMakerDraft {
     },
     modelChosenByVendor: {},
     defaultTupleCustomized: false,
+    newChatDefaultPermissionMode: null,
     defaultTupleSelectionCustomized: false,
+    pluginModel: null,
   };
 }
 
@@ -366,8 +381,14 @@ function sanitize(raw: unknown): NewMakerDraft {
     };
   })();
   const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
+  const newChatDefaultPermissionMode =
+    r.newChatDefaultPermissionMode === 'auto' || r.newChatDefaultPermissionMode === 'bypassPermissions'
+      ? r.newChatDefaultPermissionMode : null;
   const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
-    const fallback = defaultVendorPrefs(v);
+    const fallback = { ...defaultVendorPrefs(v), permissionMode: newChatDefaultPermissionMode ?? 'auto' };
+    const permissionModeCustomized = p?.permissionModeCustomized === true ||
+      (p?.permissionModeCustomized === undefined && typeof p?.permissionMode === 'string' &&
+        p.permissionMode !== 'auto' && p.permissionMode !== 'plan');
     if (!p || typeof p !== 'object') return fallback;
     // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
     // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
@@ -376,9 +397,10 @@ function sanitize(raw: unknown): NewMakerDraft {
       model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
       effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
       permissionMode:
-        typeof p.permissionMode === 'string' && !legacyPlanPermission
+        permissionModeCustomized && typeof p.permissionMode === 'string' && !legacyPlanPermission
           ? (p.permissionMode as PermissionMode)
           : fallback.permissionMode,
+      permissionModeCustomized,
       planMode: p.planMode === true || legacyPlanPermission,
       // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
       providerId:
@@ -491,8 +513,19 @@ function sanitize(raw: unknown): NewMakerDraft {
     },
     modelChosenByVendor,
     defaultTupleCustomized,
+    newChatDefaultPermissionMode,
     defaultTupleSelectionCustomized,
+    pluginModel: sanitizePluginModel(r.pluginModel),
   };
+}
+
+function sanitizePluginModel(value: unknown): NewMakerDraft['pluginModel'] {
+  if (!value || typeof value !== 'object') return null;
+  const { pluginId, modelId } = value as { pluginId?: unknown; modelId?: unknown };
+  return typeof pluginId === 'string' && pluginId.trim() && pluginId.length <= 512
+    && typeof modelId === 'string' && modelId.trim() && modelId.length <= 64
+    ? { pluginId, modelId }
+    : null;
 }
 
 function loadFromStorage(): NewMakerDraft {
@@ -535,6 +568,7 @@ type StoredDefaultTuplePreference = Pick<
   | 'effortByModel'
   | 'lastByVendor'
   | 'modelChosenByVendor'
+  | 'newChatDefaultPermissionMode'
   | 'defaultTupleCustomized'
   | 'defaultTupleSelectionCustomized'
 >;
@@ -546,6 +580,7 @@ function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePrefe
     effortByModel: draft.effortByModel,
     lastByVendor: draft.lastByVendor,
     modelChosenByVendor: draft.modelChosenByVendor,
+    newChatDefaultPermissionMode: draft.newChatDefaultPermissionMode ?? null,
     defaultTupleCustomized: draft.defaultTupleCustomized,
     defaultTupleSelectionCustomized: draft.defaultTupleSelectionCustomized,
   };
@@ -835,10 +870,26 @@ export function setWorktreePreference(enabled: boolean): void {
   emit();
 }
 
+/** Only explicit settings changes update the default; preserve independent picker choices. */
+export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): void {
+  if (mode !== null && mode !== 'auto' && mode !== 'bypassPermissions') return;
+  rebaseStoredDefaultTuplePreference();
+  const lastByVendor = { ...currentDraft.lastByVendor };
+  for (const vendor of ['cc', 'pi', 'codex', 'orca'] as const) {
+    if (!lastByVendor[vendor].permissionModeCustomized) {
+      lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
+    }
+  }
+  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+}
+
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
   // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
   // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
+  delete normalizedPatch.newChatDefaultPermissionMode;
   delete normalizedPatch.worktreeEnabled;
   delete normalizedPatch.worktreePreferenceCustomized;
   if ('workingDir' in normalizedPatch) {
@@ -1119,6 +1170,10 @@ function patchVendorPrefsInternal(
   const marksDefaultTuple = marksSelection || (opts.markModelChoice && 'effort' in patch);
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
+  delete nextPatch.permissionModeCustomized;
+  if (opts.markModelChoice && typeof nextPatch.permissionMode === 'string') {
+    nextPatch.permissionModeCustomized = true;
+  }
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
     if (opts.markModelChoice) {
       // 新建页 picker 或已有任务换模 → 打标记,下次新建跟随这次选择,不再回落区域默认。

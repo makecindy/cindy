@@ -35,7 +35,14 @@ export type VoiceInputSyncErrorResult = {
   message: string;
 };
 
-export type VoiceInputLanguage = 'auto' | SupportedLocale;
+/**
+ * Dictation-only languages: speakable languages the recognition service can be
+ * hinted with, which are NOT client UI locales. Dictation language is decoupled
+ * from the UI language so a speaker is not limited to the UI locales.
+ */
+export const VOICE_INPUT_EXTRA_LANGUAGES = ['es'] as const;
+export type VoiceInputExtraLanguage = (typeof VOICE_INPUT_EXTRA_LANGUAGES)[number];
+export type VoiceInputLanguage = 'auto' | SupportedLocale | VoiceInputExtraLanguage;
 export type VoiceInputDictionaryEntrySource = 'manual' | 'automatic';
 export type VoiceInputShortcutTrigger = 'keyboard' | 'modifier';
 export type VoiceInputModifierShortcutCode =
@@ -1025,7 +1032,10 @@ function normalizeSpeakerFilterStrictnessOverride(
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {
   if (value === 'auto') return true;
-  return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value);
+  return typeof value === 'string' && (
+    (SUPPORTED_LOCALES as readonly string[]).includes(value)
+    || (VOICE_INPUT_EXTRA_LANGUAGES as readonly string[]).includes(value)
+  );
 }
 
 function hasMacNativeModifierGroup(keySet: ReadonlySet<string>, left: string, right: string): boolean {

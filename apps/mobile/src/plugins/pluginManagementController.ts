@@ -109,10 +109,13 @@ export function createPluginManagementController(client: PluginManagementClient,
       const snapshot = await readSnapshot(token);
       if (!current(token)) return;
       if (!receiverCurrent(snapshot)) throw new Error('PLUGIN_INSTALL_CHANGED');
+      if ((intent.kind === 'approve-ui' || intent.kind === 'defer-ui') && !snapshot.uiCapabilityApproval)
+        throw new PluginManagementRequestError('PLUGIN_UI_APPROVAL_UNSUPPORTED');
       const operationId = (options.createOperationId ?? randomUUID)();
       publish({ operationId, outcome: 'running' });
       began = true;
-      await acceptReceipt(await client.begin({ ...request, operationId }, () => current(token)
+      await acceptReceipt(await client.begin({ ...request, operationId,
+        ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
         && state.online && !!state.snapshot && receiverCurrent(state.snapshot)), token);
     } catch (error) {
       if (!current(token)) return;
@@ -174,6 +177,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     install: (detail: ManagedMarketDetail, installed?: ManagedPlugin) => start({ kind: 'install', detail, installed }),
     uninstall: (installed: ManagedPlugin) => start({ kind: 'uninstall', installed }),
     setEnabled: (installed: ManagedPlugin, enabled: boolean) => start({ kind: enabled ? 'enable' : 'disable', installed }),
+    approveUi: (installed: ManagedPlugin) => start({ kind: 'approve-ui', installed }),
+    deferUi: (installed: ManagedPlugin) => start({ kind: 'defer-ui', installed }),
     answer, cancel, reconcile,
     setOnline(online: boolean) {
       if (disposed || state.online === online) return;

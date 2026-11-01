@@ -254,7 +254,10 @@ export interface AppServerHostOptions {
    * 本地 codex 用 `createStdioTransport({binaryPath, cwd, env, extraArgs})`,
    * 远端 codex 用 `createSshDaemonTransport({remoteHost, ...})` (P2)。
    */
-  createTransport: () => Transport;
+  createTransport: (modelProvider?: string) => Transport;
+  /** Local proxy hosts can align the process default with their task's provider. */
+  supportsModelProviderSelection?: boolean;
+  defaultModelProviderId?: string;
   logger: Logger;
   /** initialize 时上报的客户端身份 (走 server 日志 / thread metadata)。 */
   clientInfo: ClientInfo;
@@ -355,6 +358,7 @@ export class AppServerHost {
   private readonly writerCandidates = new WeakSet<AppServerClient>();
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
+  private modelProvider: string | undefined;
   private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
@@ -412,6 +416,10 @@ export class AppServerHost {
 
   isCodexProxyActive(): boolean {
     return this.opts.codexProxyActive === true;
+  }
+
+  getDefaultModelProviderId(): string | undefined {
+    return this.opts.defaultModelProviderId;
   }
 
   isCodexBrowserUseAvailable(): boolean {
@@ -671,7 +679,7 @@ export class AppServerHost {
     nativeEpoch = this.nativeInitializationEpoch,
   ): Promise<InitializeResponse> {
     const client = new AppServerClient({
-      createTransport: this.opts.createTransport,
+      createTransport: () => this.opts.createTransport(this.modelProvider),
       logger: this.opts.logger,
       onTransportError: (err) => {
         // Keep the shared startPromise while recovering this one pre-protocol
@@ -975,6 +983,18 @@ export class AppServerHost {
       { threadId },
       { timeoutMs: this.threadUnsubscribeTimeoutMs },
     );
+  }
+
+  async selectModelProvider(modelProvider: string | undefined): Promise<void> {
+    if (!this.opts.supportsModelProviderSelection || this.modelProvider === modelProvider) return;
+    // Native 0.166+ compares the thread provider with the process configuration
+    // on every input. Thread overrides alone no longer select a working route.
+    // Never restart a host while another task still owns a subscription.
+    if (this.subscribers.size > 0) throw new Error('Cannot change Codex provider while threads are subscribed');
+    if (this.client || this.startPromise) {
+      await this.shutdown('Codex task model provider changed', { throwOnTransportError: true });
+    }
+    this.modelProvider = modelProvider;
   }
 
   /**

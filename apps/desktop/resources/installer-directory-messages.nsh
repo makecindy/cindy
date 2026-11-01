@@ -1,4 +1,4 @@
-; NSIS runs before Electron/i18next. Keep the five client languages here, with
+; NSIS runs before Electron/i18next. Keep the supported client languages here, with
 ; English fallback for other installer languages. Windows styles the dialogs.
 !macro cindyDirectoryMessage KEY
   ${Switch} $LANGUAGE
@@ -13,6 +13,23 @@
       ${Break}
     ${Case} 1042 ; ko
       StrCpy $cindyDirectoryMessage "${${KEY}_ko}"
+      ${Break}
+    ${Case} 1034 ; es
+    ${Case} 3082 ; es-ES modern sort
+    ${Case} 2058 ; es-MX
+      StrCpy $cindyDirectoryMessage "${${KEY}_es}"
+      ${Break}
+    ${Case} 1036 ; fr
+      StrCpy $cindyDirectoryMessage "${${KEY}_fr}"
+      ${Break}
+    ${Case} 1031 ; de
+      StrCpy $cindyDirectoryMessage "${${KEY}_de}"
+      ${Break}
+    ${Case} 2070 ; pt-PT
+      StrCpy $cindyDirectoryMessage "${${KEY}_pt_PT}"
+      ${Break}
+    ${Case} 1046 ; pt-BR
+      StrCpy $cindyDirectoryMessage "${${KEY}_pt_BR}"
       ${Break}
     ${Default}
       StrCpy $cindyDirectoryMessage "${${KEY}_en}"
@@ -31,3 +48,14 @@
 !define cindyDirectoryDifferentUser_zh_TW "Windows 授權使用了另一個帳號。如需僅為目前帳號安裝 Cindy，請選擇可寫入的目錄；如需為所有使用者安裝，請返回並選擇該選項。"
 !define cindyDirectoryDifferentUser_ja "Windows の認証に別のアカウントが使われました。現在のアカウントにのみ Cindy をインストールするには、書き込み可能なディレクトリを選んでください。すべてのユーザーにインストールするには、前の画面でそのオプションを選んでください。"
 !define cindyDirectoryDifferentUser_ko "Windows 인증에 다른 계정이 사용되었습니다. 현재 계정에만 Cindy를 설치하려면 쓰기 가능한 디렉터리를 선택하세요. 모든 사용자에게 설치하려면 이전 화면으로 돌아가 해당 옵션을 선택하세요."
+
+!define cindyDirectoryNotWritable_es "Cindy no puede escribir en este directorio de instalación. Elige otro directorio o cierra las aplicaciones que usen sus archivos y revisa tu software de seguridad antes de volver a intentarlo."
+!define cindyDirectoryNotWritable_fr "Cindy ne peut pas écrire dans ce dossier d’installation. Choisissez un autre dossier, ou fermez les applications qui utilisent ses fichiers et vérifiez votre logiciel de sécurité avant de réessayer."
+!define cindyDirectoryNotWritable_de "Cindy kann nicht in dieses Installationsverzeichnis schreiben. Wähle ein anderes Verzeichnis oder schließe Apps, die auf dessen Dateien zugreifen, und überprüfe deine Sicherheitssoftware, bevor du es erneut versuchst."
+!define cindyDirectoryNotWritable_pt_PT "O Cindy não consegue escrever neste diretório de instalação. Escolha outro diretório ou feche as aplicações que utilizam os respetivos ficheiros e verifique o seu software de segurança antes de tentar novamente."
+!define cindyDirectoryNotWritable_pt_BR "O Cindy não pode gravar neste diretório de instalação. Escolha outro diretório ou feche os aplicativos que usam os arquivos dele e verifique seu software de segurança antes de tentar novamente."
+!define cindyDirectoryDifferentUser_es "La autorización de Windows usó una cuenta diferente. Para mantener Cindy instalado en tu cuenta, elige un directorio en el que puedas escribir. Para instalarlo para todos los usuarios, vuelve atrás y selecciona esa opción."
+!define cindyDirectoryDifferentUser_fr "L’autorisation Windows a utilisé un autre compte. Pour que Cindy reste installé pour votre compte, choisissez un dossier dans lequel vous pouvez écrire. Pour l’installer pour tous les utilisateurs, revenez en arrière et sélectionnez cette option."
+!define cindyDirectoryDifferentUser_de "Bei der Windows-Autorisierung wurde ein anderes Konto verwendet. Damit Cindy für dein Konto installiert bleibt, wähle ein Verzeichnis, in das du schreiben kannst. Um die Installation für alle Benutzer durchzuführen, gehe zurück und wähle diese Option."
+!define cindyDirectoryDifferentUser_pt_PT "A autorização do Windows utilizou uma conta diferente. Para manter o Cindy instalado na sua conta, escolha um diretório no qual possa escrever. Para instalar para todos os utilizadores, volte atrás e selecione essa opção."
+!define cindyDirectoryDifferentUser_pt_BR "A autorização do Windows usou uma conta diferente. Para manter o Cindy instalado na sua conta, escolha um diretório no qual você tenha permissão de gravação. Para instalar para todos os usuários, volte e selecione essa opção."

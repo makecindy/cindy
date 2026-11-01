@@ -31,6 +31,7 @@ import {
   resolveLocalPathSmart,
   resolveLocalPathSmartCached,
   resolveToolFilePath,
+  revalidateNegativeLocalPathSmart,
   toFileUrl,
   toLocalFileUrl,
 } from '@/lib/localPathResolver';
@@ -456,6 +457,35 @@ describe('resolveLocalPathSmartCached + peekResolveLocalPathSmart (renderer cach
     vi.stubGlobal('window', { electronAPI: {} });
     const r = await resolveLocalPathSmartCached('src/x.ts', '/repo');
     expect(r).toEqual({ status: 'none', fallbackAbsPath: '/repo/src/x.ts' });
+  });
+
+  // 否定重查还没返回时，这条结论被缓存容量（500 条）挤掉：同路径的普通查找要加入这次重查，
+  // 不能再发一个不带 revalidateNegative 的查找，让两个结果互相覆盖。
+  it('joins a negative re-check in flight after the cache dropped the entry', async () => {
+    let answer!: (raw: Record<string, unknown>) => void;
+    const resolvePathBatch = vi.fn(
+      async ({ hrefs, revalidateNegative }: { hrefs: string[]; revalidateNegative?: boolean }) => {
+        if (revalidateNegative) return new Promise<Record<string, unknown>>((resolve) => { answer = resolve; });
+        return Object.fromEntries(hrefs.map((href) => [href, { status: 'none', candidates: [] }]));
+      },
+    );
+    vi.stubGlobal('window', { electronAPI: { resolvePathBatch } });
+    await resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    const start = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => start + 3_000);
+
+    const recheck = revalidateNegativeLocalPathSmart('out/clip.mp4', '/task', start + 3_000);
+    await Promise.resolve();
+    await Promise.all(Array.from({ length: 500 }, (_, i) => resolveLocalPathSmartCached(`other-${i}.ts`, '/task')));
+    expect(peekResolveLocalPathSmart('out/clip.mp4', '/task')).toBeUndefined();
+    const calls = resolvePathBatch.mock.calls.length;
+
+    const plain = resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    answer({ 'out/clip.mp4': { status: 'unique', candidates: ['/task/film/out/clip.mp4'] } });
+    expect(await plain).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(await recheck).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(resolvePathBatch).toHaveBeenCalledTimes(calls);
+    vi.restoreAllMocks();
   });
 });
 

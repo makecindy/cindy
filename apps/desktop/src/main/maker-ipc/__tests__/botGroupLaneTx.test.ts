@@ -57,7 +57,7 @@ describe('Bot group lane transactions', () => {
       CREATE TABLE bot_profile_versions (bot_id TEXT, version INTEGER, capabilities_json TEXT);
       INSERT INTO bot_profile_versions VALUES ('mimi',3,'{"permissions":"ask"}'), ('abu',1,'{"permissions":"ask"}');
       CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, workspace_kind TEXT, model TEXT,
+        id TEXT PRIMARY KEY, title TEXT, working_dir TEXT, project_dir TEXT, workspace_kind TEXT, model TEXT,
         scheduled_model_baseline TEXT,
         effort TEXT, permission_mode TEXT, status TEXT NOT NULL, sdk_session_id TEXT,
         total_token_usage INTEGER, total_cost_usd REAL, context_tokens INTEGER,

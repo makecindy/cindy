@@ -584,8 +584,17 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     const deadlines = captureHandshakeDeadlines();
     const upstream = createServer();
     let handshakeStarted = false;
+    const upstreamErrors: Error[] = [];
+    let upstreamClosed: Promise<void> | undefined;
     upstream.on('upgrade', (_req, socket) => {
       sockets.add(socket);
+      // The deadline destroys the proxy's request. Windows may reset this raw
+      // fixture socket (#7683); collect errors until close so other failures
+      // still fail the test instead of escaping into the next test.
+      upstreamClosed = new Promise<void>((resolve) => socket.once('close', resolve));
+      socket.on('error', (error) => upstreamErrors.push(error));
+      socket.once('end', () => socket.end());
+      socket.resume();
       // Network activity cannot renew the phase deadline indefinitely.
       socket.write('HTTP/1.1 101 Switching Protocols\r\nX-Partial: waiting\r\n');
       handshakeStarted = true;
@@ -601,6 +610,8 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     expect(deadlines()).toHaveLength(1);
     deadlines()[0].fire();
     expect(await failed).toBe('HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n');
+    await upstreamClosed;
+    for (const error of upstreamErrors) expect(error).toMatchObject({ code: 'ECONNRESET' });
   });
 
   it('clears a FIN-cancelled handshake deadline without starting another request', async () => {

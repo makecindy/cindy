@@ -58,6 +58,8 @@ packages/*
 !packages/model-providers/**
 !packages/model-compat
 !packages/model-compat/**
+!packages/plugin-protocol
+!packages/plugin-protocol/**
 !packages/voice-input-core
 !packages/voice-input-core/**
 

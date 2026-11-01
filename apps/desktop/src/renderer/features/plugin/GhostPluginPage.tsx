@@ -1994,7 +1994,7 @@ function LocalGhostPluginPage({
             {t('settings.ghosts.contribution.myPlugins')}
             {reviewUnread.length > 0 ? (
               <span role="img" className="inline-flex" aria-label={t('settings.ghosts.contribution.unreadReview')}>
-                <AttentionDot tone={reviewUnread.some(item => item.status === 'rejected') ? 'error' : 'done'} />
+                <AttentionDot tone={reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : 'done'} />
               </span>
             ) : null}
           </Button>

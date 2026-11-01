@@ -187,6 +187,8 @@ describe('Pi device-hosted guest sessions', () => {
     model?: string;
     guestProvider?: DeviceHostedGuestProvider | null;
     deps?: Partial<AgentDeps>;
+    ghostRosterSnapshot?: string;
+    mcpServers?: string[];
   } = {}) {
     const model = extra.model ?? 'm';
     const providerId = extra.providerId ?? (guest ? 'xd' : undefined);
@@ -202,7 +204,7 @@ describe('Pi device-hosted guest sessions', () => {
       isGitRepo: false,
       tunnelUrl: 'http://127.0.0.1:4000/t/tok/',
       tunnelToken: 'tok',
-      mcpServers: ['cindy_contacts'],
+      mcpServers: extra.mcpServers ?? ['cindy_contacts'],
       mirrorRoot: path.join(sessionRoot, 'fs'),
       ...(guest ? { guest: true } : {}),
       ...(extra.guestHome ? { guestHome: extra.guestHome } : {}),
@@ -215,6 +217,7 @@ describe('Pi device-hosted guest sessions', () => {
       model,
       ...(providerId ? { providerId } : {}),
       deviceHosted,
+      ...(extra.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: extra.ghostRosterSnapshot } : {}),
       ...(extra.resumeSessionId ? { resumeSessionId: extra.resumeSessionId } : {}),
     });
     const args = knobs.spawnedArgs[0]!;
@@ -259,6 +262,18 @@ describe('Pi device-hosted guest sessions', () => {
       expect(spies.getManagedSkills).not.toHaveBeenCalled();
       expect(spies.getDisabledSkillPaths).not.toHaveBeenCalled();
       expect(spies.resolvePiNativePackagePaths).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // 插件工具经 MCP 桥回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
+  it('gives a guest the roster from its own computer', async () => {
+    const { handle, args } = await start(true, { ghostRosterSnapshot: 'TASK COMPUTER GHOST ROSTER', mcpServers: ['cindy'] });
+    try {
+      expect(readAppendedSystemPrompt(args)).toContain('TASK COMPUTER GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).not.toContain('HOST GHOST ROSTER');
+      expect(spies.getGhostRosterPrompt).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }

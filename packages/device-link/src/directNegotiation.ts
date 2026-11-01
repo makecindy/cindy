@@ -2,6 +2,8 @@ import type { DeviceLinkDirectChannel, DeviceLinkDirectPathHandle } from './dire
 
 /** Optional, end-to-end capability. Signaling always stays on the authenticated relay. */
 export const DIRECT_LINK_CAPABILITY = 'direct-link-v1';
+/** Provider-share peers require both this capability and the ordinary direct-link capability. */
+export const PROVIDER_SHARE_DIRECT_CAPABILITY = 'provider-share-direct-v1';
 export const DIRECT_LINK_SIGNAL = 'device-link:direct-signal';
 export const DIRECT_LINK_MAX_PEERS = 16;
 export const DIRECT_LINK_TIMEOUT_MS = 15_000;
@@ -66,6 +68,10 @@ export class DirectLinkNegotiator {
   constructor(private readonly deps: {
     runtime: DirectRuntime;
     identity(): string | null;
+    /** Physical identity for scoped peer keys; the scoped key itself is never an ordering identity. */
+    peerDeviceId?(peer: string): string | null;
+    /** Signaling needs the relay even when an established data channel remains usable. */
+    canSignal?(peer: string): boolean;
     streams(peer: string): { local: string; remote: string } | null;
     id(): string;
     signal(peer: string, signal: DirectSignal): void;
@@ -73,11 +79,12 @@ export class DirectLinkNegotiator {
   }) {}
 
   ready(peerId: string): void {
-    if (!this.deps.streams(peerId)) return;
+    if (!this.deps.streams(peerId) || this.deps.canSignal?.(peerId) === false) return;
     // Both endpoints run this, including a Mobile which only initiated a control link.
     // Exactly one creates offers, so mutual control cannot create glare or two channels.
     const self = this.deps.identity();
-    if (!self || self >= peerId) return;
+    const physicalPeer = this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) : peerId;
+    if (!self || !physicalPeer || self >= physicalPeer) return;
     let peer = this.peers.get(peerId);
     if (!peer) {
       if (this.peers.size >= DIRECT_LINK_MAX_PEERS) return;
@@ -93,12 +100,14 @@ export class DirectLinkNegotiator {
   }
 
   receive(peerId: string, signal: DirectSignal): void {
+    if (this.deps.canSignal?.(peerId) === false) return;
     const streams = this.deps.streams(peerId);
     if (!streams || signal.stream !== streams.remote || signal.targetStream !== streams.local) return;
     let peer = this.peers.get(peerId);
     if (signal.action === 'offer') {
       const self = this.deps.identity();
-      if (!self || peerId >= self) return;
+      const physicalPeer = this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) : peerId;
+      if (!self || !physicalPeer || physicalPeer >= self) return;
       if (!peer) {
         if (this.peers.size >= DIRECT_LINK_MAX_PEERS) return;
         peer = { failures: 0 };
@@ -115,7 +124,7 @@ export class DirectLinkNegotiator {
     } else if (peer?.attempt?.id === signal.id) {
       const attempt = peer.attempt;
       if (signal.action === 'close') this.fail(peerId, peer, attempt, false);
-      else if (this.deps.identity()! < peerId) {
+      else if (this.deps.identity()! < (this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) ?? '' : peerId)) {
         void attempt.session.answer(signal.sdp!).catch(() => this.fail(peerId, peer!, attempt));
       }
     }
@@ -191,7 +200,7 @@ export class DirectLinkNegotiator {
   }
   private retry(peerId: string, peer: Peer): void {
     if (this.peers.get(peerId) !== peer || peer.retry || !this.deps.streams(peerId)
-      || !this.deps.identity() || this.deps.identity()! >= peerId) return;
+      || !this.deps.identity() || this.deps.identity()! >= (this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) ?? '' : peerId)) return;
     const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(peer.failures++, 4));
     // Spread simultaneous peer failures even at the cap, without exceeding the retry ceiling.
     const delay = Math.floor(backoff * (0.8 + Math.random() * 0.2));

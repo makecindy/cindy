@@ -156,14 +156,9 @@ describe('live stream interruption wiring', () => {
     );
   });
 
-  it('socket 掉线：整体失效（影响所有订阅）', () => {
-    const offlineStart = source.indexOf("if (next !== 'online') {");
-    const offlineEnd = source.indexOf('// presence 是当前在线控制端收到的 delta', offlineStart);
-    expect(offlineStart).toBeGreaterThan(0);
-    expect(offlineEnd).toBeGreaterThan(offlineStart);
-    const offlineBranch = source.slice(offlineStart, offlineEnd);
-    expect(offlineBranch).toContain('remoteSessionStore.noteLiveStreamInterrupted();');
-  });
+  // Socket interruption is exercised through the real Provider in
+  // historyViewProvider.test.tsx: only peers on the lost connection lose ACKs
+  // and notify the history store, while an independent shared task stays live.
 
   it('peer ACK reset：无 durable owner 时仍保留独立 forced-open 恢复意图', () => {
     expect(source).toContain('const forcedPeerRecoveryIntentRef = useRef(new PeerRecoveryOpenIntentRegistry());');

@@ -10,6 +10,7 @@ import { INPUT_HANDOFF_ENDED_PREFIX } from '@cindy/maker-shared/synthetic-trigge
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import {
   InputHandoffSession,
+  resolveHandoffTarget,
   type HandoffCompletionHints,
   type HandoffEndReason,
   type HandoffResult,
@@ -19,6 +20,8 @@ import {
 import type { HandoffDriver } from './macDriver.js';
 import { markSecretEntered } from './secretTaint.js';
 import { TerminalPromptSession, type TerminalProgram } from './terminalPrompt.js';
+import { ImageQrHandoffSession } from './imageQr.js';
+import { qrContent } from './qrCode.js';
 
 /**
  * Process-local registry of 代输入 requests. Owns card broadcast, owner
@@ -38,6 +41,25 @@ export interface InputHandoffStartRequest {
 }
 
 export type InputHandoffStartError = 'HANDOFF_ACTIVE' | 'UNSUPPORTED' | 'RATE_LIMITED';
+
+/** A sign-in QR code in a picture the agent supplied (not a window on this computer). */
+export interface InputHandoffImageStartRequest {
+  sessionId: string;
+  purpose: string;
+  note?: string;
+  requester?: string;
+  /** The picture's bytes; read by the caller from the agent's path or managed media URL. */
+  image: Buffer;
+  timeoutMinutes?: number;
+}
+
+export type InputHandoffImageStartError = InputHandoffStartError | 'NOT_AN_IMAGE' | 'NO_QR_FOUND' | 'QR_UNREADABLE' | 'NO_SESSION_CONTEXT';
+
+/** Why a target cannot be handed off, known before starting. */
+export interface InputHandoffTargetProblem {
+  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND';
+  message: string;
+}
 
 /** A password prompt from a verified terminal program in the task's shell. */
 export interface TerminalPromptRequest {
@@ -81,6 +103,11 @@ export interface InputHandoffServiceDeps {
   describeDevice?(deviceId: string): Omit<InputHandoffHolder, 'local' | 'deviceId'>;
   logger?: { info?(message: string, context?: Record<string, unknown>): void; warn(message: string, context?: Record<string, unknown>): void };
   terminalRetentionMs?: number;
+  /**
+   * The QR code in a picture, cut out with its quiet zone; null when there is
+   * none. Absent where the platform cannot read codes.
+   */
+  qrFromPicture?(image: Buffer): Promise<{ text: string; jpeg: Buffer; width: number; height: number } | null | { error: 'not_image' | 'unreadable' }>;
   /** Test clock/sleep and countdown overrides passed through to each session. */
   sessionTiming?: { now?(): number; sleep?(ms: number): Promise<void>; finishingDelayMs?: number };
 }
@@ -128,7 +155,9 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     ...(result.finalOrigin ? [`origin=${result.finalOrigin}`] : []),
     ...(result.answeredOn ? [`answered_on=${answeredOnFact(result.answeredOn)}`] : []),
   ].join(' ');
-  const next = result.failure === 'nothing_to_fill'
+  const next = result.scanned && result.status === 'succeeded'
+    ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
+    : result.failure === 'nothing_to_fill'
     ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
     : result.status === 'succeeded'
     ? 'The owner\'s fields were typed in and confirmed. Check the current screen yourself and handle any buttons or options left; values they entered were not shared with you.'
@@ -149,6 +178,7 @@ function answeredOnFact(holder: InputHandoffHolder): string {
 export class InputHandoffService {
   private readonly entries = new Map<string, Entry>();
   private readonly recentStarts = new Map<string, number[]>();
+  private readonly decoding = new Set<{ sessionId: string; cancelled: boolean }>();
 
   constructor(private readonly deps: InputHandoffServiceDeps) {}
 
@@ -173,6 +203,96 @@ export class InputHandoffService {
       finish: (result) => this.finish(entry, result),
       onSecretEntered: ({ url }) => markSecretEntered(url),
       ...this.deps.sessionTiming,
+    }));
+  }
+
+  /**
+   * Checks the target before a handoff starts, so the agent learns at once that
+   * it named Cindy itself or a window that is not there (it used to get a
+   * pending receipt and a target_gone minutes later). Null: go ahead; the
+   * session still resolves the window itself. Without macOS Accessibility the
+   * session asks for it as before, so nothing is checked here.
+   */
+  async checkTarget(target: HandoffTargetSpec): Promise<InputHandoffTargetProblem | null> {
+    const driver = this.deps.createDriver();
+    if (!driver) return null;
+    if ((await driver.permission().catch(() => 'unknown' as const)) !== 'granted') return null;
+    const list = await driver.windows().catch(() => null);
+    if (!list || resolveHandoffTarget(list, target, this.deps.hostPid)) return null;
+    const host = list.apps.find((app) => app.pid === this.deps.hostPid);
+    const wanted = target.app?.trim().toLowerCase();
+    // By name too: a dev or renamed build is not listed as "Cindy", and no other
+    // visible window answered to it.
+    const namesHost = target.pid === this.deps.hostPid || (!!wanted && (/^cindy\b/.test(wanted)
+      || (!!host && (host.app.toLowerCase().includes(wanted) || host.bundleId.toLowerCase() === wanted))));
+    const frontIsHost = !!host && target.pid === undefined && !wanted && list.frontmost === this.deps.hostPid;
+    if (namesHost || frontIsHost) {
+      return {
+        errorCode: 'TARGET_IS_CINDY',
+        message: (frontIsHost ? 'Cindy itself is in front, and ' : '')
+          + 'Cindy\'s own window cannot be handed off. A screen shown inside Cindy (such as the device simulator) is not a '
+          + 'window here: for a sign-in QR code on it, ask again with kind="scan" and `image` set to a fresh screenshot; '
+          + 'for other fields there, tell the owner what is needed.',
+      };
+    }
+    const visible = [...new Set(list.apps
+      .filter((app) => app.pid !== this.deps.hostPid && app.windows.some((w) => !w.minimized))
+      .map((app) => app.app))].slice(0, 12);
+    return {
+      errorCode: 'TARGET_NOT_FOUND',
+      message: 'No visible window matches that target. '
+        + (visible.length ? `Apps with visible windows: ${visible.join(', ')}. ` : '')
+        + 'Pass target.app (and window_title) of the window that shows the step.',
+    };
+  }
+
+  /**
+   * Scan-to-sign-in from a picture the agent supplied. The code is read here,
+   * before anything is shown, so a picture without one fails at once.
+   */
+  async startImageQr(request: InputHandoffImageStartRequest): Promise<
+    { ok: true; requestId: string } | { ok: false; errorCode: InputHandoffImageStartError; message: string }
+  > {
+    const refused = this.admit(request.sessionId);
+    if (refused) return refused;
+    if (!this.deps.qrFromPicture)
+      return { ok: false, errorCode: 'UNSUPPORTED', message: 'Reading QR codes from a picture is only available on macOS for now.' };
+    // Not in `entries` until the picture is read: a task closed meanwhile marks this instead.
+    const decoding = { sessionId: request.sessionId, cancelled: false };
+    this.decoding.add(decoding);
+    const found = await this.deps.qrFromPicture(request.image)
+      .catch(() => ({ error: 'unreadable' as const }))
+      .finally(() => this.decoding.delete(decoding));
+    if (decoding.cancelled) {
+      if (found && !('error' in found)) found.jpeg.fill(0);
+      return { ok: false, errorCode: 'NO_SESSION_CONTEXT', message: 'This task stopped before the code could be shown.' };
+    }
+    if (found && 'error' in found) {
+      return found.error === 'not_image'
+        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG or JPEG).' }
+        : { ok: false, errorCode: 'QR_UNREADABLE', message: 'Cindy could not read that picture right now. Tell the owner what is needed instead.' };
+    }
+    const qr = found ? qrContent(found.text) : null;
+    if (!found || !qr) {
+      found?.jpeg.fill(0);
+      return { ok: false, errorCode: 'NO_QR_FOUND', message: 'No QR code found in that picture. Take a screenshot that shows the whole code and ask again.' };
+    }
+    // Another request may have started while the picture was read.
+    const late = this.admit(request.sessionId);
+    if (late) {
+      found.jpeg.fill(0);
+      return late;
+    }
+    return this.launch(request.sessionId, false, (requestId, entry) => new ImageQrHandoffSession({
+      requestId,
+      purpose: request.purpose,
+      ...(request.note ? { note: request.note } : {}),
+      ...(request.requester ? { requester: request.requester } : {}),
+      timeoutMs: timeoutMs(request.timeoutMinutes),
+      remoteInput: this.deps.remoteInputAvailable(),
+      picture: { jpeg: found.jpeg, width: found.width, height: found.height, qr },
+      publish: (snapshot) => this.publish(entry, snapshot),
+      finish: (result) => this.finish(entry, result),
     }));
   }
 
@@ -311,6 +431,7 @@ export class InputHandoffService {
   }
 
   cleanupForSession(sessionId: string): void {
+    for (const pending of this.decoding) if (pending.sessionId === sessionId) pending.cancelled = true;
     for (const entry of this.entries.values()) {
       if (entry.sessionId !== sessionId || entry.snapshot?.terminal) continue;
       entry.silent = true;
@@ -319,6 +440,7 @@ export class InputHandoffService {
   }
 
   cleanupAll(): void {
+    for (const pending of this.decoding) pending.cancelled = true;
     for (const entry of this.entries.values()) {
       if (entry.snapshot?.terminal) continue;
       entry.silent = true;

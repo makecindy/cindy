@@ -8,7 +8,8 @@
  * 监听者由 dispatch.ts(被控端隧道层)在有 active link 时注册;无 link 时 listener 为 null。
  */
 
-import { PUSH_FORWARD_ALLOWLIST } from '@cindy/device-link';
+import { PUSH_FORWARD_ALLOWLIST, isSharedTaskPeer, isProviderSharePeer } from '@cindy/device-link';
+import { CONTROLLED_MODEL_CATALOG_CHANGED, isModelCatalogSourceChange } from '../../shared/controlledModelCatalog.js';
 import {
   activeOwnerScopeKey,
   getActiveDataOwnerPushStamp,
@@ -113,4 +114,10 @@ export function setBroadcastTapListener(next: BroadcastTapListener | null): void
 
 export function hasBroadcastTapListener(): boolean {
   return listener !== null;
+}
+
+/** Re-read through this task host, never relay the source's payload or recurse. */
+export function tapRemoteModelCatalogChange(deviceId: string, channel: string, revoked: boolean): void {
+  if (revoked || isSharedTaskPeer(deviceId) || isProviderSharePeer(deviceId) || !isModelCatalogSourceChange(channel)) return;
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }

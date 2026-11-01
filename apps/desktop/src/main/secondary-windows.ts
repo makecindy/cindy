@@ -28,7 +28,7 @@ import {
   type ScreenPoint,
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
-import { resolveVibrancyConfig } from './vibrancyConfig.js';
+import { resolveVibrancyConfig, resolveWindowVibrancyConfig } from './vibrancyConfig.js';
 import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
@@ -278,7 +278,7 @@ export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boo
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
-    const config = resolveVibrancyConfig(familyId, isDark, process.platform);
+    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     if (process.platform === 'darwin') {
       win.setVibrancy(config.vibrancy as 'under-window' | null);
     }

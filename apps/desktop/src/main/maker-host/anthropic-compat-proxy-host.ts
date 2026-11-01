@@ -49,7 +49,7 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { providerModelRecord, modelWithInterface } from '@cindy/model-providers';
+import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
 import { outboundFetch } from './outbound-fetch.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
@@ -105,7 +105,9 @@ import {
   resolvePendingSessionRouteDecision,
   resolveProviderRouteDecision,
   resolveSessionRouteDecision,
+  rewriteRequestBodyModel,
 } from './provider-route.js';
+import { configuredCustomModelId, routeLookupModelId } from './claude-model-id.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
@@ -155,8 +157,9 @@ let _readGatewayKey: () => string | null = () => null;
 function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, wireModel: string, sessionId?: string): RoutingDecision {
   if (route.localHandler) return route;
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
-  const catalogModel = provider?.models['claude-code']?.find(m => m.id === wireModel);
-  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', wireModel) : providerRoutingForModel(provider, 'claude-code', wireModel)) : null;
+  const lookupModel = routeLookupModelId(provider, wireModel);
+  const catalogModel = provider?.models['claude-code']?.find(m => m.id === lookupModel);
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, 'claude-code', lookupModel) : providerRoutingForModel(provider, 'claude-code', lookupModel)) : null;
   const model = catalogModel && modelWithInterface(catalogModel, routing?.modelInterface);
   // Adapter identity belongs to the declared route. An OAuth account can select
   // another host without becoming a different provider (e.g. Copilot Business).
@@ -189,7 +192,10 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
         fast: sessionId ? getSessionFastMode(sessionId) : false },
     }) };
   }
-  return route;
+  // model-interface routes already pin their wire model; only plain custom routes need restoring
+  const configured = provider?.source === 'user' && !route.transformRequestBody
+    ? configuredCustomModelId(provider, wireModel) : null;
+  return configured ? { ...route, transformRequestBody: rewriteRequestBodyModel(configured) } : route;
 }
 
 export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
@@ -697,7 +703,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
     }
-    if (piGuest || hasHostedSessionModelAccess(piSessionId)) {
+    // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
+    // those bytes opaque; the native handler decodes and checks the live grant
+    // before forwarding. An unparsed compressed body is not a missing model.
+    const nativeCompressedPiRequest = piSessionId && piProviderId
+      && isOpenAiSubscriptionProviderId(piProviderId)
+      && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
+      && !isPlainObject(body);
+    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
       const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
       // Check the live member grant before native handlers and all other Pi routing branches.
       // Google's native API puts the authoritative model in the URL instead of body.model.
@@ -900,7 +913,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
-      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, wireModel);
+      const routeModel = requestAgent === 'claude-code'
+        ? routeLookupModelId(getActiveCatalog().providers.find(p => p.id === selectedProviderId), wireModel)
+        : wireModel;
+      const perSession = resolveSessionRouteDecision(sessionId, requestAgent, gatewayKey, routeModel);
       const recordSelectedRoute = (route: RoutingDecision | null): RoutingDecision | null => {
         if (route) {
           const denied = authorizeClaudeRoute(selectedProviderId);

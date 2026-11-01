@@ -29,9 +29,9 @@ function outboxSender(invokeOwned: (record: DurableOutboxRecord) => RemoteInvoke
   const maker = (record: DurableOutboxRecord) => createMobileMakerTransport({
     deviceId: record.deviceId, invoke: invokeOwned(record),
   });
-  const compiled = ts.transpileModule(`function create(maker, invokeOwned) { return ${enqueueSource}; }`,
+  const compiled = ts.transpileModule(`function create(maker, invokeOwned, unarchiveSessionAfterSend, ownerInvoke) { return ${enqueueSource}; }`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(`${compiled}; return create;`)()(maker, invokeOwned) as
+  return new Function(`${compiled}; return create;`)()(maker, invokeOwned, async () => {}, invokeOwned) as
     (record: DurableOutboxRecord) => Promise<unknown>;
 }
 

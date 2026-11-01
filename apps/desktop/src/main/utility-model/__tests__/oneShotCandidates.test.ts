@@ -1118,7 +1118,8 @@ describe('utility one-shot candidates', () => {
     });
   });
 
-  it('routes an explicitly selected custom provider to its own Codex endpoint', async () => {
+  it.each(['https://custom.example/v1', 'https://openrouter.ai/api/v1'])
+  ('routes an explicit auxiliary selection to %s with the application identity', async upstream => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'tapsvc',
@@ -1128,7 +1129,7 @@ describe('utility one-shot candidates', () => {
         auth: { method: 'apiKey' },
         routing: {
           codex: {
-            upstream: 'https://custom.example/v1',
+            upstream,
             authStrategy: 'api-key-header',
             headerOverride: { 'X-Tenant': 'tenant-a' },
           },
@@ -1158,7 +1159,7 @@ describe('utility one-shot candidates', () => {
       transport: 'codex-responses',
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://custom.example/v1/responses',
+      `${upstream}/responses`,
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer custom-secret',
@@ -1169,6 +1170,9 @@ describe('utility one-shot candidates', () => {
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'custom-mini',
     });
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers as HeadersInit);
+    expect(headers.get('http-referer')).toBe(upstream.includes('openrouter.ai') ? 'https://cindy.app' : null);
+    expect(headers.get('x-openrouter-title')).toBe(upstream.includes('openrouter.ai') ? 'Cindy' : null);
   });
 
   it('dispatches a saved Pi-only Go Flash auxiliary selection without launching an agent', async () => {

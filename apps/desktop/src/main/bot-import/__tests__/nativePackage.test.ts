@@ -272,10 +272,10 @@ it('ships only what the client reads: the manifest, the avatar, the knowledge bo
 });
 
 const SCRIPT: Record<string, RegExp> = { en: /^[^\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+$/, ja: /[\u3040-\u30ff\u3400-\u9fff]/, ko: /[\uac00-\ud7af]/, 'zh-TW': /[\u3400-\u9fff]/ };
-it('carries authored copy in en, ja, ko and zh-TW for every package, mirroring the Chinese copy', async () => {
+it('carries authored copy in all ten languages for every package, mirroring the Chinese copy', async () => {
   for (const id of BOT_PACKAGE_IDS) {
     const { entry } = await readNativeBotPackage(root, id);
-    expect(Object.keys(entry.locales).sort(), id).toEqual(['en', 'ja', 'ko', 'zh-TW']);
+    expect(Object.keys(entry.locales).sort(), id).toEqual(['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'pt-PT', 'zh-TW']);
     for (const [locale, copy] of Object.entries(entry.locales)) {
       const label = `${id} ${locale}`;
       expect(copy.skills, label).toHaveLength(entry.skills.length);
@@ -287,7 +287,7 @@ it('carries authored copy in en, ja, ko and zh-TW for every package, mirroring t
       const texts = [copy.name, copy.description, copy.welcome, ...copy.capabilities.map(capability => capability.label),
         ...copy.skills.flatMap(skill => [skill.name, skill.description]), ...copy.knowledge.flatMap(doc => [doc.title, doc.summary]),
         ...copy.remembers, ...copy.tools.map(tool => tool.purpose), ...copy.routines.flatMap(routine => [routine.name, routine.summary]), ...Object.values(copy.itemNames)];
-      for (const text of texts) expect(text, `${label}: ${text}`).toMatch(SCRIPT[locale]!);
+      for (const text of texts) expect(text, `${label}: ${text}`).toMatch(SCRIPT[locale] ?? SCRIPT.en!);
       // Traditional Chinese never carries Simplified-only forms or kana/Hangul; no language carries maintainer wording.
       for (const text of texts) expect(text, `${label}: ${text}`).not.toMatch(/配方|本包|UTC|脚本|腳本|\.py\b|\bscripts?\b|\brecipes?\b/i);
       if (locale === 'zh-TW') for (const text of texts) expect(text, `${label}: ${text}`).not.toMatch(/[们这为开关与对会时书产价优体兴写决别务动区华单发变号员图场处备实导层师带帮并应总战择报据显权气汇济满灯热爱状独现环离稳竞笔点标样构条档检设确码积种称简类级纪约组经结给绝统继续维绿网罗职联脑艺观览规视计订认让训议记许论访评识证词诉译试话该询语误说请读课调谈谢谱贝负财责败货质购费资赛赶车转轮软轻载较输边达迁过运还进远连迟选递逻钱铁银错键长门闭问间阅队际随隐难页项顺须预领题颜风飞馆驱验鱼鸟齐齿]|[\u3040-\u30ff\uac00-\ud7af]/);
@@ -295,7 +295,7 @@ it('carries authored copy in en, ja, ko and zh-TW for every package, mirroring t
   }
 });
 it.each([
-  ['a language the host does not know', (m: Manifest) => { m.presentation.i18n.fr = m.presentation.i18n.en!; }],
+  ['a language the host does not know', (m: Manifest) => { m.presentation.i18n.it = m.presentation.i18n.en!; }],
   ['a Skill ref that differs from detailZh', (m: Manifest) => { m.presentation.i18n.ja!.detail.skills[0]!.ref = 'engineer-bot-evidence'; }],
   ['an English title over the scaled limit', (m: Manifest) => { m.presentation.i18n.en!.detail.skills[0]!.title = 'T'.repeat(37); }],
   ['a Japanese title over the scaled limit', (m: Manifest) => { m.presentation.i18n.ja!.detail.skills[0]!.title = '字'.repeat(19); }],
@@ -331,9 +331,27 @@ it('shapes the import snapshot for the invite language and leaves it alone witho
     expect(untouched.snapshot, String(language)).toEqual(base.snapshot);
   }
   const unknown = await readNativeBotPackage(root, 'engineer-bot');
-  applyNativeLocale(unknown, 'fr');
+  applyNativeLocale(unknown, 'it');
   expect(unknown.snapshot.source.name).toBe(authored.en!.displayName);
   const traditional = await readNativeBotPackage(root, 'engineer-bot');
   applyNativeLocale(traditional, 'zh-Hant-TW');
   expect(traditional.snapshot.source.name).toBe(authored['zh-TW']!.displayName);
+  for (const locale of ['fr', 'es', 'de', 'pt-PT', 'pt-BR']) {
+    const localized = await readNativeBotPackage(root, 'engineer-bot');
+    applyNativeLocale(localized, locale);
+    expect(localized.snapshot.source.name).toBe(authored[locale]!.displayName);
+    expect(localized.identity).toEqual(base.identity);
+  }
+});
+
+// Compatibility: older packages omit the optional Latin-language copies. Their
+// production import path must still succeed and choose the English fallback.
+it('imports a legacy package without the five optional translations', async () => {
+  const dir = await edit('engineer-bot', manifest => {
+    for (const locale of ['fr', 'es', 'de', 'pt-PT', 'pt-BR']) delete manifest.presentation.i18n[locale];
+  });
+  const legacy = await readNativeBotPackage(dir, 'engineer-bot');
+  const englishName = legacy.entry.locales.en.name;
+  applyNativeLocale(legacy, 'fr');
+  expect(legacy.snapshot.source.name).toBe(englishName);
 });

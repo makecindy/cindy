@@ -1,7 +1,17 @@
-import { useState, type ComponentProps } from 'react';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { useEffect, useState, type ComponentProps } from 'react';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
+import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
+import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
+import { getDraft } from '../../../src/renderer/lib/composerDraftStore';
+import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
+import {
+  __testing as promptRecommendations,
+  beginPromptRecommendationPrediction,
+  clearPromptRecommendationSession,
+  resolvePromptRecommendationPrediction,
+} from '../../../src/renderer/lib/promptRecommendationStore';
 
 // The fixture's custom origin lacks secure-context randomUUID. These IDs only
 // identify in-memory send snapshots; production uses Chromium's secure implementation.
@@ -11,11 +21,45 @@ if (!crypto.randomUUID) {
 }
 
 const noop = () => {};
+const imageCache = { finish: undefined as (() => void) | undefined,
+  getDraft: () => getDraft('fixture-cache-draft') };
+
+function CacheComposer() {
+  const attachmentState = useAttachments('fixture-cache-draft');
+  return <ChatInput sessionId="fixture-cache-draft" initialWorkingDir="/fixture"
+    runtimeAgentKind="codex" vendorKey="codex" deviceLinkDeviceId={null}
+    initialModel="fixture-chat" initialProviderId="openai" attachmentState={attachmentState}
+    hideRuntimeControls showFolderPicker={false} disableAutofocus onSend={async () => true} />;
+}
+
+function CacheScenario() {
+  const [visible, setVisible] = useState(true);
+  return <main className="flex h-screen flex-col justify-center gap-6 bg-[var(--surface-base)] p-6 text-[var(--text-primary)]">
+    <button data-testid="toggle-composer" onClick={() => setVisible(value => !value)}>Toggle composer</button>
+    {visible ? <CacheComposer /> : null}
+  </main>;
+}
+
 function Fixture() {
   const [attached, setAttached] = useState(false);
   const [running, setRunning] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
   const [sent, setSent] = useState('');
+  useEffect(() => {
+    if (typeof ctx.data.recommendation !== 'string') return;
+    const sessionId = 'fixture-companion';
+    // Seed a completed turn and model result; keep the real recommendation
+    // store, editor acceptance and call/send dispatch for the coexistence check.
+    makerChatStore.getSnapshot(sessionId);
+    promptRecommendations.applyRunningSnapshot(new Map([[sessionId, { isRunning: true }]]));
+    promptRecommendations.noteTurnEnded(sessionId, 200);
+    promptRecommendations.applyRunningSnapshot(new Map());
+    promptRecommendations.settleCompletion(sessionId);
+    const seq = beginPromptRecommendationPrediction(sessionId, 200);
+    if (seq !== null)
+      resolvePromptRecommendationPrediction(sessionId, 200, seq, ctx.data.recommendation);
+    return () => clearPromptRecommendationSession(sessionId);
+  }, []);
   const files: ComponentProps<typeof ChatInput>['attachmentState'] = {
     attachments: attached
       ? [
@@ -95,6 +139,10 @@ function Fixture() {
 void mountPage({
   route: '/bots/fixture',
   host: {
+    getFilePath: (file: File) => `/fixture/${file.name}`,
+    cacheImageFromPath: async () => new Promise<{ url: string }>(resolve => {
+      imageCache.finish = () => resolve({ url: fixturePhoto });
+    }),
     maker: {
       onDesktopCommandTriggered: subscription('desktop-command'),
       onSessionCredentialSwitchApplied: subscription('credential-applied'),
@@ -108,10 +156,14 @@ void mountPage({
         settings: { ...getDefaultVoiceInputSettings('darwin'), playInteractionSound: false },
       }),
       onDataChanged: subscription('voice-data'),
+      getMicrophonePermissionCached: () => ({ ok: true, status: 'granted' }),
       onGlobalShortcutTrigger: subscription('voice-shortcut'),
     },
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
-  render: () => <Fixture />,
+  render: () => {
+    (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;
+    return ctx.case === 'late-attachment' ? <CacheScenario /> : <Fixture />;
+  },
 });

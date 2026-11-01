@@ -16,6 +16,87 @@ import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomati
 
 const workingDir = 'C:\\project';
 
+// #8237, unit: actual disk -> loader -> scheduler inputs. Existing reconciliation
+// tests did not distinguish repository discovery from an explicit editor save.
+// A valid file, with or without a hook, must create nothing before confirmation.
+describe('project automation import approval', () => {
+  it.each([undefined, { command: 'node check.mjs' }])('requires the reviewed file snapshot before importing %j', async (preRunHook) => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-import-approval-'));
+    try {
+      const stored: Schedule[] = [];
+      const create = vi.fn(async (input: CreateScheduleInput) => {
+        const saved = { ...projectSchedule({ desktop: true, feishu: false }), ...input,
+          id: `schedule-${stored.length}` } as Schedule;
+        stored.push(saved);
+        return saved;
+      });
+      const update = vi.fn(async (id: string, patch: Partial<Schedule>) => {
+        const current = stored.find((s) => s.id === id)!;
+        Object.assign(current, patch);
+        return current;
+      });
+      const remove = vi.fn(async (id: string) => {
+        stored.splice(stored.findIndex((s) => s.id === id), 1);
+      });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create, update, delete: remove } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => stored } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({
+          select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+          insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+        }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      const write = (config: ProjectScheduleConfig) => fs.writeFile(file, JSON.stringify({ version: 1, schedules: [config] }));
+      const config = projectConfig({ preRunHook });
+      await write(config);
+      const first = await loader.reconcile(dir);
+      expect(first.pendingImport?.schedules).toEqual([config]);
+      expect(create).not.toHaveBeenCalled();
+      await write({ ...config, prompt: 'changed while the confirmation is open' });
+      const stale = await loader.reconcile(dir, first.pendingImport!.configHash);
+      expect(stale.pendingImport).toBeDefined();
+      expect(create).not.toHaveBeenCalled();
+      expect(await loader.reconcile(dir, stale.pendingImport!.configHash)).toMatchObject({ inserted: 1 });
+      expect(stored[0].prompt).toBe('changed while the confirmation is open');
+      expect(stored[0].preRunHook).toEqual(preRunHook);
+      expect((await loader.reconcile(dir)).pendingImport).toBeUndefined();
+      expect(create).toHaveBeenCalledTimes(1);
+
+      // A direct editor save must not authorize a different file-defined change.
+      await write({ ...config, prompt: 'unapproved repository update' });
+      await loader.upsertSchedule(dir, projectConfig({ id: 'mine', prompt: 'explicit save', preRunHook }));
+      expect(stored).toHaveLength(2);
+      expect(stored[0].prompt).toBe('changed while the confirmation is open');
+      expect(update).not.toHaveBeenCalled();
+      expect((await loader.reconcile(dir)).pendingImport).toBeDefined();
+
+      await loader.removeSchedule(dir, 'mine');
+      expect(stored).toHaveLength(1);
+      expect(update).not.toHaveBeenCalled();
+      expect(stored[0].prompt).toBe('changed while the confirmation is open');
+
+      // Missing or broken files cannot silently erase saved automations/history.
+      await fs.writeFile(file, '{broken');
+      expect(await loader.reconcile(dir)).toMatchObject({ skipped: 'parse-error', deleted: 0 });
+      await fs.rm(file);
+      expect(await loader.reconcile(dir)).toMatchObject({ skipped: 'no-file', deleted: 0 });
+      expect(stored).toHaveLength(1);
+
+      await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [] }));
+      const deletion = await loader.reconcile(dir);
+      expect(deletion.pendingImport?.removedNames).toEqual(['Daily']);
+      expect(stored).toHaveLength(1);
+      expect(await loader.reconcile(dir, deletion.pendingImport!.configHash)).toMatchObject({ deleted: 1 });
+      expect(stored).toHaveLength(0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 function projectConfig(overrides: Partial<ProjectScheduleConfig> = {}): ProjectScheduleConfig {
   return {
     id: 'daily',
