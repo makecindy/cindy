@@ -1728,8 +1728,9 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       };
       const unsubscribe = onAppSessionInvalidated(cancel);
       e.sender.on('destroyed', cancel);
-      const onNavigation = (_event: unknown, _url: string, _inPlace: boolean, isMainFrame: boolean) => {
-        if (isMainFrame) cancel();
+      const onNavigation = (_event: unknown, _url: string, isInPlace: boolean, isMainFrame: boolean) => {
+        // Hash-router task switches keep the same trusted document and send target.
+        if (isMainFrame && !isInPlace) cancel();
       };
       e.sender.on('did-start-navigation', onNavigation);
       return withSourceFileAccessRecovery({
