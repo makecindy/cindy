@@ -96,6 +96,8 @@ export interface InputHandoffServiceDeps {
   remoteInputAvailable(): boolean;
   /** Whether another device may open a live view of the window (remote desktop allowed here). */
   liveViewAvailable?(): boolean;
+  /** Binds the browser tabs a window title stands for, by their ids (page reads pause there whatever the title becomes). */
+  bindUnreadablePageTabs?(windowTitle: string): Promise<void>;
   /** Hidden continuation to the requesting agent; metadata only. */
   continueAgent(sessionId: string, requestId: string, message: string): Promise<void>;
   /** Owner attention outside the app (mobile push, Agent Island). Never includes values. */
@@ -206,7 +208,12 @@ export class InputHandoffService {
       driver,
       publish: (snapshot) => this.publish(entry, snapshot),
       finish: (result) => this.finish(entry, result),
-      onSecretEntered: ({ url, windowTitle }) => (url ? markSecretEntered(url) : markSecretWindow(windowTitle)),
+      onSecretEntered: ({ url, windowTitle }) => {
+        if (url) return markSecretEntered(url);
+        // No address: cover by title at once, and bind the tabs it stands for by id (a page can rename itself).
+        markSecretWindow(windowTitle);
+        if (windowTitle) void this.deps.bindUnreadablePageTabs?.(windowTitle);
+      },
       ...this.deps.sessionTiming,
     }));
   }
@@ -226,17 +233,8 @@ export class InputHandoffService {
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
     if (resolved) {
-      if (target.windowTitle) {
-        const title = target.windowTitle.toLowerCase();
-        if (resolved.window.title.toLowerCase().includes(title)) return null;
-        const titles = list.apps.filter((app) => app.bundleId === resolved.bundleId).flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
-        return {
-          errorCode: 'TARGET_NOT_FOUND',
-          message: `${resolved.app} has no window titled ${JSON.stringify(target.windowTitle)}. `
-            + (titles.length ? `Its windows: ${[...new Set(titles)].slice(0, 8).map((t) => JSON.stringify(t)).join(', ')}. ` : '')
-            + 'Pages change their titles: read the current one and ask again.',
-        };
-      }
+      // A named window that matched stands as asked.
+      if (target.windowTitle) return null;
       if (target.pid === undefined && !target.app) return null;
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
@@ -250,6 +248,22 @@ export class InputHandoffService {
         message: `${resolved.app} has several windows: ${[...new Set(titles)].slice(0, 8).map((title) => JSON.stringify(title)).join(', ')}. `
           + 'Ask again with target.window_title naming the one that shows the step.',
       };
+    }
+    // The program is there but nothing carries that title: say what its windows are called now.
+    if (target.windowTitle) {
+      const sameProgram = resolveHandoffTarget(list, { ...target, windowTitle: undefined }, this.deps.hostPid);
+      if (sameProgram) {
+        const titles = list.apps
+          .filter((app) => (target.pid !== undefined ? app.pid === sameProgram.pid : app.pid !== this.deps.hostPid && app.bundleId === sameProgram.bundleId))
+          .flatMap((app) => app.windows.map((w) => w.title))
+          .filter(Boolean);
+        return {
+          errorCode: 'TARGET_NOT_FOUND',
+          message: `${sameProgram.app} has no window titled ${JSON.stringify(target.windowTitle)}. `
+            + (titles.length ? `Its windows: ${[...new Set(titles)].slice(0, 8).map((t) => JSON.stringify(t)).join(', ')}. ` : '')
+            + 'Pages change their titles: read the current one and ask again.',
+        };
+      }
     }
     const host = list.apps.find((app) => app.pid === this.deps.hostPid);
     const wanted = target.app?.trim().toLowerCase();

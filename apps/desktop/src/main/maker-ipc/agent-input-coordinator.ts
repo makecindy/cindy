@@ -1964,7 +1964,8 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
-      this.deps.onOwnerMessage?.(sessionId, item);
+      // A shared-task guest is not the owner: only the owner's own message closes their card.
+      if (!item.sharedTaskAuthor && !getDeviceLinkInvokeContext()?.sharedTask) this.deps.onOwnerMessage?.(sessionId, item);
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。

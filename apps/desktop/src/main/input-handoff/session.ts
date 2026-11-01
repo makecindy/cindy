@@ -183,6 +183,8 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
     const sameApp = candidates.filter((entry) => entry.bundleId === app!.bundleId && entry.windows.some(named));
     app = sameApp.find((entry) => entry.windows.some((w) => named(w) && !w.minimized)) ?? sameApp[0] ?? app;
   }
+  // A title that matches nothing is not "the focused window": the owner would be sent, and type, in the wrong one.
+  if (title && !app.windows.some(named)) return null;
   const visibleWindows = app.windows.filter((window) => !window.minimized);
   const window = visibleWindows.find(named)
     ?? app.windows.find(named)
@@ -432,7 +434,10 @@ export class InputHandoffSession {
       const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
         // A sign-in happens on the window itself, wherever the owner answers from.
-        if (step.signIn && !restored) await this.bringToFront();
+        if (step.signIn && !restored) {
+          this.guardSignInPage(step);
+          await this.bringToFront();
+        }
         this.present(step);
         return;
       }

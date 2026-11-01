@@ -85,7 +85,7 @@ import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js'
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
-import { hasSecretPages, isSecretTab } from '../input-handoff/secretTaint.js';
+import { hasSecretPages, isSecretTab, markSecretAllTabs, markSecretTargets } from '../input-handoff/secretTaint.js';
 import {
   BrowserOpenForLoginError,
   browserOpenForLoginErrorCodeFromData,
@@ -551,6 +551,25 @@ export function setBrowserUseRealProfile(enabled: boolean): Promise<boolean> {
 function browserRecipeSecretId(key: string): string {
   if (!['spotify', 'xiaoyuzhou'].includes(key)) throw new Error('Unknown browser recipe credential');
   return `browser-recipe-${key}`;
+}
+
+/**
+ * 代输入 on a page nothing could be read from: the tabs its window title stands for are bound
+ * by id, which a page cannot change. When they cannot be told, every tab's page reads pause.
+ */
+export async function bindSecretTabsByTitle(windowTitle: string): Promise<void> {
+  try {
+    const listed = await backendController.call({ action: 'tabs' });
+    const tabs = listed.ok ? ((listed.data as { tabs?: Array<Record<string, unknown>> } | undefined)?.tabs ?? []) : [];
+    const ids = tabs
+      .filter((tab) => typeof tab.title === 'string' && tab.title.trim() !== '' && windowTitle.includes(tab.title.trim()))
+      .flatMap((tab) => [tab.targetId, tab.tabId, tab.suggestedTargetId])
+      .filter((id): id is string => typeof id === 'string');
+    if (ids.length > 0) markSecretTargets(ids);
+    else markSecretAllTabs();
+  } catch {
+    markSecretAllTabs();
+  }
 }
 
 export function getBrowserMcpDeps(): {

@@ -348,6 +348,7 @@ import {
   type RenameSessionsConfirmInteractionSnapshot,
 } from '../session-title-rename/index.js';
 import {
+  bindSecretTabsByTitle,
   clearUserBrowserMarksForSession,
   getBrowserAvailability,
   openBrowserForLogin,
@@ -3655,6 +3656,7 @@ initInputHandoffService({
     return settings.remoteControlEnabled && settings.remoteDesktopEnabled;
   },
   notifyOwner: (sessionId, snapshot) => notifyInputHandoffOwner(sessionId, snapshot),
+  bindUnreadablePageTabs: bindSecretTabsByTitle,
   describeDevice: describeInputHandoffDevice,
   onClosed: (sessionId, requestId) => {
     forgetInputHandoffNotice(sessionId, requestId);
@@ -4126,12 +4128,15 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
  * and interface actions are not the owner writing.
  */
 function dismissInputHandoffForOwnerMessage(sessionId: string, text: unknown): void {
+  // A shared-task guest cannot even see the card: their message is not the owner answering it.
+  if (getDeviceLinkInvokeContext()?.sharedTask) return;
   if (typeof text === 'string' && (text.startsWith(UI_ACTION_TRIGGER_PREFIX) || text.startsWith(INPUT_HANDOFF_ENDED_PREFIX))) return;
   getInputHandoffService()?.dismissForOwnerMessage(sessionId);
 }
 
 /** Closes the card for the owner's steered message and returns the note the agent should hear, if any. */
 function inputHandoffSteerNote(sessionId: string, message: unknown): string | null {
+  if (getDeviceLinkInvokeContext()?.sharedTask) return null;
   dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message));
   return getInputHandoffService()?.ownerMessageNote(sessionId) ?? null;
 }
@@ -18771,7 +18776,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
     readTaskDeliveryNote,
-    readInputHandoffOwnerNote: (sessionId) => getInputHandoffService()?.ownerMessageNote(sessionId) ?? null,
+    readInputHandoffOwnerNote: (sessionId) =>
+      getDeviceLinkInvokeContext()?.sharedTask ? null : (getInputHandoffService()?.ownerMessageNote(sessionId) ?? null),
     inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {

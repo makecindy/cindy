@@ -4,7 +4,9 @@ import {
   hasSecretPages,
   isSecretPage,
   isSecretTab,
+  markSecretAllTabs,
   markSecretEntered,
+  markSecretTargets,
   markSecretWindow,
 } from '../secretTaint.js';
 
@@ -30,6 +32,18 @@ describe('secret pages', () => {
     markSecretWindow(undefined);
     markSecretWindow('   ');
     expect(hasSecretPages(16 * 60_000)).toBe(false);
+  });
+
+  it('keeps covering a tab by its id after the page renames itself, and fails closed when the tab is unknown', () => {
+    markSecretWindow('Sign in - Google Chrome', 0);
+    markSecretTargets(['tab-7'], 0);
+    // The page set a new title: the title no longer matches, the id still does.
+    expect(isSecretTab({ title: 'Totally unrelated', targetId: 'tab-7' }, 1000)).toBe(true);
+    expect(isSecretTab({ title: 'Totally unrelated', targetId: 'tab-8' }, 1000)).toBe(false);
+    expect(isSecretTab({ title: 'Totally unrelated', targetId: 'tab-7' }, 16 * 60_000)).toBe(false);
+    markSecretAllTabs(0);
+    expect(isSecretTab({ title: 'Anything', targetId: 'tab-9' }, 1000)).toBe(true);
+    expect(isSecretTab({ title: 'Anything', targetId: 'tab-9' }, 16 * 60_000)).toBe(false);
   });
 
   it('ignores pages it cannot place', () => {

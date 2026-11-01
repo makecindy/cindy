@@ -891,6 +891,17 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(row?.agentMeta).toMatchObject({ sourceDevice, sourcePlugin: { pluginId: 'gh-1' }, origin });
   });
 
+  it('tells the host the owner wrote, but not when a shared-task guest did or the input is automatic', async () => {
+    const h = createHarness();
+    const sid = 'owner-message-task';
+    h.coordinator.enqueue(sid, makeItem('owner-1', 'hello'));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+    h.coordinator.enqueue(sid, makeItem('guest-1', 'hi', {
+      sharedTaskAuthor: { sharedTaskId: 's', sessionId: sid, memberId: 'm', accountId: 'g', displayName: 'Guest' },
+    }));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
     const h = createHarness();
     const sid = 'sharedTask-task';
@@ -1603,6 +1614,7 @@ function createHarness(opts?: {
     NonNullable<AgentInputCoordinatorDeps['onAutomaticEnqueue']>
   >(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
+  const onOwnerMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onOwnerMessage']>>(() => {});
   const previewQueuedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['previewQueuedUserTurn']>
   >(() => {});
@@ -1631,6 +1643,7 @@ function createHarness(opts?: {
     onUserAction,
     onAutomaticEnqueue,
     onUserEnqueue,
+    onOwnerMessage,
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
@@ -1733,6 +1746,7 @@ function createHarness(opts?: {
     onUserAction,
     onAutomaticEnqueue,
     onUserEnqueue,
+    onOwnerMessage,
     previewQueuedUserTurn,
     onDiscardedQueuedMessage,
     onRejectedUserTurn,
