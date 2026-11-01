@@ -55,6 +55,13 @@
 ### User Report
 > *"when i start a new task, and choose qwen 8b, say hi, and model name revert back to hermes deepseek. however qwen 8b replied back, so model selection still has issues. write this down for next agent to fix."*
 
+### Live Runtime Evidence Captured (2026-11-01 16:22)
+From dev app log right before app quit:
+```json
+{"sessionId":"0db87c93-21ec-4f69-9a12-5249a57b2c97","sdkError":null,"message":"Hermes exited with code 130","sdkSessionId":"local-7646d23befb462f647a1267422429a79552a0cc71ae0c0f3c99e63e69afbf53f","model":null,"lastUserText":"hi","lastUserTruncated":false}
+```
+Notice `"model": null` on this session! The session row in SQLite or the error reporter observed `model: null`, indicating `sessions.model` was never stamped with `qwen3-8b` when the user typed "hi".
+
 ### What Actually Happened (Execution Succeeded, UI State Reverted)
 1. **The turn ran on Qwen 8B:** Because Qwen 8B replied back, the backend routing correctly passed `--provider custom --base-url http://127.0.0.1:1234/v1 -m qwen3-8b` to the Hermes child process.
 2. **The UI reverted to `Hermes home default (deepseek-flash)`:**
