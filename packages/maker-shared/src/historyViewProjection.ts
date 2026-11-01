@@ -230,6 +230,17 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     // 并行的动作可能乱序完成:按起点排的行里,更早的 thinking 可能结束得比最后一行还晚。
     const endedAtMs = run.reduce((end, item) => Math.max(end, rowEndMs(item.row)), 0);
     const hash = historyRowsHash(run.map((item) => item.row));
+    const ghostCalls: NonNullable<HistoryWorkSummary['ghostCalls']> = run.flatMap(({ row }) => {
+      if (row.role !== 'tool_use') return [];
+      const meta = row.agentMeta as { parentUuid?: string; replyToClientId?: string } | null;
+      const tool = parseMessageToolUse(row);
+      const input = tool.input as Record<string, unknown> | null;
+      if (meta?.parentUuid || !/(?:^|:|__)ghost_call$/.test(tool.toolName ?? '') || typeof input?.ghost_id !== 'string') return [];
+      if (Object.hasOwn(input, 'namespace') && input.namespace !== null && typeof input.namespace !== 'string') return [];
+      return [{ clientId: row.clientId, createdAt: row.createdAt, rowid: row.rowid,
+        replyToClientId: meta?.replyToClientId, ghostId: input.ghost_id,
+        ...(Object.hasOwn(input, 'namespace') ? { namespace: input.namespace as string | null } : {}) }];
+    });
     return { type: 'group', summary: {
       key: `work-${anchor.clientId || anchor.id}`,
       anchorClientId: anchor.clientId || anchor.id,
@@ -242,6 +253,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : 0,
       endedAtMs: Number.isFinite(endedAtMs) ? endedAtMs : 0,
       ...(run.some((item) => item.row.historyArtifacts?.length) ? { artifacts: run.flatMap((item) => item.row.historyArtifacts ?? []) } : {}),
+      ...(ghostCalls.length ? { ghostCalls } : {}),
       messageCount: run.length,
       toolCount: run.filter((item) => item.row.role === 'tool_use').length,
       isStreaming: active,
@@ -251,7 +263,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   // Consumers read artifacts from leaf summaries only (historyWorkSummaries), so
   // an outer copy would repeat every child's list once per nesting level.
   const nest = (result: GroupItem<T>, children: HistoryViewItem<T>[]): GroupItem<T> => {
-    const { artifacts: _leafOnly, ...summary } = result.summary;
+    const { artifacts: _leafOnly, ghostCalls: _leafCalls, ...summary } = result.summary;
     return { ...result, summary, children };
   };
   const toViewItem = (item: Item): HistoryViewItem<T> => item.type === 'group'

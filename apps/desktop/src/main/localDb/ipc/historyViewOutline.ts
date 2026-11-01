@@ -33,6 +33,13 @@ export function historyOutlineContent(): SQL<string> {
         json_extract(${body}, '$.input.args.outPath'), json_extract(${body}, '$.input.args.out_path'),
         json_extract(${body}, '$.input.args.outputPath'), json_extract(${body}, '$.input.args.output_path')) IS NOT NULL
       ) THEN ${body}
+    WHEN ${messages.role} = 'tool_use' AND substr(json_extract(${body}, '$.toolName'), -10) = 'ghost_call'
+      THEN json_object('toolName', json_extract(${body}, '$.toolName'),
+        'toolUseId', json_extract(${body}, '$.toolUseId'),
+        'input', json(CASE WHEN json_type(${body}, '$.input.namespace') IS NULL
+          THEN json_object('ghost_id', json_extract(${body}, '$.input.ghost_id'))
+          ELSE json_object('ghost_id', json_extract(${body}, '$.input.ghost_id'),
+            'namespace', json_extract(${body}, '$.input.namespace')) END))
     WHEN ${messages.role} = 'tool_use' THEN json_object(
       'toolName', json_extract(${body}, '$.toolName'),
       'toolUseId', json_extract(${body}, '$.toolUseId'),
@@ -137,6 +144,11 @@ export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T 
     const { uuid: _uuid, sdkSessionId: _sdkSessionId, requestId: _requestId,
       replyToClientId: _replyToClientId, usage: _usage, ...agentMeta } = row.agentMeta as Record<string, unknown>;
     row = { ...row, agentMeta };
+    // Folded plugin rows are not hydrated until expanded. Preserve only the
+    // ownership link needed by their summary, alongside the small outline input.
+    if (row.role === 'tool_use' && /(?:^|:|__)ghost_call$/.test(parseMessageToolUse(row).toolName ?? '') && _replyToClientId) {
+      row = { ...row, agentMeta: { ...agentMeta, replyToClientId: _replyToClientId } };
+    }
   }
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);

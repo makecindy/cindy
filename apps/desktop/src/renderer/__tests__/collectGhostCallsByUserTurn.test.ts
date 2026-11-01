@@ -27,6 +27,21 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
   }) as ChatMessage;
 
 describe('collectGhostCallsByUserTurn', () => {
+  it.each(['pending', 'reserved'] as const)('assigns a new continuation after a %s remote send using its reserved position', (mode) => {
+    // #8296, unit: historical clock fallback must not steal a new live steer.
+    const old = user('old', { createdAt: '2026-01-01T00:00:10Z' });
+    const next = user('new', { createdAt: '2026-01-01T00:00:00Z', isPendingPersist: mode === 'pending' });
+    const remote = mode === 'reserved' ? reserveRemoteUser(next, [old]) : next;
+    const continuation = user('steer', { delivery: 'steer', createdAt: '2026-01-01T00:00:11Z' });
+    const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [old, remote, continuation] }, {
+      sessionId: 's1', type: 'tool_use', persistId: 'call',
+      data: { toolUseId: 'tool', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } },
+      agentMeta: { replyToClientId: 'steer' },
+    });
+    const projected = projectRemoteUsers(state.messages, new Set(['old']));
+    expect([...collectGhostCallsByUserTurn(projected)]).toEqual([['new', new Set(['art'])]]);
+  });
+
   it.each(['pending', 'reserved'] as const)('ignores %s remote clock timestamps when attributing historical calls', (mode) => {
     // #8296 review, unit: remote projection reserves the new bubble after history,
     // even when its controller clock predates an old continuation. Previous

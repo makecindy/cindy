@@ -44,6 +44,7 @@ import {
   HistoryViewHandoff,
   type HistoryViewController,
   type HistoryViewSnapshot,
+  type HistoryWorkSummary,
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
@@ -808,6 +809,7 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
  */
 export function collectGhostCallsByUserTurn(
   messages: readonly ChatMessage[],
+  summaries: readonly HistoryWorkSummary[] = [],
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const users = messages.filter(m => m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger);
@@ -835,18 +837,28 @@ export function collectGhostCallsByUserTurn(
   // belong to an existing visible turn. Missing inputs must remain unowned.
   const userTurnOwners = new Map<string, string | null>();
   let precedingUser: string | null = null;
+  let reservedUser: ChatMessage | undefined;
   for (const m of messages) {
     if (m.role !== 'user') continue;
     if (m.delivery !== 'steer' && !m.isSyntheticTrigger) {
       precedingUser = m.clientId;
+      reservedUser = m.isPendingPersist || m.localSendPrecedingClientIds ? m : undefined;
       userTurnOwners.set(m.clientId, m.clientId);
     } else {
       userTurnOwners.set(m.clientId,
-        Number.isFinite(time(m)) ? timedOwner(m) : precedingUser);
+        reservedUser && !reservedUser.localSendPrecedingClientIds?.includes(m.clientId)
+          ? reservedUser.clientId
+          : Number.isFinite(time(m)) ? timedOwner(m) : precedingUser);
     }
   }
   let currentUserClientId: string | null = null;
-  for (const m of messages) {
+  const summarizedCalls: ChatMessage[] = summaries.flatMap(summary => (summary.ghostCalls ?? []).map(call => ({
+    clientId: call.clientId, role: 'tool_use', content: '', isStreaming: false,
+    createdAt: call.createdAt, rowid: call.rowid, replyToClientId: call.replyToClientId,
+    toolName: 'mcp__cindy__ghost_call', toolInput: { ghost_id: call.ghostId,
+      ...(Object.hasOwn(call, 'namespace') ? { namespace: call.namespace } : {}) },
+  })));
+  for (const m of [...messages, ...summarizedCalls]) {
     if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) {
       currentUserClientId = m.clientId;
       continue;
@@ -6494,8 +6506,8 @@ export function MessageStream({
   // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
   // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMetadataMessages),
-    [visibleMetadataMessages],
+    () => collectGhostCallsByUserTurn(visibleMetadataMessages, historyWorkSummaries(historySnapshot?.items ?? [])),
+    [visibleMetadataMessages, historySnapshot?.items],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
