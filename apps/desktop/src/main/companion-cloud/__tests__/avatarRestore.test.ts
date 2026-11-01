@@ -34,6 +34,10 @@ describe('restoreCloudAvatar', () => {
     fetchPublicImageBytes.mockResolvedValue({ buffer: png, mimeType: 'image/png' });
     const restored = await restoreCloudAvatar('https://cdn.example/avatar.png');
     expect(restored).toEqual({ imageBase64: Buffer.from(png).toString('base64') });
+    // Take-over restores a server-issued profile avatar: the only caller that may accept proxy fake-IP.
+    expect(fetchPublicImageBytes).toHaveBeenLastCalledWith(
+      'https://cdn.example/avatar.png', expect.any(Number), undefined, expect.objectContaining({ allowProxyFakeIp: true }),
+    );
   });
 
   it('uses the default avatar when the address is permanently gone, so take-over can finish', async () => {

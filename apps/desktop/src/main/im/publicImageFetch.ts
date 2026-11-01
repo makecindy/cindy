@@ -8,6 +8,7 @@
 import {
   fetchWithSsrFGuard,
   type GuardedFetchResult,
+  type SsrFPolicy,
 } from '@cindy/browser-control-runtime/ssrf-runtime';
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -18,7 +19,25 @@ export type GuardedImageFetch = (params: {
   signal: AbortSignal;
   requireHttps: true;
   maxRedirects: number;
+  policy?: SsrFPolicy;
 }) => Promise<GuardedFetchResult>;
+
+/**
+ * Proxy fake-IP stacks (Clash / Surge / sing-box in TUN mode) resolve public
+ * CDN hostnames into 198.18.0.0/15 (RFC 2544). That range is only a placeholder
+ * the TUN maps back to the original hostname, so the guard cannot see where the
+ * proxy really connects. Exempting it is therefore opt-in and only for callers
+ * whose URL is server-supplied (companion avatars); the default (IM path, which
+ * fetches untrusted Agent Markdown URLs) keeps 198.18/15 blocked so a
+ * crafted URL cannot reach private HTTPS endpoints through the proxy mapping.
+ * The renderer-driven avatar cache (`resolveCompanionAvatar` takes any https URL) stays blocked too;
+ * only the takeover restore, whose avatar comes from the cloud profile snapshot, opts in.
+ * fc00::/7 stays blocked in every case: it hosts real internal services and is
+ * indistinguishable from an IPv6 fake-IP (browser-managed-config.ts).
+ */
+export const PROXY_FAKE_IP_SSRF_POLICY: SsrFPolicy = {
+  allowRfc2544BenchmarkRange: true,
+};
 
 async function readBodyLimited(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (!response.body) throw new Error('remote image response has no body');
@@ -53,7 +72,7 @@ export async function fetchPublicImageBytes(
   url: string,
   maxBytes: number,
   guardedFetch: GuardedImageFetch = fetchWithSsrFGuard,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; allowProxyFakeIp?: boolean } = {},
 ): Promise<{ buffer: Uint8Array; mimeType?: string }> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error('invalid remote image size limit');
@@ -70,6 +89,7 @@ export async function fetchPublicImageBytes(
       signal: controller.signal,
       requireHttps: true,
       maxRedirects: MAX_REDIRECTS,
+      ...(options.allowProxyFakeIp ? { policy: PROXY_FAKE_IP_SSRF_POLICY } : {}),
     });
     const { response } = result;
     if (!response.ok) throw new Error(`remote image request failed: HTTP ${response.status}`);
