@@ -1,6 +1,7 @@
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 import { HermesSessionModelLabel } from './HermesSessionModelLabel';
+import { SessionContextGuardBanner } from './SessionContextGuardBanner';
 import { SessionRouteBlockedBanner } from './SessionRouteBlockedBanner';
 import { SessionUsagePanel } from './SessionUsagePanel';
 /**
@@ -678,6 +679,7 @@ export function SessionContentHeader({
           sessionModel={session.model}
         />
       )}
+      {!isEditing && <SessionContextGuardBanner session={session} />}
       {!isEditing && (
         <SessionUsagePanel
           sessionId={session.id}

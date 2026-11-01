@@ -10,6 +10,21 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 2: ROADMAP 2.5b-1, context-window guard warning UI and routed "summarise and continue" action (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx` (new), `apps/desktop/src/renderer/features/cc-agent/SessionContentHeader.tsx` (+2 lines), and `apps/desktop/src/renderer/__tests__/sessionContextGuardBanner.test.tsx` (new, 4 tests): `resolveSessionUsedTokens` reads the latest assistant turn's `turnUsageDetails` tokens (falling back to `session.contextTokens` / `session.totalTokenUsage`), `resolveSessionContextLength` resolves the active model's `capabilities.contextLength` from `providers.yaml` via `routing.yaml`, and `SessionContextGuardBannerView` renders the `warn` / `critical` banner from `guardContext` with either a one-click `Summarise and continue (<provider>/<model>)` button (which calls `window.electronAPI.maker.providers.requestRoutedTaskText({ taskClass: 'summary' })`, creates a continuation session, and sends the summary prompt) or the blocked `summary` route reason + one-click alternative route buttons (never auto-switching).
+
+**Mutation checks (2):**
+- In `apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx`, iterating `messages` forward (`0..length-1`) instead of backward in `resolveSessionUsedTokens` returned the first turn's tokens instead of the latest turn's and failed `sessionContextGuardBanner.test.tsx` (`expected 12000 to be 57000`); restored byte-identical.
+- In `apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx`, replacing `summarise?.ok` with `summarise` rendered the summarise button even when the `summary` route was offline and failed 2 tests in `sessionContextGuardBanner.test.tsx`; restored byte-identical.
+
+**Not claimed:** not clicked in the running desktop app yet. `2.5b-live` stays open for the owner-clicked live proof in the app.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Phase 2: ROADMAP 2.4b-1, no silent fallback session error and one-click "use X instead" UI (`unit-tested`)
 
 **Outcome:**
