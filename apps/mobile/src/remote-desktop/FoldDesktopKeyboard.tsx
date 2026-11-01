@@ -14,15 +14,12 @@ import {
 import { FoldTouchpad } from "./FoldTouchpad";
 import { RemoteKeySurface } from "./RemoteKeySurface";
 
-type KeySurfaceProps = Omit<Parameters<typeof RemoteKeySurface>[0], "compact">;
+type KeySurfaceProps = Omit<
+  Parameters<typeof RemoteKeySurface>[0],
+  "compact" | "mode" | "strip"
+>;
 
-export function FoldDeckOperations({
-  onPress,
-  color,
-}: {
-  onPress(): void;
-  color?: string;
-}) {
+function FoldDeckOperations({ onPress }: { onPress(): void }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -37,7 +34,7 @@ export function FoldDeckOperations({
       <Ellipsis
         size={iconSize.action}
         strokeWidth={iconStroke.regular}
-        color={color ?? colors.textPrimary}
+        color={colors.textPrimary}
       />
     </Pressable>
   );

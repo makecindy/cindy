@@ -25,6 +25,8 @@ export type KeyRect = KeyCell & {
   width: number;
   height: number;
 };
+/** The top row's fixed height and the width its bar neighbours reserve. */
+export type KeyStrip = { height?: number; left?: number; right?: number };
 export type HostPlatform = string | undefined;
 
 const GAP = 5;
@@ -65,6 +67,46 @@ const control = (code: string, weight: number): KeyCell => ({
   weight,
   control: true,
 });
+
+/**
+ * Vintage machines had only the typing keys, with printed words instead of icons.
+ * Everything else stays one tap away through the toolbar's keyboard.
+ */
+export function classicKeyboardRows(platform: HostPlatform): KeyCell[][] {
+  const mac = platform === "darwin";
+  const key = (code: string, legend: string, weight = 1): KeyCell => ({
+    id: code,
+    code,
+    weight,
+    legend,
+  });
+  const meta = mac ? "⌘" : platform === "win32" ? "Win" : "Super";
+  return [
+    [
+      key("Escape", "Esc"),
+      ...[..."1234567890"].map((digit) => key(`Digit${digit}`, digit)),
+      key("Backspace", "⌫"),
+    ],
+    [key("Tab", "Tab"), ...letters("QWERTYUIOP")],
+    [...letters("ASDFGHJKL"), key("Enter", mac ? "Return" : "Enter")],
+    [
+      key("ShiftLeft", "Shift"),
+      ...letters("ZXCVBNM"),
+      key("Comma", ","),
+      key("Period", "."),
+      key("ArrowUp", "↑"),
+    ],
+    [
+      key("ControlLeft", "Ctrl"),
+      key("AltLeft", mac ? "Option" : "Alt"),
+      key("MetaLeft", meta),
+      key("Space", "", 4),
+      key("ArrowLeft", "←"),
+      key("ArrowDown", "↓"),
+      key("ArrowRight", "→"),
+    ],
+  ];
+}
 
 /** Phone width cannot fit a laptop's 15 columns, so symbols move to a second page. */
 export const KEY_PAGE = "page";
@@ -210,22 +252,33 @@ export function keyRects(
   rows: KeyCell[][],
   width: number,
   height: number,
+  strip: KeyStrip | false = {},
 ): KeyRect[] {
-  const units = rows.length - 1 + FUNCTION_ROW_HEIGHT;
-  const rowHeight = Math.max(0, height - GAP * (rows.length - 1)) / units;
+  const fixedStrip = strip && strip.height !== undefined ? strip.height : null;
+  const typingRows = strip ? rows.length - 1 : rows.length;
+  const units =
+    typingRows + (strip && fixedStrip === null ? FUNCTION_ROW_HEIGHT : 0);
+  const rowHeight =
+    Math.max(0, height - GAP * (rows.length - 1) - (fixedStrip ?? 0)) /
+    Math.max(1, units);
   const rects: KeyRect[] = [];
   let y = 0;
   rows.forEach((row, rowIndex) => {
-    const currentHeight =
-      rowIndex === 0 ? rowHeight * FUNCTION_ROW_HEIGHT : rowHeight;
+    const isStrip = strip && rowIndex === 0;
+    const currentHeight = isStrip
+      ? (fixedStrip ?? rowHeight * FUNCTION_ROW_HEIGHT)
+      : rowHeight;
+    const left = isStrip ? (strip.left ?? 0) : 0;
+    const right = isStrip ? (strip.right ?? 0) : 0;
     const slots = row.filter((cell) => cell.half !== "bottom");
     const total = slots.reduce(
       (sum, cell) =>
         sum + cell.weight + (cell.groupGap ?? 0) + (cell.trailingGap ?? 0),
       0,
     );
-    const unit = Math.max(0, width - GAP * (slots.length - 1)) / total;
-    let x = 0;
+    const unit =
+      Math.max(0, width - left - right - GAP * (slots.length - 1)) / total;
+    let x = left;
     for (const cell of slots) {
       x += (cell.groupGap ?? 0) * unit;
       const cellWidth = cell.weight * unit;

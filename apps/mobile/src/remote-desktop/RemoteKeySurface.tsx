@@ -50,9 +50,11 @@ import {
   ESCAPE_CELL,
   FN_CELL,
   KEY_PAGE,
+  classicKeyboardRows,
   keyAt,
   keyRects,
   keyboardRows,
+  type KeyStrip,
   type HostPlatform,
   type KeyCell,
   type KeyRect,
@@ -99,7 +101,6 @@ const Keycap = memo(function Keycap({
   rect,
   styles,
   palette,
-  stripPalette,
   legend,
   shifted,
   Icon,
@@ -113,7 +114,6 @@ const Keycap = memo(function Keycap({
   rect: KeyRect;
   styles: ReturnType<typeof makeStyles>;
   palette: ThemeColors;
-  stripPalette: ThemeColors;
   legend?: string;
   shifted?: string;
   Icon?: LucideIcon;
@@ -125,12 +125,11 @@ const Keycap = memo(function Keycap({
   onActivate(id: string): void;
 }) {
   const selected = latch !== null;
-  const own = rect.bare ? stripPalette : palette;
   const foreground = selected
-    ? own.ctaText
+    ? palette.ctaText
     : rect.bare || (subdued && !artwork)
-      ? own.textSecondary
-      : own.textPrimary;
+      ? palette.textSecondary
+      : palette.textPrimary;
   const small = (legend?.length ?? 0) > 1;
   return (
     <View
@@ -148,8 +147,6 @@ const Keycap = memo(function Keycap({
         artwork ? styles.keyArtwork : null,
         pressed && (artwork ? styles.keyArtworkPressed : styles.keyPressed),
         selected && styles.keySelected,
-        rect.bare && pressed && { backgroundColor: own.border },
-        rect.bare && selected && { backgroundColor: own.cta },
         {
           left: rect.x,
           top: rect.y,
@@ -208,8 +205,9 @@ export function RemoteKeySurface({
   keyLabel,
   onInputMethod,
   compact = false,
+  mode = "keyboard",
+  strip,
   palette,
-  stripPalette,
   renderKeycap,
   renderOverlay,
   testID = "remoteDesktop.keys",
@@ -222,13 +220,17 @@ export function RemoteKeySurface({
   undo(): void;
   redo(): void;
   keyLabel(code: string): string;
-  /** Adds the strip's key for the phone's input method. */
+  /** Adds the strip's key for the phone's own keyboard. */
   onInputMethod?: () => void;
   compact?: boolean;
+  /**
+   * classic: typing keys only, for hardware skins.
+   * bar: only the top row, as an accessory above the phone's own keyboard.
+   */
+  mode?: "keyboard" | "classic" | "bar";
+  strip?: KeyStrip;
   /** Hardware skins keep their own colors in either app theme. */
   palette?: ThemeColors;
-  /** The strip sits on a different material from the keycaps on hardware skins. */
-  stripPalette?: ThemeColors;
   renderKeycap?: (rect: KeyRect) => ReactNode;
   renderOverlay?: (rects: KeyRect[]) => ReactNode;
   testID?: string;
@@ -259,31 +261,71 @@ export function RemoteKeySurface({
 
   const systemKey = systemActions.map((action) => action.id).join();
   const hasInputMethod = Boolean(onInputMethod);
+  const stripKey = strip ? `${strip.height},${strip.left},${strip.right}` : "";
   const rects = useMemo(() => {
+    if (mode === "classic")
+      return keyRects(
+        classicKeyboardRows(platform),
+        size.width,
+        size.height,
+        false,
+      );
     const gap = compact ? 0.3 : 0.6;
-    const strip: KeyCell[] = [
-      ESCAPE_CELL,
-      ...(compact ? [{ id: "Tab", code: "Tab", weight: 1, bare: true }] : []),
-      ...systemKey
-        .split(",")
-        .filter(Boolean)
-        .map((id, index) => ({
-          id,
-          weight: 1,
-          bare: true,
-          groupGap: index === 0 ? gap : 0,
-        })),
-      { id: "undo", weight: 1, bare: true, groupGap: gap },
-      { id: "redo", weight: 1, bare: true },
-      { ...FN_CELL, groupGap: gap },
-      ...(hasInputMethod ? [{ id: INPUT_METHOD, weight: 1, bare: true }] : []),
-    ];
-    return keyRects(
-      keyboardRows(platform, strip, compact, symbols),
-      size.width,
-      size.height,
-    );
-  }, [platform, systemKey, hasInputMethod, compact, symbols, size]);
+    const bareKey = (code: string): KeyCell => ({
+      id: code,
+      code,
+      weight: 1,
+      bare: true,
+    });
+    const typingStrip: KeyCell[] =
+      mode === "bar"
+        ? [
+            ESCAPE_CELL,
+            bareKey("Tab"),
+            { ...bareKey("ArrowLeft"), groupGap: gap },
+            bareKey("ArrowUp"),
+            bareKey("ArrowDown"),
+            bareKey("ArrowRight"),
+          ]
+        : [
+            ESCAPE_CELL,
+            ...(compact ? [bareKey("Tab")] : []),
+            // A phone's bar has no room for these; the toolbar has them a tap away.
+            ...(compact && strip
+              ? []
+              : systemKey
+                  .split(",")
+                  .filter(Boolean)
+                  .map((id, index) => ({
+                    id,
+                    weight: 1,
+                    bare: true,
+                    groupGap: index === 0 ? gap : 0,
+                  }))),
+            { id: "undo", weight: 1, bare: true, groupGap: gap },
+            { id: "redo", weight: 1, bare: true },
+            { ...FN_CELL, groupGap: gap },
+            ...(hasInputMethod
+              ? [{ id: INPUT_METHOD, weight: 1, bare: true }]
+              : []),
+          ];
+    const rows =
+      mode === "bar"
+        ? [typingStrip]
+        : keyboardRows(platform, typingStrip, compact, symbols);
+    return keyRects(rows, size.width, size.height, strip ?? {});
+    // stripKey stands for the strip's values, which callers rebuild each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    platform,
+    systemKey,
+    hasInputMethod,
+    compact,
+    symbols,
+    size,
+    mode,
+    stripKey,
+  ]);
   const rectsRef = useRef(rects);
   rectsRef.current = rects;
 
@@ -348,7 +390,7 @@ export function RemoteKeySurface({
       if (resolved !== rect.code) return FN_LEGENDS[resolved] ?? resolved;
     }
     if (rect.legend)
-      return /^Key/.test(rect.id) && !uppercase
+      return /^Key/.test(rect.id) && !uppercase && mode !== "classic"
         ? rect.legend.toLowerCase()
         : rect.legend;
     if (rect.id === "Escape") return "esc";
@@ -362,7 +404,7 @@ export function RemoteKeySurface({
     if (rect.id === "redo") return Redo2;
     const system = systemActions.find((action) => action.id === rect.id);
     if (system) return system.Icon;
-    if (!rect.code) return undefined;
+    if (!rect.code || rect.legend !== undefined) return undefined;
     if (fn && fnLayerCode(rect.code) !== rect.code) return undefined;
     return (
       KEY_ICONS[rect.code] ??
@@ -409,7 +451,6 @@ export function RemoteKeySurface({
           rect={rect}
           styles={styles}
           palette={colors}
-          stripPalette={stripPalette ?? colors}
           legend={legend(rect, fn, uppercase)}
           shifted={
             fn && rect.code && fnLayerCode(rect.code) !== rect.code

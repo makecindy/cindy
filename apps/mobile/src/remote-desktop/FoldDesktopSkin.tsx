@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef } from "react";
 import { Image, Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
@@ -14,7 +14,6 @@ import {
 } from "@/theme";
 import type { LayoutRect } from "@/platform/windowGeometry";
 import { retroMacArtwork } from "./retroMacArtwork";
-import { FoldDeckOperations } from "./FoldDesktopKeyboard";
 import { FoldTouchpad } from "./FoldTouchpad";
 import { RemoteKeySurface } from "./RemoteKeySurface";
 import type { KeyRect } from "./remoteKeyLayout";
@@ -289,19 +288,22 @@ export function FoldDesktopDeck({
   keys,
   skin,
   onChange,
-  onOperations,
-  clipboard,
   safeInsets = { top: 0, bottom: 0, left: 0, right: 0 },
   bottomReserve = 0,
 }: {
   keys: Omit<
     Parameters<typeof RemoteKeySurface>[0],
-    "compact" | "palette" | "renderKeycap" | "renderOverlay" | "testID"
+    | "compact"
+    | "mode"
+    | "strip"
+    | "palette"
+    | "renderKeycap"
+    | "renderOverlay"
+    | "testID"
+    | "onInputMethod"
   >;
   skin: RetroDesktopSkin;
   onChange(value: FoldDesktopSkin): void;
-  onOperations(): void;
-  clipboard: ReactNode;
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   bottomReserve?: number;
 }) {
@@ -359,8 +361,7 @@ export function FoldDesktopDeck({
             {...keys}
             testID="remoteDesktop.retroKeys"
             palette={palette}
-            // Every hardware keyboard sits in a dark well, even in a beige case.
-            stripPalette={darkColors}
+            mode="classic"
             renderKeycap={(rect) => (
               <FoldDesktopKeycap
                 skin={skin}
@@ -421,27 +422,6 @@ export function FoldDesktopDeck({
           ]}
         >
           <FoldTouchpad send={send} enabled={enabled} bare />
-        </View>
-        {/* After the palmrest, so these two stay above its pointer surface. */}
-        <View
-          pointerEvents="box-none"
-          style={[
-            StyleSheet.absoluteFill,
-            {
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-              bottom: safeInsets.bottom + bottomReserve,
-              paddingLeft: safeInsets.left + spacing.md,
-              paddingRight: safeInsets.right + spacing.md,
-            },
-          ]}
-        >
-          <View style={styles.corner}>{clipboard}</View>
-          <FoldDeckOperations
-            onPress={onOperations}
-            color={palette.textPrimary}
-          />
         </View>
       </View>
     </View>
@@ -556,12 +536,6 @@ const styles = StyleSheet.create({
   switchButton: {
     minHeight: 44,
     paddingHorizontal: spacing.lg,
-    justifyContent: "center",
-  },
-  corner: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
     justifyContent: "center",
   },
 });

@@ -304,6 +304,7 @@ vi.mock("lucide-react-native", () => ({
   CornerDownLeft: () => null,
   Delete: () => null,
   Ellipsis: () => null,
+  Languages: () => null,
   LayoutGrid: () => null,
   Redo2: () => null,
   Search: () => null,
@@ -3431,7 +3432,7 @@ describe("remote desktop controls", () => {
       await act(async () => root.render(<RemoteDesktopScreen />));
       await connect();
       act(() => button("keyboard").click());
-      act(() => button("computerKeyboard").click());
+      act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
       const keys = fixture.views["remoteDesktop.keys"];
       expect(keys).toBeDefined();
       // Unit: a phone-width portrait panel uses the compact page; landscape has room for all keys.
@@ -4186,10 +4187,7 @@ describe("remote desktop controls", () => {
       bottomInset: 270,
       keyboardOpen: true,
     });
-    const computer = [...host.querySelectorAll("button")].find(
-      (element) => element.textContent === "remoteDesktop.computerKeyboard",
-    )!;
-    act(() => computer.click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
     expect(
@@ -4209,6 +4207,63 @@ describe("remote desktop controls", () => {
       bottomInset: 0,
       keyboardOpen: false,
     });
+  });
+
+  // Unit: switching keyboards must not move the bar or the desktop. Earlier
+  // coverage only checked panel insets at rest, not the swap between the modes.
+  it("keeps the keys under the rising iOS keyboard, sized to match it, then swaps to the bar", async () => {
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    act(() => button("keyboard").click());
+    const surface = () =>
+      Object.assign(
+        {},
+        ...[fixture.views["remoteDesktop.keyboardSurface"].style]
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+    const avoiding = () =>
+      fixture.views["remoteDesktop.keyboardPanel"];
+    expect(avoiding()).toBeDefined();
+    act(() =>
+      fixture.keyboardListeners.keyboardDidShow({
+        endCoordinates: { screenY: 500, height: 344 },
+      }),
+    );
+    expect(surface().height).toBe(44);
+    const mode = () => fixture.views["remoteDesktop.keyboardMode"];
+    act(() => mode().onPress());
+    const keysHeight = surface().height;
+    // 344 keyboard - safe bottom + bar spacing + bar.
+    expect(keysHeight).toBeGreaterThan(44 + 220);
+    act(() => mode().onPress());
+    // Still the keys while the system keyboard rises.
+    expect(surface().height).toBe(keysHeight);
+    act(() =>
+      fixture.keyboardListeners.keyboardDidShow({
+        endCoordinates: { screenY: 500, height: 344 },
+      }),
+    );
+    expect(surface().height).toBe(44);
+  });
+
+  it("falls back to the bar when no system keyboard rises, as with a hardware keyboard", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await connect();
+      act(() => button("keyboard").click());
+      const mode = () => fixture.views["remoteDesktop.keyboardMode"];
+      act(() => mode().onPress());
+      act(() => mode().onPress());
+      const height = () =>
+        fixture.views["remoteDesktop.keyboardSurface"].style.height;
+      expect(height()).toBeGreaterThan(44);
+      act(() => vi.advanceTimersByTime(800));
+      expect(height()).toBe(44);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps Android native keyboard avoidance without adding its height twice", async () => {
@@ -4232,10 +4287,7 @@ describe("remote desktop controls", () => {
         .filter((m) => m.type === "mouseButtons")
         .at(-1),
     ).toMatchObject({ bottomInset: 0, keyboardOpen: false });
-    const computer = [...host.querySelectorAll("button")].find(
-      (element) => element.textContent === "remoteDesktop.computerKeyboard",
-    )!;
-    act(() => computer.click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
     act(() => panel().onLayout({ nativeEvent: { layout: { height: 280 } } }));
     expect(panel().style.flat(Infinity)).toContainEqual({ bottom: 0 });
     expect(
@@ -5894,6 +5946,13 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
     fixture.post.mockClear();
+    // Unit: hardware skins keep the toolbar and only the typing keys.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.toolbarPosition"]'),
+    ).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.key.undo"]'),
+    ).toBeNull();
     act(() =>
       fixture.views["remoteDesktop.retroKeys"].onLayout({
         nativeEvent: { layout: { width: 600, height: 300 } },

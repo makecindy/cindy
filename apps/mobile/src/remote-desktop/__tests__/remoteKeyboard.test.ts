@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { KEY_CAPS, KEY_FN, RemoteKeyInput } from "../remoteKeyInput";
-import { keyAt, keyRects, keyboardRows } from "../remoteKeyLayout";
+import {
+  classicKeyboardRows,
+  keyAt,
+  keyRects,
+  keyboardRows,
+} from "../remoteKeyLayout";
 
 const down = (code: string) => ({ kind: "key", code, down: true });
 const up = (code: string) => ({ kind: "key", code, down: false });
@@ -81,6 +86,36 @@ describe("RemoteKeyInput", () => {
     input.press(1, "AltLeft");
     input.release(1, true);
     expect(input.latch("AltLeft")).toBeNull();
+  });
+});
+
+describe("classic keyboard", () => {
+  it("has only the typing keys, in five rows with printed words", () => {
+    const rows = classicKeyboardRows("darwin");
+    expect(rows).toHaveLength(5);
+    expect(rows.flat().every((cell) => cell.legend !== undefined)).toBe(true);
+    expect(rows.flat().some((cell) => cell.bare)).toBe(false);
+    const rects = keyRects(rows, 600, 300, false);
+    expect(rects[0].y).toBe(0);
+    const last = rects[rects.length - 1];
+    expect(last.y + last.height).toBeCloseTo(300, 3);
+  });
+});
+
+describe("keyboard bar", () => {
+  it("fits between its neighbours at a fixed height, keys filling the rest", () => {
+    const rows = keyboardRows("darwin", [
+      { id: "Escape", code: "Escape", weight: 1 },
+    ]);
+    const rects = keyRects(rows, 400, 300, { height: 44, left: 44, right: 88 });
+    const esc = rects[0];
+    expect(esc.x).toBe(44);
+    expect(esc.width).toBeCloseTo(268, 3);
+    expect(esc.height).toBe(44);
+    expect(rects[1].y).toBe(49);
+    expect(rects[1].x).toBe(0);
+    const last = rects[rects.length - 1];
+    expect(last.y + last.height).toBeCloseTo(300, 3);
   });
 });
 
