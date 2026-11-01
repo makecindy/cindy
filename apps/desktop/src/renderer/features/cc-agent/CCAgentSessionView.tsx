@@ -161,6 +161,8 @@ import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWa
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
+import { SessionRouteBlockedBanner } from './SessionRouteBlockedBanner';
+import { SessionContextGuardBanner } from './SessionContextGuardBanner';
 import { Tip } from '@/components/ui/tooltip';
 import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -5846,6 +5848,24 @@ function CCAgentSessionContent({
                 pendingAgentDeviceId !== undefined ? pendingAgentDeviceId : agentDeviceId
               )}
             />
+
+            {session && (
+              <SessionRouteBlockedBanner
+                sessionId={session.id}
+                agentKind={session.agentKind}
+                sessionModel={session.model}
+                style={{ width: inputWidth }}
+                className="py-1"
+              />
+            )}
+
+            {session && (
+              <SessionContextGuardBanner
+                session={session}
+                style={{ width: inputWidth }}
+                className="py-1"
+              />
+            )}
 
             <div
               className="mx-auto flex flex-col items-center gap-[10px]"

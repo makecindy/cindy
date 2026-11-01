@@ -82,15 +82,16 @@ export function resolveSessionContextLength(params: {
     }
   }
 
+  if (typeof sessionContextWindow === 'number' && sessionContextWindow > 0) {
+    return sessionContextWindow;
+  }
+
   const defaultRoute = resolveTaskRoute(routing, 'chat.default');
   if (defaultRoute.ok) {
     const cap = byId.get(defaultRoute.target.provider)?.capabilities.contextLength;
     if (typeof cap === 'number' && cap > 0) return cap;
   }
 
-  if (typeof sessionContextWindow === 'number' && sessionContextWindow > 0) {
-    return sessionContextWindow;
-  }
   return undefined;
 }
 
@@ -150,6 +151,8 @@ export function SessionContextGuardBannerView({
   onSummariseAndContinue,
   onSelectSummaryAlternative,
   onDismiss,
+  style,
+  className,
 }: {
   guard: ContextGuardResult | null;
   summarising?: boolean;
@@ -157,6 +160,8 @@ export function SessionContextGuardBannerView({
   onSummariseAndContinue: () => void;
   onSelectSummaryAlternative?: (alt: RouteAlternative) => void;
   onDismiss?: () => void;
+  style?: React.CSSProperties;
+  className?: string;
 }) {
   if (!guard) return null;
   const { context, summarise } = guard;
@@ -168,8 +173,8 @@ export function SessionContextGuardBannerView({
     <div
       data-testid="session-context-guard-banner"
       data-context-level={context.level}
-      className="mx-1 shrink-0"
-      style={WINDOW_NO_DRAG_STYLE}
+      className={className ?? 'mx-1 shrink-0'}
+      style={style ?? WINDOW_NO_DRAG_STYLE}
     >
       <ErrorNotice
         message={context.message}
@@ -223,7 +228,15 @@ export function SessionContextGuardBannerView({
   );
 }
 
-export function SessionContextGuardBanner({ session }: { session: Session }) {
+export function SessionContextGuardBanner({
+  session,
+  style,
+  className,
+}: {
+  session: Session;
+  style?: React.CSSProperties;
+  className?: string;
+}) {
   const navigate = useNavigate();
   const displaySnapshot = useChatDisplaySnapshot(session.id);
   const [storeMessages, setStoreMessages] = useState<readonly ChatMessage[]>(() =>
@@ -358,6 +371,8 @@ export function SessionContextGuardBanner({ session }: { session: Session }) {
       summaryError={summaryError}
       onSummariseAndContinue={() => void handleSummariseAndContinue()}
       onDismiss={() => setDismissedKey(currentKey)}
+      style={style}
+      className={className}
     />
   );
 }

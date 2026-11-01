@@ -29,11 +29,12 @@ export function formatRouteAlternativeLabel(alt: RouteAlternative): string {
  */
 export function assessSessionRouteHealth(params: {
   sessionModel?: string | null;
+  agentKind?: string | null;
   routing: RoutingFile;
   providers: ProviderFileEntry[];
   probes: ProbeLike[];
 }): RouteHealth | null {
-  const { sessionModel, routing, providers, probes } = params;
+  const { sessionModel, agentKind, routing, providers, probes } = params;
   if (!routing || !routing.routes || Object.keys(routing.routes).length === 0) {
     return null;
   }
@@ -56,6 +57,10 @@ export function assessSessionRouteHealth(params: {
     return assessRoute(resolution, routing, providers, probes);
   }
 
+  if (agentKind === 'hermes') {
+    return null;
+  }
+
   if (!('chat.default' in (routing.rules ?? {}))) {
     return null;
   }
@@ -75,19 +80,23 @@ export function SessionRouteBlockedBannerView({
   switchingRoute,
   onSelectAlternative,
   onDismiss,
+  style,
+  className,
 }: {
   health: RouteHealth | null;
   switchingRoute?: string | null;
   onSelectAlternative: (alt: RouteAlternative) => void;
   onDismiss?: () => void;
+  style?: React.CSSProperties;
+  className?: string;
 }) {
   if (!health || health.ok) return null;
 
   return (
     <div
       data-testid="session-route-blocked-banner"
-      className="mx-1 shrink-0"
-      style={WINDOW_NO_DRAG_STYLE}
+      className={className ?? 'mx-1 shrink-0'}
+      style={style ?? WINDOW_NO_DRAG_STYLE}
     >
       <ErrorNotice
         message={health.message}
@@ -133,10 +142,14 @@ export function SessionRouteBlockedBanner({
   sessionId,
   agentKind,
   sessionModel,
+  style,
+  className,
 }: {
   sessionId: string;
   agentKind: string;
   sessionModel?: string | null;
+  style?: React.CSSProperties;
+  className?: string;
 }) {
   const [health, setHealth] = useState<RouteHealth | null>(null);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
@@ -157,6 +170,7 @@ export function SessionRouteBlockedBanner({
       ]);
       const next = assessSessionRouteHealth({
         sessionModel,
+        agentKind,
         routing: routingRes,
         providers: providersRes.providers ?? [],
         probes: probes ?? [],
@@ -198,6 +212,8 @@ export function SessionRouteBlockedBanner({
       switchingRoute={switchingRoute}
       onSelectAlternative={(alt) => void handleSelectAlternative(alt)}
       onDismiss={() => setDismissedKey(currentKey)}
+      style={style}
+      className={className}
     />
   );
 }

@@ -121,6 +121,20 @@ describe('SessionRouteBlockedBanner (ROADMAP 2.4b)', () => {
     expect(html).toBe('');
   });
 
+  it('returns null for hermes sessions using hermes-default (home config owns route)', () => {
+    const probes: ProbeLike[] = [
+      { id: 'ollama-local', status: 'offline', models: [], error: 'ECONNREFUSED' },
+    ];
+    const health = assessSessionRouteHealth({
+      agentKind: 'hermes',
+      sessionModel: 'hermes-default',
+      routing,
+      providers,
+      probes,
+    });
+    expect(health).toBeNull();
+  });
+
   it('formats local vs paid alternative labels explicitly', () => {
     expect(
       formatRouteAlternativeLabel({

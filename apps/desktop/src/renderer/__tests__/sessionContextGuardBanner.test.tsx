@@ -86,6 +86,14 @@ describe('SessionContextGuardBanner (ROADMAP 2.5b)', () => {
       providers,
     });
     expect(contextLength).toBe(65_536);
+
+    const explicitContext = resolveSessionContextLength({
+      sessionModel: 'hermes-default',
+      sessionContextWindow: 200_000,
+      routing,
+      providers,
+    });
+    expect(explicitContext).toBe(200_000);
   });
 
   it('renders warning banner with "Summarise and continue" button when context is >= 80% and summary route is healthy', () => {

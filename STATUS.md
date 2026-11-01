@@ -10,6 +10,26 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Defect Fix: Relocate route/context banners from window titlebar to chat composer stack (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/renderer/features/cc-agent/SessionContentHeader.tsx`: removed `<SessionRouteBlockedBanner>` and `<SessionContextGuardBanner>` from the 40px macOS window titlebar row where they squashed the header, disrupted drag behavior, and squeezed action buttons.
+2. `apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx`: mounted `<SessionRouteBlockedBanner>` and `<SessionContextGuardBanner>` above `data-chat-composer-stack` matching Cindy's existing banner conventions (`width: inputWidth`, `className="py-1"`).
+3. `apps/desktop/src/renderer/features/cc-agent/SessionRouteBlockedBanner.tsx` + `sessionRouteBlockedBanner.test.tsx` (+1 test, 4/4): `assessSessionRouteHealth` returns `null` for `agentKind === 'hermes'` when using `hermes-default` (Hermes home config owns the route, preventing spurious offline errors from `routing.yaml`).
+4. `apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx` + `sessionContextGuardBanner.test.tsx` (+1 test, 4/4): `resolveSessionContextLength` prioritizes positive `sessionContextWindow` over fallback `chat.default`.
+5. `~/.cindy-harness/providers.yaml`: corrected `contextLength` test value from `200` to `32768`.
+6. Dev app restarted with `pnpm restart:desktop:remote --region=global`.
+
+**Mutation checks (2):**
+- In `SessionRouteBlockedBanner.tsx`, changing `agentKind === 'hermes'` guard to `'other'` failed `sessionRouteBlockedBanner.test.tsx` (`returns null for hermes sessions using hermes-default`); restored byte-identical.
+- In `SessionContextGuardBanner.tsx`, disabling the positive `sessionContextWindow` check failed `sessionContextGuardBanner.test.tsx` (`expected 65536 to be 200000`); restored byte-identical.
+
+**Not claimed:** visual appearance in the restarted app is pending owner confirmation.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Defect Fix: Hermes model picker selection and runtime projection sync (`unit-tested`)
 
 **Outcome:**
