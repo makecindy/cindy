@@ -20,10 +20,11 @@ export interface NotificationDeliveryHost<Window, Scope extends { ownerScopeKey?
   captureDataOwnerBroadcastScope(): Scope;
   isDataOwnerBroadcastScopeCurrent(scope: Scope): boolean;
   drainPersistQueue(): Promise<void>;
-  latestMessageText(id: string, role: 'assistant'): Promise<string | undefined>;
   markSessionNeedsAttention(id: string): void;
-  showDesktopSessionEvent(getWindow: () => Window | null, payload: {sessionId: string; title: string; kind: SessionEventKind; teammate?: boolean; markAttention?: boolean; body?: string}): boolean;
+  showDesktopSessionEvent(getWindow: () => Window | null, payload: {sessionId: string; title: string; kind: SessionEventKind; teammate?: boolean; markAttention?: boolean; body?: string; avatarJpeg?: string}): boolean;
+  companionAvatarThumbnail?(value: string): Promise<string | undefined>;
   getTeammateNotificationFallback: ReturnType<typeof createSessionNotificationCopy>['getTeammateNotificationFallback'];
+  getNotificationImageLabel: ReturnType<typeof createSessionNotificationCopy>['getNotificationImageLabel'];
   getSessionExternalNotificationText: ReturnType<typeof createSessionNotificationCopy>['getSessionExternalNotificationText'];
 }
 export interface ShowSessionEventPayload {
@@ -45,8 +46,8 @@ export interface ShowSessionEventPayload {
 export function createSessionNotificationDelivery<Window, Scope extends { ownerScopeKey?: string | null; ownerStamp?: unknown }>(host: NotificationDeliveryHost<Window, Scope>) {
   const { log, getMobileNotifyGeneration, sendMobileSessionNotify, getSessionNotificationTurnSignal,
     drainSessionActiveTurnWrites, readSessionNotificationPreview, captureDataOwnerBroadcastScope,
-    isDataOwnerBroadcastScopeCurrent, drainPersistQueue, latestMessageText, markSessionNeedsAttention,
-    showDesktopSessionEvent, getTeammateNotificationFallback, getSessionExternalNotificationText } = host;
+    isDataOwnerBroadcastScopeCurrent, drainPersistQueue, markSessionNeedsAttention,
+    showDesktopSessionEvent, getTeammateNotificationFallback, getNotificationImageLabel, getSessionExternalNotificationText } = host;
 type NotifiedReply = ({ eventId: string } | { fallbackSentAt: number }) & { handledByTeammate?: true };
 const notifiedReplies = new Map<string, NotifiedReply>();
 const pendingFeishuReplies = new Set<string>();
@@ -108,10 +109,6 @@ return async function showSessionEvent(payload: ShowSessionEventPayload): Promis
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
 
-      // Action/error desktop notices have no transcript preview and must be immediate.
-      if (wantDesktop && kind !== 'done') {
-        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind, markAttention });
-      }
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
       void (async () => {
@@ -120,19 +117,28 @@ return async function showSessionEvent(payload: ShowSessionEventPayload): Promis
         let teammateBotId: string | undefined;
         let postDrainPreviewReady = false;
         let detail: string | undefined;
-        if (kind === 'done' || (kind === 'needs-reply' && channels?.mobile === true)) {
+        let avatarJpeg: string | undefined;
+        if (kind === 'done' || wantDesktop || channels?.mobile === true) {
           let finished = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
+          const readAvatar = async (identity: SessionNotificationPreview) => {
+            if (!wantDesktop) return;
+            const avatar = identity.teammateAvatar;
+            const jpeg = avatar?.kind === 'jpeg' ? avatar.value
+              : avatar?.kind === 'preset' ? await host.companionAvatarThumbnail?.(`cindy://avatar/preset/${avatar.value}`) : undefined;
+            if (!finished) avatarJpeg = jpeg;
+          };
           // Routing is optional: read it beside the reply so it never spends the
           // preview's wait window, and a failed identity read costs nothing.
-          const routeRead = kind === 'needs-reply'
-            ? readSessionNotificationPreview(sessionId, false).then(
-              (identity) => { if (!finished) teammateBotId = identity.teammateBotId; },
+          const routeRead = kind !== 'done'
+            ? readSessionNotificationPreview(sessionId, false, true).then(
+              async (identity) => { if (!finished) { teammateBotId = identity.teammateBotId; preview = identity; await readAvatar(identity); } },
               () => undefined)
             : undefined;
           try {
             await Promise.race([
               Promise.all([(async () => {
+                if (kind !== 'done') return;
                 if (kind === 'done') {
                   // Read the teammate identity first so a blocked write still
                   // has the correct fallback. This snapshot may predate the
@@ -152,8 +158,7 @@ return async function showSessionEvent(payload: ShowSessionEventPayload): Promis
                   preview = await readSessionNotificationPreview(sessionId);
                   postDrainPreviewReady = true;
                   detail = preview.reply?.text;
-                } else {
-                  detail = await latestMessageText(sessionId, 'assistant');
+                  await readAvatar(preview);
                 }
               })(), routeRead]),
               new Promise<void>((resolve) => { timer = setTimeout(resolve, NOTIFICATION_PREVIEW_WAIT_MS); }),
@@ -209,15 +214,15 @@ return async function showSessionEvent(payload: ShowSessionEventPayload): Promis
           }
           return;
         }
-        const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
+        const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
-        if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
+        if (wantDesktop && (kind !== 'done' || !wasReplyNotified(desktopKey, eventId))) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
-              sessionId, title: notificationTitle, kind, teammate, markAttention,
-              body: teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined,
+              sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
+              body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
-            if (accepted) {
+            if (kind === 'done' && accepted) {
               notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
             }
           } catch (err) {
@@ -245,7 +250,7 @@ return async function showSessionEvent(payload: ShowSessionEventPayload): Promis
             pendingFeishuReplies.add(pendingKey);
             if (!eventId) pendingFeishuFallbacks.set(feishuKey, Date.now());
             try {
-              const body = teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined;
+              const body = teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined;
               const accepted = await sendFeishuMessage(feishuIm, notificationTitle, kind, body);
               if (accepted) {
                 notifiedReplies.set(feishuKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });

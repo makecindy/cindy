@@ -11,7 +11,8 @@ import type {createBotAutonomySettings} from './botAutonomySettings.js';
 import type {createBotWorkbenchAutonomyBridge} from './botWorkbenchAutonomyBridge.js';
 import type {RoutineEngineLifecycleListener} from './routineService.js';
 type HostData=ReturnType<typeof createBotAutonomyHostData>;
-export interface BotAutonomyServiceHost extends Pick<OwnerBroadcastTap,'getSafeDataOwnerPushStamp'|'tapWindowBroadcast'>,HostData,
+export interface BotAutonomyServiceHost extends Pick<OwnerBroadcastTap,'getSafeDataOwnerPushStamp'|'tapWindowBroadcast'>,
+ Pick<HostData,'readInterruptedSessionMetas'|'readLocalSessionMetas'|'readTaskOwnership'|'toRemoteTargets'>,
  Pick<ReturnType<typeof createBotAutonomyHub>,'getActiveBotAutonomy'|'getBotAutonomyHostDeps'|'scopeIsCurrent'|'setActiveBotAutonomy'>,
  Pick<ReturnType<typeof createBotAutonomySettings>,'readBotAutonomySettingsOverride'>,
  Pick<ReturnType<typeof createBotWorkbenchAutonomyBridge>,'registerBotAutonomyReader'> {

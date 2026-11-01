@@ -46,6 +46,10 @@ function getTeammateNotificationFallback(): string {
   return t('settings.notifications.sessionEvent.newReply');
 }
 
+function getNotificationImageLabel(): string {
+  return t('settings.notifications.chat.image');
+}
+
 /** Phone push body for a 分工 step that stopped for the user (bot-group-chat.md §8.3). */
 function getBotGroupStepNotificationBody(event: {
   botName: string;
@@ -64,5 +68,5 @@ function getBotGroupStepNotificationBody(event: {
     .replaceAll('{{task}}', () => event.task);
 }
 
-return { getSessionNotificationBody, getSessionNotificationUntitled, getSessionExternalNotificationText, getInputHandoffNotificationBody, getTeammateNotificationFallback, getBotGroupStepNotificationBody };
+return { getSessionNotificationBody, getSessionNotificationUntitled, getSessionExternalNotificationText, getInputHandoffNotificationBody, getTeammateNotificationFallback, getBotGroupStepNotificationBody, getNotificationImageLabel };
 }

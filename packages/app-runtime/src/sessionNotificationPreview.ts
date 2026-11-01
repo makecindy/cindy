@@ -20,7 +20,7 @@ export interface SessionNotificationPreview {
 export function createSessionNotificationPreview(host: { getDbClient(): DbClient; notificationAvatar(value: string): Promise<NotifySender['avatar']> }) {
 const { getDbClient, notificationAvatar } = host;
 /** Use the durable current turn, never the previous answer or an internal task receipt. */
-async function readSessionNotificationPreview(sessionId: string, includeReply = true): Promise<SessionNotificationPreview> {
+async function readSessionNotificationPreview(sessionId: string, includeReply = true, includeAvatar = includeReply): Promise<SessionNotificationPreview> {
   const db = getDbClient().drizzle;
   const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   const current = rows[0];
@@ -28,7 +28,7 @@ async function readSessionNotificationPreview(sessionId: string, includeReply = 
   const profile = current.source === 'bot' ? await db.select({ id: botProfiles.id, name: botProfiles.displayName, avatar: botProfiles.avatar })
     .from(botProfiles).innerJoin(botSessionLinks, eq(botSessionLinks.botId, botProfiles.id))
     .where(and(eq(botSessionLinks.sessionId, sessionId), eq(botSessionLinks.role, 'canonical'))).get() : undefined;
-  const avatar = profile && includeReply ? await notificationAvatar(profile.avatar) : undefined;
+  const avatar = profile && includeAvatar ? await notificationAvatar(profile.avatar) : undefined;
   const teammate = profile ? {
     teammateName: profile.name, teammateBotId: profile.id,
     ...(avatar ? { teammateAvatar: avatar } : {}),

@@ -25,17 +25,20 @@
 import { app, ipcMain, nativeImage, Notification, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
 
+import { companionAvatarThumbnail } from './agent-island/companionIdentity';
+import { getDeepLinkMainWindow, openMainWindowChatMessage } from './deepLink';
+import type { ChatMessageNotification } from './maker-ipc/chatMessageNotifications';
 import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
 import { readSessionNotificationPreview } from './localDb/sessionNotificationPreview';
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
-import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
 import {
   getSessionExternalNotificationText,
+  getNotificationImageLabel,
   getSessionNotificationBody,
   getTeammateNotificationFallback,
   getSessionNotificationUntitled,
@@ -50,6 +53,43 @@ let desktopNotificationsEnabled = true;
 /** Renderer owns persistence; main keeps the current value for scheduler-originated toasts. */
 export function getDesktopNotificationsEnabled(): boolean {
   return desktopNotificationsEnabled;
+}
+
+/** Chat uses the same system permission and global desktop preference as task notifications. */
+export async function showDesktopChatMessage(payload: ChatMessageNotification, current: () => boolean): Promise<void> {
+  const visible = () => {
+    // A group URL cannot tell which side-panel thread is being read. Thread
+    // notifications rely on the consumer's authoritative read-receipt check.
+    if (payload.threadRootId) return false;
+    const window = getDeepLinkMainWindow();
+    if (!window?.isFocused() || !window.isVisible()) return false;
+    try { return new URL(window.webContents.getURL()).hash.split('?')[0] === `#/bots/groups/${payload.groupId}`; }
+    catch { return false; }
+  };
+  if (!current() || !desktopNotificationsEnabled || visible() || !Notification.isSupported()) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const thumbnail = await Promise.race([
+    companionAvatarThumbnail(payload.avatar).catch(() => undefined),
+    new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 600); }),
+  ]).finally(() => clearTimeout(timer));
+  if (!current() || !desktopNotificationsEnabled || visible()) return;
+  const icon = thumbnail ? nativeImage.createFromBuffer(Buffer.from(thumbnail, 'base64')) : undefined;
+  const notification = new Notification({ title: payload.conversationKind === 'direct' ? payload.senderName : [payload.groupName,payload.threadName].filter(Boolean).join(' · '),
+    body: payload.conversationKind === 'direct' ? payload.preview : [payload.senderName,payload.preview].filter(Boolean).join(': '),
+    ...(icon && !icon.isEmpty() ? { icon } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
+  });
+  liveNotifications.add(notification);
+  const release = () => { liveNotifications.delete(notification); };
+  notification.on('click', () => {
+    release();
+    if (current()) {
+      if (payload.conversationKind === 'direct') openMainWindowChatMessage(payload.groupId, payload.messageId, payload.threadRootId, 'direct');
+      else openMainWindowChatMessage(payload.groupId, payload.messageId, payload.threadRootId);
+    }
+  });
+  notification.on('close', release);
+  notification.on('failed', release);
+  notification.show();
 }
 
 // dev 下 electron.exe / Electron.app 自带的是默认图标，notification toast 没有
@@ -115,6 +155,7 @@ export function showDesktopSessionEvent(
   payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
     body?: string;
     teammate?: boolean;
+    avatarJpeg?: string;
     /** 其它设备的任务传 false:未读归属那台设备,本机 Dock 角标不跟着记。 */
     markAttention?: boolean;
   },
@@ -122,7 +163,7 @@ export function showDesktopSessionEvent(
   const { sessionId, title, kind } = payload;
   if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
-  return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate);
+  return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate, payload.avatarJpeg);
 }
 
 /**
@@ -147,8 +188,9 @@ export type NotificationServiceDeps = SharedNotificationDeps<BrowserWindow>;
 const notificationDelivery = createSessionNotificationDelivery({
   log, getMobileNotifyGeneration, sendMobileSessionNotify, getSessionNotificationTurnSignal,
   drainSessionActiveTurnWrites, readSessionNotificationPreview, captureDataOwnerBroadcastScope,
-  isDataOwnerBroadcastScopeCurrent, drainPersistQueue, latestMessageText, markSessionNeedsAttention,
-  showDesktopSessionEvent, getTeammateNotificationFallback, getSessionExternalNotificationText,
+  isDataOwnerBroadcastScopeCurrent, drainPersistQueue, markSessionNeedsAttention,
+  showDesktopSessionEvent, getTeammateNotificationFallback, getNotificationImageLabel, getSessionExternalNotificationText,
+  companionAvatarThumbnail,
 });
 
 export function initNotificationService(deps: NotificationServiceDeps): void {
@@ -165,7 +207,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 }
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false): boolean {
+function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string): boolean {
   const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
@@ -174,13 +216,14 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
     return false;
   }
 
+  const avatar = avatarJpeg ? nativeImage.createFromBuffer(Buffer.from(avatarJpeg, 'base64')) : undefined;
   const notif = new Notification({
     title: teammate && safeTitle.trim().toLowerCase() === 'cindy'
       ? CLIENT_NOTIFICATION_NAME : `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
     // silent 默认 false——发声音，与 Electron 默认一致。
     // icon 仅在 dev 下传值；packaged 时为 undefined，回到原行为(由 AUMID/.icns 兜底)。
-    ...(devNotificationIcon ? { icon: devNotificationIcon } : {}),
+    ...(avatar && !avatar.isEmpty() ? { icon: avatar } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notif);
 

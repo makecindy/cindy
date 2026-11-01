@@ -186,3 +186,11 @@ Desktop maker-host 补回 bootstrap 已调用的 setBotConversationConnectionsRe
 沿用 botCanonicalSession 的真实 SQLite／生产服务回归，增加 available、unavailable、owner-changed 三个输入，并在既有群自查用例中验证读取器未调用。最小失败输入为具有连接的当前主人，旧共享服务不返回连接投影；切账号输入在 await 期间改变 owner，必须不返回 state。此 database integration 巨型文件的导入成本超过五秒预算，定向 16 passed、592 skipped，42.02 秒（收集 40.49 秒，执行 974ms），无新增文件、逐例模块重载或真实等待。默认 TEMP 首次执行触发 Windows 短路径 libuv 崩溃，仅将测试 TEMP/TMP 改为同一目录长路径后完成；未将崩溃运行计为通过。
 
 app-runtime 类型检查通过；Desktop 完整检查 220 条诊断（此前 223），本批服务、接线及测试无诊断。PR 实时状态仍为草稿、CONFLICTING，仅 DCO 检查通过，完整 CI 未运行；不能据本轮定向测试宣称可合并。在线 VPS 未修改。
+
+### 通知身份、当前状态与图片摘要（2026-11-01）
+
+共享通知服务补回错误／待回复的身份读取，只读取伙伴身份与头像，不再读取上一轮回答，也不使用“有新回复”替代当前错误／待回复状态。Desktop 头像解析与身份读取共用一秒等待上限；超时仍交付通用通知，保留账号复核和完成通知去重。图片摘要通过现有 locale key 翻译。自主运行宿主类型仅要求实际读取的四个数据端口，不再强制未使用的 readBotDirectory。
+
+Desktop 群聊通知展示入口从主干迁回，保留主群可见抑制、话题例外、600ms 头像预算和点击前 owner 复核；群聊生产端 onChatMessageNotification／onChatGroupAttention 尚未接回，因此仅完成展示适配，不能声称群聊通知链已恢复。
+
+既有 notificationService、sessionNotificationPreview、sessionNotificationCopy 三文件 78 项全部通过（9.02 秒），未修改断言或增加测试文件。Terminal 真实持久化通知与代输入隐私回归定向 1 passed、124 skipped（41.80 秒，收集 39.07 秒、执行 2.34 秒），使用长路径 TEMP/TMP。app-runtime、Terminal 类型检查通过；Desktop 完整检查 218 条诊断（此前 220），本批文件无诊断；test-hygiene 通过（349 files within baseline）。主干冲突、完整 CI、夜间学习及群聊生产端迁移仍未完成，PR 保持草稿，在线 VPS 未修改。
