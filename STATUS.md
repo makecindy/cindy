@@ -10,6 +10,22 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 1: ROADMAP 1.9b-3a, per-conversation usage and cost panel UI (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/shared/conversationUsage.ts` (new) + `apps/desktop/src/main/usage/conversationUsageAdapter.ts`: moved the pure adapter functions (`resolveRecordedTurnMoney`, `quoteToUsageRates`, `lookupTurnPriceQuote`, `adaptStoredTurnToSessionUsageTurn`, `buildConversationUsageFromStoredTurns`) to `src/shared/conversationUsage.ts` and re-exported them from `src/main/usage/conversationUsageAdapter.ts` so both main and renderer share one implementation without crossing the `renderer -> main` boundary.
+2. `apps/desktop/src/renderer/features/cc-agent/SessionUsagePanel.tsx` (new), `apps/desktop/src/renderer/features/cc-agent/SessionContentHeader.tsx` (+9 lines), `docs/design-rules/design-inventory.md` (updated via `pnpm design:inventory`), and `apps/desktop/src/renderer/__tests__/sessionUsagePanel.test.tsx` (new, 4 tests): `SessionUsagePanel` subscribes to the conversation's messages (`makerChatStore` / `useChatDisplaySnapshot`) and live pricing catalogs (`useGatewayModelPricing`, `useReferenceModelPricing`), filters assistant messages with `turnUsageDetails`, computes `buildConversationUsageFromStoredTurns`, and renders `<SessionUsagePanelView>` in the conversation header. Shows nothing when no turns carry usage; otherwise renders a no-drag `<details>` chip (`<tokensLabel> tok · <cost>`) and expandable breakdown with turn count, in/out/cache tokens, `complete` / `partial` / `local (tokens only)` / `unpriced` cost status, per-model rows, and `Unpriced: ...` notice.
+
+**Mutation checks (2):**
+- Removing the `message.role !== 'assistant'` filter in `extractStoredTurnsFromMessages` failed `extracts only assistant messages that carry turnUsageDetails and renders complete cost and model breakdown` (`expected length 1 but got 2`), 3 others passed; restored byte-identical.
+- Setting `allLocal = false` in `SessionUsagePanelView` failed `renders tokens-only local badge for local model conversations without pricing them` (`expected 'Cost: unpriced' to contain 'Cost: local (tokens only)'`), 3 others passed; restored byte-identical.
+
+**Not claimed:** not seen or clicked in the running desktop app yet. `1.9b-3` is split into `1.9b-3a` (`unit-tested`, done) and `1.9b-3b` (owner-clicked live proof in the dev app on a real conversation, open).
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Phase 1: ROADMAP 1.9b-2, conversation usage adapter (`unit-tested`)
 
 **Outcome:**

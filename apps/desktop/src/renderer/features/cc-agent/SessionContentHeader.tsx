@@ -1,6 +1,7 @@
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 import { HermesSessionModelLabel } from './HermesSessionModelLabel';
+import { SessionUsagePanel } from './SessionUsagePanel';
 /**
  * SessionContentHeader — 会话视图注入 ContentHeader 的中部内容
  * ---------------------------------------------------------------------------
@@ -669,6 +670,14 @@ export function SessionContentHeader({
       )}
 
       {!isEditing && <HermesSessionModelLabel agentKind={session.agentKind} model={session.model} />}
+      {!isEditing && (
+        <SessionUsagePanel
+          sessionId={session.id}
+          defaultModel={session.model}
+          defaultProvider={session.providerId}
+          agentKind={session.agentKind}
+        />
+      )}
 
       {remoteSyncing && (
         <Tip text={t('ccAgent.remoteSession.syncing')}>
