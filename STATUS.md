@@ -10,6 +10,38 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Defect Fix: Hermes model label reverts to `hermes-default` after first send (`unit-tested`)
+
+**Root cause (found by reading, proved by a failing test):**
+The send path was never the problem. Every lazy-create / prewarm path re-reads `sessions.model` from the DB (`reconcileCreateOptsAgainstDb`), so the turn running on Qwen proves the row held `qwen3-8b` at send. The rewrite happens *after* the session view mounts:
+- `apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx` "M35 vendor fallback" effect calls `shouldFallbackVendorModel(providers, session.model, agent)`.
+- Hermes sessions always have `providerId: null`, and no Cindy catalog provider lists models under the `hermes` agent. So if any provider lists the same id for Pi / Codex / Claude Code (e.g. an LM Studio provider exposing `qwen3-8b` to Pi), the check returned `true`.
+- The effect then wrote `getDefaultModelForVendor('cc')` (a `claude-*` id) into `sessions.model`. The earlier foreign-model sanitizers (`HermesSessionModelLabel`, `ModelSelector.isForeignHermesModelId`) display any `claude-*` id as `hermes-default` / "Hermes home default (deepseek-flash)". That is the visible "revert".
+- This is also the likely origin of the legacy `xai/grok-4.6` row repaired last session, and it means the *second* turn would have been launched with a Claude model id.
+
+**Outcome:**
+1. `apps/desktop/src/renderer/features/cc-agent/lib/vendorModelFallback.ts`: `shouldFallbackVendorModel` returns `false` for `agent === 'hermes'` (Hermes owns its model routing via Hermes home + `providers.yaml`).
+2. `apps/desktop/src/renderer/__tests__/vendorModelFallback.test.ts`: +1 test (`never repairs a Hermes session model, even when another engine offers that id`), 11/11 passing.
+
+**Mutation check (1):** the new test was run against the unfixed `vendorModelFallback.ts` first and failed (`expected true to be false` on `shouldFallbackVendorModel(withLocalPi, 'qwen3-8b', 'hermes')`); adding the guard turned it green.
+
+**Gates (Node 22.23.4, cloud Linux container, deps installed with `pnpm install --frozen-lockfile --ignore-scripts` + `node scripts/ensure-deps.mjs --electron-binary`):**
+- `pnpm typecheck`: parallel run OOM-killed in `apps/mobile` (container memory, not a type error); serial re-run `NODE_OPTIONS=--max-old-space-size=6144 pnpm -r --if-present --workspace-concurrency=1 run typecheck` → `EXIT=0`.
+- `pnpm test:runner` → `EXIT=0` (607 pass, 0 fail).
+- `node scripts/test-workspaces.mjs --tier unit --related --workspace-concurrency=1` → `EXIT=0`.
+- `pnpm check:test-hygiene` → `EXIT=0`.
+
+**No user state touched.** No DB, `config.yaml`, or `.env` edits this session (the container has no access to the owner's Mac).
+
+**Still open:**
+- `live-proven` needs the owner: new task → Hermes → pick `qwen3-8b (lmstudio-local)` → send "hi" → header and composer pill should still read `qwen3-8b` after the reply and after a second turn.
+- The session from the owner's failing repro likely still has a `claude-*` id in `sessions.model`. Re-selecting `qwen3-8b` in that session's picker rewrites it through `handleSetModel`; no manual DB edit needed.
+- Found, not fixed (separate task): the Hermes `AgentSessionHandle.model` in `packages/maker-core/src/agents/hermes/agent.ts` is a fixed property set at start and never updated by `setModel`, while `Session.model` assumes the handle getter tracks switches. Runtime profiles that read `live.model` (`readSessionRuntimeProfiles` in `register.ts`) can therefore report the start model after a mid-session switch.
+
+**Surprising:** the earlier "foreign model sanitization" hid this bug instead of exposing it: a `claude-*` id written into a Hermes row rendered as the Hermes default rather than as an obviously wrong model.
+
+---
+
 ## 2026-11-01 — Defect Fix: Hermes UI model synchronization, multi-segment route resolution, and foreign model sanitization (`unit-tested`)
 
 **Outcome:**

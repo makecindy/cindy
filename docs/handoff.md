@@ -52,6 +52,13 @@
 
 ## 3. The Active Defect to Fix Next
 
+> **Resolved 2026-11-01 (`unit-tested`, live check pending).** Root cause was none of the leads below.
+> The session view's vendor-fallback effect (`CCAgentSessionView.tsx` → `shouldFallbackVendorModel` in
+> `apps/desktop/src/renderer/features/cc-agent/lib/vendorModelFallback.ts`) treated `qwen3-8b` as a
+> cross-engine mismatch (a Pi provider also lists it) and rewrote the Hermes session to the Claude Code
+> default; the foreign-model sanitizer then displayed it as `hermes-default`. Hermes sessions are now
+> exempt. See the top `STATUS.md` entry. The leads below are kept for history only.
+
 ### User Report
 > *"when i start a new task, and choose qwen 8b, say hi, and model name revert back to hermes deepseek. however qwen 8b replied back, so model selection still has issues. write this down for next agent to fix."*
 
