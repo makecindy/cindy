@@ -1,11 +1,11 @@
 {
  "generated": "2026-10-30",
  "today": "2026-10-30",
- "range": "last 100 first-parent merges of main 0682fcb13e..22940326ed",
+ "range": "last 100 first-parent merges of main 8ee428cca0..cf8bc1e3e8",
  "scriptHashes": {
   "scripts/hardcoded-color-audit.mjs": "fb815d595ea5659eb4069b991262fab6bae7711f188fbb54a78bf52c22ac5410",
   "scripts/shared/hardcoded-color-match.mjs": "ed31fec9c67f130fd58103b0fb6687fc1dc6dc7ea4e6a33991129281f3b9ae07",
-  "scripts/shared/design-layer-report.mjs": "34aae10998cd06152e6d45d7c3707797ce5cbe57f2d0b22f5c4c56de2431a7d6",
+  "scripts/shared/design-layer-report.mjs": "bc2348778a11cdb07b51960ea0c8c801e3d2c2f903ce7006adbfb1d656deacd3",
   "scripts/hardcoded-color-exemptions.json": "111c4d7b1b53fadcb9faef956f48dc0e2377183290e40f304642c7e1bfa518f0",
   "packages/design-tokens/src/desktop-bindings.json": "cf16cb3cfba3f38a1806dab2458c0523ad43a991416e5e2547b1f151c9b22b85",
   "packages/design-tokens/src/semantic/foundations.json": "61651580afaff343003683fee9e827e416504e3656b04fa263fef35608f70a70"
@@ -16,23 +16,11 @@
   "colorBlocks": 0,
   "rows": [
    {
-    "sha": "37c5bb9519",
+    "sha": "c4c6d736ac",
     "offScaleRadius": [
      {
       "file": "apps/desktop/src/renderer/features/cc-agent/GitContextBadge.tsx",
-      "line": 341,
-      "value": "rounded-md",
-      "disposition": "block"
-     },
-     {
-      "file": "apps/desktop/src/renderer/features/cc-agent/GitContextBadge.tsx",
-      "line": 406,
-      "value": "rounded-md",
-      "disposition": "block"
-     },
-     {
-      "file": "apps/desktop/src/renderer/features/cc-agent/SessionPrManager.tsx",
-      "line": 281,
+      "line": 449,
       "value": "rounded-md",
       "disposition": "block"
      }
