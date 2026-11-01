@@ -17,10 +17,8 @@ import { listEngines, operateEngine } from './engines/client.js';
 import { profilePath, privateDirectory, VERSION } from './platform.js';
 import { REGION } from './version.js';
 import { connectTerminal, reconnectingClient } from './transport.js';
-import { TerminalService } from './service.js';
 import { TerminalServiceManager } from './service-manager.js';
-import { runTui } from './ui/tui.js';
-import { terminalText } from './ui/input.js';
+import { terminalText } from './terminal-text.js';
 import { runShell } from './shell-client.js';
 import { REMOTE_TERMINAL_CHANNEL } from '@cindy/terminal-core';
 import { doctor,backupProfile,restoreProfile,verifyProfileBackup,recoverProfileRestore,shellCompletion,installTerminalPackage,checkTerminalUpdate,terminalInstallationStatus,rollbackTerminalPackage,profileStorage,listTerminalProfiles } from './maintenance.js';
@@ -28,8 +26,11 @@ import { SettingsStore } from './settings.js';
 import { resourceCollections,runResourceCommand,invokeResourceAction } from './resource-commands.js';
 import { resolveLocale, getMessages } from './ui/i18n.js';
 import type { TerminalClient } from './contracts.js';
-import { TerminalBrowserRuntime } from './plugins/browser.js';
 import { desktopHostCommand } from './desktop-host.js';
+
+async function runTui(...args: Parameters<typeof import('./ui/tui.js').runTui>) {
+  return (await import('./ui/tui.js')).runTui(...args);
+}
 
 let json = false;
 let locale = resolveLocale();
@@ -167,6 +168,7 @@ async function main() {
   if(values.version||command==='version'){print(VERSION);return;}
   if(command==='browser'){
     if(str('device'))throw new Error('LOCAL_COMMAND_REQUIRES_LOCAL_TARGET');
+    const { TerminalBrowserRuntime } = await import('./plugins/browser.js');
     const runtime=new TerminalBrowserRuntime({root:path.join(directory,'browser-runtime')});
     try{
       if(subcommand==='sandbox-profile'){print(await runtime.sandboxProfile());return;}
@@ -221,6 +223,7 @@ async function main() {
       finally{process.off('SIGINT',stop);process.off('SIGTERM',stop);}
       return;
     }
+    const { TerminalService } = await import('./service.js');
     const service=new TerminalService(directory, REGION);
     try { await service.start(); } catch(error) { if(error instanceof Error&&error.message==='SERVICE_ALREADY_RUNNING')return;throw error; }
     const stop=()=>{void service.close().catch(()=>{process.exitCode=1;});};

@@ -1,16 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { Text, useInput, usePaste, useWindowSize } from 'ink';
 import wrapAnsi from 'wrap-ansi';
+import { terminalText } from '../terminal-text.js';
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 export function graphemes(value: string): string[] { return Array.from(segmenter.segment(value), part => part.segment); }
-export function terminalText(value: string): string {
-  // Strip OSC/DCS/CSI before C0; removing only ESC would expose their payload.
-  return value.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[P_X^][\s\S]*?\x1b\\/g, '')
-    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
-}
+export { terminalText } from '../terminal-text.js';
 
 export function Input({ value, onChange, onSubmit, onCancel, secret = false, multiline = false, active = true }: {
   value: string; onChange: (value: string) => void; onSubmit: (value: string) => void;

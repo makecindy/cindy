@@ -1,0 +1,398 @@
+{
+  "baseline-packaged": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 563144,
+        "Pss_KiB": 557716,
+        "Swap_KiB": 0,
+        "ticks": 458,
+        "seconds": 10.006558177999977,
+        "cpu_percent_one_core": 0.29980338360453257
+      },
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 563144,
+        "Pss_KiB": 557719,
+        "Swap_KiB": 0,
+        "ticks": 458,
+        "seconds": 10.006700732999889,
+        "cpu_percent_one_core": 0.0
+      },
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 518972,
+        "Pss_KiB": 513547,
+        "Swap_KiB": 0,
+        "ticks": 512,
+        "seconds": 10.00606571100002,
+        "cpu_percent_one_core": 5.396726501669473
+      },
+      {
+        "label": "tui",
+        "Rss_KiB": 530428,
+        "Pss_KiB": 493987,
+        "Swap_KiB": 0,
+        "ticks": 367,
+        "seconds": 10.006697196999994,
+        "cpu_percent_one_core": 0.0
+      },
+      {
+        "label": "service-after-tui",
+        "Rss_KiB": 520028,
+        "Pss_KiB": 514603,
+        "Swap_KiB": 0,
+        "ticks": 517,
+        "seconds": 10.006132947999959,
+        "cpu_percent_one_core": 0.0
+      }
+    ],
+    "pty": [
+      {
+        "mode": "hangup-ignored",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "eof",
+        "exited": false,
+        "exit_code": null,
+        "stderr": ""
+      },
+      {
+        "mode": "hangup",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "term",
+        "exited": true,
+        "exit_code": -15,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "normal",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      }
+    ],
+    "service_survived": true,
+    "region": "global"
+  },
+  "final": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 560528,
+        "Pss_KiB": 555057,
+        "Swap_KiB": 0,
+        "ticks": 422,
+        "seconds": 10.007037927999932,
+        "cpu_percent_one_core": 0.29978901065278546
+      },
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 560528,
+        "Pss_KiB": 555061,
+        "Swap_KiB": 0,
+        "ticks": 423,
+        "seconds": 10.007112978999999,
+        "cpu_percent_one_core": 0.09992892076850811
+      },
+      {
+        "label": "service-before-tui",
+        "Rss_KiB": 560528,
+        "Pss_KiB": 555065,
+        "Swap_KiB": 0,
+        "ticks": 423,
+        "seconds": 10.007324269000037,
+        "cpu_percent_one_core": 0.0
+      },
+      {
+        "label": "tui",
+        "Rss_KiB": 139040,
+        "Pss_KiB": 111158,
+        "Swap_KiB": 0,
+        "ticks": 110,
+        "seconds": 10.002407700999925,
+        "cpu_percent_one_core": 0.0
+      },
+      {
+        "label": "service-after-tui",
+        "Rss_KiB": 560764,
+        "Pss_KiB": 555301,
+        "Swap_KiB": 0,
+        "ticks": 426,
+        "seconds": 10.007101978000037,
+        "cpu_percent_one_core": 0.0
+      }
+    ],
+    "pty": [
+      {
+        "mode": "hangup-ignored",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "eof",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "hangup",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "term",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "normal",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      }
+    ],
+    "service_survived": true,
+    "region": "global"
+  },
+  "baseline-cli": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [],
+    "pty": [],
+    "cli_samples": [
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 520908,
+        "cpu_seconds": 3.6162409999999996,
+        "wall_seconds": 3.0404725529999723
+      },
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 521164,
+        "cpu_seconds": 3.6093900000000003,
+        "wall_seconds": 3.037407260000009
+      },
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 521836,
+        "cpu_seconds": 3.5395060000000003,
+        "wall_seconds": 2.9686285699999644
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 520544,
+        "cpu_seconds": 3.510453,
+        "wall_seconds": 2.988065522999932
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 520204,
+        "cpu_seconds": 3.723239,
+        "wall_seconds": 3.141387001000112
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 519472,
+        "cpu_seconds": 3.607157,
+        "wall_seconds": 3.0448684689999936
+      }
+    ],
+    "region": "global"
+  },
+  "final-cli": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [],
+    "pty": [],
+    "cli_samples": [
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 115332,
+        "cpu_seconds": 0.5105649999999999,
+        "wall_seconds": 0.3419275359999574
+      },
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 113412,
+        "cpu_seconds": 0.48257099999999997,
+        "wall_seconds": 0.32638035700006185
+      },
+      {
+        "command": "--version",
+        "exit_code": 0,
+        "peak_RSS_KiB": 115076,
+        "cpu_seconds": 0.47257,
+        "wall_seconds": 0.31382734599992546
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 113668,
+        "cpu_seconds": 0.469353,
+        "wall_seconds": 0.3115995109999403
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 113800,
+        "cpu_seconds": 0.467591,
+        "wall_seconds": 0.31037600099989504
+      },
+      {
+        "command": "--help",
+        "exit_code": 0,
+        "peak_RSS_KiB": 112896,
+        "cpu_seconds": 0.48002,
+        "wall_seconds": 0.321036875000118
+      }
+    ],
+    "region": "global"
+  },
+  "lifecycle-baseline": {
+    "cli": "cli-baseline.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [],
+    "pty": [
+      {
+        "mode": "hangup-ignored",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "eof",
+        "exited": false,
+        "exit_code": null,
+        "stderr": ""
+      },
+      {
+        "mode": "hangup",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "term",
+        "exited": true,
+        "exit_code": -15,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "normal",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      }
+    ],
+    "service_survived": true,
+    "region": "global"
+  },
+  "lifecycle-fixed": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [],
+    "pty": [
+      {
+        "mode": "hangup-ignored",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "eof",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "hangup",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "term",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "normal",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      }
+    ],
+    "service_survived": true,
+    "region": "global"
+  },
+  "cn-lifecycle": {
+    "cli": "cli.js",
+    "node": "v22.22.0",
+    "profile": "fresh unauthenticated",
+    "samples": [],
+    "pty": [
+      {
+        "mode": "hangup-ignored",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "eof",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "hangup",
+        "exited": true,
+        "exit_code": -1,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "term",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      },
+      {
+        "mode": "normal",
+        "exited": true,
+        "exit_code": 0,
+        "stderr": "\u001b[?25h"
+      }
+    ],
+    "service_survived": true,
+    "region": "cn"
+  }
+}

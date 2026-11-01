@@ -640,6 +640,23 @@ export async function runTui(client: TerminalClient, options: { locale: Locale; 
     exitOnCtrlC:false, alternateScreen:true, patchConsole:false,
     kittyKeyboard:{ mode:'auto' },
   });
-  try { await instance.waitUntilExit(); } finally { instance.cleanup();client.close(); }
+  let detached = false;
+  const detach = () => { if(detached)return;detached = true; instance.unmount(); };
+  const terminalError = (error: NodeJS.ErrnoException) => {
+    if(error.code!=='EIO'&&error.code!=='EPIPE')throw error;
+    detach();
+  };
+  for(const stream of [process.stdin,process.stdout,process.stderr])stream.on('error',terminalError);
+  process.stdin.once('end',detach);process.stdin.once('close',detach);
+  process.once('SIGHUP',detach);process.once('SIGTERM',detach);
+  try { await instance.waitUntilExit(); } finally {
+    process.stdin.off('end',detach);process.stdin.off('close',detach);
+    process.off('SIGHUP',detach);process.off('SIGTERM',detach);
+    instance.cleanup();client.close();
+    // Ink's last frame can fail on the next tick after a PTY has disappeared.
+    await new Promise<void>(resolve=>setImmediate(resolve));
+    for(const stream of [process.stdin,process.stdout,process.stderr])stream.off('error',terminalError);
+  }
+  if(detached)return;
   return externalAction;
 }

@@ -3,7 +3,7 @@ import { build } from 'esbuild';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, copyFile, cp, readFile, writeFile } from 'node:fs/promises';
-import { runtimePackages, imRuntimePackages } from './runtime-externals.mjs';
+import { buildCli } from './build-cli.mjs';
 import { readCindyBuildVersion, readCindyBuildRegion } from './build-version.mjs';
 
 const appDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -27,13 +27,7 @@ await build({
     contents:(await readFile(args.path,'utf8')).replace(/\r\n/g,'\n'),loader:args.path.endsWith('.ts')?'ts':args.path.endsWith('.json')?'json':'js',
   }));}}],
 });
-await build({
-  entryPoints:[path.join(appDir,'src/cli.tsx')],outfile:path.join(appDir,'dist/cli.js'),
-  platform:'node',target:'node22',format:'esm',bundle:true,sourcemap:true,
-  define: { __CINDY_APP_VERSION__: JSON.stringify(version), __CINDY_APP_REGION__: JSON.stringify(region) },
-  loader:{'.md':'text'},external:[...runtimePackages,...imRuntimePackages,'react/jsx-runtime'],
-  banner:{js:'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'},
-});
+await buildCli();
 
 // The native plugin worker keeps the same published bootstrap ABI as Desktop.
 await build({ entryPoints:[path.join(appDir,'../../packages/plugin-runtime/src/nativeWorkerEntry.ts')], outfile:path.join(appDir,'dist/plugin-node-worker.cjs'), platform:'node', target:'node22', format:'cjs', bundle:true, sourcemap:true });

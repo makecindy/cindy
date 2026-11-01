@@ -14,7 +14,6 @@ import { EngineManager } from './engines/manager.js';
 import { extractEngineArchive } from './engines/archive.js';
 import { runNative } from './engines/native.js';
 import { terminalSettingsSchema } from './settings.js';
-import { TerminalBrowserRuntime } from './plugins/browser.js';
 
 const derive = promisify(scrypt);
 const MAGIC = Buffer.from('CINDY-BACKUP-1\n');
@@ -58,6 +57,7 @@ export async function doctor(profileDir: string): Promise<DoctorCheck[]> {
     const envelope = raw ? JSON.parse(raw.toString()) : null;
     checks.push({ id: 'vault', status: envelope?.version === 1 ? 'ok' : 'warning', code: envelope?.version === 1 ? envelope.mode === 'machine' ? 'VAULT_MACHINE_BOUND' : 'VAULT_PASSPHRASE' : 'VAULT_NOT_INITIALIZED' });
   } catch { checks.push({ id: 'vault', status: 'error', code: 'VAULT_UNREADABLE' }); }
+  const { TerminalBrowserRuntime } = await import('./plugins/browser.js');
   const browser=new TerminalBrowserRuntime({root:path.join(profileDir,'browser-runtime')});
   try{
     const result=await browser.check();
