@@ -556,6 +556,9 @@ SSH Codex 不提供这项本机原生能力，目录如实标为不可用。
 - **提示词承诺必须等于工具面**。能力说明按实际挂载的工具集逐块注入（挂了 docs 才讲怎么
   做文档），且挂载必须真实生效：显式挂载 docs 工具集时，运行时把 `cindy_docs` 写进该伙伴
   的 MCP allowlist——不允许出现「提示词说有、运行时够不到」或反向的错位。
+- 显式加入 `collab` 工具集时，Codex 的线程 MCP 配置同样遵循 `cindy_orca` 的挂载结果，
+  不再无条件禁用。未加入、目录中不可用或没有目录记录时仍不开放；协同工具的权限审核、
+  Worker 归属与远程设备检查沿用原链路。这只修正工具装配，不增加伙伴聊天的协同 UI 入口。
 - **渠道专线自带该渠道的原生 API 工具**（2026-10-17）。伙伴绑定的 Telegram / 飞书（Lark）连接与
   设置页个人 bot 同一口径：轮次由该渠道消息触发时，`cindy_telegram_bot` / `cindy_feishu_bot` 始终
   进专线的 MCP allowlist（`botProfileRuntime` 按 `telegramChatId` / `feishuChatId` 强制挂载，伙伴
