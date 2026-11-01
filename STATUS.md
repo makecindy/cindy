@@ -10,6 +10,15 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 3.2a `live-proven`; 3.5b Code Reviewer passed (owner)
+
+- Setup: `docs/experts-examples/code-reviewer` copied to `~/.cindy-harness/experts/code-reviewer` (new file, nothing overwritten). App restarted on `main` at `c958a9e7` (PR #4 merged).
+- New task, engine Hermes, model `qwen3-8b (lmstudio-local)`, Expert menu → **Code Reviewer**, sent "who are you and what do you do?".
+- Observed: reply "I am your code reviewer, acting as described: I will carefully examine diffs, files, or paths you provide, and assess them for correctness bugs, security issues, and maintainability. I will follow your explicit instructions to report only verifiable problems, without editing files or running commands. Please provide the code you'd like me to review." Header: title, `qwen3-8b`, chip **Code Reviewer**, 15.2k tok.
+- Rows: 3.2a ✅ `live-proven`; 3.5b Code Reviewer ✅ (other three starter experts open). The wrong-route refusal (expert `model:` on another route) was not run live; it is covered by unit tests only.
+
+---
+
 ## 2026-11-01 — Unit gate for 3.2a green on the owner's Mac (sharded); desktop SIGSEGV is file-mix dependent
 
 - `packages/*` and `apps/mobile` unit tiers: all PASS (owner's terminal, Node 22.23.4, twice), including `packages/maker-core unit` (50.3 s), where `agents/hermes/agent.ts` changed.
