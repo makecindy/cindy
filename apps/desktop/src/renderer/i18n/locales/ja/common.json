@@ -6344,6 +6344,7 @@
         "renameFailed": "名前の変更に失敗しました",
         "deleted": "デバイスを削除しました",
         "deleteOnline": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
+        "deleteRejectedWhileOffline": "デバイスを削除できませんでした。一覧ではオフラインですが、サーバーではまだオンラインとして記録されています。",
         "deleteFailed": "削除に失敗しました",
         "disconnected": "すべてのリモート接続を切断しました",
         "disconnectFailed": "リモート接続の切断に失敗しました",
