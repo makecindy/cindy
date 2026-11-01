@@ -88,7 +88,7 @@ import {
   projectGhostAgentModels,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
-import { GhostModelPicker, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from './ghostModelPicker.js';
+import { GhostModelPicker, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from './ghostModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -229,7 +229,7 @@ import {
   ghostToolParametersWithinCap,
   ghostUnknownV3FieldsWithinCap,
   isGhostInstallApprovalToken,
-  ghostAppContextLocale,
+  ghostAppContextLanguages,
   unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
@@ -249,6 +249,7 @@ import {
   type GhostVideoResultParams,
   type InstalledGhost,
   type GhostLibraryOverview,
+  GHOST_HANDOFF_REF_RE,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { onQuit } from '../lifecycle.js';
@@ -347,6 +348,7 @@ import {
   setGhostAppContextProvider,
   setGhostConnectionsHandler,
   setGhostKvStore,
+  setGhostModelsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPickerProvider,
@@ -357,6 +359,8 @@ import {
 } from './runtime/electronSandboxAdapter.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
+import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
+import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   evaluateGhostSetupAssessment,
   handleGhostSetupStatusRequest,
@@ -443,6 +447,10 @@ import {
   type GhostControlPointData,
   type GhostControlPointCandidate,
   type GhostControlPointId,
+  type GhostModelRoute,
+  type GhostPickerModel,
+  type GhostStartTaskPointData,
+  type GhostStartTaskRouteResult,
   type GhostControlPointInfo,
   type GhostControlPointFailureAction,
   type GhostControlPointResult,
@@ -560,6 +568,7 @@ import { GhostFsSlot } from './fsSlot.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
 import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { GhostHandoffStore } from './handoffStore.js';
 import { LibraryStagingStore, relocateLibraryStagingOwner } from './libraryStaging.js';
 import { LibrarySqlService, defaultLibraryDbWorkerPath } from './librarySqlService.js';
 import { trashGhostLibrary } from './libraryTrash.js';
@@ -855,7 +864,7 @@ function currentGhostAppContext() {
   const region: GhostAppRegion = CURRENT_CINDY_REGION === 'global' ? 'global' : 'cn';
   return {
     ok: true as const,
-    context: { region, locale: ghostAppContextLocale(getResolvedMainLocale()) },
+    context: { region, ...ghostAppContextLanguages(getResolvedMainLocale()) },
   };
 }
 
@@ -1473,6 +1482,24 @@ let stableOwnerPostCommitTask:
   ((reason: string, scope: BuiltinReconcileScope) => Promise<BuiltinReconcileOutcome>) | null =
   null;
 
+const HANDOFF_SWEEP_DELAY_MS = 30_000;
+let handoffSweepTimer: ReturnType<typeof setTimeout> | null = null;
+/** Startup and account switch: sweep the committed owner's handoff copies off the critical path. */
+function scheduleHandoffSweep(scope: BuiltinReconcileScope): void {
+  if (handoffSweepTimer) clearTimeout(handoffSweepTimer);
+  handoffSweepTimer = null;
+  // Copies live under an account; the signed-out scope has none to sweep.
+  if (scope.dataOwnerId === null) return;
+  handoffSweepTimer = setTimeout(() => {
+    handoffSweepTimer = null;
+    if (activeOwnerScopeKey() !== scope.scopeKey || isAppSessionBoundaryPending()) return;
+    void getGhostHandoffStore().sweep().catch((err) => {
+      log.warn('对话交接副本清理失败', { error: err instanceof Error ? err.message : String(err) });
+    });
+  }, HANDOFF_SWEEP_DELAY_MS);
+  handoffSweepTimer.unref?.();
+}
+
 /** Run the Plugin post-commit pipeline registered during Ghost IPC bootstrap. */
 export function runStableOwnerPostCommitTask(
   reason: string,
@@ -1609,7 +1636,7 @@ function assertGhostRelocationDbReady(): void {
 function assertGhostRelocationIdle(part: string): void {
   if (hasPendingGhostCalls(part) || hasRunningGhostErrand(part) ||
       hasRunningGhostCindyWork(part) || fsSlotSingleton?.hasInFlightRequests(part) ||
-      networkSlotSingleton?.hasInFlightRequests(part)) {
+      networkSlotSingleton?.hasInFlightRequests(part) || handoffStoreSingleton?.isBusy(part)) {
     throw new Error('Ghost relocation is waiting for active work to finish');
   }
 }
@@ -1618,6 +1645,18 @@ async function relocateGhostUserData(
   fromPart: string, toPart: string,
 ): Promise<void> {
   if (fromPart === toPart) return;
+  // Blocked before the idle check: a call cannot store copies after it passed.
+  const unblockHandoff = getGhostHandoffStore().blockForRelocation([fromPart, toPart]);
+  try {
+    await relocateIdleGhostUserData(fromPart, toPart);
+  } finally {
+    unblockHandoff();
+  }
+}
+
+async function relocateIdleGhostUserData(
+  fromPart: string, toPart: string,
+): Promise<void> {
   assertGhostRelocationIdle(fromPart);
   const ownerKey = activeOwnerScopeKey();
   const assertCurrent = (): void => {
@@ -2988,6 +3027,32 @@ export async function screenGhostControlPoint(
   }
 }
 
+/** 插件发布的模型单独成文件：不进插件自己的 /kv，插件不能绕过校验改它，卸载时一起清。 */
+const publishedModelsStore = () => createGhostKvStore({
+  getRootDir: () => ownerScopedUserDataPath('ghost-published-models'),
+  log,
+});
+
+/** 插件当前可用的已发布模型。读落盘内容时重新校验，坏数据只让这个插件的模型不显示。 */
+function publishedRouteModels(ghost: InstalledGhost) {
+  const needs = ghost.manifest.models;
+  if (!needs || !ghostControlPointActive(ghost, 'will-start-task')) return [];
+  const parsed = parseGhostPublishedModels(publishedModelsStore().read(installedGhostStoragePart(ghost)), needs.types);
+  return parsed.ok ? parsed.models.filter((model) => model.target.type === 'route') : [];
+}
+
+/** 新任务模型选择器里的插件模型：只读落盘的列表，不调用插件。 */
+export function ghostPickerModels(): GhostPickerModel[] {
+  const { uiLocale } = currentGhostAppContext().context;
+  return availableGhosts().flatMap((ghost) => publishedRouteModels(ghost).map((model) => ({
+    pluginId: installedGhostStoragePart(ghost),
+    pluginName: ghost.manifest.name,
+    ...(ghost.iconDataUrl ? { pluginIcon: ghost.iconDataUrl } : {}),
+    id: model.id,
+    ...ghostPublishedModelText(model, uiLocale),
+  })));
+}
+
 /** 某插件看到的控制节点目录(只读；不含其它插件信息)。 */
 export function ghostControlPointInfo(ghostId: string): GhostControlPointInfo[] {
   const ghost = findInstalledGhostByInstanceId(availableGhosts(), ghostId);
@@ -3013,6 +3078,47 @@ export function resolveGhostControlPointPlugin(point: GhostControlPointId, plugi
     throwIpcError('INVALID_PARAMS', 'This plugin is not enabled for pre-run checks; enable it and allow the check in its install or update prompt');
   }
   return installedGhostStoragePart(resolved.ghost);
+}
+
+/**
+ * 新任务「让插件选」：第一条消息发出前问一次用户选定的插件。插件回的模型必须是用户此刻
+ * 已连接、可新建任务的路由(与插件模型选择器同一校验)；推理强度不合法时去掉强度再查一次。
+ * 插件没回应、不可用或给了用不了的模型，都返回 kept，由界面照常用用户原来的模型。
+ */
+export async function routeGhostNewTask(pluginId: string, data: GhostStartTaskPointData): Promise<GhostStartTaskRouteResult> {
+  const ghost = findInstalledGhostByInstanceId(availableGhosts(), pluginId);
+  const pluginName = ghost?.manifest.name ?? pluginId;
+  // 用 block 作出错哨兵：本节点出错一律保留原模型，这里只为区分「没回应」与「没意见」。
+  // 选中的模型已被插件撤下时不问：没有人能替一个不存在的模型作答，沿用原模型。
+  const published = !!ghost && publishedRouteModels(ghost).some((model) => model.id === data.modelId);
+  const result = published
+    ? await screenGhostControlPoint('will-start-task', data, { pluginId, onFailure: 'block' })
+    : { action: 'block' as const };
+  const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  const nameOf = (route: GhostModelRoute) => {
+    const agent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+    return views.find((view) => view.id === route.providerId)?.models[agent]?.find((m) => m.id === route.model)?.name ?? route.model;
+  };
+  const kept = (why: 'no-opinion' | 'failed' | 'unavailable-route'): GhostStartTaskRouteResult =>
+    ({ outcome: 'kept', pluginName, why, modelName: nameOf(data.route) });
+  if (result.action === 'block') return kept('failed');
+  if (result.action !== 'route') return kept('no-opinion');
+  const agents = getPluginModelPickerAgents();
+  const base = { agentKind: result.route.agentKind, providerId: result.route.providerId, model: result.route.model, fastMode: false as const };
+  const modelName = nameOf(result.route);
+  if (!await isPluginRouteHarnessInstalled(base.agentKind === 'cc' ? 'claude-code' : base.agentKind)) {
+    log.warn('plugin chose a Harness that is not installed', { pluginId, agentKind: base.agentKind });
+    return kept('unavailable-route');
+  }
+  if (result.route.effort && isPluginModelPickerRouteAvailable({ ...base, effort: result.route.effort }, views, agents)) {
+    return { outcome: 'routed', pluginName: result.ghostName, route: result.route, modelName, reason: result.reason };
+  }
+  if (isPluginModelPickerRouteAvailable({ ...base, effort: '' }, views, agents)) {
+    const { effort: _dropped, ...route } = result.route;
+    return { outcome: 'routed', pluginName: result.ghostName, route, modelName, reason: result.reason };
+  }
+  log.warn('plugin chose an unavailable model route', { pluginId, agentKind: base.agentKind, model: base.model });
+  return kept('unavailable-route');
 }
 
 /** 任务「前置检查」里可选的插件:已启用、声明了该节点且用户已批准。 */
@@ -6285,6 +6391,11 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         libraryPath: (instance, file) => getGhostLibrarySlot().resolvePanelFilePath(instance, file),
         libraryMime: mediaTypeForLibraryPath,
       }).read(id, `library:${relativePath}`, new Request('https://cindy.invalid/', { signal })),
+      readHandoffFile: async (id, ref, signal) => {
+        signal.throwIfAborted();
+        return getGhostHandoffStore().read(id, ref);
+      },
+      touchHandoffFiles: (id, refs) => getGhostHandoffStore().touch(id, refs),
       getGhost: (id) => {
         const ghost = findGhostForInstanceId(id);
         return ghost;
@@ -6447,6 +6558,13 @@ export function getGhostFsSlot(): GhostFsSlot {
     });
   }
   return fsSlotSingleton;
+}
+
+let handoffStoreSingleton: GhostHandoffStore | null = null;
+/** Owner-scoped copies of chat files handed to plugins (root re-resolved per call). */
+export function getGhostHandoffStore(): GhostHandoffStore {
+  handoffStoreSingleton ??= new GhostHandoffStore({ root: () => ownerScopedUserDataPath('ghost-handoff') });
+  return handoffStoreSingleton;
 }
 
 let librarySlotSingleton: GhostLibrarySlot | null = null;
@@ -8199,6 +8317,7 @@ async function uninstallGhostAndCleanupLocked(
       storagePart,
       log,
     );
+    removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
     if (storagePart) {
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
@@ -8211,6 +8330,13 @@ async function uninstallGhostAndCleanupLocked(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      // 对话交接的副本只为本插件短期处理而存,随卸载回收(与 ghost-fs 同纪律)。
+      await getGhostHandoffStore().removeInstance(storagePart).catch((err) => {
+        log.warn('对话交接副本回收失败', {
+          id: storagePart,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
     // Library(持久作品库)与 ghost-fs 语义相反:**卸载不删**。只标 orphaned
     // (设置页可见、重装自动重挂)并作废运行会话;删除必须走设置页独立确认
@@ -8764,6 +8890,15 @@ export function registerGhostIpc(): void {
       getGhostSetupChangeBus().emit(ghostId, { source: 'kv' });
     },
   });
+  setGhostModelsHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostModelsRequest({
+      ghostId, method, readBodyText, isCurrent,
+      needs: () => (ghost ? ghost.manifest.models : null),
+      store: publishedModelsStore(),
+      onChanged: () => broadcastGhostsChanged(getGhostManager().list()),
+    });
+  });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
   // settingsHtml 收单入库——宿主凭证渲染 2026-07-13 整体退役):现查在装
   // 清单拿收单键集(意识更新后立即以新清单为准,不吃分区 handler 闭包里的
@@ -9152,6 +9287,7 @@ export function registerGhostIpc(): void {
   });
 
   stableOwnerPostCommitTask = async (reason, scope) => {
+    scheduleHandoffSweep(scope);
     const outcome = await scheduleBuiltinReconcile(reason, scope);
     if (outcome === 'deferred') return outcome;
     if (
@@ -10319,6 +10455,35 @@ export function registerGhostIpc(): void {
     return ghostControlPointInfo(id).filter((point) => point.declared);
   });
 
+  // 新任务「让插件选」：第一条消息发出前问一次。
+  ipcMain.handle('ghosts:start-task:route', async (event, pluginId: unknown, data: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof pluginId !== 'string' || !pluginId.trim()) throwIpcError('INVALID_PARAMS', 'pluginId must be a non-empty string');
+    const d = (data ?? {}) as Record<string, unknown>;
+    const route = d.route as Record<string, unknown> | undefined;
+    if (typeof d.modelId !== 'string' || !d.modelId || typeof d.text !== 'string' || !route || typeof route.model !== 'string' || typeof route.providerId !== 'string'
+      || (route.agentKind !== 'cc' && route.agentKind !== 'codex' && route.agentKind !== 'pi')) {
+      throwIpcError('INVALID_PARAMS', 'invalid new task data');
+    }
+    return routeGhostNewTask(pluginId, {
+      modelId: d.modelId,
+      text: d.text.slice(0, 20_000),
+      attachmentCount: typeof d.attachmentCount === 'number' && d.attachmentCount >= 0 ? Math.floor(d.attachmentCount) : 0,
+      route: {
+        agentKind: route.agentKind,
+        model: route.model,
+        providerId: route.providerId,
+        ...(typeof route.effort === 'string' && route.effort ? { effort: route.effort } : {}),
+      },
+    });
+  });
+
+  // 新任务模型选择器里的插件模型。
+  ipcMain.handle('ghosts:models:list', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return ghostPickerModels();
+  });
+
   // 定时任务 / 例行任务编辑页的插件下拉。
   ipcMain.handle('ghosts:control-points:candidates', (event, point: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -10367,6 +10532,34 @@ export function registerGhostIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
     return getGhostLibraryOverview(id);
+  });
+  // 对话交接副本:本机设置页查看/逐个删除;不进 device-link 白名单。
+  // Same instance-key canonicalization as the Library section (rel ids map to storage parts).
+  const handoffStorageKey = (id: unknown): string => {
+    const key = typeof id === 'string' && isGhostInstanceId(id) ? libraryStorageKeyFor(id) : null;
+    if (!key) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    return key;
+  };
+  ipcMain.handle('ghosts:handoff-list', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return getGhostHandoffStore().list(handoffStorageKey(id));
+  });
+  ipcMain.handle('ghosts:handoff-folder', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return getGhostHandoffStore().folder(handoffStorageKey(id));
+  });
+  ipcMain.handle('ghosts:handoff-delete', async (event, id: unknown, ref: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const key = handoffStorageKey(id);
+    if (typeof ref !== 'string' || !GHOST_HANDOFF_REF_RE.test(ref)) throwIpcError('INVALID_PARAMS', '非法文件引用');
+    // Held like a call: a source change waits for the delete and refuses one that starts during it.
+    const release = getGhostHandoffStore().hold(key);
+    if (!release) throwIpcError('PRECONDITION_FAILED', '插件正在更换来源,请稍后再删除');
+    try {
+      return { existed: await getGhostHandoffStore().delete(key, ref) };
+    } finally {
+      release();
+    }
   });
   registerPluginUsageIpc({
     ipcMain, assertTrusted: assertTrustedAppRendererEvent, service: currentPluginUsageService,

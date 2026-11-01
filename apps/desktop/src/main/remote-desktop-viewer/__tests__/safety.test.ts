@@ -193,7 +193,24 @@ it('background passes keep the computer sync enabled without reading clipboard c
   }
 });
 
-it('a locked computer waits at a fixed interval with its own status, never growing the backoff', async () => {
+it('a locked computer clears an earlier sync failure instead of keeping it on screen', async () => {
+  const { safety, sync } = syncFixture();
+  const now = vi.spyOn(Date, 'now').mockReturnValue(10000);
+  const tick = vi
+    .spyOn(ClipboardSync.prototype, 'tick')
+    .mockRejectedValueOnce(new Error('DESKTOP_UNKNOWN_FAILURE'))
+    .mockRejectedValueOnce(new Error('DESKTOP_CLIPBOARD_UNAVAILABLE'));
+  try {
+    expect((await safety.tick(sync)).notice).toBe('clipboardSyncFailed');
+    now.mockReturnValue(20000);
+    expect((await safety.tick(sync)).notice).toBeNull();
+  } finally {
+    now.mockRestore();
+    tick.mockRestore();
+  }
+});
+
+it('a locked computer waits silently at a fixed interval, never growing the backoff', async () => {
   const { safety, sync, clipboardEnables } = syncFixture();
   const now = vi.spyOn(Date, 'now').mockReturnValue(10000);
   const tick = vi
@@ -203,7 +220,7 @@ it('a locked computer waits at a fixed interval with its own status, never growi
     .mockRejectedValueOnce(new Error('DESKTOP_CLIPBOARD_UNAVAILABLE'))
     .mockResolvedValue(undefined);
   try {
-    expect((await safety.tick(sync)).notice).toBe('clipboardSyncWaiting');
+    expect((await safety.tick(sync)).notice).toBeNull();
     for (const [at, calls] of [
       [11000, 1],
       [11500, 2],

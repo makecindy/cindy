@@ -1245,7 +1245,6 @@
     "clipboardSyncSkipped": "Este formato não é compatível com a sincronização da área de transferência e foi ignorado.",
     "clipboardSyncTooLarge": "O conteúdo excede o limite de tamanho da sincronização da área de transferência e foi ignorado.",
     "clipboardSyncPermission": "A sincronização da área de transferência precisa de permissão para colar. Autorize e volte a esta janela para retomar.",
-    "clipboardSyncWaiting": "A área de transferência do computador remoto está indisponível no momento (ele pode estar bloqueado). A sincronização será retomada automaticamente.",
     "lockingOnExit": "Bloqueando computador…",
     "idleLock": "Desconectar e bloquear por inatividade",
     "idleNever": "Nunca",
@@ -5475,7 +5474,6 @@
         "title": "Usar meus logins do navegador",
         "description": "O Agent abrirá sites com suas contas conectadas no Chrome, Edge ou Brave.",
         "toggleAria": "Usar meus logins do navegador",
-        "unavailableEmbedded": "Aplica-se apenas ao navegador independente. Desativar esta opção exclui os arquivos de login copiados.",
         "confirmTitle": "Permitir que o Agent use seus logins do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. Você pode desativar a opção a qualquer momento; a cópia será excluída.",
         "confirmDescriptionMac": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. A leitura dos arquivos de login do Chrome também exige Acesso Total ao Disco. Você pode desativar esta opção a qualquer momento; a cópia será excluída.",
@@ -7599,10 +7597,14 @@
       "controlPoints": {
         "title": "Verificações antes da execução",
         "description": "Este plugin pode verificar automações ou rotinas antes de executarem. Pode pular ou parar uma execução, nunca aprová-la por você.",
+        "titleWithStartTask": "Quando este plugin entra em ação",
+        "descriptionWithStartTask": "Só entra em ação nas tarefas em que você o escolheu: antes de uma execução, só pode pulá-la ou pará-la; numa tarefa nova, escolhe um modelo uma vez, para a primeira mensagem. Nunca aprova nada por você.",
         "usage": "Para usar, escolha-o em Verificação prévia ao editar uma automação ou rotina.",
+        "usageStartTask": "Para usar, escolha um modelo oferecido por ele no seletor de modelos de uma nova tarefa.",
         "points": {
           "will-schedule-run": "Antes de executar uma automação",
-          "will-routine-run": "Antes de executar uma rotina de um colega"
+          "will-routine-run": "Antes de executar uma rotina de um colega",
+          "will-start-task": "Ao iniciar uma nova tarefa"
         },
         "inactive": "Ainda indisponível. Permita ao atualizar ou reinstalar este plugin."
       },
@@ -7679,6 +7681,8 @@
         "subscribeScheduleRunDetail": "As automações em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê o nome e as instruções e pode pular ou parar essa execução, mas não aprovar nada por você.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de executarem",
         "subscribeRoutineRunDetail": "As rotinas em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê as instruções e os eventos que as acionaram e pode pular ou parar essa execução, mas não aprovar nada por você.",
+        "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Escolhe uma vez; o modelo não muda durante a tarefa.",
         "card": "Renderiza cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar links externos que abrem seu navegador após confirmação",
         "cardExternalLinkDetail": "Clicar em um link de cartão exibe uma caixa de diálogo de confirmação; a URL só abre no navegador do sistema após sua aprovação. Apenas endereços http/https são permitidos.",
@@ -7869,6 +7873,22 @@
         "reveal": "Mostrar na lista de tarefas",
         "revealed": "Tarefa exibida na lista de tarefas",
         "revealFailed": "Não foi possível mostrar a tarefa na lista de tarefas"
+      },
+      "handoff": {
+        "title": "Arquivos entregues a este plugin em conversas",
+        "description": "Cópias dos arquivos que você entregou a este plugin em conversas. Cada cópia é excluída automaticamente após 7 dias sem uso.",
+        "empty": "Nenhum arquivo foi entregue a este plugin em uma conversa ainda.",
+        "loadFailed": "Não foi possível carregar a lista de arquivos. Tente novamente mais tarde.",
+        "refresh": "Atualizar",
+        "openInFinder": "Abrir no Finder",
+        "openInExplorer": "Abrir no Explorador de Arquivos",
+        "meta": "{{size}} · Entregue em {{handedAt}} · Excluído automaticamente em {{expiresAt}}",
+        "delete": "Excluir",
+        "deleteNamed": "Excluir {{name}}",
+        "deleteTitle": "Excluir este arquivo?",
+        "deleteDescription": "Após a exclusão, o plugin e as páginas abertas não poderão mais usar “{{name}}”. Não é possível desfazer.",
+        "deleteFailed": "Não foi possível excluir o arquivo. Tente novamente mais tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -12843,6 +12863,7 @@
     "cindyServiceUnavailable": "O serviço de voz do Cindy está indisponível. Verifique sua rede ou altere a fonte do serviço.",
     "asrServiceUnavailable": "O serviço de reconhecimento de voz não conseguiu conectar. Verifique sua rede e tente novamente.",
     "emptyTranscript": "Foi detectada fala, mas nenhum texto foi reconhecido. Tente novamente.",
+    "speakerFiltered": "Voz de outra pessoa ignorada",
     "connectionInterrupted": "A conexão de voz foi interrompida. Verifique sua rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz parou de retornar resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — você pode editá-lo diretamente.",
@@ -12868,6 +12889,14 @@
     "verificationFailed": "O Cindy não conseguiu confirmar se o login do ChatGPT foi restaurado. Verifique novamente."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "escolheu para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa"
+      }
+    },
     "imageDelivery": {
       "stored": "Imagem entregue",
       "failed": "Não foi possível entregar a imagem. Tente transferir novamente a imagem existente.",
@@ -15993,6 +16022,7 @@
       "titleRevealPath": "Permitir que o Agent receba o caminho local deste arquivo de mídia?",
       "count": "{{count}} arquivos",
       "descriptionAttachments": "Os arquivos abaixo estão fora do diretório de trabalho desta sessão. Se você permitir, eles serão repassados a este plugin (ele recebe apenas impressões digitais do conteúdo, nunca caminhos).",
+      "descriptionHandoff": "Os arquivos abaixo estão fora do diretório de trabalho desta sessão. Se você permitir, o plugin recebe cópias deles (nunca os caminhos); as cópias são excluídas automaticamente após 7 dias sem uso.",
       "descriptionDir": "O diretório/arquivo abaixo está fora do diretório de trabalho desta sessão. Se você permitir, seus arquivos serão repassados a este plugin para envio (ele recebe apenas um tíquete de uso único, nunca caminhos).",
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se você permitir, este plugin poderá salvar nele os arquivos baixados (arquivos existentes nunca são sobrescritos).",
       "descriptionRevealPath": "O caminho só é retornado ao Agent atual após sua permissão e passará a fazer parte do registro da conversa; dispositivos pareados podem sincronizar esse registro. Isso não concede a nenhum plugin acesso ao arquivo.",
@@ -17901,6 +17931,14 @@
       "pendingTurns_many": "{{count}} trocas",
       "lastLearned_many": "{{count}} alterações",
       "readTurns_many": "{{count}} trocas lidas"
+    },
+    "remote": {
+      "pause": "Pausar rotina",
+      "resume": "Retomar rotina",
+      "addSchedule": "Adicionar horário",
+      "addInterval": "Adicionar intervalo",
+      "addEvent": "Adicionar gatilho de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

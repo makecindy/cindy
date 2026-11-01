@@ -690,7 +690,7 @@ describe('Ghost manifest contract', () => {
         ...validManifest,
         locales: {
           en: 'locales/en.json',
-          fr: 'locales/fr.json',
+          it: 'locales/it.json',
         },
       }),
     ).toMatchObject({

@@ -1216,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暂不支持剪贴板同步，已跳过",
     "clipboardSyncTooLarge": "内容超出剪贴板同步大小限制，已跳过",
     "clipboardSyncPermission": "剪贴板同步需要粘贴权限，授权后回到窗口即可恢复",
-    "clipboardSyncWaiting": "远程电脑的剪贴板暂时无法访问（可能已锁屏），解锁后会自动继续同步。",
     "lockingOnExit": "正在锁定电脑…",
     "idleLock": "无操作后断开并锁屏",
     "idleNever": "永不",
@@ -5377,7 +5376,6 @@
         "title": "使用我的浏览器登录态",
         "description": "Agent 会用你在 Chrome、Edge 或 Brave 里已登录的身份访问网站。",
         "toggleAria": "使用我的浏览器登录态",
-        "unavailableEmbedded": "只对独立浏览器生效。关掉后会删除已拷贝的登录文件。",
         "confirmTitle": "允许 Agent 使用你的浏览器登录态？",
         "confirmDescription": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。可以随时关掉，拷贝会被删除。",
         "confirmDescriptionMac": "Agent 将能以你已登录的身份打开网页，包括邮箱、网盘和公司后台。读取 Chrome 登录文件还需要「完全磁盘访问权限」。可以随时关掉，拷贝会被删除。",
@@ -7489,10 +7487,14 @@
       "controlPoints": {
         "title": "运行前检查",
         "description": "这个插件可以在自动化或例行任务运行前做检查：只能跳过或停止本次运行，不能替你批准。",
+        "titleWithStartTask": "插件介入的时机",
+        "descriptionWithStartTask": "只在你选了它的任务里介入：运行前只能跳过或停止本次运行，开新任务时只为第一条消息选一次模型。都不能替你批准。",
         "usage": "使用方法：编辑自动化或例行任务时，在「前置检查」里选它。",
+        "usageStartTask": "使用方法：在新任务的模型选择器里选它提供的模型。",
         "points": {
           "will-schedule-run": "自动化运行前",
-          "will-routine-run": "伙伴的例行任务运行前"
+          "will-routine-run": "伙伴的例行任务运行前",
+          "will-start-task": "开新任务时"
         },
         "inactive": "还不能使用。更新或重新安装这个插件时允许即可。"
       },
@@ -7569,6 +7571,8 @@
         "subscribeScheduleRunDetail": "在「前置检查」里选了它的自动化，运行前会先问它。它看得到这条自动化的名称和指令，可以让这次跳过或停止，但不能替你批准。",
         "subscribeRoutineRun": "可在你选定的伙伴例行任务运行前做检查",
         "subscribeRoutineRunDetail": "在「前置检查」里选了它的例行任务，每次触发后会先问它。它看得到例行任务的指令和触发它的事件内容，可以让这次跳过或停止，但不能替你批准。",
+        "subscribeStartTask": "可为新任务选模型",
+        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。只选一次，任务中途不会换模型。",
         "card": "渲染消息卡片",
         "cardExternalLink": "卡片内可声明外链，经你确认后打开浏览器",
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
@@ -7759,6 +7763,22 @@
         "reveal": "显示到任务列表",
         "revealed": "任务已显示到任务列表",
         "revealFailed": "未能将任务显示到任务列表"
+      },
+      "handoff": {
+        "title": "对话中交给插件的文件",
+        "description": "这些是你在对话中交给该插件的文件副本，7 天未使用后自动删除。",
+        "empty": "还没有在对话中交给该插件的文件。",
+        "loadFailed": "无法读取文件列表，请稍后重试。",
+        "refresh": "刷新",
+        "openInFinder": "在访达中打开",
+        "openInExplorer": "在资源管理器中打开",
+        "meta": "{{size}} · 交出于 {{handedAt}} · {{expiresAt}} 自动删除",
+        "delete": "删除",
+        "deleteNamed": "删除 {{name}}",
+        "deleteTitle": "删除这个文件？",
+        "deleteDescription": "删除后，插件和已打开的页面都无法再使用「{{name}}」，且无法恢复。",
+        "deleteFailed": "删除失败，请稍后重试。",
+        "cancel": "取消"
       },
       "library": {
         "title": "持久作品库",
@@ -12688,6 +12708,7 @@
     "cindyServiceUnavailable": "Cindy 官方语音服务暂不可用，请检查网络或切换服务来源。",
     "asrServiceUnavailable": "语音识别服务连接失败，请检查网络或稍后重试。",
     "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。",
+    "speakerFiltered": "已忽略其他人的声音",
     "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
@@ -12713,6 +12734,14 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "为这个任务选了",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用",
+        "failed": "{{plugin}} 没有及时回应，这个任务用",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用"
+      }
+    },
     "teammateProcess": {"record":"处理记录","operations":"操作记录","elapsed":"已处理 {{duration}}","took":"用时 {{duration}}","processing":"正在处理","worked":"处理记录","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次调用失败","separator":"、","actions":{"running":{"read":"正在查看文件","edit":"正在编辑文件","search":"正在查找内容","web":"正在查阅网页","command":"正在运行命令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理计划"},"done":{"read":"查看了文件","edit":"编辑了文件","search":"查找了内容","web":"查阅了网页","command":"运行了命令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了计划"}}},
     "imageDelivery": {
       "stored": "图片已交付",
@@ -15748,6 +15777,7 @@
       "titleRevealPath": "允许 Agent 获取这个媒体文件的本机路径？",
       "count": "{{count}} 个文件",
       "descriptionAttachments": "以下文件在当前任务的工作目录之外。允许后，这些文件会交给该插件处理(它只拿到内容指纹，拿不到路径)。",
+      "descriptionHandoff": "以下文件在当前任务的工作目录之外。允许后，插件会收到这些文件的副本（拿不到路径），副本 7 天未使用后自动删除。",
       "descriptionDir": "以下目录/文件在当前任务的工作目录之外。允许后，其中的文件会交给该插件上传(它只拿到一次性票据，拿不到路径)。",
       "descriptionSaveDir": "以下目录在当前任务的工作目录之外。允许后，该插件可以把下载的文件存入其中(不会覆盖已有文件)。",
       "descriptionRevealPath": "该路径只会在你允许后返回给当前 Agent，并进入对话记录；配对设备可能同步到这条记录。此操作不授予插件读取文件的权限。",
@@ -17635,6 +17665,14 @@
         "skillDisabled": "停用了技能「{{title}}」",
         "skillMerged": "把技能「{{title}}」并入「{{into}}」并停用"
       }
+    },
+    "remote": {
+      "pause": "暂停例行任务",
+      "resume": "恢复例行任务",
+      "addSchedule": "添加定时条件",
+      "addInterval": "添加间隔条件",
+      "addEvent": "添加事件触发器",
+      "filterField": "筛选字段"
     }
   },
   "cindyMakeDoctor": {

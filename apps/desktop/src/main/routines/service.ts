@@ -221,7 +221,7 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   }, routine.preRunPlugin) : undefined;
   assertScope(scope);
   if (signal.aborted) throw new Error('Routine cancelled');
-  if (gate && gate.action !== 'allow') {
+  if (gate && gate.action !== 'allow' && gate.action !== 'route') {
     log.info('routine stopped by plugin control point', {
       routineId: routine.id, ghostId: gate.ghostId, action: gate.action, failure: gate.failure,
     });

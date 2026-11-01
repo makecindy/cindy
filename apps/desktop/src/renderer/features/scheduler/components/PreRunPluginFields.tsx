@@ -16,19 +16,25 @@ import {
   type GhostControlPointFailureAction,
 } from '../../../../shared/ghost';
 
-type PreRunPoint = 'will-schedule-run' | 'will-routine-run';
+type PreRunPoint = 'will-schedule-run' | 'will-routine-run' | 'will-start-task';
 
 export function usePreRunPluginCandidates(point: PreRunPoint, enabled = true): GhostControlPointCandidate[] | null {
   const [candidates, setCandidates] = useState<GhostControlPointCandidate[] | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    window.electronAPI.ghosts
-      .listControlPointCandidates(point)
-      .then((list) => alive && setCandidates(list))
-      .catch(() => alive && setCandidates([]));
+    // 页面开着时装上、更新、启停或卸载插件，候选也要跟着变。
+    const refresh = () => {
+      window.electronAPI.ghosts
+        .listControlPointCandidates(point)
+        .then((list) => alive && setCandidates(list))
+        .catch(() => alive && setCandidates([]));
+    };
+    refresh();
+    const off = window.electronAPI.ghosts.onChanged(refresh);
     return () => {
       alive = false;
+      off();
     };
   }, [point, enabled]);
   return candidates;

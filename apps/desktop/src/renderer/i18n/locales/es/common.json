@@ -1245,7 +1245,6 @@
     "clipboardSyncSkipped": "Este formato no es compatible con la sincronización del portapapeles y se omitió.",
     "clipboardSyncTooLarge": "El contenido excede el límite de tamaño de sincronización del portapapeles y se omitió.",
     "clipboardSyncPermission": "La sincronización del portapapeles necesita acceso para pegar. Permítalo y luego regrese a esta ventana para continuar.",
-    "clipboardSyncWaiting": "El portapapeles de la computadora remota no está disponible en este momento (puede que esté bloqueado). La sincronización se reanuda automáticamente.",
     "lockingOnExit": "Bloqueando computadora…",
     "idleLock": "Desconectar y bloquear cuando esté inactivo",
     "idleNever": "Nunca",
@@ -5475,7 +5474,6 @@
         "title": "Usar los inicios de sesión de mi navegador",
         "description": "El Agent abrirá sitios con tus cuentas de Chrome, Edge o Brave que ya tengan la sesión iniciada.",
         "toggleAria": "Usar los inicios de sesión de mi navegador",
-        "unavailableEmbedded": "Solo se aplica al navegador independiente. Al apagarlo se eliminan los archivos de inicio de sesión copiados.",
         "confirmTitle": "¿Permitir que el Agent use tus inicios de sesión del navegador?",
         "confirmDescription": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Puedes desactivarlo cuando quieras; la copia se eliminará.",
         "confirmDescriptionMac": "El Agent podrá abrir sitios con tus cuentas que ya tengan la sesión iniciada, incluidos correo electrónico, unidades en la nube y consolas de trabajo. Para leer los archivos de inicio de sesión de Chrome, también se necesita Acceso total al disco. Puedes desactivarlo cuando quieras; la copia se eliminará.",
@@ -7599,10 +7597,14 @@
       "controlPoints": {
         "title": "Comprobaciones previas",
         "description": "Este complemento puede comprobar automatizaciones o rutinas antes de que se ejecuten. Puede omitir o detener una ejecución, nunca aprobarla por ti.",
+        "titleWithStartTask": "Cuándo interviene este complemento",
+        "descriptionWithStartTask": "Solo interviene en las tareas donde lo elegiste: antes de una ejecución solo puede omitirla o detenerla, y en una tarea nueva elige un modelo una vez, para el primer mensaje. Nunca aprueba nada por ti.",
         "usage": "Para usarlo, elígelo en Comprobación previa a la ejecución al editar una automatización o rutina.",
+        "usageStartTask": "Para usarlo, elige un modelo que ofrezca en el selector de modelos de una tarea nueva.",
         "points": {
           "will-schedule-run": "Antes de ejecutar una automatización",
-          "will-routine-run": "Antes de ejecutar una rutina de un compañero"
+          "will-routine-run": "Antes de ejecutar una rutina de un compañero",
+          "will-start-task": "Al empezar una tarea nueva"
         },
         "inactive": "Aún no disponible. Permítelo al actualizar o reinstalar este complemento."
       },
@@ -7679,6 +7681,8 @@
         "subscribeScheduleRunDetail": "Las automatizaciones en las que lo elijas en Comprobación previa a la ejecución le consultan primero. Ve su nombre e instrucciones y puede omitir o detener esa ejecución, pero no aprobar nada por ti.",
         "subscribeRoutineRun": "Puede comprobar rutinas de compañeros elegidas antes de ejecutarse",
         "subscribeRoutineRunDetail": "Las rutinas en las que lo elijas en Comprobación previa a la ejecución le consultan primero. Ve sus instrucciones y los eventos que las activaron, y puede omitir o detener esa ejecución, pero no aprobar nada por ti.",
+        "subscribeStartTask": "Puede elegir el modelo de las tareas nuevas",
+        "subscribeStartTaskDetail": "Cuando una tarea nueva usa un modelo que ofrece, lee el primer mensaje y elige uno de tus modelos conectados. Elige una sola vez; el modelo no cambia durante la tarea.",
         "card": "Representa tarjetas de mensajes",
         "cardExternalLink": "Las tarjetas pueden declarar enlaces externos que abren su navegador después de la confirmación.",
         "cardExternalLinkDetail": "Al hacer clic en el enlace de una tarjeta se muestra un cuadro de diálogo de confirmación; El URL se abre en el navegador de su sistema solo después de su aprobación. Sólo se permiten direcciones http/https.",
@@ -7869,6 +7873,22 @@
         "reveal": "Mostrar en la lista de tareas",
         "revealed": "Tarea mostrada en la lista de tareas",
         "revealFailed": "No se pudo mostrar la tarea en la lista de tareas"
+      },
+      "handoff": {
+        "title": "Archivos entregados a este complemento en conversaciones",
+        "description": "Copias de los archivos que entregaste a este complemento en conversaciones. Cada copia se elimina automáticamente tras 7 días sin usarse.",
+        "empty": "Aún no se ha entregado ningún archivo a este complemento en una conversación.",
+        "loadFailed": "No se pudo cargar la lista de archivos. Inténtalo más tarde.",
+        "refresh": "Actualizar",
+        "openInFinder": "Abrir en Finder",
+        "openInExplorer": "Abrir en el Explorador de archivos",
+        "meta": "{{size}} · Entregado el {{handedAt}} · Se elimina automáticamente el {{expiresAt}}",
+        "delete": "Eliminar",
+        "deleteNamed": "Eliminar {{name}}",
+        "deleteTitle": "¿Eliminar este archivo?",
+        "deleteDescription": "Tras eliminarlo, el complemento y las páginas abiertas ya no podrán usar «{{name}}». No se puede deshacer.",
+        "deleteFailed": "No se pudo eliminar el archivo. Inténtalo más tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -12843,6 +12863,7 @@
     "cindyServiceUnavailable": "El servicio de voz de Cindy no está disponible. Revisa tu red o cambia de fuente de servicio.",
     "asrServiceUnavailable": "No se pudo conectar al servicio de reconocimiento de voz. Revisa tu red e inténtalo de nuevo.",
     "emptyTranscript": "Se detectó voz, pero no se reconoció ningún texto. Inténtalo de nuevo.",
+    "speakerFiltered": "Se ignoró la voz de otra persona",
     "connectionInterrupted": "La conexión de voz fue interrumpida. Verifique su red e inténtelo nuevamente.",
     "recognitionStalled": "El reconocimiento de voz dejó de dar resultados. Intentar otra vez.",
     "transcriptKept": "{{message}} El texto reconocido hasta ahora se mantuvo; puede editarlo directamente.",
@@ -12868,6 +12889,14 @@
     "verificationFailed": "Cindy no pudo confirmar si se restauró el inicio de sesión de ChatGPT. Vuelve a comprobarlo."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "eligió para esta tarea",
+      "kept": {
+        "no-opinion": "{{plugin}} no cambió el modelo esta vez; esta tarea usa",
+        "failed": "{{plugin}} no respondió a tiempo; esta tarea usa",
+        "unavailable-route": "{{plugin}} eligió un modelo que no puedes usar; esta tarea usa"
+      }
+    },
     "imageDelivery": {
       "stored": "Imagen entregada",
       "failed": "Error en la entrega de la imagen. Vuelva a intentar transferir la imagen existente.",
@@ -15993,6 +16022,7 @@
       "titleRevealPath": "¿Permitir que el Agent reciba la ruta local de este archivo multimedia?",
       "count": "{{count}} archivos",
       "descriptionAttachments": "Los siguientes archivos están fuera del directorio de trabajo de esta sesión. Si lo permites, se entregarán a este complemento (solo recibe huellas digitales del contenido, nunca rutas).",
+      "descriptionHandoff": "Los archivos siguientes están fuera del directorio de trabajo de esta sesión. Si lo permites, el complemento recibirá copias de ellos (nunca sus rutas); las copias se eliminan automáticamente tras 7 días sin usarse.",
       "descriptionDir": "El siguiente directorio o archivo está fuera del directorio de trabajo de esta sesión. Si lo permites, sus archivos se entregarán a este complemento para subirlos (solo recibe un ticket de un solo uso, nunca rutas).",
       "descriptionSaveDir": "El siguiente directorio está fuera del directorio de trabajo de esta sesión. Si lo permites, este complemento podrá guardar en él los archivos descargados (nunca se sobrescriben los archivos existentes).",
       "descriptionRevealPath": "La ruta se devuelve al Agent actual solo después de que lo permitas y se incluirá en el historial de la conversación; los dispositivos vinculados podrían sincronizar ese historial. Esto no otorga a ningún complemento acceso al archivo.",
@@ -17901,6 +17931,14 @@
       "pendingTurns_many": "{{count}} intercambios",
       "lastLearned_many": "{{count}} cambios",
       "readTurns_many": "Se leyeron {{count}} intercambios"
+    },
+    "remote": {
+      "pause": "Pausar rutina",
+      "resume": "Reanudar rutina",
+      "addSchedule": "Añadir horario",
+      "addInterval": "Añadir intervalo",
+      "addEvent": "Añadir desencadenante de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

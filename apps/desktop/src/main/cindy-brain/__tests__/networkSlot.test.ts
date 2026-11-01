@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
@@ -2383,6 +2383,74 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('重定向');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Handoff copies leave only through upload.handoff, scoped to the receiving instance.
+// Rule: plugin-security-and-authoring.md §4 handoff. Gap: third upload source.
+// Tier: unit with the real store; minimum inputs are one copy and a foreign instance.
+describe('Handoff file upload', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { GhostHandoffStore } = await import('../handoffStore');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-handoff-upload-'));
+  const store = new GhostHandoffStore({ root: () => root });
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const readHandoffFile: NetworkSlotDeps['readHandoffFile'] = (id, ref) => store.read(id, ref);
+  const [copy] = await store.import('web-search', [{ name: '销售.csv', bytes: new TextEncoder().encode('a,b') }], () => {});
+  const upload = (value: Record<string, unknown>) => ({ url: 'https://api.search.brave.com/upload', method: 'POST', upload: value });
+
+  it('uploads the copy with its type and original name', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: true });
+    const body = new TextDecoder().decode((fetchImpl.mock.calls as unknown as [string, { body: Uint8Array }][])[0]![1].body);
+    expect(body).toContain(`filename="__.csv"; filename*=UTF-8''${encodeURIComponent('销售.csv')}`);
+    expect(body).toContain('Content-Type: text/csv; charset=utf-8\r\n\r\na,b\r\n');
+  });
+  it('treats another instance reference as unavailable without dispatching', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('other', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  // Codex 4431420859: the copy folder is user-visible, so its file can change after
+  // opening. Uploads read at most the stored size and refuse a grown or shortened copy.
+  it('refuses a copy that grows or shrinks after it was opened', async () => {
+    for (const change of ['grow', 'shrink'] as const) {
+      const [changed] = await store.import('web-search', [{ name: `${change}.csv`, bytes: new TextEncoder().encode('1,2') }], () => {});
+      const file = path.join(root, 'web-search', changed!.ref.slice('handoff:'.length), `${change}.csv`);
+      const editing = new (class extends GhostHandoffStore {
+        override async open(instance: string, ref: string) {
+          const opened = await super.open(instance, ref);
+          if (change === 'grow') fs.appendFileSync(file, 'x'.repeat(4096));
+          else fs.truncateSync(file, 1);
+          return opened;
+        }
+      })({ root: () => root });
+      const { slot, fetchImpl } = makeSlot({ readHandoffFile: (id, ref) => editing.read(id, ref) });
+      expect(await slot.handleFetchRequest('web-search', upload({ handoff: [changed!.ref] })))
+        .toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+  // Sliding expiry: a successful upload is a use and renews the copy for 7 days.
+  it('renews the copy after a successful upload', async () => {
+    const day = 24 * 60 * 60_000;
+    const clock = { now: 0 };
+    const timed = new GhostHandoffStore({ root: () => root, now: () => clock.now });
+    const [renewed] = await timed.import('web-search', [{ name: 'renew.csv', bytes: new TextEncoder().encode('1') }], () => {});
+    clock.now = 6 * day;
+    const { slot } = makeSlot({
+      readHandoffFile: (id, ref) => timed.read(id, ref),
+      touchHandoffFiles: (id, refs) => timed.touch(id, refs),
+    });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [renewed!.ref] }))).toMatchObject({ ok: true });
+    expect((await timed.list('web-search')).find((file) => file.ref === renewed!.ref)?.expiresAt).toBe(13 * day);
+  });
+  it('accepts exactly one upload source', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref], hashes: ['a'.repeat(64)] }))).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

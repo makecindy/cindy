@@ -1245,7 +1245,6 @@
     "clipboardSyncSkipped": "Ce format n'est pas pris en charge par la synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncTooLarge": "Le contenu dépasse la taille maximale de synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncPermission": "La synchronisation du presse-papiers nécessite l'accès au collage. Autorisez-le, puis revenez à cette fenêtre pour reprendre.",
-    "clipboardSyncWaiting": "Le presse-papiers de l'ordinateur distant n'est pas disponible pour le moment (il est peut-être verrouillé). La synchronisation reprendra automatiquement.",
     "lockingOnExit": "Verrouillage de l'ordinateur…",
     "idleLock": "Déconnecter et verrouiller en cas d'inactivité",
     "idleNever": "Jamais",
@@ -5475,7 +5474,6 @@
         "title": "Utiliser mes connexions du navigateur",
         "description": "L'Agent ouvrira les sites avec les comptes auxquels vous êtes connecté dans Chrome, Edge ou Brave.",
         "toggleAria": "Utiliser mes connexions du navigateur",
-        "unavailableEmbedded": "S'applique uniquement au navigateur autonome. Le désactiver supprime les fichiers de connexion copiés.",
         "confirmTitle": "Autoriser l'Agent à utiliser vos connexions du navigateur ?",
         "confirmDescription": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
         "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. La lecture des fichiers de connexion de Chrome nécessite également l'accès complet au disque. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
@@ -7599,10 +7597,14 @@
       "controlPoints": {
         "title": "Vérifications avant exécution",
         "description": "Ce plugin peut vérifier les automatisations ou routines avant leur exécution. Il peut ignorer ou arrêter une exécution, jamais l’approuver à ta place.",
+        "titleWithStartTask": "Quand ce plugin intervient",
+        "descriptionWithStartTask": "Il n’intervient que dans les tâches où tu l’as choisi : avant une exécution, il peut seulement l’ignorer ou l’arrêter ; pour une nouvelle tâche, il choisit un modèle une seule fois, pour le premier message. Il n’approuve jamais rien à ta place.",
         "usage": "Pour l’utiliser, choisis-le dans Vérification préalable en modifiant une automatisation ou une routine.",
+        "usageStartTask": "Pour l’utiliser, choisissez un modèle qu’il propose dans le sélecteur de modèles d’une nouvelle tâche.",
         "points": {
           "will-schedule-run": "Avant l’exécution d’une automatisation",
-          "will-routine-run": "Avant l’exécution d’une routine d’un coéquipier"
+          "will-routine-run": "Avant l’exécution d’une routine d’un coéquipier",
+          "will-start-task": "Au démarrage d’une nouvelle tâche"
         },
         "inactive": "Pas encore disponible. Autorise-le lors de la mise à jour ou de la réinstallation de ce plugin."
       },
@@ -7679,6 +7681,8 @@
         "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
         "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
         "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",
@@ -7869,6 +7873,22 @@
         "reveal": "Afficher dans la liste des tâches",
         "revealed": "Tâche affichée dans la liste des tâches",
         "revealFailed": "Impossible d'afficher la tâche dans la liste des tâches"
+      },
+      "handoff": {
+        "title": "Fichiers transmis à ce plugin dans les conversations",
+        "description": "Copies des fichiers que vous avez transmis à ce plugin dans les conversations. Chaque copie est supprimée automatiquement après 7 jours sans utilisation.",
+        "empty": "Aucun fichier n'a encore été transmis à ce plugin dans une conversation.",
+        "loadFailed": "Impossible de charger la liste des fichiers. Réessayez plus tard.",
+        "refresh": "Actualiser",
+        "openInFinder": "Ouvrir dans le Finder",
+        "openInExplorer": "Ouvrir dans l'Explorateur de fichiers",
+        "meta": "{{size}} · Transmis le {{handedAt}} · Supprimé automatiquement le {{expiresAt}}",
+        "delete": "Supprimer",
+        "deleteNamed": "Supprimer {{name}}",
+        "deleteTitle": "Supprimer ce fichier ?",
+        "deleteDescription": "Après suppression, le plugin et les pages ouvertes ne pourront plus utiliser « {{name}} ». Cette action est irréversible.",
+        "deleteFailed": "Impossible de supprimer le fichier. Réessayez plus tard.",
+        "cancel": "Annuler"
       },
       "library": {
         "title": "Bibliothèque persistante",
@@ -12843,6 +12863,7 @@
     "cindyServiceUnavailable": "Le service vocal Cindy est indisponible. Vérifiez votre réseau ou changez de source de service.",
     "asrServiceUnavailable": "Impossible de se connecter au service de reconnaissance vocale. Vérifiez votre réseau et réessayez.",
     "emptyTranscript": "Une voix a été détectée, mais aucun texte n'a été reconnu. Veuillez réessayer.",
+    "speakerFiltered": "Voix d'une autre personne ignorée",
     "connectionInterrupted": "La connexion vocale a été interrompue. Vérifiez votre réseau et réessayez.",
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",
@@ -12868,6 +12889,14 @@
     "verificationFailed": "Cindy n'a pas pu confirmer le rétablissement de la connexion ChatGPT. Vérifiez à nouveau."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "a choisi pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise"
+      }
+    },
     "imageDelivery": {
       "stored": "Image transmise",
       "failed": "Échec de la transmission de l'image. Réessayez de transférer l'image existante.",
@@ -15993,6 +16022,7 @@
       "titleRevealPath": "Autoriser l'Agent à recevoir le chemin local de ce fichier multimédia ?",
       "count": "{{count}} fichiers",
       "descriptionAttachments": "Les fichiers ci-dessous se trouvent en dehors du répertoire de travail de cette session. Si vous l'autorisez, ils seront transmis à ce plugin (il ne reçoit que des empreintes de contenu, jamais les chemins).",
+      "descriptionHandoff": "Les fichiers ci-dessous se trouvent hors du répertoire de travail de cette session. Si vous autorisez, le plugin en reçoit des copies (jamais leurs chemins) ; les copies sont supprimées automatiquement après 7 jours sans utilisation.",
       "descriptionDir": "Le répertoire ou fichier ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ses fichiers seront transmis à ce plugin pour envoi (il ne reçoit qu'un ticket à usage unique, jamais les chemins).",
       "descriptionSaveDir": "Le répertoire ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ce plugin pourra y enregistrer des fichiers téléchargés (les fichiers existants ne sont jamais écrasés).",
       "descriptionRevealPath": "Le chemin n'est renvoyé à l'Agent actuel qu'après votre autorisation et sera ajouté à l'historique de la conversation ; les appareils associés peuvent synchroniser cet historique. Cela n'accorde à aucun plugin l'accès au fichier.",
@@ -17901,6 +17931,14 @@
       "pendingTurns_many": "{{count}} échanges",
       "lastLearned_many": "{{count}} modifications",
       "readTurns_many": "{{count}} échanges lus"
+    },
+    "remote": {
+      "pause": "Suspendre la routine",
+      "resume": "Reprendre la routine",
+      "addSchedule": "Ajouter un horaire",
+      "addInterval": "Ajouter un intervalle",
+      "addEvent": "Ajouter un déclencheur d’événement",
+      "filterField": "Champ de filtre"
     }
   },
   "cindyMakeDoctor": {

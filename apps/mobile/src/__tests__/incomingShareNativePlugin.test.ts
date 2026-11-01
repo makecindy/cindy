@@ -107,9 +107,14 @@ describe("incoming share native file ownership", () => {
   it("embeds complete localized feedback in the extension, without relying on the JS app", () => {
     const strings = require("../../plugins/incoming-share-strings.json");
     expect(Object.keys(strings).sort()).toEqual([
+      "de",
       "en",
+      "es",
+      "fr",
       "ja",
       "ko",
+      "pt-BR",
+      "pt-PT",
       "zh-Hans",
       "zh-Hant",
     ]);

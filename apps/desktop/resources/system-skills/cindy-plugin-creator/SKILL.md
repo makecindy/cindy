@@ -49,7 +49,7 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 - [插件打开宿主统一模型选择器 pickModel（§4.0.3b）](references/plugin-agent-models.md)
 - [插件接入媒体模型与生成结果（§4.0.4）](references/plugin-media.md)
 - [插件联网与凭证代发 network（§4.7）](references/plugin-network.md)
-- [插件文件操作与持久作品库 fs / library（§4.10）](references/plugin-files-and-library.md)
+- [插件文件操作、持久作品库与对话文件交接 fs / library / cindy_handoff_files（§4.10）](references/plugin-files-and-library.md)
 - [插件随包 Node 工作进程、CLI 与 stdio MCP（§4.12）](references/plugin-node-worker.md)
 
 ### 插件界面与用户交互
@@ -78,6 +78,7 @@ Use when the plugin listens for events, supplies routine triggers or interacts w
 - [插件事件订阅 subscribe（§4.6）](references/plugin-event-subscriptions.md)
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化与例行任务运行前先问插件（§4.6.2）](references/plugin-control-points.md)
+- [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
 - [插件发起 Agent 任务与请求自动化（§4.11）](references/plugin-agent-tasks.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)

@@ -2,6 +2,9 @@ import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
+import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+export { GHOST_LOCALES, type GhostLocale } from './locales.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
@@ -16,8 +19,6 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
 
 /** Cindy host locales supported by Plugin manifest resources. */
-export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
-export type GhostLocale = (typeof GHOST_LOCALES)[number];
 export type GhostManifestLocales = {
   en: string;
 } & Partial<Record<Exclude<GhostLocale, 'en'>, string>>;
@@ -990,6 +991,8 @@ export interface GhostManifest {
   subscribe?: GhostSubscribeNeeds;
   /** Autonomous publishing of declared events into user-configured routines. */
   routineEvents?: GhostRoutineEvents;
+  /** Models this plugin may add to the model picker; the list is published at runtime. */
+  models?: GhostModelsNeeds;
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -1193,6 +1196,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
+  'models',
   'schemaVersion',
   'id',
   'name',
@@ -2018,6 +2022,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
+  const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
+  if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -2069,6 +2075,10 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
       };
     }
+  }
+
+  if (models?.types.includes('route') && !(subscribe?.hooks as readonly string[] | undefined)?.includes('will-start-task')) {
+    return { ok: false, reason: 'A route model needs subscribe.hooks to include will-start-task' };
   }
 
   // network 槽详单:与 slots 含 'network' 成对(有详单必有槽;有槽
@@ -3915,6 +3925,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
+      ...(models !== undefined ? { models } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

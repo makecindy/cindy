@@ -759,5 +759,17 @@
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在编辑消息",
+    "discard": "放弃编辑消息",
+    "stopTimeout": "等待任务停止超时，请稍后重试",
+    "queueNotEmpty": "任务有排队中的消息，先发送或移除队列内容后再编辑",
+    "notLast": "任务里已有更新的消息，这条不再是最后一条，无法编辑重发",
+    "failed": "编辑重发失败，请重试",
+    "noPriorAssistant": "这条消息前面还没有 AI 回复，电脑端当前版本暂不支持编辑；更新电脑端 Cindy 后再试。",
+    "uploadsPending": "还有附件正在上传，等上传完成后再编辑消息。",
+    "rollbackHint": "发送将撤销上一轮对 {{count}} 个文件的改动",
+    "conversationOnlyHint": "发送不会恢复项目文件，上一轮的文件改动会保留"
   }
 }

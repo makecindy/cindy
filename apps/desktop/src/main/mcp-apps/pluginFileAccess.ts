@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import fs, { type FileHandle } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolveSafe, openBlobFile } from '../cindy-media/blobStore.js';
 import { ghostCanRead } from '../cindy-media/ledger.js';
@@ -9,10 +9,13 @@ import type { PluginFileAccess } from './pluginFiles.js';
 export function createPluginFileAccess(deps: {
   libraryPath(instance: string, relativePath: string): Promise<string | null>;
   libraryMime(relativePath: string): string;
+  /** Live, link-checked handoff copy of this instance; null when expired or deleted. */
+  openHandoff?(instance: string, ref: string): Promise<{ file: FileHandle; size: number; mimeType: string } | null>;
 }): PluginFileAccess {
   const open = async (instance: string, uri: string) => {
     let path: string | null = null,
       mimeType: string;
+    if (uri.startsWith('handoff:')) return (await deps.openHandoff?.(instance, uri)) ?? null;
     if (uri.startsWith('cindy-media:')) {
       const media = resolveSafe(uri);
       if (!(await ghostCanRead(media.hash, instance))) return null;

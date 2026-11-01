@@ -37,6 +37,7 @@ import {
   type GhostControlPointFailureAction,
   type GhostControlPointId,
   type GhostControlPointResult,
+  type GhostModelRoute,
   type GhostDidEventData,
   type GhostDidEventName,
   type GhostEventActivityData,
@@ -54,12 +55,26 @@ import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
+/** 插件回传的模型路由：只取已知字段并限长，是否可用由宿主按用户已连接的模型另行校验。 */
+function parseModelRoute(value: unknown): GhostModelRoute | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const r = value as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() && v.length <= 256 ? v.trim() : undefined);
+  const agentKind = r.agentKind === 'cc' || r.agentKind === 'codex' || r.agentKind === 'pi' ? r.agentKind : undefined;
+  const model = text(r.model);
+  const providerId = text(r.providerId);
+  if (!agentKind || !model || !providerId) return undefined;
+  const effort = text(r.effort);
+  return { agentKind, model, providerId, ...(effort ? { effort } : {}) };
+}
+
 /** block 理由展示上限(超长截断,防意识用理由塞小作文)。 */
 const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  route?: GhostModelRoute;
   reason?: string;
   text?: string;
   html?: string;
@@ -539,6 +554,16 @@ export class GhostSubscriptionGateway {
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
+    if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
+      this.deps.log?.info('control point routed', { ghostId, point, agentKind: verdict.route.agentKind, model: verdict.route.model });
+      return {
+        action: 'route',
+        ghostId,
+        ghostName: ghost.manifest.name,
+        route: verdict.route,
+        reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
+      };
+    }
     if ((verdict.action === 'skip' || verdict.action === 'block') &&
         (spec.actions as readonly string[]).includes(verdict.action)) {
       this.deps.log?.info('control point stopped', { ghostId, point, action: verdict.action });
@@ -550,7 +575,7 @@ export class GhostSubscriptionGateway {
         failure: false,
       };
     }
-    // allow 与本节点不支持的动作(rewrite/render)都只算不反对。
+    // allow、格式不对的 route 与本节点不支持的动作都只算不反对。
     return { action: 'allow' };
   }
 
@@ -741,7 +766,8 @@ export class GhostSubscriptionGateway {
     if (typeof payload !== 'object' || payload === null) return;
     const p = payload as Record<string, unknown>;
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip') return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route') return;
+    const route = p.action === 'route' ? parseModelRoute(p.route) : undefined;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
     this.pendingHooks.delete(p.hookId);
@@ -751,6 +777,7 @@ export class GhostSubscriptionGateway {
       ...(typeof p.text === 'string' ? { text: p.text } : {}),
       ...(typeof p.html === 'string' ? { html: p.html } : {}),
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
+      ...(route ? { route } : {}),
     });
   }
 

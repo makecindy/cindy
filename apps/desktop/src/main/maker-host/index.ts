@@ -25,7 +25,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
-import { setPluginModelPickerAgentProvider } from '../cindy-brain/ghostModelPicker.js';
+import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -424,6 +424,7 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
+setPluginRouteAgentStatusProvider(async (agent) => _maker?.getAgentStatus(agent as AgentKind));
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
 
 export function handleRemoteWorkerBridge(

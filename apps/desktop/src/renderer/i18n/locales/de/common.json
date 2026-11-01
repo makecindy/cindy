@@ -1228,7 +1228,6 @@
     "clipboardSyncSkipped": "Dieses Format wird bei der Synchronisierung der Zwischenablage nicht unterstützt und wurde übersprungen.",
     "clipboardSyncTooLarge": "Der Inhalt überschreitet die Größenbegrenzung für die Synchronisierung der Zwischenablage und wurde übersprungen.",
     "clipboardSyncPermission": "Die Zwischenablagesynchronisierung benötigt Zugriff zum Einfügen. Erlaube ihn und kehre dann zu diesem Fenster zurück, um fortzufahren.",
-    "clipboardSyncWaiting": "Die Zwischenablage des Remote-Computers ist derzeit nicht verfügbar (möglicherweise ist sie gesperrt). Die Synchronisierung wird automatisch fortgesetzt.",
     "lockingOnExit": "Computer wird gesperrt…",
     "idleLock": "Bei Inaktivität trennen und sperren",
     "idleNever": "Nie",
@@ -5420,7 +5419,6 @@
         "title": "Meine Browser-Anmeldedaten verwenden",
         "description": "Der Agent öffnet Websites mit deinen angemeldeten Chrome-, Edge- oder Brave-Konten.",
         "toggleAria": "Meine Browser-Anmeldedaten verwenden",
-        "unavailableEmbedded": "Gilt nur für den Standalone-Browser. Durch das Ausschalten werden die kopierten Anmeldedateien gelöscht.",
         "confirmTitle": "Dem Agent Zugriff auf deine Browser-Anmeldedaten erlauben?",
         "confirmDescription": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
         "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Zum Lesen der Chrome-Anmeldedateien ist außerdem Festplattenvollzugriff erforderlich. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
@@ -7532,10 +7530,14 @@
       "controlPoints": {
         "title": "Prüfungen vor der Ausführung",
         "description": "Dieses Plugin kann Automatisierungen oder Routinen vor dem Start prüfen. Es kann einen Lauf überspringen oder stoppen, aber nie für dich genehmigen.",
+        "titleWithStartTask": "Wann dieses Plugin eingreift",
+        "descriptionWithStartTask": "Es greift nur bei Aufgaben ein, für die du es gewählt hast: Vor einem Lauf kann es ihn nur überspringen oder stoppen, bei einer neuen Aufgabe wählt es einmal ein Modell für die erste Nachricht. Es genehmigt nie etwas für dich.",
         "usage": "Wähle es beim Bearbeiten einer Automatisierung oder Routine unter Vorabprüfung aus.",
+        "usageStartTask": "So nutzt du es: Wähle in der Modellauswahl einer neuen Aufgabe ein Modell, das dieses Plugin bereitstellt.",
         "points": {
           "will-schedule-run": "Vor der Ausführung einer Automatisierung",
-          "will-routine-run": "Vor der Ausführung einer Routine eines Teammitglieds"
+          "will-routine-run": "Vor der Ausführung einer Routine eines Teammitglieds",
+          "will-start-task": "Wenn eine neue Aufgabe startet"
         },
         "inactive": "Noch nicht verfügbar. Erlaube es beim Aktualisieren oder Neuinstallieren dieses Plugins."
       },
@@ -7612,6 +7614,8 @@
         "subscribeScheduleRunDetail": "Automatisierungen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht Name und Anweisungen und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
         "subscribeRoutineRun": "Kann ausgewählte Teammate-Routinen vor dem Start prüfen",
         "subscribeRoutineRunDetail": "Routinen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht die Anweisungen und auslösenden Ereignisse und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
+        "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
+        "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Es wählt einmal; das Modell ändert sich während der Aufgabe nicht.",
         "card": "Stellt Nachrichtenkarten dar",
         "cardExternalLink": "Karten können externe Links enthalten, die nach Bestätigung deinen Browser öffnen",
         "cardExternalLinkDetail": "Beim Anklicken eines Kartenlinks erscheint ein Bestätigungsdialog. Die URL öffnet sich erst nach deiner Zustimmung im Systembrowser. Nur http/https-Adressen sind erlaubt.",
@@ -7802,6 +7806,22 @@
         "reveal": "In Aufgabenliste anzeigen",
         "revealed": "Aufgabe wird in der Aufgabenliste angezeigt",
         "revealFailed": "Aufgabe konnte nicht in der Aufgabenliste angezeigt werden"
+      },
+      "handoff": {
+        "title": "In Chats an dieses Plugin übergebene Dateien",
+        "description": "Kopien von Dateien, die du in Chats an dieses Plugin übergeben hast. Jede Kopie wird automatisch gelöscht, wenn sie 7 Tage lang nicht verwendet wurde.",
+        "empty": "In Chats wurden diesem Plugin noch keine Dateien übergeben.",
+        "loadFailed": "Die Dateiliste konnte nicht geladen werden. Versuche es später erneut.",
+        "refresh": "Aktualisieren",
+        "openInFinder": "Im Finder öffnen",
+        "openInExplorer": "Im Datei-Explorer öffnen",
+        "meta": "{{size}} · Übergeben am {{handedAt}} · Automatisch gelöscht am {{expiresAt}}",
+        "delete": "Löschen",
+        "deleteNamed": "{{name}} löschen",
+        "deleteTitle": "Diese Datei löschen?",
+        "deleteDescription": "Nach dem Löschen können das Plugin und geöffnete Seiten „{{name}}“ nicht mehr verwenden. Dies kann nicht rückgängig gemacht werden.",
+        "deleteFailed": "Die Datei konnte nicht gelöscht werden. Versuche es später erneut.",
+        "cancel": "Abbrechen"
       },
       "library": {
         "title": "Dauerhafte Bibliothek",
@@ -12741,6 +12761,7 @@
     "cindyServiceUnavailable": "Der Cindy-Sprachdienst ist nicht verfügbar. Prüfe dein Netzwerk oder wechsle die Dienstquelle.",
     "asrServiceUnavailable": "Verbindung zum Spracherkennungsdienst fehlgeschlagen. Prüfe dein Netzwerk und versuche es erneut.",
     "emptyTranscript": "Sprache wurde erkannt, aber kein Text. Versuche es erneut.",
+    "speakerFiltered": "Stimme einer anderen Person ignoriert",
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
@@ -12766,6 +12787,14 @@
     "verificationFailed": "Cindy konnte nicht bestätigen, ob die ChatGPT-Anmeldung wiederhergestellt ist. Prüfe es erneut."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "hat für diese Aufgabe gewählt:",
+      "kept": {
+        "no-opinion": "{{plugin}} hat das Modell diesmal nicht geändert, diese Aufgabe nutzt",
+        "failed": "{{plugin}} hat nicht rechtzeitig geantwortet, diese Aufgabe nutzt",
+        "unavailable-route": "{{plugin}} hat ein nicht nutzbares Modell gewählt, diese Aufgabe nutzt"
+      }
+    },
     "imageDelivery": {
       "stored": "Bild übertragen",
       "failed": "Bildübertragung fehlgeschlagen. Versuche erneut, das vorhandene Bild zu übertragen.",
@@ -15849,6 +15878,7 @@
       "titleRevealPath": "Darf der Agent den lokalen Pfad dieser Mediendatei erhalten?",
       "count": "{{count}} Dateien",
       "descriptionAttachments": "Die folgenden Dateien liegen außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, werden sie diesem Plugin übergeben (es erhält nur Inhaltsfingerabdrücke, niemals Pfade).",
+      "descriptionHandoff": "Die folgenden Dateien liegen außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, erhält das Plugin Kopien davon (niemals die Pfade); die Kopien werden automatisch gelöscht, wenn sie 7 Tage lang nicht verwendet wurden.",
       "descriptionDir": "Das folgende Verzeichnis bzw. die folgende Datei liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, werden die Dateien diesem Plugin zum Hochladen übergeben (es erhält nur ein einmaliges Ticket, niemals Pfade).",
       "descriptionSaveDir": "Das folgende Verzeichnis liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, kann dieses Plugin heruntergeladene Dateien darin speichern (vorhandene Dateien werden niemals überschrieben).",
       "descriptionRevealPath": "Der Pfad wird erst nach deiner Zustimmung an den aktuellen Agent übergeben und in den Gesprächsverlauf aufgenommen. Gekoppelte Geräte können diesen Verlauf synchronisieren. Dadurch erhält kein Plugin Zugriff auf die Datei.",
@@ -17737,6 +17767,14 @@
         "skillDisabled": "Skill „{{title}}“ deaktiviert",
         "skillMerged": "Skill „{{title}}“ mit „{{into}}“ zusammengeführt und deaktiviert"
       }
+    },
+    "remote": {
+      "pause": "Routine pausieren",
+      "resume": "Routine fortsetzen",
+      "addSchedule": "Zeitplan hinzufügen",
+      "addInterval": "Intervall hinzufügen",
+      "addEvent": "Ereignisauslöser hinzufügen",
+      "filterField": "Filterfeld"
     }
   },
   "cindyMakeDoctor": {

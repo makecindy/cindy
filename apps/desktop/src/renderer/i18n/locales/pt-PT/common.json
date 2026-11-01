@@ -1245,7 +1245,6 @@
     "clipboardSyncSkipped": "Este formato não é suportado pela sincronização da área de transferência e foi ignorado.",
     "clipboardSyncTooLarge": "O conteúdo excede o limite de tamanho da sincronização da área de transferência e foi ignorado.",
     "clipboardSyncPermission": "A sincronização da área de transferência precisa de acesso para colar. Permita-o e regresse a esta janela para retomar.",
-    "clipboardSyncWaiting": "A área de transferência do computador remoto não está disponível neste momento (pode estar bloqueado). A sincronização será retomada automaticamente.",
     "lockingOnExit": "A bloquear o computador…",
     "idleLock": "Desligar e bloquear por inatividade",
     "idleNever": "Nunca",
@@ -5475,7 +5474,6 @@
         "title": "Usar os meus inícios de sessão do navegador",
         "description": "O Agent abrirá sites com as suas contas com sessão iniciada no Chrome, Edge ou Brave.",
         "toggleAria": "Usar os meus inícios de sessão do navegador",
-        "unavailableEmbedded": "Aplica-se apenas ao navegador autónomo. Ao desativar, os ficheiros de início de sessão copiados são eliminados.",
         "confirmTitle": "Permitir que o Agent use os seus inícios de sessão do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
         "confirmDescriptionMac": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. A leitura dos ficheiros de início de sessão do Chrome também requer Acesso total ao disco. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
@@ -7599,10 +7597,14 @@
       "controlPoints": {
         "title": "Verificações antes da execução",
         "description": "Este plugin pode verificar automatizações ou rotinas antes de serem executadas. Pode ignorar ou parar uma execução, nunca aprová-la por ti.",
+        "titleWithStartTask": "Quando este plugin intervém",
+        "descriptionWithStartTask": "Só intervém nas tarefas em que o escolheste: antes de uma execução, só pode ignorá-la ou pará-la; numa tarefa nova, escolhe um modelo uma vez, para a primeira mensagem. Nunca aprova nada por ti.",
         "usage": "Para o usar, escolhe-o em Verificação prévia ao editar uma automatização ou rotina.",
+        "usageStartTask": "Para usar, escolha um modelo fornecido por ele no seletor de modelos de uma nova tarefa.",
         "points": {
           "will-schedule-run": "Antes de executar uma automatização",
-          "will-routine-run": "Antes de executar uma rotina de um colega"
+          "will-routine-run": "Antes de executar uma rotina de um colega",
+          "will-start-task": "Ao iniciar uma nova tarefa"
         },
         "inactive": "Ainda indisponível. Permite-o ao atualizar ou reinstalar este plugin."
       },
@@ -7679,6 +7681,8 @@
         "subscribeScheduleRunDetail": "As automatizações em que o escolheres em Verificação prévia consultam-no primeiro. Vê o nome e as instruções e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de serem executadas",
         "subscribeRoutineRunDetail": "As rotinas em que o escolheres em Verificação prévia consultam-no primeiro. Vê as instruções e os eventos que as acionaram e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
+        "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo fornecido por ele, lê a primeira mensagem e escolhe um dos seus modelos ligados. Escolhe uma vez; o modelo não muda durante a tarefa.",
         "card": "Apresenta cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar ligações externas que abrem o navegador após confirmação",
         "cardExternalLinkDetail": "Clicar numa ligação de um cartão apresenta uma caixa de diálogo de confirmação; o URL só abre no navegador do sistema após a sua aprovação. Apenas são permitidos endereços http/https.",
@@ -7869,6 +7873,22 @@
         "reveal": "Mostrar na lista de tarefas",
         "revealed": "Tarefa apresentada na lista de tarefas",
         "revealFailed": "Não foi possível mostrar a tarefa na lista de tarefas"
+      },
+      "handoff": {
+        "title": "Ficheiros entregues a este plugin em conversas",
+        "description": "Cópias dos ficheiros que entregou a este plugin em conversas. Cada cópia é eliminada automaticamente após 7 dias sem utilização.",
+        "empty": "Ainda não foram entregues ficheiros a este plugin numa conversa.",
+        "loadFailed": "Não foi possível carregar a lista de ficheiros. Tente novamente mais tarde.",
+        "refresh": "Atualizar",
+        "openInFinder": "Abrir no Finder",
+        "openInExplorer": "Abrir no Explorador de Ficheiros",
+        "meta": "{{size}} · Entregue em {{handedAt}} · Eliminado automaticamente em {{expiresAt}}",
+        "delete": "Eliminar",
+        "deleteNamed": "Eliminar {{name}}",
+        "deleteTitle": "Eliminar este ficheiro?",
+        "deleteDescription": "Após a eliminação, o plugin e as páginas abertas deixam de poder usar «{{name}}». Não é possível anular.",
+        "deleteFailed": "Não foi possível eliminar o ficheiro. Tente novamente mais tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -12843,6 +12863,7 @@
     "cindyServiceUnavailable": "O serviço de voz do Cindy está indisponível. Verifique a rede ou altere a origem do serviço.",
     "asrServiceUnavailable": "O serviço de reconhecimento de voz não conseguiu estabelecer ligação. Verifique a rede e tente novamente.",
     "emptyTranscript": "Foi detetada fala, mas não foi reconhecido texto. Tente novamente.",
+    "speakerFiltered": "Voz de outra pessoa ignorada",
     "connectionInterrupted": "A ligação de voz foi interrompida. Verifique a rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz deixou de devolver resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — pode editá-lo diretamente.",
@@ -12868,6 +12889,14 @@
     "verificationFailed": "O Cindy não conseguiu confirmar se o início de sessão no ChatGPT foi restabelecido. Verifique novamente."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "escolheu para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa"
+      }
+    },
     "imageDelivery": {
       "stored": "Imagem entregue",
       "failed": "Não foi possível entregar a imagem. Tente transferir novamente a imagem existente.",
@@ -15993,6 +16022,7 @@
       "titleRevealPath": "Permitir que o Agent receba o caminho local deste ficheiro multimédia?",
       "count": "{{count}} ficheiros",
       "descriptionAttachments": "Os ficheiros abaixo estão fora do diretório de trabalho desta sessão. Se permitir, serão entregues a este plugin (que recebe apenas impressões digitais do conteúdo, nunca caminhos).",
+      "descriptionHandoff": "Os ficheiros abaixo estão fora do diretório de trabalho desta sessão. Se permitir, o plugin recebe cópias deles (nunca os caminhos); as cópias são eliminadas automaticamente após 7 dias sem utilização.",
       "descriptionDir": "O diretório/ficheiro abaixo está fora do diretório de trabalho desta sessão. Se permitir, os seus ficheiros serão entregues a este plugin para carregamento (que recebe apenas um comprovativo de utilização única, nunca caminhos).",
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, este plugin poderá guardar nele ficheiros transferidos (os ficheiros existentes nunca são substituídos).",
       "descriptionRevealPath": "O caminho só é devolvido ao Agent atual depois de dar permissão e passará a constar do registo da conversa; os dispositivos emparelhados poderão sincronizar esse registo. Isto não concede a nenhum plugin acesso ao ficheiro.",
@@ -17901,6 +17931,14 @@
       "pendingTurns_many": "{{count}} trocas",
       "lastLearned_many": "{{count}} alterações",
       "readTurns_many": "{{count}} trocas lidas"
+    },
+    "remote": {
+      "pause": "Pausar rotina",
+      "resume": "Retomar rotina",
+      "addSchedule": "Adicionar horário",
+      "addInterval": "Adicionar intervalo",
+      "addEvent": "Adicionar acionador de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

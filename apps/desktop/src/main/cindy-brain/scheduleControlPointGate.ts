@@ -32,7 +32,8 @@ export async function screenScheduleRun(
     firedAt: ctx.firedAt,
   }, target);
   if (ctx.signal.aborted) throw new DOMException('aborted', 'AbortError');
-  if (gate.action === 'allow') return null;
+  // route 只属于开新任务时，运行前不会出现，按不反对处理。
+  if (gate.action === 'allow' || gate.action === 'route') return null;
   const who = gate.failure
     ? `Plugin "${gate.ghostName}" was unavailable or did not answer; handled by this task's failure setting`
     : gate.reason ? `Stopped by plugin "${gate.ghostName}": ${gate.reason}` : `Stopped by plugin "${gate.ghostName}"`;

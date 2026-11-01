@@ -5,7 +5,7 @@ import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
-import type { GhostControlPointCandidate, GhostControlPointInfo } from '../shared/ghost';
+import type { GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
 import {
   FAVORITE_HOST_READY,
   FAVORITE_HOST_REQUEST,
@@ -1471,8 +1471,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
       ipcRenderer.invoke('ghosts:control-points:get', id),
     /** 任务「前置检查」可选的插件(仅本机窗口,不进 device-link)。 */
-    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run'): Promise<GhostControlPointCandidate[]> =>
+    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task'): Promise<GhostControlPointCandidate[]> =>
       ipcRenderer.invoke('ghosts:control-points:candidates', point),
+    /** 新任务「让插件选」：第一条消息发出前问一次插件用哪个模型(仅本机窗口)。 */
+    /** 新任务模型选择器里的插件模型(仅本机窗口,不进 device-link)。 */
+    listPickerModels: (): Promise<GhostPickerModel[]> => ipcRenderer.invoke('ghosts:models:list'),
+    routeNewTask: (pluginId: string, data: GhostStartTaskPointData): Promise<GhostStartTaskRouteResult> =>
+      ipcRenderer.invoke('ghosts:start-task:route', pluginId, data),
     /** 详情页「后台任务」:本插件转入后台的任务(仅本机窗口,不进 device-link)。 */
     listBackgroundTasks: (id: string): Promise<{
       items: Array<{ taskId: string; title: string; status: 'active' | 'archived'; updatedAt: number; running: boolean }>;
@@ -1617,6 +1622,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearUsage: (subjectId: string | null): Promise<void> => ipcRenderer.invoke('ghosts:usage-clear', subjectId),
     libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
       ipcRenderer.invoke('ghosts:library-overview', id),
+    handoffList: (id: string): Promise<import('../shared/ghost').GhostHandoffFile[]> =>
+      ipcRenderer.invoke('ghosts:handoff-list', id),
+    handoffFolder: (id: string): Promise<string | null> => ipcRenderer.invoke('ghosts:handoff-folder', id),
+    handoffDelete: (id: string, ref: string): Promise<{ existed: boolean }> =>
+      ipcRenderer.invoke('ghosts:handoff-delete', id, ref),
     libraryPickLocation: (
       id: string,
     ): Promise<{
@@ -4568,6 +4578,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolvePathBatch: (params: {
     hrefs: string[];
     workingDir: string;
+    /** Re-walk hrefs whose cached answer is `none` / `multiple`. */
+    revalidateNegative?: boolean;
   }): Promise<
     Record<
       string,

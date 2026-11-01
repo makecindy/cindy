@@ -1216,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暂不支持剪贴板同步，已略之",
     "clipboardSyncTooLarge": "内容逾剪贴板同步之大小上限，已略之",
     "clipboardSyncPermission": "剪贴板同步须粘贴之权，授之后归此窗口即复",
-    "clipboardSyncWaiting": "远方之机的剪贴板暂不能访问（或已锁定屏幕），解锁后将自动续同步。",
     "lockingOnExit": "方锁定此机…",
     "idleLock": "闲置后断连并锁定屏幕",
     "idleNever": "永不",
@@ -5377,7 +5376,6 @@
         "title": "用我之浏览器登录态",
         "description": "Agent 将以君于 Chrome、Edge 或 Brave 中已登录之身分造访网站。",
         "toggleAria": "用我之浏览器登录态",
-        "unavailableEmbedded": "仅于独立浏览器生效。关之则删已拷贝之登录档。",
         "confirmTitle": "许 Agent 用君之浏览器登录态乎？",
         "confirmDescription": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。可随时关之，拷贝即删。",
         "confirmDescriptionMac": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。读 Chrome 登录档另需「完全磁盘访问权」。可随时关之，拷贝即删。",
@@ -7613,7 +7611,9 @@
         "subscribeRoutineRun": "可于君所择之同僚例行差事运行前行检",
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
-        "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。"
+        "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。",
+        "subscribeStartTask": "可为新差事择模型",
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。唯择一次，任务中途不易模型。"
       },
       "connections": {
         "confirmTitle": "增连接地址",
@@ -7749,6 +7749,22 @@
         "reveal": "显于差事录",
         "revealed": "差事已显于差事录",
         "revealFailed": "未能令差事显于差事录"
+      },
+      "handoff": {
+        "title": "对话中交予法器之卷",
+        "description": "此乃君于对话中交予此法器之卷之副本，七日不用则自删。",
+        "empty": "对话中尚未交卷予此法器。",
+        "loadFailed": "卷之列表读取未成，请稍后再试。",
+        "refresh": "重整",
+        "openInFinder": "于访达中启之",
+        "openInExplorer": "于资源管理器中启之",
+        "meta": "{{size}} · 交于 {{handedAt}} · {{expiresAt}} 自删",
+        "delete": "删",
+        "deleteNamed": "删 {{name}}",
+        "deleteTitle": "删此卷乎？",
+        "deleteDescription": "删之，则法器与已开之页皆不得复用「{{name}}」，且不可复原。",
+        "deleteFailed": "删除未成，请稍后再试。",
+        "cancel": "罢"
       },
       "library": {
         "title": "久藏之库",
@@ -8202,10 +8218,14 @@
         "inactive": "尚不可用。更新或重装此法器时许之即可。",
         "points": {
           "will-routine-run": "同僚例行差事运行前",
-          "will-schedule-run": "自动化运行前"
+          "will-schedule-run": "自动化运行前",
+          "will-start-task": "开新差事时"
         },
         "title": "行前检查",
-        "usage": "用法：编辑自动化或例行差事时，于「预检」择之。"
+        "usage": "用法：编辑自动化或例行差事时，于「预检」择之。",
+        "descriptionWithStartTask": "仅于君所择之差事介入：运行前仅能略过或止此番，开新差事时仅为首言择模型一次。皆不能代君准允。",
+        "titleWithStartTask": "法器介入之时",
+        "usageStartTask": "用法：于新任务之模型择器中，择其所供之模型。"
       }
     },
     "mcp": {
@@ -12688,6 +12708,7 @@
     "cindyServiceUnavailable": "Cindy 官方声服暂不可用，请察网络，或易其服源。",
     "asrServiceUnavailable": "识声之服连接未成，请察网络，或稍后再试。",
     "emptyTranscript": "已闻其声，而未识一字，请再试。",
+    "speakerFiltered": "他人之声已略",
     "connectionInterrupted": "声之连接中断，请察网络后再试。",
     "recognitionStalled": "识声不复有所回，请再试。",
     "transcriptKept": "{{message}}（所识之文已存，可径修之）",
@@ -13863,6 +13884,14 @@
       "closeDescription": "将止而删此番追问，主差事不受其扰。",
       "closeConfirm": "阖而删之",
       "closeFailed": "删追问未成，请稍后再试。"
+    },
+    "pluginModelRoute": {
+      "kept": {
+        "failed": "{{plugin}} 未及回应，此差事用",
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用",
+        "unavailable-route": "{{plugin}} 所择之模型今不可用，此差事用"
+      },
+      "routed": "为此差事择用"
     }
   },
   "ccAgent": {
@@ -15781,6 +15810,7 @@
       "titleRevealPath": "许 Agent 取此媒体卷于此机之路径？",
       "count": "{{count}} 卷",
       "descriptionAttachments": "下列之卷在今差事之工作目录外。许之，则交此法器处之(其唯得内容指纹，不得路径)。",
+      "descriptionHandoff": "下列之卷在今差事之工作目录外。许之，则此法器得其副本(不得路径)，副本七日不用则自删。",
       "descriptionDir": "下列目录/卷在今差事之工作目录外。许之，则其中之卷交此法器上呈(其唯得一次性票据，不得路径)。",
       "descriptionSaveDir": "下列目录在今差事之工作目录外。许之，此法器可将取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路径唯于君许之后返予今之 Agent，并入言谈录；配对之设备或同步此录。此举不授法器读卷之权柄。",
@@ -17668,7 +17698,15 @@
         "skillMerged": "并技艺「{{title}}」入「{{into}}」而停之"
       }
     },
-    "checkSource": "检查之法"
+    "checkSource": "检查之法",
+    "remote": {
+      "pause": "暂停例行差事",
+      "resume": "续行例行差事",
+      "addSchedule": "增定时条件",
+      "addInterval": "增间隔条件",
+      "addEvent": "增事件条件",
+      "filterField": "筛选字段"
+    }
   },
   "cindyMakeDoctor": {
     "description": "察此机建置 Cindy 所需之环境。用法：/cindy-make-doctor",

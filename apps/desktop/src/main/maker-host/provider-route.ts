@@ -44,6 +44,7 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { getActiveCatalog, isXdCodexAnthropicBridgeModel } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { sessionModelInterface, assertModelInterfaceAvailable } from './session-model-interface.js';
+import { routeLookupModelId } from './claude-model-id.js';
 import { getSessionProvider } from './session-provider-store.js';
 
 /**
@@ -350,14 +351,19 @@ export function buildRouteDecision(...args: Parameters<typeof buildRouteDecision
   const selected = args[0].modelInterface;
   if (!decision || !selected || decision.localHandler) return decision;
   return { ...decision, compatibilityProfiles: selected.compatibility,
-    transformRequestBody: (body) => {
-      let parsed: unknown;
-      try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
-      const object = parsed as Record<string, unknown>;
-      if (typeof object.model === 'string') object.model = selected.wireModelId;
-      return { body: Buffer.from(JSON.stringify(parsed)) };
-    },
+    transformRequestBody: rewriteRequestBodyModel(selected.wireModelId),
+  };
+}
+
+/** Rewrites the JSON body's model right before forwarding; non-JSON bodies pass through. */
+export function rewriteRequestBodyModel(model: string): NonNullable<RoutingDecision['transformRequestBody']> {
+  return (body) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
+    const object = parsed as Record<string, unknown>;
+    if (typeof object.model === 'string') object.model = model;
+    return { body: Buffer.from(JSON.stringify(parsed)) };
   };
 }
 
@@ -1072,12 +1078,14 @@ export async function resolveImplicitLocalBridgeRouteResolution(
   }
   const source = await connectedDefaultProviderForModel(catalogModelId, agent);
   if (source.kind !== 'provider') return source;
-  const routing = providerRoutingForModel(source.provider, agent, modelId);
+  // cc sends `foo[1m]` for a 1M window while the Provider lists `foo` (and its own route)
+  const lookupModelId = agent === 'claude-code' ? routeLookupModelId(source.provider, modelId) : modelId;
+  const routing = providerRoutingForModel(source.provider, agent, lookupModelId);
   const wire = implicitBridgeWire(routing, agent);
   if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && wire !== 'google-generative-ai' && !(agent === 'claude-code' && wire === 'openai-responses')) {
     return { kind: 'none' };
   }
-  const route = await resolveProviderRouteById(source.provider.id, agent, modelId);
+  const route = await resolveProviderRouteById(source.provider.id, agent, lookupModelId);
   return route ? { kind: 'route', route } : { kind: 'none' };
 }
 

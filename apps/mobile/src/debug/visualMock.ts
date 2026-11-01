@@ -649,7 +649,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : null,
+        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });

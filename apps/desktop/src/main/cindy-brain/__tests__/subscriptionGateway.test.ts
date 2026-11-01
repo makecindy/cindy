@@ -1551,4 +1551,36 @@ describe('control points', () => {
     await vi.advanceTimersByTimeAsync(30_000 + 10);
     expect(await allowed).toEqual({ action: 'allow' });
   });
+
+  // Rule (2026-10-31): only the new-task point may pick a model; the route is reduced to the four
+  // known fields before Main validates it, and a route sent to a run point is just "no objection".
+  it('returns a sanitized route only at the new-task point', async () => {
+    const start = 'will-start-task' as const;
+    const startData = { modelId: 'auto', text: 'fix the login bug', attachmentCount: 0, route: { agentKind: 'codex' as const, model: 'm1', providerId: 'p' } };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [start, point] }), approvedControlPoints: [start, point] }],
+    });
+    running.add('r1');
+    const verdict = (index: number, route: unknown) => gw.handleVerdict('r1', {
+      type: 'event-verdict', hookId: (sent[index].payload as { hookId: string }).hookId, action: 'route', reason: 'code', route,
+    });
+
+    const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', endpoint: 'https://evil' });
+    expect(await routed).toEqual({
+      action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high' },
+    });
+
+    const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(1, { agentKind: 'gpt', model: 'opus', providerId: 'anthropic' });
+    expect(await malformed).toEqual({ action: 'allow' });
+
+    const runPoint = gw.screenControlPoint(point, data, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
+    expect(await runPoint).toEqual({ action: 'allow' });
+  });
 });

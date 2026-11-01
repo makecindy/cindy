@@ -99,6 +99,7 @@
     "incomplete": "A entrada por voz não foi concluída. Tente novamente.",
     "missingRefinerTargetProvider": "O refinamento de voz está indisponível. Entre novamente em {{appName}} e tente de novo.",
     "emptyTranscript": "O reconhecimento de fala não retornou texto. Grave novamente.",
+    "speakerFiltered": "Voz de outra pessoa ignorada",
     "connectionInterrupted": "A conexão de voz foi interrompida. Verifique sua rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz parou de retornar resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — você pode editá-lo diretamente.",

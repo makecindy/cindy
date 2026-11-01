@@ -2,6 +2,7 @@ import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validat
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
+import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
 import {
@@ -15,7 +16,7 @@ import {
 } from '@cindy/plugin-protocol';
 import { PLUGIN_STORAGE_PART_RE } from './pluginStoragePartPattern.js';
 import { PLUGIN_TASK_PERMISSION_MODES } from './pluginTasks.js';
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isClassicalLocale, modernLocaleOf, type SupportedLocale } from './locale';
 
 /**
  * 意识(Ghost,.cindy 文件)的清单数据模型与校验 —— main / renderer 共用。
@@ -700,9 +701,11 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route';
+
 export interface GhostControlPointSpec {
-  /** 插件可返回的裁决(allow 恒可用)。 */
-  actions: readonly ('allow' | 'skip' | 'block')[];
+  /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
+  actions: readonly GhostControlPointAction[];
   /** 用户可选的出错处理。 */
   failureActions: readonly GhostControlPointFailureAction[];
   /** 任务编辑页的默认出错处理；与脚本前置检查一致，出错即停止并记为失败。 */
@@ -733,6 +736,20 @@ export const GHOST_CONTROL_POINTS = {
     permissionKey: 'subscribe:hooks:routine-run',
     labelKey: 'subscribeRoutineRun',
     detailKey: 'subscribeRoutineRunDetail',
+  },
+  /**
+   * 开新任务时(2026-10-31)：用户在新任务的模型选择器里选了「让插件选」，第一条消息发出前
+   * 问一次插件用哪个模型；之后整个任务不再换(保住缓存)，伙伴对话不问。插件只能从用户已
+   * 连接的模型里选，宿主校验；出错一律用用户原来的模型，用户在等，时限短。
+   */
+  'will-start-task': {
+    actions: ['allow', 'route'],
+    failureActions: ['allow'],
+    defaultOnFailure: 'allow',
+    timeoutMs: 8_000,
+    permissionKey: 'subscribe:hooks:start-task',
+    labelKey: 'subscribeStartTask',
+    detailKey: 'subscribeStartTaskDetail',
   },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
@@ -1707,6 +1724,8 @@ export interface GhostManifest {
   subscribe?: GhostSubscribeNeeds;
   /** Autonomous publishing of declared events into user-configured routines. */
   routineEvents?: GhostRoutineEvents;
+  /** Models this plugin may add to the model picker; the list is published at runtime. */
+  models?: GhostModelsNeeds;
   /**
    * 网络能力与范围。
    * 域名白名单 + 凭证声明,插件详情逐项展示,运行期主机代发并守门。
@@ -3336,6 +3355,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
+  'models',
   'schemaVersion',
   'id',
   'name',
@@ -3537,14 +3557,15 @@ function dropEmptyLegacyCapabilitySlots(
   });
 }
 
-/** 当前宿主语言在插件未提供时固定回退英文。 */
+/** 文言界面使用对应现代语言资源；插件未提供时固定回退英文。 */
 export function ghostLocalePathFor(
   manifest: GhostManifest,
   locale: string | undefined | null,
 ): string | null {
   if (!manifest.locales) return null;
-  const manifestLocale = (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
-    ? locale as GhostLocale
+  const resourceLocale = isClassicalLocale(locale) ? modernLocaleOf(locale) : locale;
+  const manifestLocale = (GHOST_LOCALES as readonly string[]).includes(resourceLocale ?? '')
+    ? resourceLocale as GhostLocale
     : null;
   return (
     (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null
@@ -3552,10 +3573,16 @@ export function ghostLocalePathFor(
 }
 
 /** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
-export function ghostAppContextLocale(locale: string | undefined | null): GhostLocale {
-  return (GHOST_LOCALES as readonly string[]).includes(locale ?? '')
-    ? (locale as GhostLocale)
+const GHOST_APP_CONTEXT_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
+export function ghostAppContextLocale(locale: string | undefined | null): (typeof GHOST_APP_CONTEXT_LOCALES)[number] {
+  return (GHOST_APP_CONTEXT_LOCALES as readonly string[]).includes(locale ?? '')
+    ? (locale as (typeof GHOST_APP_CONTEXT_LOCALES)[number])
     : 'en';
+}
+
+/** Shared by /app-context and host-context-changed; authored plugin resources use modern locales. */
+export function ghostAppContextLanguages(locale: SupportedLocale) {
+  return { locale: ghostAppContextLocale(locale), uiLocale: modernLocaleOf(locale) };
 }
 
 /** 把当前宿主语言附到运行时清单视图；不支持的输入固定归一到英文。 */
@@ -5432,6 +5459,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
   }
   const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
+  const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
+  if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -5475,6 +5504,10 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
           '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
       };
     }
+  }
+
+  if (models?.types.includes('route') && !(subscribe?.hooks as readonly string[] | undefined)?.includes('will-start-task')) {
+    return { ok: false, reason: 'A route model needs subscribe.hooks to include will-start-task' };
   }
 
   // network 槽详单:与 slots 含 'network' 成对(有详单必有槽;有槽
@@ -6630,6 +6663,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(node !== undefined ? { node } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
+      ...(models !== undefined ? { models } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(browserExtension !== undefined ? { browserExtension } : {}),
@@ -6873,6 +6907,11 @@ export type GhostPipeHostRequest =
       kind: 'control-points';
     };
 
+/** 新任务「让插件选」的结果(Host 界面用)。kept = 用用户原来选的模型。 */
+export type GhostStartTaskRouteResult =
+  | { outcome: 'routed'; pluginName: string; route: GhostModelRoute; modelName: string; reason: string }
+  | { outcome: 'kept'; pluginName: string; why: 'no-opinion' | 'failed' | 'unavailable-route'; modelName: string };
+
 /** 任务「前置检查」可选的插件(Host 界面用)。 */
 export interface GhostControlPointCandidate {
   /** 插件实例 id,任务里保存的就是它。 */
@@ -6883,7 +6922,7 @@ export interface GhostControlPointCandidate {
 /** `host-request {kind:'control-points'}` 的单项。 */
 export interface GhostControlPointInfo {
   id: GhostControlPointId;
-  actions: readonly ('allow' | 'skip' | 'block')[];
+  actions: readonly GhostControlPointAction[];
   timeoutMs: number;
   /** 本插件 manifest 是否声明了该节点。 */
   declared: boolean;
@@ -7528,7 +7567,9 @@ export interface GhostAppContextResult {
   context: {
     region: GhostAppRegion;
     /** 插件协议语言；宿主新增语言会在边界回退英文。 */
-    locale: GhostLocale;
+    locale: ReturnType<typeof ghostAppContextLocale>;
+    /** Modern UI language for authored plugin resources; optional for older hosts. */
+    uiLocale?: SupportedLocale;
   };
 }
 
@@ -8709,7 +8750,36 @@ export interface GhostRoutineRunPointData {
   events: { id: string; type: string; sourceId?: string; occurredAt: number; subject?: string; data: Record<string, unknown> }[];
 }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData;
+/** 模型路由(插件看到与回传的同一形状)。agentKind: cc = Claude Code。 */
+export interface GhostModelRoute {
+  agentKind: 'cc' | 'codex' | 'pi';
+  model: string;
+  providerId: string;
+  effort?: string;
+}
+
+/** 开新任务时(will-start-task)交给插件的数据：第一条消息与用户当前选的模型。不含本机路径。 */
+export interface GhostStartTaskPointData {
+  /** 用户选中的、由本插件发布的模型 id。 */
+  modelId: string;
+  /** 第一条消息正文(附件只给数量)。 */
+  text: string;
+  attachmentCount: number;
+  /** 用户在选择器里原本选的模型；插件拿不准时用它。 */
+  route: GhostModelRoute;
+}
+
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData;
+
+/** 选择器里的一个插件模型(已按当前语言解析文案)。 */
+export interface GhostPickerModel {
+  pluginId: string;
+  pluginName: string;
+  pluginIcon?: string;
+  id: string;
+  name: string;
+  description?: string;
+}
 
 /**
  * 控制节点裁决结果(宿主消费)。allow = 任务选定的插件不反对；skip/block 由该插件
@@ -8724,7 +8794,8 @@ export type GhostControlPointResult =
       reason: string;
       /** true = 插件没有按时答复，按用户的出错处理设置得出。 */
       failure: boolean;
-    };
+    }
+  | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
 
 /**
@@ -8851,7 +8922,9 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  /** route 时选定的模型(仅开新任务时)。 */
+  route?: GhostModelRoute;
   /** block 时展示的理由。 */
   reason?: string;
   /** rewrite 时的新正文(替换消息正文;其它 action 忽略)。 */
@@ -8912,6 +8985,54 @@ export const GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE = 64 * 1024 * 1024;
 export const GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 /** 上传:multipart 字段名形状(缺省 'file')。 */
 export const GHOST_FETCH_UPLOAD_FIELD_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/* ── 对话文件交接(ghost_call.attachments 的非媒体文件):宿主保存副本,插件只拿引用 ──
+ * 目标工具的参数表声明 GHOST_HANDOFF_FILES_ARG 才启用;字节不进沙箱,插件用
+ * upload.handoff 上传,页面经签发的只读地址读取。副本 7 天后由宿主删除。 */
+
+/** 宿主保留的工具参数名:声明即启用,值由宿主注入(模型或页面自带的值被剥除)。 */
+export const GHOST_HANDOFF_FILES_ARG = 'cindy_handoff_files';
+/** 交接引用:`handoff:<uuid>`,只在交接给的那个插件实例里有效。 */
+export const GHOST_HANDOFF_REF_RE = /^handoff:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+/** 副本连续未使用多久后删除:每次使用(签发、页面读取、上传成功)从那一刻重新起算。 */
+export const GHOST_HANDOFF_TTL_MS = 7 * 24 * 60 * 60_000;
+/** 同一副本两次续期写盘的最小间隔,控制元数据写入次数。 */
+export const GHOST_HANDOFF_RENEW_INTERVAL_MS = 60 * 60_000;
+/** 单次交接、单个文件、整批的上限(与 upload 通道同值,超出也传不出去)。 */
+export const GHOST_HANDOFF_MAX_FILES = 4;
+export const GHOST_HANDOFF_MAX_BYTES_PER_FILE = 64 * 1024 * 1024;
+export const GHOST_HANDOFF_MAX_BATCH_BYTES = 128 * 1024 * 1024;
+/** 每个插件实例的配额:满了拒绝新交接,不挤掉尚未处理的旧文件。 */
+export const GHOST_HANDOFF_QUOTA_BYTES = 512 * 1024 * 1024;
+export const GHOST_HANDOFF_QUOTA_FILES = 200;
+/** 副本过期或已被删除时,上传与读取返回的稳定失败码。 */
+export const GHOST_HANDOFF_UNAVAILABLE = 'HANDOFF_UNAVAILABLE';
+
+/**
+ * 工具参数表显式把保留参数声明为数组,才接收对话文件交接;同名但其它形态的
+ * 存量业务参数保持原行为。
+ */
+export function ghostToolDeclaresHandoff(tool: GhostToolDecl | undefined): boolean {
+  const properties = tool?.parameters?.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties) ||
+      !Object.prototype.hasOwnProperty.call(properties, GHOST_HANDOFF_FILES_ARG)) return false;
+  const schema = (properties as Record<string, unknown>)[GHOST_HANDOFF_FILES_ARG];
+  return Boolean(schema && typeof schema === 'object' && (schema as { type?: unknown }).type === 'array');
+}
+
+/** 注入 args[GHOST_HANDOFF_FILES_ARG] 的单项,也是设置页列表的单项。 */
+export interface GhostHandoffFile {
+  ref: string;
+  /** 原文件名,只用于显示;不含路径。 */
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  /** 毫秒时间戳。 */
+  createdAt: number;
+  /** 当前到期时间(最后一次使用 + 7 天);使用时会顺延,不是固定截止时间。 */
+  expiresAt: number;
+}
 /** 总仓指纹形状(64 位十六进制,与 blobStore 同口径)。 */
 export const GHOST_MEDIA_HASH_RE = /^[a-f0-9]{64}$/;
 
@@ -9391,9 +9512,10 @@ export interface GhostPipeFetchRequest {
    * 十六进制指纹);field 为每个文件的表单字段名,缺省 'file';fields 为
    * 随行普通表单字段(在文件段之前;值里的字面量 "{bytes}" 由主机替换成
    * 全部上传文件的总字节数——飞书 upload_all 这类要求 size 字段的服务用,
-   * 2026-07-16 lizi_feishu 意识化前置)。
+   * 2026-07-16 lizi_feishu 意识化前置)。hashes / library / handoff 三选一;
+   * handoff 为 `handoff:<uuid>` 交接引用(见 GHOST_HANDOFF_FILES_ARG)。
    */
-  upload?: { hashes?: string[]; library?: string[]; field?: string; fields?: Record<string, string> };
+  upload?: { hashes?: string[]; library?: string[]; handoff?: string[]; field?: string; fields?: Record<string, string> };
   /**
    * 目录上传通道(仅 POST;与 body / upload 互斥):把主机过户票据指向的
    * 本地目录整体以 multipart/form-data 上传——token 来自 ghost_call 顶层

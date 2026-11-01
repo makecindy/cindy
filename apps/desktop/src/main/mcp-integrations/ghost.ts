@@ -69,8 +69,10 @@ import {
   collectDirFiles,
   getDirDepositVault,
   getSaveDepositVault,
+  isDepositExcludedFileName,
   isPathInsideDir,
 } from '../cindy-brain/dirDeposit.js';
+import { GhostHandoffQuotaError, handoffMimeType } from '../cindy-brain/handoffStore.js';
 import {
   getGhostGrantConfirmBridge,
   type GhostGrantFileItem,
@@ -86,7 +88,15 @@ import {
 } from '../appSessionState.js';
 import {
   deriveGhostSessionContext,
+  GHOST_HANDOFF_FILES_ARG,
+  GHOST_HANDOFF_MAX_BATCH_BYTES,
+  GHOST_HANDOFF_MAX_BYTES_PER_FILE,
+  GHOST_HANDOFF_MAX_FILES,
+  GHOST_HANDOFF_QUOTA_BYTES,
+  GHOST_HANDOFF_QUOTA_FILES,
   ghostInstallApprovalToken,
+  ghostToolDeclaresHandoff,
+  type GhostHandoffFile,
   type GhostSessionContextInjected,
   type GhostToolCallResult,
   type GhostSetupAssessment,
@@ -114,6 +124,7 @@ import {
   acquireGhostMutationLeaseForMcp,
   installOrUpdateLocalGhostPackageFromForge,
   isGhostAvailableForActiveSession,
+  getGhostHandoffStore,
 } from '../cindy-brain/index.js';
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarget.js';
@@ -1087,6 +1098,142 @@ async function prepareLocalPathAttachments(params: {
     }
   }
   return { ok: true, resolved, isCurrent };
+}
+
+/** 只有参数表显式声明保留参数的工具才接收交接副本。 */
+function toolDeclaresHandoff(ghost: InstalledGhost, tool: string): boolean {
+  return ghostToolDeclaresHandoff(ghost.manifest.tools?.find((candidate) => candidate.name === tool));
+}
+
+function withoutHandoffArg(args: Record<string, unknown>): Record<string, unknown> {
+  if (!(GHOST_HANDOFF_FILES_ARG in args)) return args;
+  const { [GHOST_HANDOFF_FILES_ARG]: _forged, ...rest } = args;
+  void _forged;
+  return rest;
+}
+
+/**
+ * Read the file the classifier resolved, not whatever the path points to now:
+ * no final link, and after opening the path must still be that same file at
+ * the same real path (a swapped parent directory changes the real path).
+ */
+async function readClassifiedFile(realPath: string): Promise<Uint8Array | 'too-large' | null> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(realPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  try {
+    const opened = await handle.stat({ bigint: true });
+    const current = await fs.promises.lstat(realPath, { bigint: true });
+    if (!opened.isFile() || opened.dev !== current.dev || opened.ino !== current.ino ||
+        (await fs.promises.realpath(realPath)) !== realPath) return null;
+    // Bounded by the opened size: a file that grows after classification is not read past the cap.
+    if (opened.size > BigInt(GHOST_HANDOFF_MAX_BYTES_PER_FILE)) return 'too-large';
+    const bytes = Buffer.alloc(Number(opened.size));
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (bytesRead === 0) return null;
+      offset += bytesRead;
+    }
+    return bytes;
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+function handoffQuotaMessage(): string {
+  return `该插件保存的对话文件已达上限(${GHOST_HANDOFF_QUOTA_BYTES / 1024 / 1024} MB 或 ${GHOST_HANDOFF_QUOTA_FILES} 个);请让用户在插件详情里删除旧文件后重试`;
+}
+
+/** 非媒体本地文件(媒体链路解析不了、媒体白名单外)走交接副本。 */
+function isHandoffCandidate(url: string, workdirAbs: string | null): boolean {
+  try {
+    resolveGhostAttachmentUrl(url);
+    return false;
+  } catch {
+    return classifyLocalAttachmentPath(url, workdirAbs, { mimeForExt: blobStore.mimeForExt }).kind === 'unsupported-type';
+  }
+}
+
+/**
+ * 交接副本的过户前置:限额与配额在弹卡前判定;字节在授权判定前读入,
+ * 落盘的就是批准时的字节。workdir 外沿用附件的两层策略(lane=handoff),
+ * 不做目录级会话记忆。
+ */
+async function prepareHandoffAttachments(params: {
+  urls: string[];
+  ghostId: string;
+  target: GhostGrantTarget;
+  workdirAbs: string | null;
+  sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+}): Promise<
+  | { ok: true; files: Array<{ name: string; bytes: Uint8Array }>; isCurrent?: () => boolean }
+  | { ok: false; message: string }
+> {
+  const candidates: Array<Extract<ReturnType<typeof classifyLocalAttachmentPath>, { absPath: string }> & { url: string }> = [];
+  let total = 0;
+  for (const url of params.urls) {
+    const c = classifyLocalAttachmentPath(url, params.workdirAbs, { mimeForExt: (ext) => handoffMimeType(`file${ext}`) });
+    if (c.kind !== 'inside-workdir' && c.kind !== 'outside-workdir') {
+      return { ok: false, message: '附件读取失败(文件不可读或已被移动)' };
+    }
+    if (isDepositExcludedFileName(c.name)) {
+      return { ok: false, message: `该文件不能交给插件(${c.name}):凭证与系统文件不交接` };
+    }
+    if (c.size > GHOST_HANDOFF_MAX_BYTES_PER_FILE) {
+      return { ok: false, message: `文件过大(${c.name}):单个文件上限 ${GHOST_HANDOFF_MAX_BYTES_PER_FILE / 1024 / 1024} MB` };
+    }
+    total += c.size;
+    if (total > GHOST_HANDOFF_MAX_BATCH_BYTES) {
+      return { ok: false, message: `附件总量过大:单次合计上限 ${GHOST_HANDOFF_MAX_BATCH_BYTES / 1024 / 1024} MB` };
+    }
+    candidates.push({ ...c, url });
+  }
+  try {
+    await getGhostHandoffStore().assertQuota(params.ghostId, candidates.map((c) => c.size));
+  } catch (error) {
+    if (!(error instanceof GhostHandoffQuotaError)) throw error;
+    return { ok: false, message: handoffQuotaMessage() };
+  }
+  const files: Array<{ name: string; bytes: Uint8Array; absPath: string; mimeType: string; outside: boolean; url: string }> = [];
+  let read = 0;
+  for (const c of candidates) {
+    const bytes = await readClassifiedFile(c.absPath);
+    if (!bytes) return { ok: false, message: `附件读取失败:${c.name}(文件不可读或已被移动)` };
+    if (bytes === 'too-large' || bytes.byteLength > GHOST_HANDOFF_MAX_BYTES_PER_FILE) {
+      return { ok: false, message: `文件过大(${c.name}):单个文件上限 ${GHOST_HANDOFF_MAX_BYTES_PER_FILE / 1024 / 1024} MB` };
+    }
+    // Files can grow between stat and read: the batch cap applies to the bytes actually read.
+    read += bytes.byteLength;
+    if (read > GHOST_HANDOFF_MAX_BATCH_BYTES) {
+      return { ok: false, message: `附件总量过大:单次合计上限 ${GHOST_HANDOFF_MAX_BATCH_BYTES / 1024 / 1024} MB` };
+    }
+    files.push({ name: c.name, bytes, absPath: c.absPath, mimeType: c.mimeType, outside: c.kind === 'outside-workdir', url: c.url });
+  }
+  const outside = files.filter((file) => file.outside);
+  let isCurrent = params.target.isCurrent;
+  if (outside.length > 0) {
+    const confirm = await requestGrantConfirm({
+      ghostId: params.ghostId,
+      target: params.target,
+      sessionId: params.sessionId,
+      sessionInstanceId: params.sessionInstanceId,
+      lane: 'handoff',
+      items: outside.map((file) => ({ name: file.name, absPath: file.absPath, size: file.bytes.byteLength, mimeType: file.mimeType })),
+      requiresResolvedPathReview: outside.some((file) => path.relative(path.resolve(file.url), file.absPath) !== ''),
+      getLiveSessionGrantState: params.getLiveSessionGrantState,
+    });
+    if (!confirm.ok) return confirm;
+    isCurrent = confirm.isCurrent ?? params.target.isCurrent;
+  }
+  return { ok: true, files: files.map(({ name, bytes }) => ({ name, bytes })), isCurrent };
 }
 
 /**
@@ -2345,7 +2492,31 @@ export function getCindyGhostsMcpDeps(
         };
       }
       const callId = randomUUID();
-      const attachmentUrls = [...new Set(attachments ?? [])];
+      let attachmentUrls = [...new Set(attachments ?? [])];
+      // 对话文件交接:目标工具参数表声明保留参数才启用;未声明时一个字节都不变
+      // (非媒体照旧报「请改用 dir」)。保留参数的值只能由宿主注入。
+      const handoffDeclared = toolDeclaresHandoff(target, tool);
+      let handoffPrepared: Extract<Awaited<ReturnType<typeof prepareHandoffAttachments>>, { ok: true }> | null = null;
+      const handoffUrls = handoffDeclared ? attachmentUrls.filter((url) => isHandoffCandidate(url, sessionWorkdir)) : [];
+      if (handoffUrls.length > 0) {
+        if (attachmentUrls.length > GHOST_HANDOFF_MAX_FILES) {
+          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: `附件过多(单次上限 ${GHOST_HANDOFF_MAX_FILES} 项)` };
+        }
+        const prepared = await prepareHandoffAttachments({
+          urls: handoffUrls,
+          ghostId: instanceId,
+          target: grantTarget,
+          workdirAbs: sessionWorkdir,
+          sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+        });
+        if (!prepared.ok) return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: prepared.message };
+        if (prepared.isCurrent) handoffChecks.push(prepared.isCurrent);
+        if (handoffExpired()) return handoffDenied;
+        handoffPrepared = prepared;
+        attachmentUrls = attachmentUrls.filter((url) => !handoffUrls.includes(url));
+      }
       if (attachmentUrls.length > 0) {
         const grant = await grantAttachmentUrls({
           ghostId: instanceId,
@@ -2364,6 +2535,13 @@ export function getCindyGhostsMcpDeps(
         if (handoffExpired()) return handoffDenied;
         mergedArgs = { ...args, attachments: grant.hashes };
         pageAttachmentHashes = grant.hashes;
+      }
+      // The reserved value is host-minted; the copies themselves are stored just before dispatch.
+      let handoffFiles: GhostHandoffFile[] = [];
+      let publishArgs = args;
+      if (handoffDeclared) {
+        mergedArgs = withoutHandoffArg(mergedArgs);
+        publishArgs = withoutHandoffArg(args);
       }
       // 目录过户(xd-service 意识化二期):dir 收集文件发一次性票据,元数据
       // 注入 args.dir_deposit——意识拿到的只有票据与相对路径清单;上传时
@@ -2520,6 +2698,36 @@ export function getCindyGhostsMcpDeps(
         };
       }
       if (handoffExpired()) return handoffDenied;
+      // 交接副本最后落盘:前面任何一道闸失败都不留副本、不占配额。
+      // Cleanup uses the owner root the copies were written under, not the current account.
+      const handoffRoot = handoffPrepared ? getGhostHandoffStore().currentRoot() : '';
+      // Held from storing until dispatch settles: a source change waits for this call.
+      const releaseHandoff = handoffPrepared ? getGhostHandoffStore().hold(instanceId) : () => {};
+      if (!releaseHandoff) {
+        return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: '插件正在更换来源,文件未交出,请稍后重试' };
+      }
+      if (handoffPrepared) {
+        try {
+          handoffFiles = await getGhostHandoffStore().import(instanceId, handoffPrepared.files, () => {
+            if (handoffExpired()) throw new Error(GRANT_AUTHORIZATION_CHANGED_MESSAGE);
+          }, handoffRoot);
+        } catch (error) {
+          releaseHandoff();
+          if (handoffExpired()) return handoffDenied;
+          return {
+            ok: false,
+            errorCode: 'ATTACHMENT_INVALID',
+            message: error instanceof GhostHandoffQuotaError ? handoffQuotaMessage() : '附件保存失败,请稍后重试',
+          };
+        }
+        // The final rename can race an approval change: re-check and drop the new copies.
+        if (handoffExpired()) {
+          for (const file of handoffFiles) await getGhostHandoffStore().delete(instanceId, file.ref, handoffRoot).catch(() => false);
+          releaseHandoff();
+          return handoffDenied;
+        }
+        mergedArgs = { ...mergedArgs, [GHOST_HANDOFF_FILES_ARG]: handoffFiles };
+      }
       // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
       // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
       // 中可 card-update)→ finalize(问"这单供过卡吗",开晚到宽限窗)→
@@ -2547,15 +2755,30 @@ export function getCindyGhostsMcpDeps(
         if (signal?.aborted) { revokePageCall(); signal.throwIfAborted(); }
         signal?.addEventListener('abort', revokePageCall, { once: true });
       }
-      const result = await getGhostPipeDispatcher().callGhostTool({
-        ghostId: instanceId,
-        tool,
-        args: mergedArgs,
-        callId,
-        signal,
-        sessionId: callSessionContext?.sessionId,
-        onProgress: pageCall?.onProgress,
-      });
+      // A failed call publishes no card, so its copies could never be used: drop them
+      // instead of letting retries against a broken plugin fill the quota.
+      const discardHandoff = async () => {
+        for (const file of handoffFiles) await getGhostHandoffStore().delete(instanceId, file.ref, handoffRoot).catch(() => false);
+      };
+      let result: Awaited<ReturnType<ReturnType<typeof getGhostPipeDispatcher>['callGhostTool']>>;
+      try {
+        result = await getGhostPipeDispatcher().callGhostTool({
+          ghostId: instanceId,
+          tool,
+          args: mergedArgs,
+          callId,
+          signal,
+          sessionId: callSessionContext?.sessionId,
+          onProgress: pageCall?.onProgress,
+        });
+        // Still held: a source change must not move the copies before they are dropped.
+        if (!result.ok) await discardHandoff();
+      } catch (error) {
+        await discardHandoff();
+        throw error;
+      } finally {
+        releaseHandoff();
+      }
       signal?.removeEventListener('abort', revokePageCall);
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
@@ -2570,7 +2793,7 @@ export function getCindyGhostsMcpDeps(
         return result;
       }
       if (result.ok && callSessionContext?.sessionId && !callSessionContext.remoteHostId) {
-        await publishPluginAppResult(target, callSessionContext.sessionId, tool, args, result.result, pageAttachmentHashes)
+        await publishPluginAppResult(target, callSessionContext.sessionId, tool, publishArgs, result.result, pageAttachmentHashes, handoffFiles)
           .catch(() => log.warn('Plugin App card could not be stored'));
       }
       // View-only metadata is independent of card creation (visibility-only tools,

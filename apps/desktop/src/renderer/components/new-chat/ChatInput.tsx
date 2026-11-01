@@ -139,6 +139,7 @@ import {
   type RemoteAgentSelectorOptions,
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
+import type { PluginModelsPickerProps } from './PluginModelsSection';
 import {
   enqueueEffortChange,
   getEffortChangeCoordinator,
@@ -409,6 +410,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -903,6 +905,8 @@ interface ChatInputProps {
   collaboration?: CollaborationMenuConfig;
   /** Persistent teammates available as structured message targets in this task. */
   botMentions?: readonly ComposerBotMention[];
+  /** 新任务的「让插件选」(只有新任务草稿传)。 */
+  pluginModels?: PluginModelsPickerProps;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1345,6 +1349,7 @@ export function ChatInput({
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
+  pluginModels,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -3420,6 +3425,8 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // Only the composer that owns the run explains why someone else's words are missing.
+  const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
@@ -3580,12 +3587,14 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
-      // 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
+      // 文档预览 / 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        event.target instanceof Element &&
-        event.target.closest('[role="alertdialog"], [data-morph-side]')
+        (getTextPreviewSearchHost() || (
+          event.target instanceof Element &&
+          event.target.closest('[role="alertdialog"], [data-morph-side]')
+        ))
       ) {
         return;
       }
@@ -9308,16 +9317,20 @@ export function ChatInput({
           />
         </div>
       )}
-      {/* Voice-input error + attachment rejections (oversize / blocked /
+      {/* Voice-input error (or the voiceprint filter notice) + attachment rejections (oversize / blocked /
           read-failed) share ONE floating slot above the input card — so they
           don't shrink the typing area and are clearly visible. They MUST live
           in a single flex-col container: two separate same-position absolute
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
-          {voiceInput.lastError && <VoiceInputStatusNotice message={voiceInput.lastError} />}
+          {voiceInput.lastError ? (
+            <VoiceInputStatusNotice message={voiceInput.lastError} />
+          ) : showSpeakerFilteredNotice ? (
+            <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
+          ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
           )}
@@ -10009,6 +10022,7 @@ export function ChatInput({
                         ? handleUnifiedDraftSelect
                         : undefined
                     }
+                    {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在

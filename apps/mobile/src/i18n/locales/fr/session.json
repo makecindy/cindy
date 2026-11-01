@@ -780,5 +780,17 @@
     "confirm": "Changer",
     "remember": "Changer, et le faire automatiquement désormais (cette tâche uniquement)",
     "cancel": "Annuler"
+  },
+  "messageEdit": {
+    "editing": "Modification du message",
+    "discard": "Abandonner la modification du message",
+    "stopTimeout": "Délai dépassé en attendant l'arrêt de la tâche : veuillez réessayer",
+    "queueNotEmpty": "Cette session contient des messages en file d'attente : envoyez-les ou supprimez-les avant de modifier",
+    "notLast": "Un message plus récent existe dans cette session : celui-ci n'est plus le dernier et ne peut pas être modifié",
+    "failed": "Échec de la modification et du renvoi, veuillez réessayer",
+    "noPriorAssistant": "Aucune réponse de l'IA ne précède ce message et la version de Cindy sur l'ordinateur ne peut pas encore le modifier. Mettez à jour Cindy sur l'ordinateur, puis réessayez.",
+    "uploadsPending": "Des pièces jointes sont encore en cours d'envoi. Attendez la fin avant de modifier le message.",
+    "rollbackHint": "L'envoi annulera les modifications apportées à {{count}} fichier(s) lors du dernier tour",
+    "conversationOnlyHint": "L'envoi ne restaurera pas les fichiers du projet ; les modifications de fichiers précédentes seront conservées"
   }
 }

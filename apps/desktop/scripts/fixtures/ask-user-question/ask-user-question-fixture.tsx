@@ -6,7 +6,12 @@ import type { AskUserDraft, AskUserViewerState } from '../../../src/renderer/lib
 import type { VoiceQuestionTarget } from '../../../src/renderer/components/new-chat/voiceQuestionSelection';
 import { CompanionVoiceToolbar } from '../../../src/renderer/features/bots/voice/CompanionVoiceToolbar';
 
-function Fixture({ question, voice, multi }: { question: string; voice?: boolean; multi?: boolean }) {
+function Fixture({ question, voice, multi, speakerFiltered = false }: {
+  question: string;
+  voice?: boolean;
+  multi?: boolean;
+  speakerFiltered?: boolean;
+}) {
   const [draft, setDraft] = useState<AskUserDraft | null>(null);
   const [viewerState, setViewerState] = useState<AskUserViewerState>('expanded');
   const bridge = useRef<VoiceQuestionTarget | null>(null);
@@ -18,7 +23,7 @@ function Fixture({ question, voice, multi }: { question: string; voice?: boolean
     {voice ? <div className="mb-4"><CompanionVoiceToolbar
       bot={{ id: 'fixture', name: 'Cindy' }}
       state={{ phase: 'listening', transcript: '', unsent: '', level: 0, error: null,
-        muted: false, microphonePending: false, microphoneError: false, exitCountdown: null }}
+        muted: false, microphonePending: false, microphoneError: false, speakerFiltered, exitCountdown: null }}
       questionPending loading={false} blocked={false} configurationError={false} titleRef={titleRef}
       onResume={forbid('resume')} onMute={forbid('mute')} onInterrupt={forbid('interrupt')}
       onSend={forbid('send')} onCancelExit={forbid('cancel exit')} onClose={forbid('close')}
@@ -53,5 +58,6 @@ void mountPage({
         : { status: 'unique', candidates: [href.startsWith('/') ? href : '/project/' + href], kind: 'file' },
     ])),
   },
-  render: (ctx) => <Fixture question={String(ctx.data.question)} voice={ctx.data.voice === true} multi={ctx.data.multi === true} />,
+  render: (ctx) => <Fixture question={String(ctx.data.question)} voice={ctx.data.voice === true} multi={ctx.data.multi === true}
+    speakerFiltered={ctx.data.speakerFiltered === true} />,
 });

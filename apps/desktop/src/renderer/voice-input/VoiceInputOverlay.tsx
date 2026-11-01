@@ -86,6 +86,7 @@ import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
+import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
 
 const log = createLogger('voice-input-overlay');
 const workletUrl = getVoiceInputWorkletUrl();
@@ -244,6 +245,11 @@ export function VoiceInputOverlay() {
   const [hasRecordingContent, setHasRecordingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [microphoneNotice, setMicrophoneNotice] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const [hasPasteError, setHasPasteError] = useState(false);
   const [pasteErrorCode, setPasteErrorCode] = useState<PasteErrorCode | null>(null);
   const [permissionPrompt, setPermissionPrompt] = useState<PermissionPromptKind | null>(null);
@@ -330,6 +336,7 @@ export function VoiceInputOverlay() {
     setCodexRecovery(null);
     invalidateCodexRecoveryPrompt();
     setMicrophoneNotice(null);
+    clearSpeakerFiltered();
     setHasPasteError(false);
     setPasteErrorCode(null);
     setPermissionPrompt(null);
@@ -359,7 +366,7 @@ export function VoiceInputOverlay() {
     setStopInFlight(false);
     setVoiceState('idle');
     resetOverlayInteraction();
-  }, [clearErrorCloseTimer, invalidateCodexRecoveryPrompt, resetOverlayInteraction, setVoiceState]);
+  }, [clearErrorCloseTimer, clearSpeakerFiltered, invalidateCodexRecoveryPrompt, resetOverlayInteraction, setVoiceState]);
 
   const enableActionTips = useCallback(() => {
     setActionTipsDisabled(false);
@@ -812,6 +819,7 @@ export function VoiceInputOverlay() {
     setError(null);
     setCodexRecovery(null);
     setMicrophoneNotice(null);
+    clearSpeakerFiltered();
     setHasPasteError(false);
     setPasteErrorCode(null);
     setPermissionPrompt(null);
@@ -1032,6 +1040,7 @@ export function VoiceInputOverlay() {
     buildRefinementContext,
     cancelStartedRun,
     clearErrorCloseTimer,
+    clearSpeakerFiltered,
     closeOverlay,
     closeOverlayAndReset,
     createStartReadyState,
@@ -1556,6 +1565,9 @@ export function VoiceInputOverlay() {
             recordVoiceInputRefinementUsage(event.refinement);
           }
           break;
+        case 'speaker-filtered':
+          showSpeakerFiltered();
+          break;
         case 'timeline':
           if (
             event.event.type === 'refine_rejected' &&
@@ -1566,7 +1578,7 @@ export function VoiceInputOverlay() {
           break;
       }
     });
-  }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState]);
+  }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.voiceInput.onGlobalOverlayCommand((command: GlobalOverlayCommand) => {
@@ -1736,6 +1748,10 @@ export function VoiceInputOverlay() {
             <VoiceInputLiveWave className="shrink-0 text-[var(--cmd-palette-item-text)]" />
           )}
           <span className="min-w-0 truncate font-medium text-[var(--cmd-palette-item-text)]">{statusLabel}</span>
+          {/* Beside the status, not below the transcript: the card height stays fixed. */}
+          {speakerFiltered && !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
+            <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
+          )}
           <div className="ml-auto flex items-center gap-1">
             {!hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
               <Tip text={submitTooltip} side="bottom" delay={150} disabled={actionTipsDisabled}>

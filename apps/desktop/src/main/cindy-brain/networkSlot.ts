@@ -65,6 +65,8 @@ import {
   type GhostFetchMethod,
   type GhostSecretOauthDecl,
   isSafeGhostRelativePath,
+  GHOST_HANDOFF_REF_RE,
+  GHOST_HANDOFF_UNAVAILABLE,
   type GhostPipeFetchResult,
   type GhostSecretDecl,
   type InstalledGhost,
@@ -74,6 +76,10 @@ export interface NetworkSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   createTransferProgress?(instanceKey: string, callId?: string): (bytes: number | undefined, total: number | undefined, message: string) => void;
   readLibraryFile?(instanceKey: string, path: string, signal: AbortSignal): Promise<Response>;
+  /** Live handoff copy of this instance; null when expired, deleted or never handed over, `changed` when altered on disk. */
+  readHandoffFile?(instanceKey: string, ref: string, signal: AbortSignal): Promise<{ bytes: Uint8Array; name: string; mimeType: string } | 'changed' | null>;
+  /** A successful upload counts as use of these handoff copies; renewal never fails the request. */
+  touchHandoffFiles?(instanceKey: string, refs: readonly string[]): Promise<void>;
   uploadFileSize?(instanceKey: string, value: string, library: boolean): Promise<number | undefined>;
   saveLibraryStream?(instanceKey: string, input: {
     path: string; source: AsyncIterable<Uint8Array>; totalBytes?: number;
@@ -900,24 +906,31 @@ export class GhostNetworkSlot {
     }
     // ── 上传通道(媒体模式的镜像):意识只报指纹,主机验归属读字节代组
     // multipart。字节不进沙箱。
-    let upload: { hashes: string[]; library: string[]; field: string; fields: Record<string, string> } | undefined;
+    let upload: { hashes: string[]; library: string[]; handoff: string[]; field: string; fields: Record<string, string> } | undefined;
     if (p.upload !== undefined) {
       if (typeof p.upload !== 'object' || p.upload === null || Array.isArray(p.upload)) {
         return { ok: false, message: 'upload 必须是对象({ hashes, field?, fields? })' };
       }
-      const u = p.upload as { hashes?: unknown; library?: unknown; field?: unknown; fields?: unknown };
-      if ((u.hashes === undefined) === (u.library === undefined)) {
-        return { ok: false, message: 'upload 必须提供 hashes 或 library 其中一项' };
+      const u = p.upload as { hashes?: unknown; library?: unknown; handoff?: unknown; field?: unknown; fields?: unknown };
+      const sources = [u.hashes, u.library, u.handoff].filter((value) => value !== undefined).length;
+      if (sources !== 1) {
+        return { ok: false, message: u.handoff === undefined
+          ? 'upload 必须提供 hashes 或 library 其中一项'
+          : 'upload 必须提供 hashes、library 或 handoff 其中一项' };
       }
-      const values = u.hashes ?? u.library;
+      const values = u.hashes ?? u.library ?? u.handoff;
       if (!Array.isArray(values) || values.length === 0 || values.length > GHOST_FETCH_UPLOAD_MAX_FILES) {
         return { ok: false, message: `upload.hashes 必须是 1–${GHOST_FETCH_UPLOAD_MAX_FILES} 条的数组` };
       }
       const hashes: string[] = [];
       const library: string[] = [];
-      const target = u.library === undefined ? hashes : library;
+      const handoff: string[] = [];
+      const target = u.handoff !== undefined ? handoff : u.library === undefined ? hashes : library;
       for (const h of values) {
-        if (typeof h !== 'string' || (u.library === undefined ? !GHOST_MEDIA_HASH_RE.test(h) : !isSafeGhostRelativePath(h))) {
+        if (u.handoff !== undefined && (typeof h !== 'string' || !GHOST_HANDOFF_REF_RE.test(h))) {
+          return { ok: false, message: 'upload.handoff 只接受 handoff:<uuid> 交接引用' };
+        }
+        if (typeof h !== 'string' || (u.handoff === undefined && (u.library === undefined ? !GHOST_MEDIA_HASH_RE.test(h) : !isSafeGhostRelativePath(h)))) {
           return { ok: false, message: 'upload.hashes 含非法指纹(需 64 位十六进制)' };
         }
         if (target.includes(h)) {
@@ -927,6 +940,9 @@ export class GhostNetworkSlot {
       }
       if (library.length && !this.deps.readLibraryFile) {
         return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明或宿主不支持 Library 上传' };
+      }
+      if (handoff.length && !this.deps.readHandoffFile) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '宿主不支持交接文件上传' };
       }
       let field = 'file';
       if (u.field !== undefined) {
@@ -966,7 +982,7 @@ export class GhostNetworkSlot {
         // 上传响应(入库回执 JSON)按文本回;禁掉组合免与取件闸互相占坑。
         return { ok: false, message: asMode === 'media' ? "upload 与 as:'media' 不可同时使用(上传响应按文本形态返回)" : 'upload 与 Library 下载不能同时使用' };
       }
-      upload = { hashes, library, field, fields: uploadFields };
+      upload = { hashes, library, handoff, field, fields: uploadFields };
     }
     // ── 目录上传通道(uploadDir):意识只报过户票据,主机凭票读盘代组
     // multipart(文件字段 file-N,filename=相对路径)。路径与字节都不进沙箱。
@@ -1203,7 +1219,8 @@ export class GhostNetworkSlot {
         holdingMediaGate = true;
         const built = await this.buildUploadBody(instanceKey, upload, controller.signal, assertStillValid, progress);
         if ('error' in built) return { ok: false, message: built.error,
-          ...(built.limitBytes !== undefined ? { errorCode: 'TOO_LARGE', limitBytes: built.limitBytes } : {}) };
+          ...(built.limitBytes !== undefined ? { errorCode: 'TOO_LARGE', limitBytes: built.limitBytes } : {}),
+          ...(built.errorCode ? { errorCode: built.errorCode } : {}) };
         body = built.body;
         // multipart 的 Content-Type(含 boundary)由主机独占,意识自带的删干净。
         deleteHeaderVariants(requestHeaders, 'Content-Type');
@@ -1423,6 +1440,9 @@ export class GhostNetworkSlot {
       }
       if (!response) return { ok: false, message: '请求未获得响应' };
       assertStillValid();
+      if (upload?.handoff?.length && response.status >= 200 && response.status < 300) {
+        await this.deps.touchHandoffFiles?.(instanceKey, upload.handoff).catch(() => {});
+      }
 
       // ── 响应收敛:媒体落仓 / 文本透传;体积护栏;响应头白名单 ──────────
       const contentType = response.headers.get('content-type') ?? '';
@@ -2026,18 +2046,35 @@ export class GhostNetworkSlot {
    * filename 用指纹前 16 位 + 总仓后缀,不含任何用户可控文本。
    */
   private async buildUploadBody(instanceKey: string,
-    upload: { hashes: string[]; library: string[]; field: string; fields?: Record<string, string> },
+    upload: { hashes: string[]; library: string[]; handoff?: string[]; field: string; fields?: Record<string, string> },
     signal: AbortSignal, assertCurrent: () => void,
     progress?: (bytes: number | undefined, total: number | undefined, message: string) => void,
-  ): Promise<{ body: Uint8Array; boundary: string } | { error: string; limitBytes?: number }> {
+  ): Promise<{ body: Uint8Array; boundary: string } | { error: string; limitBytes?: number; errorCode?: string }> {
     const boundary = `----cindy-ghost-${randomUUID()}`;
     const encoder = new TextEncoder();
     const chunks: Uint8Array[] = [];
     let total = 0;
     const fileParts: Uint8Array[] = [];
     const entries = [...upload.hashes.map(value => ({ value, library: false })), ...upload.library.map(value => ({ value, library: true }))];
+    // Handoff copies are capped at import time; read them first and reuse the media path below.
+    const handoffs = new Map<string, { buffer: Buffer; name: string; mimeType: string }>();
+    let handoffBytes = 0;
+    for (const ref of upload.handoff ?? []) {
+      const copy = await this.deps.readHandoffFile!(instanceKey, ref, signal);
+      assertCurrent(); signal.throwIfAborted();
+      if (!copy) return { error: '交接文件已过期或已被删除,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      if (copy === 'changed') return { error: '交接文件在交出后被改动,已拒绝上传,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      // Stop as soon as the batch cannot fit instead of holding every copy first.
+      handoffBytes += copy.bytes.byteLength;
+      if (handoffBytes > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+      const buffer = Buffer.from(copy.bytes.buffer, copy.bytes.byteOffset, copy.bytes.byteLength);
+      handoffs.set(ref, { buffer, name: copy.name, mimeType: copy.mimeType });
+      entries.push({ value: ref, library: false });
+    }
     let expectedTotal: number | undefined = 0;
     for (const entry of entries) {
+      const handoffCopy = handoffs.get(entry.value);
+      if (handoffCopy) { expectedTotal = (expectedTotal ?? 0) + handoffCopy.buffer.byteLength; continue; }
       const size = await this.deps.uploadFileSize?.(instanceKey, entry.value, entry.library);
       assertCurrent(); signal.throwIfAborted();
       if (size === undefined) { expectedTotal = undefined; break; }
@@ -2072,7 +2109,7 @@ export class GhostNetworkSlot {
           }
         } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
         media = { buffer: Buffer.concat(parts), ext: '', mimeType: normalizeMime(response.headers.get('content-type') ?? '') || 'application/octet-stream' };
-      } else media = await this.deps.readGhostMedia(instanceKey, hash);
+      } else media = handoffs.get(hash) ? { ...handoffs.get(hash)!, ext: '' } : await this.deps.readGhostMedia(instanceKey, hash);
       assertCurrent(); signal.throwIfAborted();
       if (!media) {
         return { error: `媒体不存在或不属于本意识(${hash.slice(0, 8)}…)——只能上传自己名下/用户过户的总仓媒体` };
@@ -2085,11 +2122,18 @@ export class GhostNetworkSlot {
         return { error: `上传总量超上限(${GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES} 字节)`, limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
       }
       reportRead(total);
-      const filename = entry.library ? (hash.split('/').pop() ?? 'file').replace(/[^a-zA-Z0-9_.-]/g, '_') : `${hash.slice(0, 16)}${media.ext}`;
+      const handoffName = handoffs.get(hash)?.name;
+      const filename = handoffName !== undefined
+        ? handoffName.replace(/[^a-zA-Z0-9_.-]/g, '_')
+        : entry.library ? (hash.split('/').pop() ?? 'file').replace(/[^a-zA-Z0-9_.-]/g, '_') : `${hash.slice(0, 16)}${media.ext}`;
+      // The user's original name (often non-ASCII) travels as RFC 5987 filename*.
+      // RFC 5987 ext-value: encodeURIComponent leaves ' ( ) * literal, which attr-char forbids.
+      const utf8Name = handoffName !== undefined && filename !== handoffName
+        ? `; filename*=UTF-8''${encodeURIComponent(handoffName).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}` : '';
       fileParts.push(
         encoder.encode(
           `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="${upload.field}"; filename="${filename}"\r\n` +
+          `Content-Disposition: form-data; name="${upload.field}"; filename="${filename}"${utf8Name}\r\n` +
           `Content-Type: ${media.mimeType}\r\n\r\n`,
         ),
         media.buffer,

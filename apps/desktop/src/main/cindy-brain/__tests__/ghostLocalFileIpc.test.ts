@@ -280,6 +280,7 @@ function harness(
     hasRunningGhostCindyWork: () => false,
     fsSlotSingleton: { hasInFlightRequests: () => options.fsBusy === true },
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
+    handoffStoreSingleton: null,
     stopPluginAppInstance: vi.fn(async () => {}),
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),

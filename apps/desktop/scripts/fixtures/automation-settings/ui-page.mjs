@@ -17,6 +17,9 @@ export default {
       about:
         'Backend configuration fails twice, showing localized recovery inside the browser card',
     },
+    'my-browser': {
+      about: 'My browser selected while login copying is on; the login copy switch stays hidden',
+    },
   },
   async check(page, ui) {
     const browser = page.getByRole('switch', {
@@ -32,6 +35,19 @@ export default {
         .getByText(await ui.t('settings.computerUse.android.title'), { exact: true })
         .isVisible(),
     );
+    const loginCopy = page.getByRole('switch', {
+      name: await ui.t('settings.computerUse.realProfile.toggleAria'),
+    });
+    if (ui.case === 'default') await loginCopy.waitFor();
+    if (ui.case === 'my-browser') {
+      await page
+        .getByRole('radio', {
+          name: await ui.t('settings.computerUse.browserBackend.userBrowser.title'),
+          checked: true,
+        })
+        .waitFor();
+      assert.equal(await loginCopy.count(), 0);
+    }
     if (ui.case === 'error') {
       await page
         .getByRole('button', { name: await ui.t('settings.computerUse.configurationRead.retry') })

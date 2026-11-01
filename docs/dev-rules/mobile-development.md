@@ -396,6 +396,30 @@ App Group 里存每台电脑最近一次的快照和「自动」所选电脑（�
 切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
 显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
 
+### Android 桌面小组件
+
+同一对组件（订阅余量、每日用量）在 Android 上由本地模块 `cindy-usage-widgets` 的 `android/` 提供：两个
+`AppWidgetProvider`（`QuotaWidgetProvider`、`UsageWidgetProvider`）、数据来源选择页 `ComputerConfigActivity`
+都由模块自己的 `AndroidManifest.xml` 合并进应用，不经 config plugin。数据通道、快照格式与「自动 / 固定电脑」规则与 iOS
+相同（`UsageWidgetBridge` 两端共用，`readSnapshot` / `writeSnapshot` / `readPinnedDeviceIds` / `clearSnapshot` 同名）：
+快照存在应用私有的 `noBackupFilesDir/usage-widget-snapshot.json`（不进自动备份），组件选中的电脑与记录的固定电脑在
+SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有「排在前面的账号」（最多 7 个，可上移、下移、移除）与
+「隐藏的账号」，与 iOS 编辑页、Mac 菜单栏设置同一规则：排在前面的先显示，其余账号（含以后新加的）按电脑顺序跟在后面，隐藏的不显示，
+全部隐藏时照常显示全部；按组件存在同一 SharedPreferences（`pinned.<id>` / `hidden.<id>`，与 iOS 相同的 `AccountKey` 字符串，
+按 id 找不到时按同一图标与名字匹配）。换电脑不清空这两项。液面顶角与 iOS 一样是 4dp 圆角。
+
+组件内容由 `WidgetRenderer` 按启动器格子的实际尺寸直接画成位图（版式与 iOS 的小 / 中 / 大一致，格子比 iOS 尺寸小时整体
+等比缩小，大时靠弹性空白撑开），浅 / 深两套都画好，由 `layout` 与 `layout-night` 选择可见的一张，所以系统切换深浅色不需要
+重绘。一行高、宽度 ≥ 250dp 的格子（高度 < 120dp 且宽 ≥ 1.4 倍高）用 Android 独有的单行版式，更窄的一行沿用等比缩小的小号版式（4 个来源仍可见）（液柱在左、数字名称重置时间叠在右；每日用量是今日数字加迷你柱图），
+启动器里一行的实际高度因启动器而异（40–110dp），最小可缩到 40dp 高。每 30 分钟（`updatePeriodMillis`）、App 写入新数据、调整大小时重绘。Barlow Condensed 数字字体由 Gradle 任务从
+`apps/desktop/native/menubar` 复制进 assets，不再提交第三份；文案表 `assets/usage-widgets/text.json` 由
+`plugins/usage-widgets/UsageWidgetModel.swift` 的 `WidgetText` 转出并追加数据来源页文案，两处同步修改；选择器里的名称与说明
+在 `res/values*/cindy_usage_widgets_strings.xml`（同源生成）。
+
+调试：debug 包响应 `adb shell am broadcast -a app.cindy.usagewidgets.RENDER_PREVIEWS --es variant multi|single|stale|offline|empty
+-n <applicationId>/app.cindy.usagewidgets.QuotaWidgetProvider`，把示例数据下的全部版式与深浅色写到 `cache/widget-previews`；
+选择器预览图 `res/drawable*/cindy_*_widget_preview.png` 由它生成。Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包。
+
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 

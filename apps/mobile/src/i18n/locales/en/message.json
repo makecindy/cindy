@@ -162,6 +162,7 @@
     "mediaErrorLine": "Error: {{message}}",
     "mediaDeviceLinkHint": "Before opening, your phone asks the remote device to upload this media.",
     "controlDelete": "Delete message",
+    "controlEdit": "Edit",
     "controlRewind": "Back to here",
     "controlFork": "Start new session from here",
     "markdownDocAriaLabel": "Message body",
@@ -261,6 +262,14 @@
     "waitingMessage": "Waiting to send: {{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} chose {{model}} for this task",
+      "kept": {
+        "no-opinion": "{{plugin}} kept your choice for this task: {{model}}",
+        "failed": "{{plugin}} didn’t answer in time, so this task uses {{model}}",
+        "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Context reorganized, continuing",
       "labelTimeout": "Last turn didn't respond; context reorganized to continue",

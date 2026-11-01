@@ -766,7 +766,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,

@@ -36,6 +36,7 @@ import {
   CircleAlert,
   Clock3,
   Loader2,
+  Plug,
   PlugZap,
   Plus,
   RefreshCw,
@@ -74,6 +75,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -715,6 +717,8 @@ export interface RemoteAgentSelectorOptions {
 }
 
 interface ModelSelectorProps {
+  /** 语义同 ModelSelectorContentProps.pluginModels。 */
+  pluginModels?: PluginModelsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -925,6 +929,8 @@ interface ModelSelectorProps {
 }
 
 interface ModelSelectorContentProps {
+  /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
+  pluginModels?: PluginModelsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   modelId: string;
@@ -1196,7 +1202,11 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   );
 }
 
+/** 「让插件选」生效时不点亮任何模型行(空 modelId 不匹配任何条目)。 */
+const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
+
 function ModelSelectorContentView({
+  pluginModels,
   providersOverride,
   providersOverrideState,
   modelId,
@@ -3556,6 +3566,10 @@ function ModelSelectorContentView({
           </div>
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
+            {...(pluginModels ? {
+              pinnedTop: <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />,
+              pinnedTopHasRows: matchPluginModels(pluginModels.models, query).length > 0,
+            } : {})}
             {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
                   catalogNotice: (
@@ -3587,8 +3601,9 @@ function ModelSelectorContentView({
             query={query}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
-            selected={panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog ? selectedFavoriteUid : null}
+            // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
+            selected={pluginModels?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
             }
@@ -4017,6 +4032,7 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  pluginModels,
   providersOverride,
   providersOverrideState,
   modelId,
@@ -4476,11 +4492,15 @@ export function ModelSelector({
     : null;
   const withAgentDeviceLabel = (label: string): string =>
     agentDeviceLabel ? `${label} · ${agentDeviceLabel}` : label;
-  const triggerTitle = withAgentDeviceLabel(pendingSelectionTitle
+  const activePluginModel = pluginModels?.active ?? null;
+  const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
+  const triggerTitle = activePluginModel
+    ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
+    : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const accessibleLabel = pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel);
+  const accessibleLabel = activePluginModel ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
@@ -4608,7 +4628,14 @@ export function ModelSelector({
       {agentIdentity?.state === 'pending' && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
-      {noSource ? (
+      {activePluginModel ? (
+        <>
+          <PluginModelIcon model={activePluginModel} size={14} />
+          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
+            {activePluginModel.name}
+          </span>
+        </>
+      ) : noSource ? (
         <>
           <PlugZap
             size={isCreateAgentVariant ? 11 : 13}
@@ -4899,6 +4926,7 @@ export function ModelSelector({
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
+      {...(pluginModels ? { pluginModels } : {})}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}
