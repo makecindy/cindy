@@ -217,7 +217,13 @@ describe('a browser page that cannot be read', () => {
       const shot = await read(pid, window);
       return 'nodes' in shot && !seen.readable ? { ...shot, nodes: [screens.email[0]] } : shot;
     };
-    driver.capture = async () => ({ jpeg: Buffer.from('jpeg'), width: 8, height: 8, frame });
+    driver.capture = async () => ({
+      jpeg: Buffer.from('jpeg'),
+      width: 8,
+      height: 8,
+      area: frame,
+      windowFrame: frame,
+    });
     return { driver, state, seen };
   };
 
@@ -274,7 +280,13 @@ describe('a waiting card watching its window', () => {
     driver.windows = async (options) => {
       const windows = await list(options);
       return state.closed
-        ? { ...windows, apps: windows.apps.map((app) => ({ ...app, windows: app.windows.map((w) => ({ ...w, title: '(5) X' })) })) }
+        ? {
+            ...windows,
+            apps: windows.apps.map((app) => ({
+              ...app,
+              windows: app.windows.map((w) => ({ ...w, title: '(5) X' })),
+            })),
+          }
         : windows;
     };
     const run = start(driver);
