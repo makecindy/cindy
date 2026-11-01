@@ -341,6 +341,7 @@ it('forwards operations from a window that only shows the call', async () => {
           muted: false,
           microphonePending: false,
           microphoneError: false,
+          speakerFiltered: false,
           exitCountdown: null,
         },
         loading: false,

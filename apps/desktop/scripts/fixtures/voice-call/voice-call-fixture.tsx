@@ -139,6 +139,7 @@ function Fixture({
         muted,
         microphonePending: false,
         microphoneError: false,
+        speakerFiltered: false,
         exitCountdown: countdown ? { reason: 'idle', secondsRemaining: 10 } : null,
         callRecord: call,
       }}

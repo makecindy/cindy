@@ -18,6 +18,7 @@ const status = (open = true): VoiceCallStatus => ({
     muted: false,
     microphonePending: false,
     microphoneError: false,
+    speakerFiltered: false,
     exitCountdown: null,
   },
   loading: false,
