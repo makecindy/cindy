@@ -205,17 +205,23 @@ jobs:
           test "$VERIFY_CHECKS_RESULT" = "success"
           test "$LINUX_UNIT_SHARDS_RESULT" = "success"
 
-  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
-  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。
+  # 每组四个 Windows 分片并行运行。Desktop 与其余 workspace 分组，避免重型
+  # workspace 在同一个 runner 内串行；include/exclude 的并集仍完整覆盖 unit tier。
   # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
   windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/4)
+    name: Windows unit tests (${{ matrix.group.name }}, ${{ matrix.shard }}/4)
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        group:
+          - name: desktop
+            args: --workspace desktop
+          - name: other
+            args: --exclude-workspace desktop
     env:
       XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
 
@@ -250,7 +256,7 @@ jobs:
       - name: Run client and package unit tests
         # 通过 package script 传递
         # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
-        run: pnpm run test:workspaces --tier unit
+        run: pnpm run test:workspaces --tier unit ${{ matrix.group.args }}
 
   # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
   # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
