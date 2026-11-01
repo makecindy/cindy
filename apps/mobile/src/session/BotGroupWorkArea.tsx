@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { View } from 'react-native';
+import { ScrollView } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -13,10 +13,12 @@ import type { BotGroupIdentity } from './BotGroupAvatars';
 
 /** Live work is separate from messages. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError }: {
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping, onError }: {
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
   onError(message: string | null): void;
+  onStop(): Promise<void>;
+  stopping: boolean;
 }) {
   const { accountGeneration } = useAuth();
   const { i18n } = useTranslation();
@@ -65,8 +67,10 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
-  return <View testID="botGroup.work" style={{ paddingHorizontal: 16, paddingVertical: 8, gap: 12 }}>
-    {group.round.speakers.map(speaker => {
+  const speakers = group.round.speakers.filter(speaker => group.members.some(member => member.botId === speaker.botId));
+  const stopPending = stopping || speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping');
+  return <ScrollView testID="botGroup.work" style={{ maxHeight: 220 }} contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8, gap: 8 }} keyboardShouldPersistTaps="handled">
+    {speakers.map((speaker, index) => {
       const member = group.members.find(member => member.botId === speaker.botId);
       if (!member) return null;
       const target = speaker.executionId && resolved?.scope === scope ? resolved.targets.get(speaker.executionId) : undefined;
@@ -74,8 +78,8 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError
       return <BotGroupSpeakerRow key={speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}
         deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
         identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={speaker.sessionId ?? target?.sessionId ?? null}
-        executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
+        executionId={speaker.executionId} startedAt={speaker.startedAt} onStop={index === speakers.length - 1 && online ? onStop : undefined} stopPending={stopPending} groupId={group.id}
         activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
     })}
-  </View>;
+  </ScrollView>;
 }

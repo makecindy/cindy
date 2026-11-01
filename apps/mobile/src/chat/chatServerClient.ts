@@ -388,8 +388,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
+  // No server-provided start time here: created_at is the enqueue time, so omit startedAt
+  // rather than presenting queued time as elapsed work.
   const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
-    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { startedAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const }));
   return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',

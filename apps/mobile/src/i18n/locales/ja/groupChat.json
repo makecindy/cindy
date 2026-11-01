@@ -1,4 +1,8 @@
 {
+  "progress": {
+    "viewProcess": "過程を見る",
+    "stop": "停止"
+  },
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",

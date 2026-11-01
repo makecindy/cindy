@@ -1,4 +1,8 @@
 {
+  "progress": {
+    "viewProcess": "과정 보기",
+    "stop": "중지"
+  },
   "title": "그룹 채팅",
   "memberSeparator": ", ",
   "memberCount_one": "멤버 {{count}}명",

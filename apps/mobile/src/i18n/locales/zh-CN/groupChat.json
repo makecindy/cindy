@@ -1,4 +1,8 @@
 {
+  "progress": {
+    "viewProcess": "看过程",
+    "stop": "停止"
+  },
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成员",
