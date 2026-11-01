@@ -94,6 +94,11 @@ export function getSelfHostedRelayRouteGeneration(): number {
   return generation;
 }
 
+/** Stable display-cache scope; credentials and route epochs never enter persisted keys. */
+export function getSelfHostedRelayDataKey(): string {
+  return active ? JSON.stringify(['relay', active.relayId, active.baseUrl]) : 'official';
+}
+
 export function subscribeSelfHostedRelayRoute(listener: () => void): () => void {
   listeners.add(listener);
   return () => {

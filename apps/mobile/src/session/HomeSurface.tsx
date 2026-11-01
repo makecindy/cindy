@@ -1,4 +1,6 @@
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
+import { getSelfHostedRelayDataKey } from '@/device-link/selfHostedRelayRouting';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
 import { readTeammateTasks } from './readTeammateTasks';
@@ -546,9 +548,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const { width: windowWidth, height: screenHeight } = useWindowDimensions();
   const screenWidth = width ?? windowWidth;
   const auth = useAuth();
-  const { accountGeneration, deviceId: selfDeviceId, user } = auth;
+  const { deviceId: selfDeviceId, user } = auth;
+  // Home's existing read fences cover both account switches and relay switches.
+  // Auth/credential ownership continues to use auth.accountGeneration unchanged.
+  const accountGeneration = useRelayDataGeneration(auth.accountGeneration);
   // 首页列表持久缓存按账号键控(401 掉线换号不串数据);首页仅登录后可达,user 理应非空。
   const homeCacheUserId = user?.id ?? '';
+  const resourceCacheUserId = homeCacheUserId ? JSON.stringify([homeCacheUserId, getSelfHostedRelayDataKey()]) : '';
   const {
     connectionEpoch,
     connectionIssue,
@@ -761,6 +767,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // updated during render, so every older async continuation is fenced even before this reset runs.
   useLayoutEffect(() => {
     syncInFlightRef.current = null;
+    homeAccountGenerationRef.current = accountGeneration;
     syncQueuedRef.current = null;
     devicesRef.current = [];
     homeSyncTargetDeviceIdsRef.current.clear();
@@ -793,6 +800,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setRevokedTipDeviceId(null);
     setRetryingDeviceIds(new Set());
     setProjectDrag(null);
+    return () => { homeAccountGenerationRef.current = Number.NaN; };
   }, [accountGeneration]);
 
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {
@@ -1855,14 +1863,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     remoteHomeCollectionsRef.current = [];
     setRemoteHomeCollections([]);
     setResourceCacheAccount(null);
-    void readRemoteResourceSnapshot(homeCacheUserId).then((snapshot) => {
+    void readRemoteResourceSnapshot(resourceCacheUserId).then((snapshot) => {
       if (cancelled) return;
       remoteHomeCollectionsRef.current = snapshot.home;
       setRemoteHomeCollections(snapshot.home);
       setResourceCacheAccount(accountGeneration);
     });
     return () => { cancelled = true; };
-  }, [accountGeneration, homeCacheUserId]);
+  }, [accountGeneration, resourceCacheUserId]);
   useEffect(() => {
     if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
     let cancelled = false;
@@ -1888,7 +1896,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
           remoteHomeCollectionsRef.current = collections;
           setRemoteHomeCollections(collections);
-          void cacheRemoteResourceHome(homeCacheUserId, collections);
+          void cacheRemoteResourceHome(resourceCacheUserId, collections);
         }
       })
       .catch(() => {
@@ -1903,6 +1911,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     lastSyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
+    resourceCacheUserId,
     deviceModels,
     i18nInstance.language,
     invoke,

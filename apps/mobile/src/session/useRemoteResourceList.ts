@@ -3,6 +3,8 @@ import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
+import { getSelfHostedRelayDataKey } from '@/device-link/selfHostedRelayRouting';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices, revokedDevicesStore } from '@/device-link/revokedDevicesStore';
@@ -21,13 +23,14 @@ import { startBoundedStartupRead } from './mobileHomeStartup';
 
 /** One roster reader for resource routes, home and the picker. Host shards reconcile independently. */
 export function useRemoteResourceList(collectionId: string, targets: readonly RemoteResourceHostTarget[], enabled = true) {
-  const { user, accountGeneration } = useAuth();
+  const { user, accountGeneration: authGeneration } = useAuth();
+  const accountGeneration = useRelayDataGeneration(authGeneration);
   const revoked = useRevokedDevices();
   const { t, i18n } = useTranslation();
   const { connectionEpoch, status, presenceVersion, getPresenceAvailability, invoke, openLink,
     onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
-  const owner = `${user?.id ?? ''}:${accountGeneration}`;
+  const owner = JSON.stringify([user?.id ?? '', accountGeneration, getSelfHostedRelayDataKey()]);
   const binding = JSON.stringify([owner, collectionId]);
   const bindingRef = useRef(binding); bindingRef.current = binding;
   const freshHosts = useRef<{ binding: string; ids: Set<string> }>({ binding, ids: new Set() });
@@ -180,7 +183,8 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     return () => { stop(); foreground.remove(); off(); cleanups.forEach((cleanup) => cleanup()); };
   }, [collectionId, enabled, onRemoteResourceChanged, refresh, requestRefresh, status, subscribe, targets, unsubscribe]));
   const ownState = state.binding === binding;
-  const visibleItems = useMemo(() => revoked.size ? state.items.filter(row => !revoked.has(row.host.deviceId)) : state.items, [state.items, revoked]);
+  const visibleItems = useMemo(() => state.items.filter(row => !revoked.has(row.host.deviceId)
+    && targets.some(target => target.deviceId === row.host.deviceId)), [state.items, revoked, targets]);
   const isOnline = useCallback((host: RemoteResourceHostTarget) => ownState && isRemoteResourceHostOnline(
     status, getPresenceAvailability(host.deviceId), state.replies[host.deviceId], connectionEpoch,
   ), [connectionEpoch, getPresenceAvailability, ownState, presenceKey, state.replies, status]);
