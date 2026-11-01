@@ -136,6 +136,42 @@ describe('dingtalk teammate-owned connection', () => {
     expect(personal.turnPermissionPolicyFor?.(ownerEvent)).toBeDefined();
     expect(adapter.turnPermissionPolicyFor?.({ messageId: 'dm' } as IMMessageEvent)).toBeUndefined();
   });
+
+  // Unit regression: the transport now supplies speaker for guest DMs. The generic
+  // source helper treats any speaker as a group; the adapter must use lane identity
+  // instead, or both UI and model receive the wrong conversation kind.
+  it('keeps guest DMs labeled private and subject to the non-owner policy', () => {
+    const adapter = buildDingTalkAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    const event = {
+      channelName: 'dingtalk', senderId: 'guest-1', chatId: 'private-1',
+      contextId: 'app', messageId: 'guest-message', text: 'hello',
+      speaker: { id: 'guest-1', name: 'Guest', isOwner: false },
+      attachments: [], unsupported: [],
+    } satisfies IMMessageEvent;
+    expect(adapter.channelNoteSourceFor?.(event)).toMatchObject({
+      chatKind: 'direct', chatId: 'private-1', senderId: 'guest-1', senderIsOwner: false,
+    });
+    expect(adapter.turnPermissionPolicyFor?.(event)?.forceConfirmToolCall('file_change', {})).toBe(true);
+    expect(adapter.companionLane?.(event.senderId)).toEqual({ kind: 'guest-dm', userId: 'guest-1' });
+  });
+
+  // A received guest DM inherits the teammate's permission mode. In Full access,
+  // attaching a mandatory turn policy rejects the message before model dispatch.
+  it('honors teammate Full access for guest DMs while retaining Auto and personal policies', () => {
+    const adapter = buildDingTalkAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    const personal = buildDingTalkAdapter(im, CONFIG);
+    const event = {
+      messageId: 'guest-full-access', senderId: 'guest-1',
+      speaker: { id: 'guest-1', name: 'Guest', isOwner: false },
+    } as IMMessageEvent;
+    const policy = adapter.turnPermissionPolicyFor?.(event);
+    expect(policy?.autoReviewContext?.requesterAuthority).toBe('guest');
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).toBe(true);
+    for (const mode of ['auto', 'ask', 'acceptEdits'] as const) {
+      expect(adapter.turnPolicyOptionalForMode?.(mode, policy!)).toBe(false);
+    }
+    expect(personal.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).not.toBe(true);
+  });
 });
 
 describe('dingtalk group window', () => {
