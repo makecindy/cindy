@@ -3734,6 +3734,17 @@ describe('Chat Server result delivery and refresh', () => {
       expect(await service.sendMessage({ groupId: directId, conversationKind: 'direct', text: 'No plan', division: true,
         clientId: 'direct-notice-no-plan', mentions: { all: false, botIds: [] } })).toMatchObject({ ok: false });
       expect(writes()).toHaveLength(1);
+      // A warmed direct room still requires the notification opt-in; group routes must not read its messages or plans.
+      fixture.handle.mockClear();
+      expect(await service.getGroup(directId)).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+      expect(fixture.handle.mock.calls.filter(([route]) => String(route).startsWith(`/conversations/${directId}`)
+        && !String(route).endsWith('/snapshot'))).toEqual([]);
+      fixture.handle.mockClear();
+      expect(await service.sendMessage({ groupId: directId, text: 'No opt in', clientId: 'direct-unmarked-reply',
+        mentions: { all: false, botIds: [] } })).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+      expect(fixture.handle.mock.calls.filter(([route]) => String(route).startsWith(`/conversations/${directId}`)
+        && !String(route).endsWith('/snapshot'))).toEqual([]);
+      expect(writes()).toEqual([]);
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => route === `/conversations/${directId}/snapshot`
         ? { body: { room: roomOf(directId), cursor: '2', members: [], reads: [{ thread_key: 'main', read_seq: '0' }],

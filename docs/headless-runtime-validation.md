@@ -202,3 +202,9 @@ Chat Server 的 message.created 接入共享通知消费者，Desktop 注入上�
 在既有 chatServer 测试加入真实生产 transport 回归：最小输入是已订阅群收到一条新的 message.created，之前共享适配器不通知。覆盖首次历史、重连历史、实时消息、已读／静音及切账号；使用模拟 HTTP／WebSocket 和 fake timers，属于 unit transport tier，无真实等待或新增测试文件。修改前源码运行时新增用例失败；修改后定向 1 passed、366 skipped（7.66 秒，收集 7.19 秒、执行 43ms），存量巨型文件导入超过五秒预算。既有消费者文件补入摘要生成期间读位变化的竞态，5 项全部通过，单文件 458ms。
 
 两文件完整运行 335 passed、37 failed（9.03 秒）；用 HEAD 的 chatServer 原生产源码对照为 329 passed、38 failed（仅 Chat Server 文件），失败名称集合比较仅新增通知用例由失败转通过，其余 37 项完全一致。失败涉及分工自动继续、个人资料投影、私聊等尚未迁入的主干行为，未删改断言。app-runtime、Terminal 类型检查通过；Desktop 仍 218 条诊断，本批通知接线无新增诊断；test-hygiene 通过。主干冲突、完整 CI 与剩余迁移仍待解决，在线 VPS 未修改。
+
+### 群聊执行与通知深链兼容（2026-11-01）
+
+接回群聊运行时迁移遗漏的四项行为：讨论安排的较早回答限制为 600 字、最新回答保留至 2000 字；负责人安排未完成时同步拒绝新消息（`PLAN_OPEN`）；默认负责人投影为本机伙伴 ID；通知深链显式标注 `conversationKind: 'direct'` 后可读取直接会话、发送回复和推进读位。直接会话即使已预热，普通群入口仍只读快照并拒绝读取群消息或安排。
+
+既有 `chatServer.test.ts` 定向运行 367 项通过（9.53 秒，收集 6.89 秒、执行 2.08 秒）；用例覆盖旧回答截断、安排期间拒绝新消息、负责人 ID 投影、直接通知读取／回复／已读，以及预热直接会话仍拒绝普通群入口。`@cindy/app-runtime`、`@cindy/companion-core`、`@cindy/remote-agent` 与 `cindy-terminal` 类型检查通过；`git diff --check` 通过。Desktop 整包类型检查已执行但失败，报告仍有多处跨模块接口迁移差异；本轮未运行完整 Desktop CI，PR 仍与主干冲突并保持草稿，本轮未部署或修改 VPS。

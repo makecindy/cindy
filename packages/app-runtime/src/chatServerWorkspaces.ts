@@ -5,7 +5,8 @@ import path from 'node:path';
 import { z } from 'zod';
 import { atomicWriteFileSync, readAtomicFileSync } from '@cindy/companion-core/atomicWriteFile';
 const workspace = z.object({ workDir: z.string(), branch: z.string().nullable(), ownerSessionId: z.string().nullable() });
-const record = z.object({ projectDir: z.string().nullable(), plans: z.record(z.string(), workspace) });
+const record = z.object({ projectDir: z.string().nullable(), plans: z.record(z.string(), workspace), autoContinue: z.boolean().optional(),
+  startedHere: z.array(z.string()).max(50).optional() });
 export function createChatServerWorkspaces(ownerScopedUserDataPath: (...parts: string[]) => string) {
 function chatServerWorkspaces(endpoint: string, actorId: string, current: () => boolean) {
   const root = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'));

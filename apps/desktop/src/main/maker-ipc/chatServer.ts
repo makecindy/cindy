@@ -7,6 +7,7 @@ import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
+import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import { chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
 import { prepareBotGroupTaskPost } from './botGroupTaskPostSnapshot.js';
@@ -18,7 +19,7 @@ export { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageTex
 export const { withChatServer } = createChatServerRuntime({
  userDataPath:()=>app.getPath('userData'),isPackaged:()=>app.isPackaged,getClientEndpoint,t,
  fetch:(url,init)=>net.fetch(url instanceof URL ? url.toString() : url,init),getAccessToken,refresh,getDbClient,readMedia,
- createChatMedia,prepareChatReplyImages,chatServerWorkspaces,chatMigrationReceipts,prepareBotGroupTaskPost,
+ createChatMedia,prepareChatReplyFiles,prepareChatReplyImages,chatServerWorkspaces,chatMigrationReceipts,prepareBotGroupTaskPost,
  readPersistedReplyText,registerGroupToolAuthority,GroupToolAuthorizationError,uploadPublicAsset,
  validateAvatar:avatar=>validateAvatarUpload(avatar,({buffer})=>{
   const image=nativeImage.createFromBuffer(Buffer.from(buffer));

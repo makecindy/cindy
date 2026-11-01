@@ -1261,6 +1261,9 @@ importers:
       unified:
         specifier: 11.0.5
         version: 11.0.5
+      unist-util-visit:
+        specifier: ^5.1.0
+        version: 5.1.0
       ws:
         specifier: ^8.18.3
         version: 8.21.1

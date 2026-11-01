@@ -1,3 +1,5 @@
+import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
+import type { ChatUploadAttachment } from '@cindy/companion-core/chatMedia';
 import { createChatMessageNotifications } from './chatMessageNotifications.js';
 import { notificationPreview } from './notificationPreview.js';
 import type { BotGroupTaskPostSnapshot } from './botGroupTaskPostSnapshot.js';
@@ -12,7 +14,8 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from '@cindy/companion-core/chatServerMigration';
 import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from '@cindy/companion-core/chatServerErrors';
-import { buildPlanStepBrief } from '@cindy/companion-core/botGroupDivision';
+import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from '@cindy/companion-core/botGroupDivision';
+import { splitBotGroupRelaySteps } from '@cindy/maker-shared/botGroupMentions';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import WebSocket from 'ws';
@@ -80,7 +83,7 @@ interface Running {
   lane?: string;
   laneLookup?: Promise<void>;
   context?: ExecutionContext;
-  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: BotGroupAttachment[] }; retryAt: number; keepLease?: boolean };
+  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<ChatServerHost['prepareChatReplyFiles']>>; retryAt: number; keepLease?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
@@ -204,6 +207,7 @@ export interface ChatServerHost {
  getDbClient(): import('@cindy/runtime-db').DbClient;
  readMedia: ReturnType<typeof import('./persistedMedia.js').createPersistedMedia>['blobStore']['readFile'];
  createChatMedia: ReturnType<typeof import('./chatServerMedia.js').createChatMediaRuntime>['createChatMedia'];
+ prepareChatReplyFiles: ReturnType<typeof import('./chatServerReplyFiles.js').createChatReplyFiles>['prepareChatReplyFiles'];
  prepareChatReplyImages: ReturnType<typeof import('./chatServerReplyImages.js').createChatReplyImages>['prepareChatReplyImages'];
  chatServerWorkspaces: ReturnType<typeof import('./chatServerWorkspaces.js').createChatServerWorkspaces>;
  chatMigrationReceipts: ReturnType<typeof import('./chatMigrationReceipts.js').createChatMigrationReceipts>;
@@ -218,7 +222,7 @@ export interface ChatServerHost {
 
 export function createChatServerRuntime(host: ChatServerHost) {
 const {userDataPath,isPackaged,getClientEndpoint,t,fetch,getAccessToken,refresh,getDbClient,readMedia,
- createChatMedia,prepareChatReplyImages,chatServerWorkspaces,chatMigrationReceipts,prepareBotGroupTaskPost,
+ createChatMedia,prepareChatReplyFiles,prepareChatReplyImages,chatServerWorkspaces,chatMigrationReceipts,prepareBotGroupTaskPost,
  readPersistedReplyText,registerGroupToolAuthority,GroupToolAuthorizationError,validateAvatar,uploadPublicAsset} = host;
 const attachmentName = (b: Message['content'][number]) => b.caption?.trim() || t('bots.groupChat.files.untitled');
 const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.type === 'media' ? [attachmentName(b)] : []).join(', ');
@@ -254,9 +258,14 @@ function mainGroupContext<V extends { text: string }>(messages: Message[], view:
  */
 function discussionTurnBrief(plan: ServerPlan, position: number, history: readonly Message[]) {
   const step = plan.steps[position];
-  const earlierAnswers = plan.steps.filter(s => s.position < position).flatMap(s => {
+  const answers = plan.steps.filter(s => s.position < position).flatMap(s => {
     const result = history.find(m => m.id === s.resultMessageId);
     return result ? [{ from: s.botName, text: bodyText(result) }] : [];
+  });
+  const earlierAnswers = answers.map((answer, index) => {
+    const limit = index === answers.length - 1 ? 2000 : 600;
+    const shortened = answer.text.length > limit;
+    return { ...answer, text: shortened ? answer.text.slice(0, limit) + '…' : answer.text, ...(shortened ? { shortened: true } : {}) };
   });
   const notes = history.filter(m => plan.note_message_ids?.includes(m.id)).map(bodyText);
   return [
@@ -919,6 +928,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function subscribe(roomId: string, cursor = '0') {
     const fresh = !rooms.has(roomId); advanceRoom(roomId, cursor);
     if (fresh && connected && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
+    if (fresh) autoContinuePlans(roomId);
   }
   function connect() {
     if (!current()) return;
@@ -945,7 +955,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           for (const roomId of rooms.keys()) invalidate(roomId);
           ws.send(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' }));
           for (const [roomId, cursor] of rooms) ws.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
-          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) changed(roomId); changed(''); } }).catch(() => ws.close());
+          void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) { changed(roomId); autoContinuePlans(roomId); } changed(''); } }).catch(() => ws.close());
         } else if (event.type === 'changes') {
           // This adapter stores no client history. Each invalidation re-reads authoritative
           // state; a reconnect resumes after the last cursor this process has read or acked.
@@ -964,8 +974,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const types = changes.map(change => (change as { type?: unknown } | null)?.type);
             // Lease renewals append no change; ordinary chatter cannot revoke a lease, so it does
             // not renew one either. Any other or unknown change re-checks the room's running work.
-            if (!types.length || types.some(type => typeof type !== 'string' || !CHATTER_CHANGES.has(type)))
+            if (!types.length || types.some(type => typeof type !== 'string' || !CHATTER_CHANGES.has(type))) {
               for (const run of running.values()) if (run.execution.conversation_id === roomId) void checkLease(run);
+              autoContinuePlans(roomId);
+            }
             if (changes.some(queuedForThisDevice)) {
               for (const change of changes) {
                 const value = change as { entityId?: unknown; data?: { botId?: unknown } };
@@ -1072,6 +1084,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   async function groupSnapshot(roomId: string) {
     const value = await readSnapshot(roomId);
     if (!isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
+    subscribe(roomId, value.cursor);
+    return value;
+  }
+  async function directSnapshot(roomId: string) {
+    const value = await readSnapshot(roomId);
+    if (value.room.kind !== 'direct') throw new Error('NOT_A_GROUP');
     subscribe(roomId, value.cursor);
     return value;
   }
@@ -1332,9 +1350,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function detail(roomId: string, options?: unknown, summaryOnly = false): Promise<BotGroupDetail> {
     id.parse(roomId);
-    const o = z.object({ beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
+    const o = z.object({ conversationKind: z.literal('direct').optional(), beforeSequence: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).optional(),
       sourceMessageIds: z.array(id).optional(),
       shownShares: z.array(z.object({ id, messageId: id, threadRootId: id, sharerId: z.string().min(1).max(200).optional() })).optional() }).parse(options ?? {});
+    const direct = o.conversationKind === 'direct';
     const query = new URLSearchParams({ limit: String(o.limit ?? 100) });
     if (o.beforeSequence) query.set('before', String(o.beforeSequence));
     // Independent reads share a round trip. Each is awaited in the former serial order, so the
@@ -1342,18 +1361,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // reported (a left room stays 「not found」), whichever request fails first in time.
     // A followed room reports every later change, so its snapshot may run alongside. A new
     // room first takes the snapshot cursor it will follow from, before the rest is read.
-    const snapshotRead = groupSnapshot(roomId);
-    if (!rooms.has(roomId)) await snapshotRead;
+    const snapshotRead = direct ? directSnapshot(roomId) : groupSnapshot(roomId);
+    const cachedRoom = snapshots.get(roomId)?.value.room;
+    if (!rooms.has(roomId) || !cachedRoom || (direct ? cachedRoom.kind !== 'direct' : !isGroupRoom(cachedRoom))) await snapshotRead;
     const messagesRead = summaryOnly ? null : api<Message[]>(`/conversations/${roomId}/messages?${query}`);
-    const executionsRead = api<Execution[]>(`/conversations/${roomId}/executions`);
+    const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>('/conversations/' + roomId + '/executions');
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
     const page = (await messagesRead) ?? s.messages;
     const executions = await executionsRead;
     const ids = page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : []));
-    const plansRead = api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
+    const plansRead = direct ? Promise.resolve([] as ServerPlan[])
+      : api<ServerPlan[]>('/conversations/' + roomId + '/plans' + (ids.length ? '?ids=' + ids.join(',') : ''));
     plansRead.catch(() => undefined);
-    const executionFailures = summaryOnly ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
+    const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
@@ -1381,9 +1402,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     messages.sort((a, b) => a.sequence - b.sequence);
     const last = s.messages[0];
     const lastView = last ? messageView(last, s.members) : null;
+    const organizerActorId = s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id;
+    const organizerBotId = organizerActorId ? localBot(organizerActorId)?.id ?? organizerActorId : null;
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
-    return { serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: true, supportsDissolve, supportsListRemoval, supportsMemberAvatar, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: singleSpeaker && !!managementActor(s), ...(singleSpeaker ? { singleSpeaker: true } : {}), id: s.room.id, name: s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: true, supportsDissolve, supportsListRemoval, supportsMemberAvatar, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: singleSpeaker && !!managementActor(s), ...(singleSpeaker ? { singleSpeaker: true, autoContinue: workspace?.autoContinue === true } : {}), id: s.room.id, name: s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       members: s.members.filter(m => m.state === 'joined').map(m => {
         const p = localBot(m.id);
         return { botId: p?.id ?? m.id, actorId: m.id, actorKind: m.kind, isSelf: m.id === selfId,
@@ -1394,7 +1417,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(m.ownerActorId === selfId && m.kind === 'bot' ? { homeDeviceId: actors.find(a => a.id === m.id)?.homeDeviceId ?? null } : {}),
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
-      }), organizerBotId: s.room.organizer_id ? localBot(s.room.organizer_id)?.id ?? s.room.organizer_id : s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id ?? null, projectDir: workspace?.projectDir ?? null, lastMessage: last && lastView ? {
+      }), organizerBotId, projectDir: workspace?.projectDir ?? null, lastMessage: last && lastView ? {
         isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
         preview: lastIsShare ? '' : (botGroupMessageSummaryText(lastView) || mediaNames(last)).slice(0, 80), createdAt: lastView.createdAt, ...(lastIsShare ? { threadShare: true } : {}),
       } : null, speakingBotIds: speakers.map(s => s.botId), planningBotId: planning.get(roomId)?.botId ?? null, openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length, currentBotName: open.steps[open.currentStep ?? 0]?.botName ?? null, currentStepStatus: open.steps[open.currentStep ?? 0]?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
@@ -1406,7 +1429,53 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
       round: { status: deciding || executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers,
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
-          && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
+          && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) },
+      ...(direct ? { conversationKind: 'direct' as const, supportsGroupLeave: false, supportsDissolve: false, supportsListRemoval: false,
+        supportsMemberAvatar: false, migrationPending: false, canInvite: false, canStopAll: false, singleSpeaker: false, autoContinue: false,
+        organizerBotId: null, projectDir: null, speakingBotIds: [], planningBotId: null, openPlan: null,
+        round: { status: 'idle' as const, speakers: [], canContinue: false }, plans: [] } : {}) };
+  }
+  const autoContinueRuns = new Map<string, boolean>();
+  const autoContinued = new Set<string>();
+  function startedHere(plan: ServerPlan, workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>) {
+    return plan.kind === 'work' && plan.creator_id === selfId && workspace?.startedHere?.includes(plan.id) === true;
+  }
+  function markStartedHere(roomId: string, planId: string) {
+    try {
+      const settings = workspaces().read(roomId) ?? { projectDir: null, plans: {} };
+      workspaces().save(roomId, { ...settings, startedHere: [...(settings.startedHere ?? []).filter(known => known !== planId), planId].slice(-50) });
+    } catch (error) { deps.log?.warn('Group 分工 origin could not be saved', { groupId: roomId, ...chatErrorDiagnostic(error) }); }
+  }
+  function autoContinuePlans(roomId: string) {
+    if (!current()) return;
+    if (autoContinueRuns.has(roomId)) { autoContinueRuns.set(roomId, true); return; }
+    autoContinueRuns.set(roomId, false);
+    void (async () => {
+      do {
+        autoContinueRuns.set(roomId, false);
+        if (!workspaces().read(roomId)?.autoContinue) return;
+        const plans = await api<ServerPlan[]>(`/conversations/${roomId}/plans`);
+        const workspace = workspaces().read(roomId);
+        for (const plan of plans) {
+          const at = plan.current_step ?? 0;
+          if (!startedHere(plan, workspace) || plan.status !== 'waiting'
+            || plan.steps[at]?.status !== 'done' || at + 1 >= plan.steps.length) continue;
+          const key = `${plan.id}:${at}`;
+          if (autoContinued.has(key)) continue;
+          autoContinued.add(key);
+          if (autoContinued.size > 1000) autoContinued.delete(autoContinued.values().next().value!);
+          try {
+            if (!workspaces().read(roomId)?.autoContinue) { autoContinued.delete(key); return; }
+            await api(`/conversations/${roomId}/plans/${plan.id}`, 'POST', { operationId: randomUUID(), expectedRevision: plan.revision, action: 'continue' });
+            changed(roomId);
+          } catch (error) {
+            if (!(error instanceof ChatResponseError) || retryableResponse(error)) autoContinued.delete(key);
+            throw error;
+          }
+        }
+      } while (current() && autoContinueRuns.get(roomId));
+    })().catch(error => deps.log?.warn('Group 分工 auto-continue failed', { groupId: roomId, ...chatErrorDiagnostic(error) }))
+      .finally(() => autoContinueRuns.delete(roomId));
   }
   function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
@@ -1417,6 +1486,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         canManage: plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)),
         // Same rule as sendMessage's commentPlan: additions are written as the human, so a teammate's role does not count.
         canAdd: plan.creator_id === selfId || members.some(m => m.id === selfId && ['owner', 'admin'].includes(m.role)) } : {}),
+      ...(startedHere(plan, workspace) ? { autoContinue: workspace?.autoContinue === true } : {}),
       createdAt: Date.parse(plan.created_at), updatedAt: Date.parse(plan.updated_at) };
   }
   async function actPlan(input: unknown, action: string) {
@@ -1437,11 +1507,49 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       action: serverAction, position: i.position, botId }, asManager);
     changed(room); return { ok: true as const };
   }
+  function planRequest(text: string, quote: BotGroupQuoteView | null) {
+    const quoteLine = quote ? buildBotGroupQuoteCard(quote).fallback : '';
+    return quoteLine && text.length + quoteLine.length + 2 <= 8000 ? `${text}\n\n${quoteLine}` : text;
+  }
+  async function settleExplicitRequest(roomId: string, sourceId: string, answer: boolean) {
+    if (!singleSpeaker) return cancelPlanning(roomId, sourceId, true);
+    if (answer) await api(`/conversations/${roomId}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}` });
+  }
+  function writtenPlanSteps(s: Snapshot, text: string, picked: string[]): PlanStepDraft[] | null {
+    const bots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
+    const written = splitBotGroupRelaySteps(text, { allLabels: [],
+      members: bots.map(m => ({ botId: m.id, name: memberName(m), displayName: m.name, nickname: m.nickname })) });
+    if (written && !picked.every(target => written.some(step => step.botId === target || localBot(step.botId)?.id === target))) return null;
+    const assignable = (botId: string) => bots.some(m => m.id === botId && (m.ownerActorId === selfId || m.guestAccess !== 'none')
+      && (!localBot(m.id) || localBot(m.id)?.status === 'active'));
+    return written?.every(step => assignable(step.botId)) ? draftPlanSteps(written) : null;
+  }
+  async function openWrittenPlan(s: Snapshot, sourceId: string, request: string, steps: PlanStepDraft[], intent: PlanIntent) {
+    if (!current() || planIntents.get(s.room.id) !== intent) return;
+    const shown = s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id;
+    const organizerId = steps.some(step => step.botId === shown) ? shown! : steps[0]!.botId;
+    let plan: ServerPlan;
+    try {
+      plan = await api<ServerPlan>(`/conversations/${s.room.id}/plans`, 'POST', {
+        operationId: `plan:${sourceId}`, sourceMessageId: sourceId, organizerId, request, steps });
+      markStartedHere(s.room.id, plan.id);
+    } catch (error) {
+      await settleExplicitRequest(s.room.id, sourceId, true);
+      throw error;
+    } finally { delete intent.sourceId; }
+    if (current() && planIntents.get(s.room.id) === intent) await api(`/conversations/${s.room.id}/plans/${plan.id}`, 'POST', {
+      operationId: `start:${plan.id}`, expectedRevision: plan.revision, action: 'start' });
+    changed(s.room.id);
+  }
   async function decideArrangement(s: Snapshot, sourceId: string, text: string, forced: boolean, attachments: BotGroupAttachment[], intent: PlanIntent, quote: BotGroupQuoteView | null = null) {
     if (!current() || planIntents.get(s.room.id) !== intent) return;
     const members = s.members.filter(m => m.kind === 'bot' && m.state === 'joined' && (!localBot(m.id) || localBot(m.id)?.status === 'active') && (m.ownerActorId === selfId || m.guestAccess !== 'none'));
     const organizer = members.find(m => m.id === s.room.organizer_id) ?? members[0];
-    if (!organizer || !deps.decidePlan) throw new Error('MEMBER_UNAVAILABLE');
+    if (!organizer || !deps.decidePlan) {
+      delete intent.sourceId;
+      if (forced) await settleExplicitRequest(s.room.id, sourceId, true);
+      throw new Error('MEMBER_UNAVAILABLE');
+    }
     planning.get(s.room.id)?.controller.abort();
     const controller = new AbortController();
     const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller };
@@ -1460,18 +1568,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }), request: text,
         requestAttachments: attachments.map(a => a.name), currentSteps: proposed?.steps,
         ...(quote ? { requestQuote: { from: quote.authorName, text: quote.excerpt, ...quoteAttachments(quote.attachmentCount, quote.attachmentName) } } : {}) }, controller.signal);
-      // Steps read the plan's request; keep what it quotes beside it when the server's limit allows.
-      const quoteLine = quote ? buildBotGroupQuoteCard(quote).fallback : '';
-      const request = quoteLine && text.length + quoteLine.length + 2 <= 8000 ? `${text}\n\n${quoteLine}` : text;
+      const request = planRequest(text, quote);
       if (!current() || controller.signal.aborted || planIntents.get(s.room.id) !== intent) return;
-      if (decision?.needsPlan) await api(`/conversations/${s.room.id}/plans`, 'POST', {
-        operationId: `plan:${sourceId}`, sourceMessageId: sourceId, organizerId: organizer.id, request, steps: decision.steps });
-      else if (explicit) await cancelPlanning(s.room.id, sourceId, true);
+      if (decision?.needsPlan) markStartedHere(s.room.id, (await api<ServerPlan>(`/conversations/${s.room.id}/plans`, 'POST', {
+        operationId: `plan:${sourceId}`, sourceMessageId: sourceId, organizerId: organizer.id, request, steps: decision.steps })).id);
+      else if (explicit) await settleExplicitRequest(s.room.id, sourceId, forced && !proposed);
       else await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}`, ...(groupDiscussionParity ? { automatic: true } : {}) });
     } catch (error) {
       if (current() && !controller.signal.aborted) {
         // An organizer failure must not swallow the user's posted request.
-        if (explicit) await cancelPlanning(s.room.id, sourceId, true);
+        if (explicit) await settleExplicitRequest(s.room.id, sourceId, forced);
         else await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}`, ...(groupDiscussionParity ? { automatic: true } : {}) });
         deps.log?.warn('Group arrangement could not be prepared', { groupId: s.room.id });
       }
@@ -1528,6 +1634,31 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     await deliverSettlement(run);
   }
+  async function validateExecutionAuthority(run: Running): Promise<void> {
+    const execution = run.execution;
+    const assertCurrent = () => {
+      if (!current() || running.get(execution.id) !== run) throw new GroupToolAuthorizationError();
+    };
+    assertCurrent();
+    // Recheck metadata and the execution lease at the tool or file-delivery boundary.
+    // Group administrators cannot grant access to someone else's companion.
+    try {
+      const members = await api<Member[]>(`/conversations/${execution.conversation_id}/members`);
+      assertCurrent();
+      const companion = members.find(m => m.id === execution.bot_id && m.kind === 'bot' && m.state === 'joined');
+      const requester = members.find(m => m.id === execution.requester_id && m.state === 'joined');
+      if (execution.access_mode === 'chat' || !companion || companion.ownerActorId !== selfId || !requester
+        || companion.accessRevision !== execution.access_revision
+        || (execution.access_mode === 'owner' ? requester.ownerActorId !== selfId : companion.guestAccess !== 'tools'))
+        throw new GroupToolAuthorizationError();
+      await updateExecution(run, 'heartbeat');
+    } catch (error) {
+      if (error instanceof ChatResponseError && !recoverableAuth(error) && [401, 403, 404, 409, 410].includes(error.status))
+        throw new GroupToolAuthorizationError();
+      throw error;
+    }
+    assertCurrent();
+  }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
     const pending = run.settlement;
@@ -1554,15 +1685,38 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           let contentText = text;
           let files: ChatContentBlock[] = [];
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
+          const validateUpload = async () => {
+            assertCurrent();
+            if (pending.fileReply?.attachments.length) {
+              try { await validateExecutionAuthority(run); }
+              catch (error) {
+                // Definitive revocation ends delivery; transport failures retain
+                // the same result for retry without running the Agent again.
+                if (error instanceof GroupToolAuthorizationError) throw new ChatResponseError('PERMISSION_DENIED', 403);
+                throw error;
+              }
+            }
+            assertCurrent();
+          };
           try {
             if (terminal.outcome !== 'error') {
               if (ordinaryReply) {
-                pending.reply ??= { sourceText: text, ...await prepareChatReplyImages(text, run.sessionId, assertCurrent) };
+                pending.fileReply ??= await prepareChatReplyFiles(text, run.sessionId, () => {
+                  assertCurrent();
+                  if (run.execution.access_mode === 'chat') throw new Error('ATTACHMENT_UNAVAILABLE');
+                }, !terminal.resultText.trim() ? terminal.resultMessageClientId : undefined);
+                // Shared reference classification reads file bytes before image import.
+                // Retain the later upload/seal checks and authorize this read as well.
+                if (!pending.reply && pending.fileReply.attachments.length) await validateUpload();
+                pending.reply ??= { sourceText: text, ...await prepareChatReplyImages(pending.fileReply.text, run.sessionId, assertCurrent,
+                  pending.fileReply.attachments) };
                 contentText = pending.reply.text;
-                produced.push(...pending.reply.attachments);
+                produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
+                if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }
+              if (ordinaryReply) await validateUpload();
               files = await media.upload(run.execution.conversation_id, `step:${run.execution.id}:${run.execution.epoch}`,
-                produced, run.execution.bot_id, ordinaryReply ? assertCurrent : undefined);
+                produced, run.execution.bot_id, ordinaryReply ? validateUpload : undefined);
               assertCurrent();
             }
           } catch (error) {
@@ -1737,24 +1891,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           botId: bot.id, mode: execution.access_mode,
           sourceGroup: { groupId: s.room.id, name: s.room.name },
           isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
-          validate: async () => {
-            // Recheck metadata and the execution lease at the actual tool boundary.
-            // Group administrators cannot grant access to someone else's companion.
-            try {
-              const members = await api<Member[]>(`/conversations/${s.room.id}/members`);
-              const companion = members.find(m => m.id === execution.bot_id && m.kind === 'bot' && m.state === 'joined');
-              const requester = members.find(m => m.id === execution.requester_id && m.state === 'joined');
-              if (!companion || companion.ownerActorId !== selfId || !requester
-                || companion.accessRevision !== execution.access_revision
-                || (execution.access_mode === 'owner' ? requester.ownerActorId !== selfId : companion.guestAccess !== 'tools'))
-                throw new GroupToolAuthorizationError();
-              await updateExecution(run, 'heartbeat');
-            } catch (error) {
-              if (error instanceof ChatResponseError && [401, 403, 404, 409, 410].includes(error.status))
-                throw new GroupToolAuthorizationError();
-              throw error;
-            }
-          },
+          validate: () => validateExecutionAuthority(run),
         });
         if (run.plan && run.workspace?.ownerSessionId) {
           const settings = workspaces().read(s.room.id)!;
@@ -2239,6 +2376,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const target = await resolveGroup(id.parse(input.groupId));
       const actorAction = z.object({ actorId: id });
       const action = z.discriminatedUnion('type', [
+        z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
         z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
           z.object({ type: z.literal('keep') }).strict(), z.object({ type: z.literal('reset') }).strict(),
@@ -2252,6 +2390,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         z.object({ type: z.literal('dissolve'), expectedRevision: z.number().int().positive() }).strict(),
         z.object({ type: z.literal('archive'), archived: z.boolean(), expectedRevision: z.number().int().positive() }).strict(),
       ]).parse(input.action);
+      if (action.type === 'read') {
+        const snapshot = action.conversationKind === 'direct' ? await directSnapshot(target) : await groupSnapshot(target);
+        const message = snapshot.messages.find(item => item.id === action.messageId) ?? await readMessage(target, action.messageId);
+        if (!message) throw new Error('MESSAGE_NOT_FOUND');
+        await api('/conversations/' + target + '/read', 'POST', { operationId: randomUUID(), readSeq: message.seq });
+        changed(target);
+        return {};
+      }
       if (action.type === 'avatar') {
         if (!supportsMemberAvatar) throw new Error('CHAT_UNAVAILABLE');
         const snapshot = await groupSnapshot(target);
@@ -2462,11 +2608,34 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   const sendMessage: BotGroupChatService['sendMessage'] = (input, origin) => safe(async () => {
     const started = Date.now();
-    const i = z.object({ groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
+    const i = z.object({ conversationKind: z.literal('direct').optional(), groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
       mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional(),
       quote: z.object({ messageId: id }).strict().optional() }).parse(input);
     i.groupId = await resolveGroup(i.groupId);
     if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
+    if (i.conversationKind === 'direct') {
+      if (i.division || i.quote) throw new Error('NOT_A_GROUP');
+      const s = await directSnapshot(i.groupId);
+      const prepared = i.attachments?.length
+        ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments, controllerDeviceId: origin?.controllerDeviceId })
+        : undefined;
+      if (i.attachments?.length && (!prepared || !prepared.ok)) throw new Error('INVALID_ATTACHMENT');
+      let result: { id: string };
+      try {
+        const uploaded = await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId);
+        result = await api<{ id: string }>('/conversations/' + i.groupId + '/messages', 'POST', {
+          operationId: i.clientId, content: [ ...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded ],
+          mentions: resolveMentions(s.members, i.mentions), deferExecution: false,
+        });
+      } catch (error) {
+        if (prepared?.ok) await prepared.discard();
+        throw error;
+      }
+      if (prepared?.ok) prepared.commit();
+      changed(i.groupId);
+      return { ok: true as const, messageId: result.id };
+    }
+    if (singleSpeaker && planIntents.get(i.groupId)?.sourceId) throw new Error('PLAN_OPEN');
     // An attempted send must not cancel a valid decision until its message exists.
     const intentVersion = ++nextIntentVersion;
     // The reads a send needs share one round trip (none for a snapshot the live subscription
@@ -2474,7 +2643,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // one the serial version reported.
     const snapshotRead = recentSnapshot(i.groupId, true);
     // An unopened room must be confirmed as a group before reading its other resources.
-    if (!rooms.has(i.groupId)) await snapshotRead;
+    const cachedRoom = snapshots.get(i.groupId)?.value.room;
+    if (!rooms.has(i.groupId) || !cachedRoom || !isGroupRoom(cachedRoom)) await snapshotRead;
     const quoteKey = i.quote ? JSON.stringify([i.groupId, i.clientId, i.quote.messageId, i.text, i.mentions, i.division]) : '';
     const knownQuote = i.quote ? postedQuotes.get(quoteKey) : undefined;
     const snapshotMembers = snapshotRead.then(value => value.members);
@@ -2490,15 +2660,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const plans = await plansRead;
     const openPlan = plans.find(p => ['proposed','running','waiting'].includes(p.status));
     const proposed = openPlan?.status === 'proposed' && openPlan.creator_id === selfId;
-    // A single-speaker server arranges turns itself (several named teammates, or everyone when
-    // nobody is named); the send no longer asks a helper model whether to divide the work first.
-    if (i.division && openPlan && !proposed && !singleSpeaker) throw new Error('PLAN_OPEN');
-    // Reply mode decides whether a message triggers work; single-speaker only decides its order.
-    const canTrigger = (!singleSpeaker && i.division) || s.room.response_mode !== 'mentioned' || !namesNobody(i.mentions);
-    // A queue waiting for 继续 gives way to a new request; only a turn under way takes additions (§4.0).
-    const commentPlan = canTrigger && openPlan && openPlan.status !== 'proposed' && !(singleSpeaker && openPlan.kind === 'talk' && openPlan.status === 'waiting') && !i.mentions.botIds.length && !i.mentions.all && (openPlan.creator_id === selfId || s.members.some(m => m.id === selfId && ['owner','admin'].includes(m.role))) ? openPlan : undefined;
-    const shouldPlan = canTrigger && !singleSpeaker && !!deps.decidePlan && (i.division || (!i.mentions.botIds.length && (!proposed || !i.mentions.all)))
-      && (!openPlan || proposed);
+    const mayAdd = !!openPlan && (openPlan.creator_id === selfId || s.members.some(m => m.id === selfId && ['owner','admin'].includes(m.role)));
+    const settleQueue = singleSpeaker && i.division && openPlan?.kind === 'talk' && openPlan.status === 'waiting' && mayAdd ? openPlan : undefined;
+    if (i.division && openPlan && !proposed && !settleQueue) throw new Error('PLAN_OPEN');
+    const namedBot = i.mentions.botIds.some(target => s.members.some(m => m.kind === 'bot' && (m.id === target || localBot(m.id)?.id === target)));
+    const canTrigger = i.division || i.mentions.all || namedBot || (namesNobody(i.mentions) && s.room.response_mode !== 'mentioned');
+    const commentPlan = canTrigger && openPlan && openPlan.status !== 'proposed'
+      && !(singleSpeaker && openPlan.kind === 'talk' && openPlan.status === 'waiting')
+      && !i.mentions.botIds.length && !i.mentions.all && mayAdd ? openPlan : undefined;
+    const shouldPlan = singleSpeaker
+      ? i.division || (canTrigger && proposed && namesNobody(i.mentions) && !!deps.decidePlan)
+      : canTrigger && !!deps.decidePlan && (i.division || (!i.mentions.botIds.length && (!proposed || !i.mentions.all)))
+        && (!openPlan || proposed);
     const prepared = i.attachments?.length ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments, controllerDeviceId: origin?.controllerDeviceId }) : undefined;
     if (i.attachments?.length && (!prepared || !prepared.ok)) {
       const error = new Error(prepared && !prepared.ok ? prepared.errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : prepared.errorCode : 'INVALID_ATTACHMENT');
@@ -2539,15 +2712,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Installing the intent is synchronous, so a newer send or control action still
       // supersedes this one in order; only the cancels of replaced decisions are awaited.
       const installed = intentVersion > (acceptedIntentVersions.get(roomId) ?? 0) ? installPlanIntent(roomId, intentVersion) : null;
-      if (installed) await cancelPlanningWithRetry(roomId, () => flushPlanCancels(roomId, installed.previousSourceId));
       const intent = installed?.intent ?? null;
+      if (shouldPlan && intent) intent.sourceId = messageId;
+      if (installed) await cancelPlanningWithRetry(roomId, () => flushPlanCancels(roomId, installed.previousSourceId));
       if (shouldPlan) {
         // Overtaken by a newer message or control action: this message must not stay deferred,
         // so its cancel gets the same immediate retry as a replaced decision's.
         if (!intent || planIntents.get(roomId) !== intent) await cancelPlanningWithRetry(roomId, () => cancelPlanning(roomId, messageId));
         else {
-          intent.sourceId = messageId;
-          void decideArrangement(s, messageId, i.text, i.division === true, prepared?.ok ? prepared.attachments : [], intent, quote).catch(() => undefined);
+          const arrange = async () => {
+            if (settleQueue) await api(`/conversations/${roomId}/plans/${settleQueue.id}`, 'POST', {
+              operationId: `settle:${settleQueue.id}:${messageId}`, expectedRevision: settleQueue.revision, action: 'stop' })
+              .catch(error => deps.log?.warn('Waiting queue could not be ended', { groupId: roomId, ...chatErrorDiagnostic(error) }));
+            const written = singleSpeaker && i.division && !i.mentions.all ? writtenPlanSteps(s, i.text, i.mentions.botIds) : null;
+            if (written) await openWrittenPlan(s, messageId, planRequest(i.text, quote), written, intent);
+            else await decideArrangement(s, messageId, i.text, i.division === true, prepared?.ok ? prepared.attachments : [], intent, quote);
+          };
+          void arrange().catch(error => deps.log?.warn('Group arrangement failed', { groupId: roomId, ...chatErrorDiagnostic(error) }));
         }
       }
     })().catch(error => deps.log?.warn('Group send bookkeeping failed', { groupId: roomId, ...chatErrorDiagnostic(error) }));
@@ -2593,7 +2774,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!current()) return Promise.resolve(chatGroupFailure(new Error('OWNER_CHANGED')));
       // clientId identifies one immutable send; annotation burn-in can regenerate
       // attachment names/URLs while the controller is retrying its lost receipt.
-      const identity = z.object({ groupId: id, clientId: z.string().min(1).max(200), text: z.string(),
+      const identity = z.object({ conversationKind: z.literal('direct').optional(), groupId: id, clientId: z.string().min(1).max(200), text: z.string(),
         mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(),
         quote: z.object({ messageId: z.string() }).optional() }).safeParse(input);
       if (!identity.success) return sendMessage(input, origin);
@@ -2614,8 +2795,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
-        speakingMode: z.enum(['auto', 'sequential']).optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), expectedRevision: z.number().int().positive().optional() }).parse(input);
+        speakingMode: z.enum(['auto', 'sequential']).optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId);
+      if (i.autoContinue !== undefined) workspaces().save(i.groupId, { ...(workspaces().read(i.groupId) ?? { projectDir: null, plans: {} }), autoContinue: i.autoContinue });
       if (i.organizerBotId) await register();
       const s = await groupSnapshot(i.groupId);
       let projectDir = i.projectDir;
@@ -2623,8 +2805,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
         name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId }, managementActor(s));
-      if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
-      changed(i.groupId); return { ok: true as const };
+      if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { projectDir: null, plans: {} }, projectDir });
+      changed(i.groupId);
+      if (i.autoContinue) autoContinuePlans(i.groupId);
+      return { ok: true as const };
     }),
     // Stop stops what is yours: your requests and arrangements, and your teammates' work for
     // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.

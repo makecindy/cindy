@@ -58,6 +58,19 @@ function clamp(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
 }
 
+/** Normalize steps from an organizer response or an explicitly written request. */
+export function draftPlanSteps(items: ReadonlyArray<{ botId: string; task: string }>): PlanStepDraft[] | null {
+  const steps: PlanStepDraft[] = [];
+  for (const { botId, task } of items) {
+    const flat = task.replace(/\s+/g, ' ').trim();
+    if (!flat) return null;
+    const previous = steps[steps.length - 1];
+    if (previous && previous.botId === botId) previous.task = clamp(`${previous.task}；${flat}`, BOT_GROUP_PLAN_TASK_MAX_CHARS);
+    else steps.push({ botId, task: clamp(flat, BOT_GROUP_PLAN_TASK_MAX_CHARS) });
+  }
+  return steps.length && steps.length <= BOT_GROUP_PLAN_MAX_STEPS ? steps : null;
+}
+
 export const PLAN_DECISION_SYSTEM_PROMPT = [
   'You are the organizer of a group chat between one user and their AI partners.',
   "You decide whether the user's latest message should be split into steps that different partners do one after another, and you assign those steps.",

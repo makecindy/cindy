@@ -8,6 +8,7 @@ import { createBotCanonicalSessionRegistry } from '@cindy/app-runtime/botCanonic
 import { createChatServerRuntime } from '@cindy/app-runtime/chatServer';
 import { createChatMediaRuntime } from '@cindy/app-runtime/chatServerMedia';
 import { createChatReplyImages } from '@cindy/app-runtime/chatServerReplyImages';
+import { createChatReplyFiles } from '@cindy/app-runtime/chatServerReplyFiles';
 import { createChatServerWorkspaces } from '@cindy/app-runtime/chatServerWorkspaces';
 import { createChatMigrationReceipts } from '@cindy/app-runtime/chatMigrationReceipts';
 import { createBotGroupTaskPostSnapshot } from '@cindy/app-runtime/botGroupTaskPostSnapshot';
@@ -100,12 +101,13 @@ export class TerminalCompanionCloud {
     const {t}=createRuntimeTranslator(mainLocaleResources,this.options.locale);
     const chatMedia=createChatMediaRuntime({fetch,getDbClient,ownerScopedUserDataPath:ownerRoot,...media});
     const replyImages=createChatReplyImages({getDbClient,...media,...media.blobStore,...media.ledger});
+    const replyFiles=createChatReplyFiles({getCurrentDbClientSnapshot:()=>{this.guard();return database.getCurrentDbClientSnapshot();}});
     const snapshots=createBotGroupTaskPostSnapshot(getDbClient);
     await tasks.connectOriginalGroupServices({resources,trashItem,notifications,companionCloud:cloud,
       withChatServer:(service,deps,readPersistedReplyText)=>createChatServerRuntime({
         getDbClient,userDataPath:()=>this.options.userDataPath,isPackaged:()=>process.env.XDT_ISOLATED!=='1',
         getClientEndpoint:this.options.endpoint,t,fetch,getAccessToken:this.options.getToken,refresh:this.options.refresh,
-        readMedia:media.blobStore.readFile,...chatMedia,...replyImages,...snapshots,
+        readMedia:media.blobStore.readFile,...chatMedia,...replyImages,...replyFiles,...snapshots,
         chatServerWorkspaces:createChatServerWorkspaces(ownerRoot),chatMigrationReceipts:createChatMigrationReceipts(ownerRoot),
         readPersistedReplyText,registerGroupToolAuthority:bots.groups.registerGroupToolAuthority,
         GroupToolAuthorizationError:class extends GroupToolAuthorizationError{constructor(temporary=false){super(temporary,t(temporary?'groupTools.verificationUnavailable':'groupTools.authorizationRequired'));}},

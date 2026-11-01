@@ -10,11 +10,11 @@ export function visibleMessageTextForConversationSearch(role: string, content: u
 }
 
 /** Full visible content for result rendering; only search previews flatten Markdown. */
-export function visibleMessageText(role: string, content: unknown): string {
+export function visibleMessageText(role: string, content: unknown, options?: { preserveWhitespace?: boolean }): string {
   const parsed = typeof content === 'string' ? tryParseJsonLike(content) : content;
   const rawText = roleVisibleText(role, parsed);
   const text = role === 'assistant' ? stripInternalWebCitations(rawText) : rawText;
-  return text.trim();
+  return options?.preserveWhitespace ? text : text.trim();
 }
 
 function roleVisibleText(role: string, content: unknown): string {
