@@ -83,6 +83,26 @@ it.each(['ios', 'android'])('keeps the sidebar active through new task → creat
   expect(select).toHaveBeenCalledOnce();
 });
 
+// Unit regression: a teammate's chat is a task route and kept the sidebar on
+// foldables, but its group chat (/companions/groups/[groupId]) hid it and went
+// full screen. Group chats share the teammate list, so they keep it too.
+it.each(['ios', 'android'])('keeps the sidebar beside a wide group chat and hides it when narrow on %s', platform => {
+  state.platform = platform;
+  state.segments = ['companions', 'groups', '[groupId]'];
+  const host = document.createElement('div'), root = createRoot(host); roots.push(root);
+  const select = vi.fn();
+  const render = () => act(() => root.render(<Scene detail homeSelect={select} detailSelect={select} />));
+  render();
+  expect(host.querySelector('[data-host]')?.getAttribute('data-pointer')).toBe('box-none');
+  expect(host.querySelector('[data-subscriptions]')?.getAttribute('data-subscriptions')).toBe('true');
+  expect(host.querySelector('[data-testid="session.paneDivider"]')).not.toBeNull();
+  state.width = 430; render();
+  expect(host.querySelector('[data-host]')?.getAttribute('data-pointer')).toBe('none');
+  expect(host.querySelector('[data-subscriptions]')?.getAttribute('data-subscriptions')).toBe('false');
+  state.width = 1000; state.segments = ['companions', 'cloud', '[actorId]']; render();
+  expect(host.querySelector('[data-host]')?.getAttribute('data-pointer')).toBe('none');
+});
+
 // Unit: real divider handlers + provider layout. User's 2026-10-23 request adds
 // live bounded resizing; previous resident-list tests never drove a divider.
 it('drags both panes together, clamps the bounds and retains width through route and orientation changes', () => {
