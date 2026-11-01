@@ -8,7 +8,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
-import { podInstallBounded } from './sim-pod-install.mjs';
+import { podInstallBounded, withUserGemPodOnPath } from './sim-pod-install.mjs';
 import { cwdOfPid, isInside, listenerPid, portInUse } from './sim-metro.mjs';
 import { withLocalMobileRegionConfig } from './lib/mobile-dev-region.mjs';
 import {
@@ -91,7 +91,7 @@ async function main() {
   });
 
   console.log('› pod install(本地 specs 优先，输出空转看门狗兜底)…');
-  await podInstallBounded({ iosDir, env });
+  await podInstallBounded({ iosDir, env: withUserGemPodOnPath({ env }) });
 
   const workspace = selectMobileXcodeWorkspace(iosDir, readdirSync(iosDir));
   console.log(`› 打开 ${workspace}`);

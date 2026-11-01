@@ -162,7 +162,7 @@ describe('mobile:xcode 完整开发链路', () => {
       existsSync: (target) => files.has(target), readFileSync: (target) => files.get(target), writeFileSync,
       portInUse, listenerPid: () => '4242', cwdOfPid: () => owner === 'local' ? mobileDir : resolve('/other-checkout/apps/mobile'),
       isInside: (root, cwd) => cwd === mobileDir && root === worktreeRoot,
-      execFileSync, podInstallBounded, readdirSync: () => ['Pods.xcworkspace', 'Cindy.xcworkspace'],
+      execFileSync, podInstallBounded, withUserGemPodOnPath: ({ env }: { env: object }) => env, readdirSync: () => ['Pods.xcworkspace', 'Cindy.xcworkspace'],
       selectMobileXcodeWorkspace, mobileXcodeGeneratedDir,
     });
     if (error) {

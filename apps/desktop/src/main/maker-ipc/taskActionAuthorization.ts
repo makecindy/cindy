@@ -107,6 +107,7 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
     'The host could not admit this action for the current turn. Prepare the target, action and content for the owner instead of retrying.',
 });
 
+
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
 ]);

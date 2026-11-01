@@ -5473,7 +5473,6 @@
         "title": "Usar os meus inícios de sessão do navegador",
         "description": "O Agent abrirá sites com as suas contas com sessão iniciada no Chrome, Edge ou Brave.",
         "toggleAria": "Usar os meus inícios de sessão do navegador",
-        "unavailableEmbedded": "Aplica-se apenas ao navegador autónomo. Ao desativar, os ficheiros de início de sessão copiados são eliminados.",
         "confirmTitle": "Permitir que o Agent use os seus inícios de sessão do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
         "confirmDescriptionMac": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. A leitura dos ficheiros de início de sessão do Chrome também requer Acesso total ao disco. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
