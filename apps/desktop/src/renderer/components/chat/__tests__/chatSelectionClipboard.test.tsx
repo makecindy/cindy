@@ -6,7 +6,7 @@ import katex from 'katex';
 import { File } from 'lucide-react';
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip';
 import { MessageActionBar, BubbleHoverToolbar } from '../MessageActionBar';
-import { installRendererClipboardStyles, installRendererSelectionStyles as productionSelectionCss } from '../../../../test/vitest/rendererSelectionStyles';
+import { installKatexClipboardStyles, installRendererClipboardStyles, installRendererSelectionStyles as productionSelectionCss } from '../../../../test/vitest/rendererSelectionStyles';
 import { InlineReferenceChip } from '../InlineReferenceChip';
 import { copyChatSelection } from '../chatSelectionClipboard';
 import { CopyAsImageBlock } from '../CopyAsImageBlock';
@@ -593,6 +593,28 @@ describe('chat selection clipboard', () => {
     expect(pasted.textContent).toContain('Ambient');
   });
 
+  // Review4434467983: real Markdown/RichAnswer media override, not a
+  // hand-sized img. Authored wrapper variables must survive detached export.
+  it.each([
+    { style: { width: 120 }, width: '120px', height: 'auto' },
+    { style: { width: 120, height: 60 }, width: '120px', height: '60px' },
+  ])('keeps effective authored image dimensions $height', async ({ style, width, height }) => {
+    const source = JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'photo', kind: 'image', props: {
+      src: 'https://example.com/rich-sized.png', alt: 'Sized rich photo', style,
+    } });
+    const { root, select, copy } = setup(<><p>before photo</p><MarkdownRenderer renderRichAnswers workingDir="" content={'```cindy-ui\n' + source + '\n```'} /><p>after photo</p></>);
+    const image = root.querySelector('img')!;
+    expect(image).toBeTruthy(); fireEvent.load(image);
+    await waitFor(() => expect(image.style.display).not.toBe('none'));
+    expect((image.closest('.rich-answer-media') as HTMLElement).style.getPropertyValue('--rich-width')).toBe(width);
+    select(); const pasted = document.createElement('div');
+    pasted.innerHTML = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    const target = pasted.querySelector('img')!;
+    expect(target.style.width).toBe(width); expect(target.style.height).toBe(height);
+    expect(target.style.maxWidth).toBe('100%');
+    expect(pasted.textContent).toContain('before photo'); expect(pasted.textContent).toContain('after photo');
+  });
+
   // Review 4434198424: ordinary image fixtures never load a tall attachment.
   // Unit: load the real component's 10:1 image, then copy mixed text through
   // the production event; exported geometry must survive removal of its parent.
@@ -771,6 +793,32 @@ describe('chat selection clipboard', () => {
     expect(pasted.querySelector('annotation')?.textContent).toBe(source);
     expect(pasted.querySelector('math mfrac, math msqrt')).not.toBeNull();
     expect(html).not.toMatch(/before|after|aria-hidden|class=/);
+  });
+
+  // Review4434467975: real KaTeX layout, selected structured slices only.
+  // Unit geometry declarations supplement the detached native-browser check.
+  it.each(['power', 'fraction'])('keeps portable layout for a partial %s', kind => {
+    installKatexClipboardStyles();
+    const { root, copy } = setup(katex.renderToString(kind === 'power' ? 'x^2 + y' : '\\frac{a}{b} + y'));
+    const visual = root.querySelector('.katex-html')!;
+    const range = document.createRange();
+    if (kind === 'fraction') range.selectNodeContents(visual.querySelector('.mfrac')!);
+    else {
+      const walker = document.createTreeWalker(visual, NodeFilter.SHOW_TEXT);
+      const leaves: Text[] = []; while (walker.nextNode()) if (walker.currentNode.textContent?.trim()) leaves.push(walker.currentNode as Text);
+      range.setStart(leaves[0], 0); range.setEnd(leaves.find(n => n.textContent === '2')!, 1);
+    }
+    window.getSelection()!.addRange(range);
+    const pasted = document.createElement('div');
+    pasted.innerHTML = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    expect(pasted.textContent).not.toMatch(/[+y]/);
+    expect(pasted.querySelector('math, [aria-hidden="true"]')).toBeNull();
+    const spans = [...pasted.querySelectorAll('span')];
+    expect(spans.some(e => ['absolute', 'relative'].includes(e.style.position) && parseFloat(e.style.top) < 0)).toBe(true);
+    expect(pasted.querySelector('br')).toBeNull();
+    if (kind === 'fraction') expect(spans.some(e => e.style.borderBottomStyle === 'solid' && parseFloat(e.style.borderBottomWidth) > 0)).toBe(true);
+    else expect(spans.some(e => parseFloat(e.style.top) < 0)).toBe(true);
+    expect(pasted.innerHTML).not.toMatch(/background|color:/);
   });
 
   it('does not expand an internal partial formula selection', () => {

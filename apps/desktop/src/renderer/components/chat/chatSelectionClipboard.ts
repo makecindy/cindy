@@ -144,6 +144,40 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
       copy.removeAttribute('role');
       copy.removeAttribute('tabindex');
     }
+    if (element.matches('[data-chat-image-preview] img, img[data-gallery-src]')) {
+      const media = element.closest<HTMLElement>('.rich-answer-media');
+      const geometry = [['width', '--rich-width'], ['height', '--rich-height'],
+        ['min-height', '--rich-minHeight'], ['max-height', '--rich-maxHeight']] as const;
+      if (media && geometry.some(([, token]) => media.style.getPropertyValue(token))) {
+        // RichAnswer's important media rule overrides the preview's inline
+        // defaults. Transfer the authored variables before removing that owner.
+        const target = copy as HTMLImageElement;
+        target.style.maxWidth = '100%';
+        target.style.height = 'auto';
+        for (const [property, token] of geometry) {
+          const value = media.style.getPropertyValue(token);
+          if (value) target.style.setProperty(property, value);
+        }
+      }
+    }
+    if (element.closest('.katex-html')) {
+      // Partial equations cannot use the whole-formula MathML shortcut. Keep
+      // only KaTeX's selected visual geometry, without theme color/background.
+      const computed = styleOf(element);
+      for (const property of ['display', 'position', 'top', 'right', 'bottom', 'left',
+        'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
+        'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+        'vertical-align', 'line-height', 'font-size', 'font-style', 'font-weight',
+        'letter-spacing', 'text-align', 'white-space', 'transform',
+        'border-top-style', 'border-top-width', 'border-right-style', 'border-right-width',
+        'border-bottom-style', 'border-bottom-width', 'border-left-style', 'border-left-width',
+        'border-collapse', 'border-spacing']) {
+        const value = (element as HTMLElement).style.getPropertyValue(property) || computed.getPropertyValue(property);
+        if (value) (copy as HTMLElement).style.setProperty(property, value);
+      }
+      if (/^KaTeX_/i.test(computed.fontFamily)) (copy as HTMLElement).style.fontFamily = computed.fontFamily;
+    }
     if (element.matches('img[data-chat-audio-cover]')) {
       // Audio artwork is content, but its display box lives on the parent.
       // Carry that bounded size onto the image so detached HTML cannot expand
@@ -158,7 +192,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     return copy;
   };
   const preserveTextBoundaries = (source: Element, copy: Element | DocumentFragment): void => {
-    if (!copy.textContent?.trim()) return;
+    if (!copy.textContent?.trim() || source.closest('.katex-html')) return;
     const style = styleOf(source);
     const gap = style.columnGap && style.columnGap !== 'normal'
       ? style.columnGap : style.gap.split(/\s+/).at(-1) ?? '';
@@ -402,7 +436,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     preserveTextBoundaries(element, copy);
     // Empty semantic nodes carry spacing/list positions; SVG leaf geometry
     // carries drawing commands without text children. Do not prune either.
-    const preservesEmpty = element.matches('br, img, hr, th, td') ||
+    const preservesEmpty = Boolean(element.closest('.katex-html')) || element.matches('br, img, hr, th, td') ||
       element.namespaceURI === 'http://www.w3.org/2000/svg' ||
       (!element.hasChildNodes() && element.matches(SEMANTIC_CONTAINER_SELECTOR));
     if (!copy.hasChildNodes() && !preservesEmpty) return null;

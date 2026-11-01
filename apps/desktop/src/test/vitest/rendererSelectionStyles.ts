@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import postcss from 'postcss';
 import tailwindcss from 'tailwindcss';
@@ -85,4 +86,14 @@ export function copyRenderedSelection(element: Element) {
   } });
   try { element.dispatchEvent(event); } finally { selection.removeAllRanges(); }
   return { event, formats };
+}
+
+// Load the installed production stylesheet as behavior, never assert its text.
+// Vite's test CSS stub returns an empty string even for ?raw imports.
+export function installKatexClipboardStyles(doc: Document = document): HTMLStyleElement {
+  const style = doc.createElement('style');
+  style.dataset.copyTest = '';
+  style.textContent = readFileSync(createRequire(import.meta.url).resolve('katex/dist/katex.min.css'), 'utf8');
+  doc.head.appendChild(style);
+  return style;
 }
