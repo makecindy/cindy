@@ -1,347 +1,70 @@
-name: client-ci
-
+name: codeql-scope-benchmark
 on:
-  pull_request:
-  # merge queue 把 PR 与最新 main(及排在前面的 PR)合成临时分支,在上面重跑必需检查
-  # (verify / Windows unit tests),全绿才合入。没有这个触发,队列会一直等到超时再把 PR 移出。
-  merge_group:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-
 permissions:
   contents: read
-
+  actions: read
+  security-events: write
 concurrency:
-  group: client-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  XDT_SKIP_AGENT_BIN_INSTALL: '1'
-  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-  ELECTRON_OVERRIDE_DIST_PATH: '${{ github.workspace }}/.electron-stub-dist'
-  # 8192: desktop tsc 全量 typecheck 峰值内存随仓体增长已突破 4GB(2026-08-02 起
-  # 所有 PR 的 verify 在 Typecheck desktop 步骤稳定 OOM,含纯 mobile 改动);
-  # 公开仓 ubuntu-latest runner 内存 16GB,8GB heap 安全。
-  NODE_OPTIONS: '--max-old-space-size=8192'
-
+  group: codeql-scope-benchmark-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  # 静态检查、类型检查和 runner 自测与 Linux 单测分片并行。这里不装
-  # bundled ripgrep；它只在 Desktop 单测收集时需要，由单测分片自行安装。
-  verify-checks:
+  compare:
+    name: CodeQL scope (${{ matrix.scope }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
-    steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          lfs: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # 纯文本扫描、秒级返回：逐用例重置模块、真实等待和普通单测读源码文本只允许
-      # 比基线少（engineering-conventions.md §3.2 性能预算），在耗时步骤前快速失败。
-      - name: Check unit test hygiene
-        run: pnpm check:test-hygiene
-
-      # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
-      # Linux 单测分片只负责 workspace unit tier。
-      - name: Run test runner self-tests
-        run: pnpm test:runner
-
-      # Cross-file security, permission, and design contracts are intentionally
-      # outside the ordinary behavior-test pool, but remain a required gate.
-      - name: Run Desktop and Mobile source-contract guards
-        run: pnpm test:guard
-
-      # No private service checkout or secrets: exercise production clients over real
-      # loopback WebSockets with bounded fault injection. Failure blocks verify.
-      - name: Run Device Link connection integration tests
-        run: |
-          pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
-          pnpm test:device-link
-
-      # DS-7: candidate merge/head versus the event base; only mature colour
-      # consumers block. Geometry/adoption observations remain report-only.
-      - name: Check added design colours
-        env:
-          DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
-          DESIGN_HEAD_REF: ${{ github.sha }}
-        run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
-
-      - name: Check design inventory freshness
-        run: pnpm check:design-inventory
-
-      - name: Check endpoint literals
-        run: pnpm check:endpoints
-
-      # i18n 三道静态门禁：key 结构一致性、品牌名收口、术语表一致性。
-      # 都是纯文件扫描、秒级返回，放在耗时的 typecheck / 单测之前快速失败。
-      - name: Check i18n key consistency
-        run: pnpm check:i18n
-
-      - name: Check brand terminology
-        run: pnpm check:brand-terminology
-
-      - name: Check i18n glossary
-        run: pnpm check:i18n-glossary
-
-      # desktop 的 tsc 峰值内存已经贴着全局 4096MB 上限(2026-08-03 本地实测
-      # 约 4.2GB,`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),
-      # 在 runner 上会随机 OOM(FATAL ERROR: Ineffective mark-compacts near heap
-      # limit)。已排除单点热点:移走最大的单个测试文件只省 ~5MB、移走 1400 行的
-      # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
-      # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
-      - name: Typecheck desktop
-        env:
-          NODE_OPTIONS: '--max-old-space-size=6144'
-        run: pnpm --filter desktop typecheck
-
-      - name: Typecheck mobile
-        run: pnpm --filter mobile typecheck
-
-      - name: Validate SQLite migrations
-        env:
-          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
-        run: pnpm --filter desktop db:validate
-
-      - name: Run scheduler architecture guard
-        run: pnpm ci:scheduler-guard
-
-      - name: Run mobile scope guard
-        run: pnpm --filter mobile test:scope
-
-  # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。四个分片分别覆盖每个
-  # workspace 经 Vitest 切分后的测试文件，并集等于完整 unit tier；不重复 test:runner。
-  linux-unit-shards:
-    name: Linux unit tests (${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-    env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
-
+        include:
+          - scope: baseline
+            config: ''
+          - scope: scoped
+            config: .github/codeql/codeql-config.yml
     steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Unit shards only read the working tree; full history and every remote
-        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: 49baccf631
           lfs: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - name: Initialize CodeQL 2.27.3 with unchanged default queries
+        uses: github/codeql-action/init@793b778da9c9275a0f276522b27cb5fc14bba279
         with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          languages: javascript-typescript
+          build-mode: none
+          tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-javascript-linux64.tar.zst
+          config-file: ${{ matrix.config }}
+          db-location: ${{ runner.temp }}/scope-db
+      - name: Analyze without publishing alerts or databases
+        uses: github/codeql-action/analyze@793b778da9c9275a0f276522b27cb5fc14bba279
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
-      # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
-      # 会让 apps/desktop 单测在收集阶段全挂——每个分片都必须单独装回来。
-      - name: Install bundled ripgrep
+          upload: never
+          upload-database: false
+          output: scope-evidence/sarif
+      - name: Record database and extracted source inventory
+        if: always()
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm install:ripgrep
-
-      - name: Install Linux user-installer test tools
-        run: sudo apt-get update && sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils
-
-      - name: Run client and package unit test shard
-        # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
-        run: pnpm run test:workspaces --tier unit
-
-      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
-      - name: Run Pi manager integration tests
-        if: matrix.shard == 1
-        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
-
-      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
-      - name: Run companion database regressions
-        if: matrix.shard == 1
-        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
-
-  # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
-  verify:
-    name: verify
-    if: ${{ always() }}
-    needs:
-      - verify-checks
-      - linux-unit-shards
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require checks and every Linux unit shard
-        env:
-          VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
-          LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
+          DATABASE_ROOT: ${{ runner.temp }}/scope-db
+          SCOPE: ${{ matrix.scope }}
         run: |
-          test "$VERIFY_CHECKS_RESULT" = "success"
-          test "$LINUX_UNIT_SHARDS_RESULT" = "success"
-
-  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
-  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
-  # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
-  windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/4)
-    runs-on: windows-latest
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
-
-    steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Unit shards only read the working tree; full history and every remote
-        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
+          mkdir -p scope-evidence
+          python3 - <<'PY'
+          import os, pathlib, json, zipfile, subprocess
+          root=pathlib.Path(os.environ['DATABASE_ROOT'])
+          output=pathlib.Path('scope-evidence')
+          sizes={}
+          for db in root.iterdir():
+              if not db.is_dir(): continue
+              sizes[db.name]=sum(p.stat().st_size for p in db.rglob('*') if p.is_file())
+              for archive in db.glob('src.zip'):
+                  with zipfile.ZipFile(archive) as z:
+                      (output/(db.name+'-sources.json')).write_text(json.dumps(sorted(z.namelist()),indent=2))
+          metrics={'scope':os.environ['SCOPE'],'sourceCommit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'databaseBytes':sizes}
+          (output/'metrics.json').write_text(json.dumps(metrics,indent=2))
+          print(json.dumps(metrics,indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          lfs: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install bundled ripgrep
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm install:ripgrep
-
-      - name: Run client and package unit tests
-        # 通过 package script 传递
-        # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
-        run: pnpm run test:workspaces --tier unit
-
-  # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
-  # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
-  windows-runner-checks:
-    name: Windows runner and database checks
-    runs-on: windows-latest
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          lfs: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install bundled ripgrep
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm install:ripgrep
-
-      # 保留 Windows 路径、进程与锁的自测覆盖。
-      - name: Run Windows test runner self-tests
-        run: pnpm test:runner
-
-      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
-      - name: Run companion database regressions
-        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
-
-  # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
-  windows-unit:
-    name: Windows unit tests
-    if: ${{ always() }}
-    needs:
-      - windows-unit-shards
-      - windows-runner-checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every Windows unit shard and runner checks
-        env:
-          WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
-          WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
-        run: |
-          test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
-          test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
-
-  git-integration:
-    name: Desktop Git integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - name: Checkout client
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          lfs: true
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install bundled ripgrep
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm install:ripgrep
-
-      - name: Run Desktop Git integration tests
-        run: pnpm test:git-integration
+          name: codeql-scope-${{ matrix.scope }}
+          path: scope-evidence/
+          retention-days: 14
