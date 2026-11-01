@@ -428,6 +428,8 @@ import { i18n } from '@/i18n';
 import { formatLocalizedDuration } from '@/session/sessionDurationFormat';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { mobileToolRowWording } from '@/i18n/toolWording';
+import { useStableValue } from '@/utils/useStableValue';
+import { mapContentEqual, sameArrayIdentity } from '@/utils/valueEquality';
 import type { HistoryWorkLine } from '@cindy/maker-shared/message-window';
 
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
@@ -660,6 +662,15 @@ interface MessageActions {
   lastUserInputClientId?: string | null;
   /** 已加载窗口里最后一条用户消息(含 steer):只有它挂编辑入口。 */
   lastUserMessageClientId?: string | null;
+}
+
+/** Optional-Map content equality for useStableValue: both absent, or same keys with equal values. */
+function sameMapEntries<V>(
+  a: ReadonlyMap<string, V> | undefined,
+  b: ReadonlyMap<string, V> | undefined,
+  valueEqual: (x: V, y: V) => boolean,
+): boolean {
+  return a === b || (!!a && !!b && mapContentEqual(a, b, valueEqual));
 }
 
 export function MessageRenderer({
@@ -1697,22 +1708,32 @@ export function MessageRenderer({
     }
     if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
-  const companionPluginWork = useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]);
+  // `items` is rebuilt on every streaming flush, but these two maps only change when a turn,
+  // its plugin calls or its five-minute stamp changes. Keep the previous instance when the
+  // entries are equal: both sit in `actions` / `extraData`, so a fresh Map re-renders every row.
+  const companionPluginWork = useStableValue(
+    useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]),
+    (previous, next) => sameMapEntries(previous, next, (a, b) =>
+      a.sessionId === b.sessionId && a.running === b.running && sameArrayIdentity(a.plugins, b.plugins)),
+  );
   // Desktop MessageStream groups the visible teammate conversation (not hidden work) into five-minute stamps.
   // Your own send is grouped by its send time from the moment its bubble appears, and its echo
   // (same key) keeps that time, so a phone/computer clock skew cannot add or move a stamp on
   // confirmation. Outbox rows carry the time across restarts.
   const pendingSentAtRef = useRef(new Map<string, number>());
-  const companionTimeGroups = useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
-    if (item.type === 'pending_send') {
-      const sentAt = item.sentAt ?? localSendStartedAt(item.key);
-      if (sentAt === null) return [];
-      pendingSentAtRef.current.set(item.key, sentAt);
-      return [{ clientId: item.key, createdAt: sentAt }];
-    }
-    return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-      ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
-  })) : undefined, [companion, items]);
+  const companionTimeGroups = useStableValue(
+    useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+      if (item.type === 'pending_send') {
+        const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+        if (sentAt === null) return [];
+        pendingSentAtRef.current.set(item.key, sentAt);
+        return [{ clientId: item.key, createdAt: sentAt }];
+      }
+      return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+        ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+    })) : undefined, [companion, items]),
+    (previous, next) => sameMapEntries(previous, next, (a, b) => a === b),
+  );
   const quoteItemsRef = useRef(items);
   quoteItemsRef.current = items;
   const showCompanionReplyTargets = !!(companion && companionQuote?.showReplyTargets);

@@ -23,6 +23,16 @@ export function deepValueEqual(a: unknown, b: unknown): boolean {
   return false;
 }
 
+/** 数组逐元素引用等值:元素本身引用稳定(如 store 调和过的消息对象)时,用它保住派生数组的引用。 */
+export function sameArrayIdentity<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Map 内容等值:键集合一致且逐值 valueEqual(默认 deepValueEqual)。 */
 export function mapContentEqual<K, V>(
   a: ReadonlyMap<K, V>,
