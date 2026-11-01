@@ -425,7 +425,7 @@ pending-<crashAtMs>-<token>.json     token = randomBytes(6).toString('hex') —�
 
 ```ts
 export interface LogUploadMeta {
-  uploadCode: string;   // 上传编号:Crockford base32 去易混字符,8 位,格式化为 XXXX-XXXX
+  uploadCode: string;   // 上传编号:CN/GLOBAL/DEV 区域前缀 + 8 位去易混字符,格式为 REGION-XXXX-XXXX
   userId: string;       // 未登录为 ''
   deviceId: string;     // authManager.getDeviceId()
   appVersion: string;
@@ -438,7 +438,9 @@ export interface LogUploadMeta {
 }
 ```
 
-上传编号由 `crypto.randomBytes` 生成，字符集去掉 `I/L/O/U/0/1`，用户能口述。
+上传编号由 `crypto.randomBytes` 生成，随机部分保留 8 位，字符集去掉 `I/L/O/U/0/1`，
+前置当前构建区域 `CN-` / `GLOBAL-` / `DEV-`，用户能口述。前缀避免不同区域的新编号
+重号，不保证区域内随机编号唯一；格式校验继续接受历史无前缀编号。
 
 ---
 

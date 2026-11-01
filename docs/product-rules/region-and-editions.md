@@ -46,6 +46,14 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
   `executableNameByRegion`）。本条约束的是**按区域取不同值**的标识符，不约束两版
   共用的名字。
 - 新增任何按区域派生的标识符时，`global` 取无后缀值，`cn` 取带限定值。
+- **日志上传编号是用途限定例外**：2026-10-26 用户明确选择所有区域均带前缀的方案
+  （[PR #7284](https://github.com/makecindy/cindy/pull/7284)，讨论见
+  [#7324](https://github.com/makecindy/cindy/issues/7324)）。Desktop / Mobile 的
+  `uploadCode` 使用 `GLOBAL-XXXX-XXXX` / `CN-XXXX-XXXX`，内部 Dev 使用
+  `DEV-XXXX-XXXX`，让排障人员按完整编号确定 SLS 查询区域。该前缀是诊断编号的检索
+  命名空间，不是产品展示身份或版本标签；例外只适用于上传编号及其显示、复制、上报，
+  不扩展到可执行名、appId、目录名或产品区域徽标。编号兼容边界见
+  [日志上传规则 §4](../dev-rules/log-upload-and-redaction.md#4-上报目标与区域)。
 
 ### 2.2 默认值落在 global
 
@@ -62,6 +70,8 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
 ### 2.3 只标注中国大陆版
 
 需要在界面上区分两个版本时，只标注中国大陆版；Global 构建不加版本标签。
+
+日志上传编号中的区域命名空间按 §2.1 的用途限定例外处理，不作为界面版本标签。
 
 用户看到的默认形态就是 Cindy 本身，不需要向用户证明"这是全球版"。当前存在与本条
 冲突的既有实现，见 §4。
@@ -120,12 +130,13 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
 
 ## 4. 已知例外与待收敛项
 
-以下是与 §2 冲突的既有实现。按 `core-product-principles.md` §9，它们属于历史实现
-遗留，**不构成对新代码的豁免**：新增代码一律按 §2 执行，既有项按用户影响与迁移
-风险分阶段收敛。
+下表除明确登记的用途限定产品裁决外，均为与 §2 冲突的既有实现。按
+`core-product-principles.md` §9，历史实现遗留**不构成对新代码的豁免**：新增代码一律
+按 §2 执行，既有项按用户影响与迁移风险分阶段收敛；用途限定例外不能外推到其他功能。
 
 | 项 | 现状 | 冲突条款 | 收敛难点 |
 | --- | --- | --- | --- |
+| 日志上传编号 | 2026-10-26 用户选择所有区域均带前缀：`GLOBAL-` / `CN-` / 内部 `DEV-`，用于按编号定位 SLS 查询区域；见 [PR #7284](https://github.com/makecindy/cindy/pull/7284) 与 [#7324](https://github.com/makecindy/cindy/issues/7324) | §2.1 明示的用途限定例外，§2.3 按检索命名空间处理 | 有意保留，仅适用于 `uploadCode` 的生成、显示、复制和上报；不改变产品命名或 Global 区域徽标规则 |
 | 登录页区域徽标 | 原设计规范规定国际区在标题旁显示红色 `Global` pill、中国大陆版不标。规范原散落三处：`docs/design-rules/DESIGN.md` §16.1、`docs/design-rules/figma-component-spec.md` §4.10、`docs/design-rules/token-decision-table.md`（§3 的 `#df0c27` 语义与 `login-global-badge-bg` token）；其中 `figma-component-spec.md` 已于 2026-10-23 随该文档移除，不再是设计源。落码在 `apps/desktop/src/renderer/components/login/LoginControls.tsx` 的 `LoginTitleBlock`（`LoginPage.tsx` 只负责传入） | §2.3 | **正在收敛**：PR #554 已将徽标翻转为 global 不标、`cn` / `dev` 标注，并同步修订 `DESIGN.md`。但它只改了现存两份设计源中的一份——`token-decision-table.md` 仍规定 `Global` pill 可见。**本行的删除条件是实现与剩余设计源（`DESIGN.md`、`token-decision-table.md`）全部收敛，而不是 #554 单独合并** |
 | 侧栏与移动端的区域标签 | 桌面侧栏 `apps/desktop/src/renderer/components/sidebar/UserInfoSection.tsx` 的 **§2.3 部分已收敛**：区域代号统一走 `apps/desktop/src/shared/regionCode.ts` 的 `CINDY_REGION_CODE`（cn → `CN`、dev → `Dev`、global 为 `null` 不标），Global 构建的版本行只剩版本号。**§2.5 部分未收敛**：cn 构建仍渲染代号 `CN`，不是本文规定的 `Mainland China`。`apps/mobile/src/settings/mobileSettings.ts:124` 的 debug 项两条都未收敛，仍输出 `Global` / `CN` | §2.5（桌面）；§2.3、§2.5（移动端） | 属于调试 / 身份自查信息而非产品叙事表达，收敛优先级低于登录页。**`CN` → `Mainland China` 是待产品裁决项**，不是单纯落码：术语表把 `CN` / `Dev` 登记为 `proposed`（`i18n/GLOSSARY.md` region-code-cn / region-code-dev），且 `DESIGN.md` §16.3 现规定徽标值就是四语同文的区域代号——改判要同时动设计规范、术语表与三条消费链路（登录页徽标、侧栏版本行、issue 正文）。本行的删除条件是移动端补上 §2.3、且 `CN` 措辞冲突被裁决或重新归类 |
 | 端点清单文件名 | `config/endpoint.json` 是中国大陆版，`config/endpoint.global.json` 才是 Global | §2.1 | 改名牵动构建脚本与发布链路 |
