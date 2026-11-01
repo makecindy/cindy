@@ -81,6 +81,12 @@ export interface IMHost {
     telegramMediaDir?: string;
     /** Root for downloaded WeCom files and legacy image fallback. */
     wecomMediaDir?: string;
+    /**
+     * Root for non-media files (PDF / docx / zip …) received through the DingTalk
+     * account (dws) channel. Images go to the host media cache instead. Optional —
+     * without it inbound files degrade to an unsupported notice.
+     */
+    dingtalkMediaDir?: string;
   };
 
   /**
@@ -276,6 +282,11 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /**
+   * 被引消息的附件, **不**并入 attachments(不算当前发言人发送的附件、不落库)。
+   * 渠道 adapter 可将其作为 contextAttachments 只交给模型。目前仅钉钉账号(dws)方式提供。
+   */
+  replyAttachments?: IMAttachment[];
   /** Feishu quote resources; host downloads only after screening the quote. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */

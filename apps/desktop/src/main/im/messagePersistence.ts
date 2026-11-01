@@ -52,6 +52,8 @@ export async function persistUserMessage(args: {
   source?: ImMessageSource;
   /** Only use a pre-persisted row belonging to this session. Never reinsert it. */
   existingClientId?: string;
+  /** 'steer' = 插进正在跑的一轮的输入（与桌面插话同一 agentMeta 标记）。 */
+  delivery?: 'steer';
 }): Promise<{ clientId: string } | null> {
   const { sessionId, text, attachments = [] } = args;
   const clientId = args.existingClientId ?? createId();
@@ -63,6 +65,7 @@ export async function persistUserMessage(args: {
         return await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
           const patched = await patchMessageAgentMeta(sessionId, clientId, {
             imSource: args.source,
+            ...(args.delivery ? { delivery: args.delivery } : {}),
           });
           // A confirmed deletion is different from a failed enrichment: never
           // recreate the row or start a turn change set against a missing row.
@@ -77,7 +80,14 @@ export async function persistUserMessage(args: {
       clientId,
       role: 'user',
       content,
-      ...(args.source ? { agentMeta: { imSource: args.source } } : {}),
+      ...(args.source || args.delivery
+        ? {
+            agentMeta: {
+              ...(args.source ? { imSource: args.source } : {}),
+              ...(args.delivery ? { delivery: args.delivery } : {}),
+            },
+          }
+        : {}),
     });
     return { clientId };
   } catch (err) {

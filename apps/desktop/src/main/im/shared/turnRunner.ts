@@ -124,8 +124,10 @@ import {
 import { clearPendingTurnChangeSets } from '../../turn-change-set/store';
 import {
   beginInteractionRoute,
+  noteInteractionRouteSteer,
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
+import { publishUiSessionIntervention } from '../../maker-ipc/uiContinuationSignal';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
 import { beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
@@ -1372,6 +1374,9 @@ export function createTurnRunner(
         await completeTurnCallbackAfterAck(turn);
         return { kind: 'busy', reason: 'session_running' };
       }
+      if (adapter.steerWhileBusy?.() === true && (await trySteerIntoRunningTurn(state, item))) {
+        return { kind: 'busy', reason: 'steered' };
+      }
       state.sendQueue.push(item);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
       // 本渠道没有未收口的 turn(纯 desktop turn 在跑) → 派发只能靠它的 stray
@@ -1440,6 +1445,96 @@ export function createTurnRunner(
       log.warn(`resolveEffectiveTurnPolicy peek failed (keep policy): ${msg}`);
     }
     return item.turnPermissionPolicy;
+  }
+
+  /**
+   * 渠道开启插话（adapter.steerWhileBusy）时，把忙时到达的消息插进正在跑的那一轮，
+   * 而不是排到它后面。插话的输入继承当前一轮的权限，所以只在任务处于「完全访问」
+   * 且本条消息不需要逐轮强确认（私聊，或群里按渠道规则可取缔策略的轮次）时插话；
+   * 前面已有排队消息时也不插队。返回 false = 没插成，调用方照常排队。
+   */
+  async function trySteerIntoRunningTurn(state: SessionState, item: QueuedSend): Promise<boolean> {
+    const rowId = item.rowId;
+    const session = state.makerSession;
+    if (
+      state.sendQueue.length > 0 ||
+      state.scheduledTranspond !== null ||
+      state.pendingTranspondFinals > 0 ||
+      session.capabilities.sameTurnSteer?.supported !== true ||
+      !session.isTurnRunning()
+    ) {
+      return false;
+    }
+    try {
+      const row = await repo.peekSessionById(rowId);
+      if (row?.permissionMode !== 'bypassPermissions') return false;
+    } catch {
+      return false;
+    }
+    if ((await resolveEffectiveTurnPolicy(item)) !== undefined) return false;
+    // 上面的 await 期间这一轮可能已结束、会话可能已换绑，或别的消息已经排队。
+    if (
+      sessionStates.get(rowId) !== state ||
+      state.makerSession !== session ||
+      state.sendQueue.length > 0 ||
+      !session.isTurnRunning()
+    ) {
+      return false;
+    }
+    // 当前一轮的交互路由只替触发它的发言人担保；插话进来后不再沿用这份担保。
+    noteInteractionRouteSteer(session);
+    publishUiSessionIntervention(rowId);
+    try {
+      await session.steer(item.userMessage as Parameters<typeof session.steer>[0], {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
+          rawChannelText: item.text,
+          ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
+        },
+      });
+    } catch (err) {
+      log.info(
+        `steer not delivered for session=${rowId.slice(-8)}, falling back to queue: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
+    log.info(`steered message into running turn for session=${rowId.slice(-8)}`);
+    const prePersisted =
+      item.prePersistedUserMessage?.sessionId === rowId ? item.prePersistedUserMessage : null;
+    const persisted = item.protectedContent
+      ? null
+      : await persistUserMessage({
+          sessionId: rowId,
+          text: item.text,
+          attachments: item.attachments,
+          source: createLocalImSource(
+            adapter.messageSourceIm?.() ?? channel,
+            item.text,
+            item.contextSnapshot,
+          ),
+          existingClientId: prePersisted?.clientId,
+          delivery: 'steer',
+        });
+    try {
+      await adapter.onUserMessagePersisted?.({
+        sessionId: rowId,
+        userMessageId: item.turn.userMessageId,
+        persisted: persisted !== null,
+      });
+      await item.onRouteResolved?.(rowId);
+    } catch (err) {
+      log.warn(
+        `steer post-accept callback failed for session=${rowId.slice(-8)}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // 插话不单独成轮：本条的回复由正在跑的那一轮输出，这里只收掉它自己的 ack 与回调。
+    await completeTurnCallbackAfterAck(item.turn);
+    settleTurnTerminal(item.turn);
+    return true;
   }
 
   async function dispatchQueuedSend(

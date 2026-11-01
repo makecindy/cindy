@@ -46,7 +46,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 步骤 | 个人 IM 现状 | 官方 hook 现状 | 目标归属 |
 |---|---|---|---|
 | 入站 | 各渠道 adapter → `im/shared/messageHandler.ts`（微信经 `WechatTaskStore` 持久队列） | `hook-control/manager.ts` 收 `task.dispatch` → `dispatcher.handleDispatch` | 渠道适配（入站来源各自保留） |
-| 幂等与重投 | 无（个人连接无重投） | `ackHistory` / `inflightRequests` / `terminalLedger` | 渠道适配（服务端重投是 hook 的传输语义） |
+| 幂等与重投 | 各传输层处理；钉钉账号按账号 + 会话 + `message_id` 在入队前去重，不用投递的 `event_id`（见下文） | `ackHistory` / `inflightRequests` / `terminalLedger` | 渠道适配（按各渠道传输语义去重） |
 | 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按工作目录映射现场重算）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
@@ -62,6 +62,35 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 收尾 | `handleTurnDoneAsync` / `handleTurnErrorAsync` → 流式 handle finalize | `execute` 收口 → `turnCarrier.publishFinal` → `turn.end`（持久出箱） | 共用流程的收口骨架 + 渠道出站载体 |
 | 停止 | `turnRunner.stopActiveTurn`：清 `sendQueue` + 撤自动续跑 + `abort()`；**不暂停 Goal、不停 coordinator** | `dispatcher.cancel` → `abortSession`：只 `abort()`；**不撤自动续跑、不暂停 Goal** | **公共入口：统一明确停止**（`stopSessionTurnExplicitly`，与桌面 Stop 同一套清理） |
 | 重启恢复 | 无（微信例外：`WechatTaskStore`） | 终稿持久出箱（`requestLedger`，24h） | 渠道适配（终稿必达是 hook 的保障；台账缺口 3） |
+
+钉钉账号的去重在 [`DingTalkDwsIM.accept`](../../packages/lizi-im/src/dingtalk-dws/index.ts)
+进入异步附件处理和 lane 队列前同步登记，重投即使更换或省略 `event_id` 也不再次派发。
+缓存沿用进程内 5 分钟 TTL、最多 2048 条，保留于事件流重连期间，不提供应用重启后的持久去重。
+相同文字但 `message_id` 不同仍是两条请求；不同账号、不同会话的编号互不影响。
+回归见 [`dingtalkDwsIM.test.ts`](../../packages/lizi-im/src/dingtalk-dws/__tests__/dingtalkDwsIM.test.ts)。
+
+钉钉账号出站仅对明确的 `RATE_LIMIT_ERROR` 延迟 5 / 15 / 30 秒重试，最多追加三次。
+每段文字、每个附件分别复用自己的幂等键，已发送的段落不重发；CLI 超时、无输出和其他
+结果不明的失败不自动重发。出站绑定发起时的 DWS profile、渠道代次及宿主账号，关闭渠道
+会取消等待中的重试，切号后不再续发。重试不是持久出箱，应用退出后不会补发。
+宿主 runner 从有界 stderr / stdout 中提取结构化错误码，同时检查退出码，不输出原始诊断。
+文字或附件最终发送失败向收尾层报告；设置页显示最近一次发送失败分类，成功发送或
+断开渠道后清除，不把消息正文、收件人或 CLI 诊断透传到界面。
+
+钉钉账号设置里有「任务执行时允许插话」开关（`dingtalk-bot-access.json` 的 `steerWhileBusy`，缺省关闭，
+每条消息到达时现读）。打开后，`turnRunner` 在会话忙、本应进 `sendQueue` 的内部队列消息先尝试
+`session.steer` 插进当前一轮：只在任务处于「完全访问」、本条消息不需要逐轮强确认（私聊；群里主人，
+或已开「群成员也使用完全访问」的群成员）、Agent 支持同轮插话、前面没有排队消息时才插；插话前调用
+`noteInteractionRouteSteer` 让当前一轮的交互路由不再替原发言人担保。插成后用户消息以
+`agentMeta.delivery='steer'` 落库，本条自己的 ack / 回调直接收口，回复由正在跑的那一轮输出（Agent 可随时
+用 dws 回消息）；任一条件不满足或插话失败照常排队。机器人方式只在一轮结束时回复，不提供该开关。
+
+钉钉账号的群上下文（`dingtalk/groupContext.ts`）与飞书 / Telegram 同口径：每行发言人后标 `createTime`
+解析出的发送时间（`formatImHistoryTime`），块尾附 `formatImHistoryTimeNote` 的时区与整理时刻，避免模型
+把昨天的讨论当成今天的语境；解析不了的时间不标。群 @ 消息经 `dws chat +conversation-info` 取群名
+（按会话缓存 30 分钟，查不到缓存 5 分钟），写进 `interactionSource.chatName`，渠道说明因此带
+「钉钉群「群名」chat_id=…」，末尾再提示可用 `dws chat +chat-messages --open-conversation-id <chat_id>`
+读取更早的群历史。
 
 ## 2. 状态清单
 
@@ -238,7 +267,7 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 排队消息在桌面端可见 / 可删 | 不可见 | 不可见 | 迁到 coordinator 后自然可见、可删（删除即视同撤回：IM 撤排队表情，hook 回 `turn.end(cancelled)`） |
 | 排队上限 | 无上限 | 每会话 20 | 各自保留：IM 不限，hook 仍按 20 拒收 |
 | 停止时同任务已排队的消息 | `/stop` 一并清掉 `sendQueue` | 服务端 `/stop` 只对正在跑的那一个 requestId 发 `task.cancel`；desktop hook 队列里同任务已排队的请求照常接着跑（本 PR 前即如此） | 未改：一并清掉等于替用户丢弃没被取消的请求、并以 cancelled 收口，属产品语义；随批次 3（hook 队列并入 coordinator）一起定 |
-| 插话（steer） | 无 | 无 | 不新增 |
+| 插话（steer） | 默认无；钉钉账号（dws）有可选开关（见 §1 末段） | 无 | 其余渠道不新增 |
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
