@@ -39,10 +39,6 @@ vi.mock('../../../session-import/legacy', () => ({
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
 }));
-vi.mock('../../../git-context/prRefsStore', () => ({
-  recomputePrRefsForSession: vi.fn(async () => undefined),
-  recordPrRefsForMessage: vi.fn(async () => undefined),
-}));
 vi.mock('../../../cindy-media/chatAttachments', () => ({
   commitMessageMediaRefs: vi.fn(async (params: { sessionId: string; role: string; content: unknown }) => {
     h.mediaRefCalls.push(params);
@@ -149,10 +145,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     const beforePublish = vi.fn(async () => {
       const published = beforePublish.mock.calls.length === 2;
       expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(published ? 1 : 0);
@@ -160,7 +154,6 @@ describe('message write paths avoid large-content readback', () => {
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
       if (revoked) throw new Error('revoked at server');
     });
     const sending = createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
@@ -170,7 +163,6 @@ describe('message write paths avoid large-content readback', () => {
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     } else {
       await expect(sending).resolves.toMatchObject({ clientId: 'private-message', content: 'Private result' });
       expect(h.sqlite!.prepare('SELECT client_id, rewind_at FROM messages').get()).toEqual({ client_id: 'private-message', rewind_at: null });
@@ -199,10 +191,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     let revoked = false;
     h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
       const result = runInprocTx(h.sqlite!, { name, args });
@@ -223,7 +213,6 @@ describe('message write paths avoid large-content readback', () => {
     expect(tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.mediaRefCalls).toEqual([]);
     expect(onMessageCreated).not.toHaveBeenCalled();
-    expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     // The same client receipt can be retried once permission is available again.
     h.client.tx.mockImplementation(async (name: string, args: unknown) => runInprocTx(h.sqlite!, { name, args }));
     revoked = false;
@@ -235,10 +224,8 @@ describe('message write paths avoid large-content readback', () => {
   it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
-    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
     vi.mocked(tapWindowBroadcast).mockClear();
     vi.mocked(onMessageCreated).mockClear();
-    vi.mocked(recordPrRefsForMessage).mockClear();
     h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
       if (args.publication !== 'publish') return runInprocTx(h.sqlite!, { name, args });
       if (outcome !== 'not-committed') {
@@ -258,13 +245,11 @@ describe('message write paths avoid large-content readback', () => {
       expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
       expect(h.mediaRefCalls).toHaveLength(1);
       expect(onMessageCreated).toHaveBeenCalledOnce();
-      expect(recordPrRefsForMessage).toHaveBeenCalledOnce();
     } else {
       await expect(sending).rejects.toThrow('Publication receipt lost');
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
-      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
     }
     expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(outcome === 'not-committed' ? 0 : 1);
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);

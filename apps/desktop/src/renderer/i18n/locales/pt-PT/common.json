@@ -4956,9 +4956,6 @@
         "title": "Participação em grupos",
         "hint": "Os grupos que o bot já viu aparecem aqui. \"Ativo\" = lê todas as mensagens e decide por si próprio se deve participar (cada mensagem consome tokens).",
         "empty": "Ainda não há grupos. Adicione o bot a um grupo e este aparecerá aqui assim que alguém falar.",
-        "contactsOn": "As pessoas que falam nos grupos são adicionadas automaticamente a Smart Contacts (a opção principal está ativada).",
-        "contactsOff": "Smart Contacts está desativado — as pessoas que falam nos grupos não serão memorizadas automaticamente.",
-        "contactsEnable": "Ativar",
         "error": {
           "load": "Não foi possível carregar os grupos do Telegram. Verifique a ligação e tente novamente.",
           "save": "O modo do grupo não foi guardado. Foi restaurado o último modo confirmado.",
@@ -5817,10 +5814,6 @@
         "ssh": {
           "name": "Comandos SSH",
           "description": "Executar comandos em computadores remotos através de ligações SSH configuradas."
-        },
-        "contacts": {
-          "name": "Smart Contacts",
-          "description": "Encontrar e gerir perfis de contactos e histórico de interações."
         }
       }
     },
@@ -6313,9 +6306,6 @@
             "title": "Participação em grupos",
             "hint": "Os grupos detetados pelo bot oficial aparecem aqui. O modo ativo aplica-se a todas as mensagens apenas da sua conta associada; os outros membros acrescentam contexto local, mas não podem desencadear tarefas.",
             "empty": "Ainda não há grupos. Adicione o bot a um grupo e envie uma mensagem a partir da sua conta associada.",
-            "contactsOn": "As outras pessoas que falam nos grupos são adicionadas automaticamente aos Smart Contacts.",
-            "contactsOff": "Os Smart Contacts estão desativados, pelo que os outros membros dos grupos não serão memorizados automaticamente.",
-            "contactsEnable": "Ativar",
             "error": {
               "load": "Não foi possível carregar os grupos do Telegram. Verifique a ligação e tente novamente.",
               "save": "O modo do grupo não foi guardado. Foi restaurado o último modo confirmado.",
@@ -8398,188 +8388,6 @@
         "title": "Eliminar \"{{name}}\"?",
         "message": "As novas sessões deixarão de carregar este MCP.",
         "confirm": "Eliminar"
-      }
-    },
-    "contacts": {
-      "title": "Smart Contacts",
-      "description": "Um diretório de pessoas e organizações criado para Agents: resolução de identidades entre plataformas (email / Feishu / Slack / GitHub id → quem é esta pessoa), contexto das relações e registos de eventos datados. Os Agents recolhem entradas enquanto trabalham; as de baixa confiança ficam numa fila pendente para a sua revisão. Por predefinição, os dados permanecem neste dispositivo, com sincronização opcional entre dispositivos; as pesquisas e a organização são processadas através do seu próprio modelo.",
-      "enable": {
-        "label": "Ativar Contactos Inteligentes",
-        "description": "Quando ativado, os Agents podem consultar e recolher automaticamente informações de contacto (as entradas incertas ficam pendentes de revisão). Desativar não afeta a consulta nem a gestão dos dados existentes aqui.",
-        "toggleAria": "Ativar/desativar Contactos Inteligentes"
-      },
-      "sync": {
-        "label": "Sincronizar entre os meus dispositivos",
-        "description": "Ative uma vez em cada computador que pretenda incluir. Os dispositivos online sincronizam automaticamente, ligando-se diretamente na mesma rede local quando possível ou usando retransmissão de dados com encriptação ponto a ponto. A comparação é programática, sem utilização de modelos nem de tokens.",
-        "toggleAria": "Ativar/desativar sincronização de contactos entre dispositivos",
-        "syncNow": "Sincronizar agora",
-        "onlineDevices_one": "{{count}} outro dispositivo online",
-        "onlineDevices_other": "{{count}} outros dispositivos online",
-        "route": {
-          "lan": "Rede local",
-          "relay": "Retransmissão encriptada"
-        },
-        "status": {
-          "loading": "A ler o estado da sincronização…",
-          "signInRequired": "Inicie sessão na sua conta Cindy para sincronizar entre dispositivos",
-          "off": "Sincronização desativada",
-          "waiting": "À espera de que outro computador com sincronização ativada fique online",
-          "syncing": "A sincronizar em segurança…",
-          "ready": "Pronto — os dispositivos serão sincronizados quando ficarem online",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "O armazenamento seguro do sistema não está disponível, pelo que não é possível proteger a chave do dispositivo",
-          "peer-identity-changed": "A identidade de um dispositivo mudou; a sincronização está em pausa para proteger os seus dados",
-          "sync-failed": "A sincronização falhou e será repetida quando um dispositivo voltar a ficar online"
-        },
-        "toast": {
-          "enabled": "Sincronização entre dispositivos ativada",
-          "disabled": "Sincronização entre dispositivos desativada"
-        },
-        "onlineDevices_many": "{{count}} outros dispositivos online"
-      },
-      "stats": "{{people}} pessoas / {{orgs}} organizações / {{groups}} grupos",
-      "kind": {
-        "person": "Pessoa",
-        "org": "Organização"
-      },
-      "filters": {
-        "all": "Todas",
-        "person": "Pessoas",
-        "org": "Organizações",
-        "pending": "Pendente"
-      },
-      "list": {
-        "searchPlaceholder": "Pesquisar nome / email / palavra-chave",
-        "newAria": "Novo contacto",
-        "newNamePlaceholder": "Nome ou organização",
-        "newKindAria": "Alternar tipo (pessoa / organização)",
-        "newConfirm": "Criar",
-        "groupFilterAria": "Filtrar por grupo",
-        "groupFilterAll": "Todos os grupos",
-        "loadMore": "Carregar mais",
-        "noResults": "Nenhum contacto correspondente",
-        "empty": "Não tem contactos. Após a ativação, os Agents recolherão entradas enquanto trabalham — ou clique em + para adicionar uma manualmente."
-      },
-      "detail": {
-        "empty": "Selecione um contacto à esquerda para ver o respetivo perfil",
-        "pendingBanner": "Esta entrada foi recolhida por um Agent com baixa confiança. Reveja-a.",
-        "pendingConfirm": "Confirmar",
-        "pendingDiscard": "Descartar",
-        "nameAria": "Nome apresentado",
-        "deleteAria": "Eliminar contacto",
-        "summaryPlaceholder": "Resumo numa linha",
-        "identities": "Identidades",
-        "identityRemoveAria": "Remover identidade {{value}}",
-        "identityPlatformAria": "Plataforma",
-        "identityValuePlaceholder": "Email / id da plataforma / identificador",
-        "identityAddAria": "Adicionar identidade",
-        "narrative": "Relação e contexto",
-        "narrativePlaceholder": "A sua relação, histórico de colaboração e contexto (Markdown)",
-        "agentNotes": "Instruções para Agents",
-        "agentNotesPlaceholder": "Por exemplo: Este é o email pessoal do chefe — nunca enviar emails em massa para este endereço",
-        "events": "Cronologia",
-        "eventsEmpty": "Ainda não há eventos",
-        "eventDeleteAria": "Eliminar evento",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "O que aconteceu",
-        "eventAddAria": "Adicionar evento",
-        "groups": "Grupos",
-        "groupRemoveAria": "Remover do grupo {{name}}",
-        "groupAddAria": "Adicionar ao grupo",
-        "groupAddPlaceholder": "Adicionar ao grupo…",
-        "discardChanges": "Descartar alterações",
-        "save": "Guardar",
-        "identitiesEmpty": "Ainda não há identidades",
-        "relations": "Ligações",
-        "relationsEmpty": "Ainda não há ligações (organizações / pessoas relacionadas)",
-        "relationAddAria": "Adicionar ligação",
-        "relationRemoveAria": "Remover ligação com {{name}}",
-        "relationVerbPlaceholder": "trabalha em / família…",
-        "relationTargetAria": "Escolher contacto relacionado",
-        "relationTargetPlaceholder": "Escolher uma pessoa ou organização…",
-        "relationNotePlaceholder": "Nota (cargo…)"
-      },
-      "deleteConfirm": {
-        "title": "Eliminar \"{{name}}\"?",
-        "description": "Todas as identidades, eventos da cronologia e associações a grupos serão eliminados. Esta ação não pode ser anulada.",
-        "confirm": "Eliminar",
-        "cancel": "Cancelar"
-      },
-      "toast": {
-        "enabled": "Contactos Inteligentes ativados",
-        "disabled": "Contactos Inteligentes desativados",
-        "codexRefreshDeferred": "Definição guardada, mas o Codex está ocupado — será aplicada às sessões do Codex após reiniciar a aplicação",
-        "toggleFailed": "Falha ao ativar/desativar Contactos Inteligentes",
-        "created": "\"{{name}}\" criado",
-        "createFailed": "Falha ao criar contacto",
-        "deleted": "\"{{name}}\" eliminado",
-        "deleteFailed": "Falha ao eliminar contacto",
-        "saved": "Guardado",
-        "saveFailed": "Falha ao guardar",
-        "confirmFailed": "Falha ao confirmar entrada",
-        "identityAddFailed": "Falha ao adicionar identidade",
-        "identityRemoveFailed": "Falha ao remover identidade",
-        "eventAddFailed": "Falha ao adicionar evento",
-        "eventDeleteFailed": "Falha ao eliminar evento",
-        "groupAddFailed": "Falha ao adicionar ao grupo",
-        "groupRemoveFailed": "Falha ao remover do grupo",
-        "relationAddFailed": "Falha ao adicionar ligação",
-        "relationRemoveFailed": "Falha ao remover ligação"
-      },
-      "manage": "Gerir",
-      "manager": {
-        "title": "Smart Contacts",
-        "closeAria": "Fechar"
-      },
-      "merge": {
-        "button": "Unir duplicado",
-        "buttonAria": "Unir contacto duplicado",
-        "hint": "Escolha um duplicado para unir as respetivas identidades, eventos e ligações a \"{{target}}\" e, em seguida, eliminá-lo.",
-        "searchPlaceholder": "Pesquisar duplicados…",
-        "confirmTitle": "Unir \"{{source}}\" a \"{{target}}\"?",
-        "confirmDescription": "Todas as identidades, eventos, ligações e grupos de \"{{source}}\" serão transferidos e o respetivo perfil será eliminado. Esta ação não pode ser anulada.",
-        "confirm": "Unir",
-        "success": "\"{{source}}\" unido a \"{{target}}\"",
-        "failed": "Falha na união"
-      },
-      "import": {
-        "title": "Importar contactos",
-        "button": "Importar",
-        "pickHint": "Importação em massa de uma origem externa. As entradas cujo email/telefone corresponda a um perfil existente são unidas automaticamente (sem duplicados); os nomes semelhantes vão para uma lista de revisão manual.",
-        "sourceSystem": "Contactos do sistema",
-        "sourceSystemDesc": "Só de leitura; requer permissão do sistema na primeira utilização",
-        "sourceVcf": "Ficheiro vCard",
-        "sourceVcfDesc": ".vcf (formato padrão de exportação de contactos)",
-        "emptySource": "Não há contactos importáveis nesta origem",
-        "permissionDenied": "Acesso aos contactos negado — permita-o em Definições do Sistema → Privacidade e Segurança → Automatização",
-        "systemReadFailed": "Falha ao ler contactos do sistema",
-        "vcfParseFailed": "Falha ao analisar o ficheiro vCard",
-        "selectedCount": "{{checked}} / {{total}} selecionados",
-        "groupPlaceholder": "Adicionar ao grupo após a importação (opcional; será criado se não existir)",
-        "run": "Importar {{count}}",
-        "running": "A importar…",
-        "failed": "Falha na importação",
-        "doneSummary": "Importação concluída: {{created}} criados, {{enriched}} unidos a perfis existentes, {{orgs}} organizações criadas.",
-        "needsReview": "{{count}} entradas têm nomes semelhantes a perfis existentes e não foram importadas — reveja: {{names}}",
-        "identityConflicts": "{{count}} registo(s) tinham identidades já pertencentes a outros contactos ({{names}}) e não foram unidos — reveja-os no gestor para decidir se pretende uni-los",
-        "relationErrors": "Não foi possível criar {{count}} relação(ões) de emprego ({{names}})",
-        "skipped": "{{count}} entradas ignoradas (inválidas ou com falha)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "Esta identidade já pertence a outro contacto. Atualize esse perfil ou una-os primeiro.",
-        "PERMISSION_DENIED": "Acesso aos contactos não autorizado. Permita-o em Definições do Sistema > Privacidade e Segurança > Automatização.",
-        "UNSUPPORTED_CAPABILITY": "Esta ação não é suportada nesta plataforma.",
-        "NOT_FOUND": "O destino já não existe.",
-        "ALREADY_EXISTS": "Já existe um item com o mesmo nome ou conteúdo.",
-        "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
-        "INTERNAL": "A operação falhou. Tente novamente mais tarde."
-      },
-      "guide": {
-        "hint": "Deixe a IA ajudar a adicionar perfis de contactos, rever entradas pendentes e eliminar duplicados.",
-        "cta": "Gerir contactos com IA",
-        "managementPrompt": "Ajuda-me a gerir os meus Contactos Inteligentes. Primeiro verifica o estado atual e as ferramentas já disponíveis e depois orienta-me na adição de contactos úteis, na revisão de duplicados e no tratamento de entradas pendentes. Pergunta-me antes de qualquer escrita, união ou eliminação."
       }
     },
     "remotePermission": {
@@ -11238,22 +11046,112 @@
       "skill": "Skills",
       "mcp": "MCP",
       "toolset": "Ferramentas integradas",
-      "unavailable": "Indisponível",
       "empty": "Nenhuma capacidade correspondente",
-      "accessHint": "Escolhe as ferramentas integradas, os servidores MCP e as Skills que este companheiro pode utilizar. As alterações aplicam-se ao próximo pedido, incluindo pedidos de grupo autorizados.",
-      "inheritedHint": "Atualmente, segue as ferramentas ativadas neste computador. Desativar um item muda esta lista para uma seleção explícita.",
-      "selectedHint": "Só os itens selecionados nesta lista são permitidos para este companheiro.",
-      "personalHint": "Uma Skill aprendida por este companheiro, carregada com o respetivo perfil.",
       "unavailableHint": "Indisponível neste computador ou destino de execução. Configura primeiro a ligação ou o acesso ao sistema.",
       "notOnThisComputer": "Indisponível neste computador",
-      "configure": "Abrir configuração",
       "empty_toolset": "Não há ferramentas integradas disponíveis neste destino de execução.",
       "empty_mcp": "Não foram adicionados servidores MCP personalizados.",
       "empty_skill": "Não há Skills disponíveis para selecionar.",
       "inputHandoff": {
         "title": "Transferência do controlo da introdução",
         "description": "Quando este colega chegar a um início de sessão, palavra-passe ou código que não consiga introduzir, pode pedir-te que o introduzas num dos teus dispositivos. Os teus dados nunca são partilhados com ele."
-      }
+      },
+      "intro": "Escolhe que Skills, ferramentas e servidores MCP este colega pode usar. As alterações aplicam-se a partir da próxima mensagem.",
+      "alwaysOn": "Sempre ativa",
+      "core": {
+        "group": "Skill principal",
+        "name": "Núcleo do colega",
+        "hint": "Tarefas, outros colegas, modelos, ferramentas e plugins, memória. Atualizado com o Cindy.",
+        "meta": "Comum a todos os colegas · Sempre ativo · Atualizado com o Cindy",
+        "note": "A coordenação que todos os colegas têm. Não pode ser desativada nem editada. Para mudar a forma como ele trabalha, diz-lho no chat e ele guarda isso como Skill própria.",
+        "covers": "Inclui",
+        "raw": "Ver texto original",
+        "items": {
+          "tasks": {
+            "title": "Tarefas",
+            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, incluindo nos teus outros computadores."
+          },
+          "teammates": {
+            "title": "Outros colegas",
+            "body": "Envia mensagens a outros colegas ou cria um novo para ti."
+          },
+          "models": {
+            "title": "Modelos e ferramentas",
+            "body": "Muda de modelo quando pedes e usa ferramentas e plugins conforme necessário."
+          },
+          "memory": {
+            "title": "Memória",
+            "body": "Lembra-se das tuas preferências e do teu contexto, confirma antes de usar e atualiza quando algo muda."
+          },
+          "self": {
+            "title": "Conhecer-se",
+            "body": "Sabe o que consegue fazer e ativa ou desativa funcionalidades por ti; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+          }
+        }
+      },
+      "system": {
+        "group": "Skills do sistema",
+        "meta": "{{on}} de {{total}} ativas",
+        "pageMeta": "Skill do sistema · Atualizada com o Cindy",
+        "use": "Ativar para este colega",
+        "whenOff": "Ao desativar",
+        "items": {
+          "todo": {
+            "name": "Pendentes",
+            "hint": "Regista o que pedes e o que ele repara, e lembra-te no prazo.",
+            "off": "Deixa de registar, organizar e lembrar pendentes. Os existentes mantêm-se e continuam quando voltares a ativar."
+          },
+          "routine": {
+            "name": "Rotinas",
+            "hint": "Cria e mantém rotinas que correm periodicamente.",
+            "off": "Deixa de criar ou alterar rotinas. As existentes continuam a correr e podem ser geridas na página Rotinas."
+          },
+          "follow": {
+            "name": "Painel e acompanhamento",
+            "hint": "Acompanha o estado de todas as tuas tarefas e dá seguimento às que lhe entregas.",
+            "off": "Deixa de verificar e acompanhar as tuas tarefas por iniciativa própria. Podes continuar a perguntar-lhe no chat."
+          }
+        }
+      },
+      "learned": {
+        "group": "Skills aprendidas",
+        "empty": "Ainda não há Skills aprendidas. A aprendizagem noturna transforma em Skills os métodos que se repetem, ou podes pedir-lhe no chat que se lembre de um.",
+        "meta": "Aprendida · Atualizada a {{date}}",
+        "metaUndated": "Aprendida",
+        "missing": "Esta Skill já não existe.",
+        "use": "Usar esta Skill",
+        "useHint": "Desativada, a Skill é mantida, mas não é usada.",
+        "edit": "Editar",
+        "delete": "Eliminar",
+        "cancel": "Cancelar",
+        "save": "Guardar",
+        "saveFailed": "Não foi possível guardar. Tenta novamente mais tarde.",
+        "deleteFailed": "Não foi possível eliminar. Tenta novamente mais tarde.",
+        "deleteTitle": "Eliminar “{{name}}”?",
+        "deleteBody": "O colega deixa de usar esta Skill e o conteúdo não pode ser recuperado. Se precisares dela mais tarde, pede-lhe no chat que volte a guardar o método.",
+        "unsavedTitle": "Alterações não guardadas",
+        "unsavedDescription": "Ao sair, perderá estas alterações à Skill.",
+        "discard": "Descartar alterações",
+        "continueEditing": "Continuar a editar",
+        "descriptionLabel": "Quando usar",
+        "bodyLabel": "Como fazer"
+      },
+      "local": {
+        "group": "Skills deste computador"
+      },
+      "followMeta": "Segue este computador · {{count}}",
+      "selectedMeta": "{{count}} de {{total}} selecionadas",
+      "showRest": "Mostrar mais {{count}}",
+      "showLess": "Mostrar menos",
+      "manage": "Gerir",
+      "toolSettings": "Definições das ferramentas",
+      "notTurnedOn": "Ainda não ativado neste computador",
+      "turnOn": "Ativar",
+      "permissions": "Permissões"
+    },
+    "systemSkills": {
+      "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Volta a ativá-la em Capacidades para usar isto.",
+      "offHint": "A Skill do sistema “{{skill}}” está desativada. Volta a correr quando a reativares em Capacidades."
     },
     "guided": {
       "title": "Criar um colega",
@@ -14900,6 +14798,7 @@
           "hint": "Até 3 no cabeçalho; os PRs fixados aparecem primeiro",
           "empty": "Cole uma ligação de PR do GitHub para o adicionar",
           "removed": "Removidos: {{count}}",
+          "legacy": "Referências por confirmar: {{count}}",
           "addLabel": "Adicionar ligação de PR",
           "add": "Adicionar PR",
           "loading": "A carregar…",
@@ -15232,6 +15131,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Automatizações do repositório encontradas em {{projectName}}",
+        "review": "Rever importação",
+        "title": "Importar automatizações do repositório",
+        "description": "Origem: {{workingDir}}. Reveja as definições abaixo. A importação aplica estas alterações e ativa novas automatizações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo de confiança.",
+        "accept": "Confirmar importação",
+        "removed": "Serão removidos: {{names}}"
+      },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
         "installed": "Automatização de projeto instalada para {{projectName}} ({{summary}})",
@@ -15406,6 +15313,7 @@
         "timeout": "Tempo limite (segundos, opcional)",
         "timeoutPlaceholder": "Sem tempo limite",
         "capabilities": {
+          "github_read": "Ler GitHub",
           "jira_read": "Ler Jira",
           "jira_comment": "Comentar no Jira",
           "sessions_dispatch": "Encaminhar sessões",
@@ -15417,6 +15325,7 @@
         "capabilitiesSearch": "Pesquisar capacidades",
         "capabilitiesEmpty": "Nenhuma capacidade correspondente",
         "capabilityDescs": {
+          "github_read": "Ler PR, CI, revisões e alterações observadas sem associar tarefas",
           "jira_read": "Ler pedidos do Jira (obter por chave / pesquisa JQL)",
           "jira_comment": "Adicionar comentários a pedidos do Jira",
           "sessions_dispatch": "Criar ou reativar sessões de {{appName}} e entregar mensagens",

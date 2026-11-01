@@ -18,7 +18,6 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { CONTACTS_RULES_DISABLED } from '../../../contacts/system-prompt.js';
 import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
@@ -175,7 +174,6 @@ async function startHostedSession(
     binaryPath: process.execPath,
     logger: createNoopLogger(),
     getGhostRosterPrompt: () => GHOST_ROSTER,
-    getContactsPromptState: () => 'disabled',
     getManagedSkills: async () => [{
       kind: 'agent-skill',
       name: 'learn',
@@ -240,9 +238,8 @@ describe('Claude Code device-hosted guest sessions', () => {
     const parentClaudeMd = path.join(path.dirname(sessionRoot), 'CLAUDE.md').split(path.sep).join('/');
     expect(options.settings?.claudeMdExcludes).toContain(parentClaudeMd);
     expect(options.plugins).toBeUndefined();
-    // 不带本机的插件清单与通讯录说明(system prompt 改动已经维护者确认)。
+    // 不带本机的插件清单(system prompt 改动已经维护者确认)。
     expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).not.toContain(CONTACTS_RULES_DISABLED);
   });
 
   // 插件工具经隧道回到任务所在电脑：花名册用那台带来的快照，本机的仍不进来；那台没提供插件工具就不注入。
@@ -306,7 +303,6 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect(await preToolUseDenial(options, 'Agent', { description: 'd', prompt: 'p', isolation: 'worktree' })).toBeNull();
     expect(options.plugins?.length).toBe(1);
     expect(options.systemPrompt?.append).toContain(GHOST_ROSTER);
-    expect(options.systemPrompt?.append).toContain(CONTACTS_RULES_DISABLED);
     expect(options.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
     expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b', 'other/model-c']);

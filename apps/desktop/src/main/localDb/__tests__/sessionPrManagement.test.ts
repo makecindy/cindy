@@ -9,12 +9,11 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { eq } from 'drizzle-orm';
+import { manageSessionPrs } from '../../git-context/manageSessionPrs';
 import { messages, sessionPrRefs, sessions } from '../schema';
 import {
   managePrRefs,
   listPrRefs,
-  recordPrRefsForMessage,
-  recomputePrRefsForSession,
 } from '../../git-context/prRefsStore';
 
 const h = vi.hoisted(() => ({ client: null as unknown, changed: vi.fn() }));
@@ -57,22 +56,10 @@ beforeEach(() => {
 afterAll(() => sqlite.close());
 
 describe('manual PR management', () => {
-  it('removal survives automatic rescans and recomputation, then explicitly restores', async () => {
-    await recordPrRefsForMessage({
-      sessionId: 's',
-      role: 'user',
-      content: 'https://github.com/example/repo/pull/1',
-      createdAt: 1,
-    });
-    const [ref] = await listPrRefs('s');
+  it('keeps removed links out of active reads until explicit restore', async () => {
+    const [ref] = await add(1);
     await managePrRefs('s', { action: 'remove', id: ref.id }, verify);
-    await recordPrRefsForMessage({
-      sessionId: 's',
-      role: 'assistant',
-      content: ref.url,
-      createdAt: 2,
-    });
-    await recomputePrRefsForSession('s');
+    await expect(add(1)).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(await listPrRefs('s')).toEqual([]);
     const removed = await managePrRefs('s', { action: 'list' }, verify);
     expect(removed).toHaveLength(1);
@@ -80,12 +67,26 @@ describe('manual PR management', () => {
     expect(await listPrRefs('s')).toMatchObject([{ id: ref.id, removedAt: null }]);
   });
 
-  it('manual links survive history recomputation and duplicate URLs are rejected', async () => {
+  it('repeated explicit adds are idempotent, legacy links remain recoverable', async () => {
+    const [ref] = await add(2);
     await add(2);
-    await recomputePrRefsForSession('s');
-    expect(await listPrRefs('s')).toMatchObject([{ prNumber: 2, manuallyAdded: true }]);
-    await expect(add(2)).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(verify).toHaveBeenCalledTimes(1);
+    db.update(sessionPrRefs).set({ associationSource: 'legacy', manuallyAdded: false }).where(eq(sessionPrRefs.id, ref.id)).run();
+    expect(await listPrRefs('s')).toEqual([]);
+    expect(await managePrRefs('s', { action: 'list' }, verify)).toHaveLength(1);
+    await add(2);
+    expect(await listPrRefs('s')).toMatchObject([{ id: ref.id, associationSource: 'explicit' }]);
+  });
+
+  it('public selectors validate pagination before mutation and preserve repeated detach', async () => {
+    const args = { action: 'attach', pr: { repo: 'example/repo', number: 8 } };
+    await expect(manageSessionPrs('s', { ...args, limit: 0 }, verify, 'agent:test')).rejects.toThrow('INVALID_LIMIT');
+    expect(await listPrRefs('s')).toEqual([]);
+    await manageSessionPrs('s', args, verify, 'agent:test');
+    const removed = await manageSessionPrs('s', { ...args, action: 'detach' }, verify, 'agent:test');
+    const again = await manageSessionPrs('s', { ...args, action: 'detach' }, verify, 'agent:test');
+    expect(again.associations).toEqual(removed.associations);
+    expect(await listPrRefs('s')).toEqual([]);
   });
 
   it('rejects malformed links and API-confirmed missing PRs before storing anything', async () => {
@@ -117,12 +118,6 @@ describe('manual PR management', () => {
       { action: 'reorder', ids: [rows[2].id, rows[0].id, rows[1].id] },
       verify,
     );
-    await recordPrRefsForMessage({
-      sessionId: 's',
-      role: 'assistant',
-      content: rows[0].url,
-      createdAt: Date.now() + 1_000,
-    });
     expect((await listPrRefs('s'))[0].id).toBe(rows[2].id);
   });
 

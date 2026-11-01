@@ -173,7 +173,6 @@ async function startHosted(fixture: Fixture) {
   const guestSkill = path.join(workingDir, '.agents', 'skills', 'guest', 'SKILL.md');
 
   const getGhostRosterPrompt = vi.fn(() => GHOST_ROSTER);
-  const getContactsPromptState = vi.fn(() => 'enabled' as const);
   const getDisabledSkillPaths = vi.fn(() => [hostSkill]);
   const prepareCodexSkills = vi.fn(async () => {});
   const prepareCodexResumeSession = vi.fn(async () => undefined);
@@ -196,7 +195,6 @@ async function startHosted(fixture: Fixture) {
     binaryPath: process.execPath,
     logger: noopLogger(),
     getGhostRosterPrompt,
-    getContactsPromptState,
     getDisabledSkillPaths,
     prepareCodexSkills,
     prepareCodexResumeSession,
@@ -332,7 +330,7 @@ async function startHosted(fixture: Fixture) {
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getContactsPromptState, getDisabledSkillPaths,
+    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
     hostSkill, systemSkill, pluginSkill, guestSkill, guestHome, codexHome, agent, workingDir,
   };
@@ -494,10 +492,9 @@ describe('Codex device-hosted guest sessions', () => {
     ]));
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.systemSkill);
     expect(skills.map((entry) => entry.path)).not.toContain(fixture.guestSkill);
-    // 不带本机的插件清单、通讯录说明与技能偏好。
+    // 不带本机的插件清单与技能偏好。
     expect(String(params.developerInstructions ?? '')).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
-    expect(fixture.getContactsPromptState).not.toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -537,7 +534,6 @@ describe('Codex device-hosted guest sessions', () => {
       'mcp_servers.cindy_contacts.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_contacts',
     });
     expect(String(params.developerInstructions)).toContain(GHOST_ROSTER);
-    expect(fixture.getContactsPromptState).toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).toHaveBeenCalled();
     // 同账号不检查本机 Skill / MCP 清单(Review 与受邀者才逐项关闭)，Codex 功能也不按白名单收窄。
     expect(fixture.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);

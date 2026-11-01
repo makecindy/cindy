@@ -203,6 +203,17 @@ describe('BotGlanceButton', () => {
     expect(screen.getByTestId('bot-glance-daily-check')).toBeTruthy();
   });
 
+  // cindy-bots-runtime.md §6「伙伴技能分层」: with the Todos system Skill off, its background check is refused by the host;
+  // 近况 still lists the Todos but no longer offers "check for me" or the daily check.
+  it('keeps todos but hides both check controls when the Todos system Skill is off', async () => {
+    items = [todo('t1')]; dailyOn = true;
+    h.local = [{ id: 'bot-1', name: '葫芦', capabilities: { systemSkillsOff: ['todo'] } }];
+    await openGlance();
+    expect(await screen.findByText('Todo t1')).toBeTruthy();
+    expect(screen.queryByTestId('bot-glance-check')).toBeNull();
+    expect(screen.queryByTestId('bot-glance-daily-check')).toBeNull();
+  });
+
   // User-approved #7546 projection: two devices, existing unread, real PR title, one output per PR.
   it('opens the correct task host, reads existing attention and deduplicates true PR outputs', async () => {
     const a = { id: 'task-a', title: 'Session title A', status: 'active', updatedAt: '2026-10-28T10:00:00Z' };

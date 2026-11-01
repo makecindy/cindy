@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "Gérer les liens de PR",
+    "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
+    "empty": "Collez un lien de PR GitHub pour l’ajouter",
+    "removed": "Supprimées : {{count}}",
+    "legacy": "Références non confirmées : {{count}}",
+    "addLabel": "Ajouter un lien de PR",
+    "add": "Ajouter une PR",
+    "loading": "Chargement…",
+    "restore": "Restaurer la PR",
+    "pin": "Épingler dans l’en-tête",
+    "unpin": "Désépingler la PR",
+    "pinLimit": "Épingler jusqu’à 3 PR",
+    "reorderHint": "Utilisez Alt+↑/↓ pour réorganiser les PR au sein du groupe épinglé ou non épinglé.",
+    "dragHandle": "Faire glisser pour réorganiser {{repo}} #{{number}}",
+    "remove": "Supprimer la PR",
+    "errors": {
+      "duplicate": "Cette PR est déjà liée ; restaurez les liens supprimés depuis la liste",
+      "notFound": "PR introuvable ou accès refusé",
+      "invalidUrl": "Saisissez un lien de PR GitHub valide",
+      "reorderFailed": "L’ordre n’a pas été enregistré. Réessayez.",
+      "verifyFailed": "Impossible de vérifier la PR ; vérifiez la connexion à GitHub et les droits d’accès",
+      "unsupported": "La version installée sur cet ordinateur ne permet pas de gérer les liens de PR",
+      "failed": "Impossible de mettre à jour les liens de PR"
+    },
+    "moveUp": "Monter"
+  },
   "paneResize": {
     "label": "Largeur des colonnes",
     "hint": "Faites glisser vers la gauche ou la droite pour ajuster la largeur des colonnes"
@@ -197,7 +224,7 @@
       },
       "actionCopy": {
         "pending": "Traitez d'abord la demande en attente ; la zone de saisie sera ensuite restaurée.",
-        "archived": "Cette session est archivée. Restaurez-la avant d'envoyer d'autres messages.",
+        "archived": "Cette session est archivée. Envoyer un message la désarchive automatiquement.",
         "deleted": "Cette session est supprimée et ne peut pas être modifiée.",
         "queuePaused": "La file d'attente est en pause. Reprenez-la depuis le panneau de la file d'attente."
       }
@@ -441,7 +468,7 @@
     "copyLinkAction": "Copier le lien",
     "unpin": "Désépingler",
     "pin": "Épingler",
-    "restore": "Restaurer",
+    "restore": "Désarchiver",
     "archive": "Archiver",
     "deleteAction": "Supprimer la session",
     "deleteConversation": "Supprimer la session",

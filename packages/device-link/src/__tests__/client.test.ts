@@ -38,7 +38,6 @@ import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
-import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
 import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
@@ -4542,8 +4541,8 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('流控 push(contacts-sync)满员入队不驱逐镜像帧,维持 BACKPRESSURE 交发送方流控', async () => {
-    // contacts-sync sender 对 BACKPRESSURE 做阻塞等待重试(它的流控协议),
+  it('流控 push(插件同步)满员入队不驱逐镜像帧,维持 BACKPRESSURE 交发送方流控', async () => {
+    // 不可驱逐通道的发送方对 BACKPRESSURE 做阻塞等待重试(它的流控协议),
     // 它的帧不得触发 latest-wins 驱逐别人——满员时按原语义拒收即可。
     const warn = vi.fn();
     const h = makeHarness({
@@ -4559,7 +4558,7 @@ describe('DeviceLinkClient', () => {
       h.client.sendPush('dev-b', 'maker:event', { i });
     }
     expect(() =>
-      h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk' }),
+      h.client.sendPush('dev-b', PLUGIN_SYNC_CHANNEL, { version: 1, type: 'chunk' }),
     ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining('latest-wins push admission'),
@@ -4568,7 +4567,7 @@ describe('DeviceLinkClient', () => {
   });
 
   it('已入队的流控 push 是腾位边界:镜像洪峰驱逐到它即止,分片不被静默丢弃', async () => {
-    // 反例(review P2):contacts-sync 的 cipher-chunk 一旦被 maker:event 洪峰
+    // 反例(review P2):插件同步等流控帧 一旦被 maker:event 洪峰
     // 静默驱逐,发送方以为已送达,接收端永远拼不出本次传输。
     const warn = vi.fn();
     const h = makeHarness({
@@ -4580,10 +4579,10 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await establishInboundReliableLink(h, 'flow-controlled-boundary-stream');
 
-    // 队形:2 条镜像(seq1-2) + 1 条 contacts 分片(seq3) + 镜像填满到 64
+    // 队形:2 条镜像(seq1-2) + 1 条插件同步帧(seq3) + 镜像填满到 64
     h.client.sendPush('dev-b', 'maker:event', { i: 0 });
     h.client.sendPush('dev-b', 'maker:event', { i: 1 });
-    h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk', index: 0 });
+    h.client.sendPush('dev-b', PLUGIN_SYNC_CHANNEL, { version: 1, type: 'chunk', index: 0 });
     for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 3; i++) {
       h.client.sendPush('dev-b', 'maker:event', { fill: i });
     }
@@ -4591,7 +4590,7 @@ describe('DeviceLinkClient', () => {
     const pushFrames = () => h.current().sent.filter(
       (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
     );
-    // 洪峰驱逐 seq1、seq2 两条镜像后,队头是 contacts 分片:边界生效,第三条拒收
+    // 洪峰驱逐 seq1、seq2 两条镜像后,队头是插件同步帧:边界生效,第三条拒收
     expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
     expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
     expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' })).not.toThrow();

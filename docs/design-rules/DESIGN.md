@@ -528,6 +528,23 @@ provide a compact restore action after an explicit selection. Desktop separates 
 the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
 Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
 
+### Teammate capability page (owner-approved r2, 2026-11-01)
+
+The teammate's Capabilities page follows the Memory page's grouped list: a quiet 12px/500 group
+heading with a tabular count or summary (`1 of 3 on`, `Following this computer · 11`), then one
+12px-radius card per group with 13px/500 names, one-line 12px descriptions (full text on hover)
+and inset dividers. Groups in order: Core skill (always on, opens a read-only page with a
+plain-language summary and the original text folded), System skills (switch per item; the page
+explains what turning it off stops), Learned skills (switch; the page shows the content with Edit
+and Delete), Skills on this computer, Built-in tools, MCP, Permissions (Input Handoff). A group
+shows at most four rows, enabled first and unavailable last; the rest unfold under "Show N more"
+with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading link per group
+(Manage / Tool settings) instead of a button on every row; an unavailable tool says so in its
+note line with a "Turn on" link. Rows that open a page carry a trailing chevron and keep the switch
+as a separate control. Light and Dark use the existing tokens; prototype and screenshots live in
+the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules: cindy-bots-runtime.md §6
+「伙伴技能分层」.
+
 ### Inputs & Forms
 
 ```
@@ -2337,3 +2354,12 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 ### 伙伴私聊消息下操作（2026-10-29）
 
 常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；五语及明暗模式均不得溢出。
+
+### 伙伴内部通讯入口（2026-11-01）
+
+伙伴间收发只留一行次级文字「发给 X」／「收到 X」，复用原小头像与双向箭头的单行胶囊入口，
+入口与「处理记录」及助手正文共用左对齐轴，不用两侧伸展分隔线把入口推到中间；
+11px 字号、28px 最小点击高度，颜色走现有语义 token，键盘焦点可见。
+不铺两行摘要、不另放展开/完整对话按钮。点击直接打开原只读往来页，返回原主任务位置。
+长名字在可用宽度内省略，完整标签保留在可访问名称和悬停提示。手机沿用已有触摸热区。
+内部往来不制造用户未读；执行与提醒边界见 `cindy-bots-runtime.md` §6.1。

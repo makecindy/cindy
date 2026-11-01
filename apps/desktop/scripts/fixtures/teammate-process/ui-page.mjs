@@ -4,13 +4,25 @@ export default {
   stubs: { 'src/renderer/components/chat/GhostToolCard': 'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";', 'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";' },
   real: 'MessageStream, teammate grouping, WorkGroupBlock, Markdown, theme and i18n',
   notCovered: 'Host execution, native mobile layout and transport',
-  cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } } },
+  cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } } },
   async check(page, ui) {
     const definition = this.cases[ui.case];
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
     const heading = journal.locator(':scope > button');
+    if (definition.data.retry) {
+      const action = journal.locator('[data-teammate-segment] > button');
+      assert.match(await action.innerText(), /skills\.md/);
+      assert.doesNotMatch(await action.innerText(), /失败|failed|失敗|실패/);
+      assert.equal(await action.evaluate(el => getComputedStyle(el).color), await heading.evaluate(el => getComputedStyle(el).color), 'Prior failures do not turn the current action red');
+      await ui.capture('current-action');
+      await action.click();
+      await journal.getByText('helper', { exact: false }).first().waitFor();
+      assert.ok(await journal.getByText('helper', { exact: false }).count() > 0, 'Original tool attempts remain inspectable');
+      await ui.capture('attempts');
+      return;
+    }
     if (definition.data.done) {
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       assert.equal(await journal.getByText('任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。').count(), 0);

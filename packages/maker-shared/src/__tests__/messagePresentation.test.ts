@@ -3,6 +3,7 @@ import {
   buildMessageActionBarPresentation,
   countMessageRenderItemDiffs,
   isToolErrorLike,
+  isToolResultFailureLike,
   summarizeToolUseText,
   summarizeMessageBubblePresentation,
   summarizeTodoCardPresentation,
@@ -13,6 +14,7 @@ import {
   type ToolRowWording,
 } from '../messagePresentation';
 import type { PresentationLocalizer } from '../presentationLocalization';
+import { describeToolUse } from '../toolUseDescriptor';
 import type {
   MessageRenderNormalizedMessage,
   MessageRenderSourceMessageLike,
@@ -39,6 +41,28 @@ function message(id: string, patch: Partial<TestMessage> = {}): TestMessage {
 }
 
 describe('messagePresentation', () => {
+  // Unit: plugin/MCP content mentioning errors is data, not execution status.
+  // Previous content-tool cases covered Read/Search only. Preserve explicit MCP
+  // failure signals while a successful skill/document response stays neutral.
+  it.each([
+    ['{"ok":true,"result":"遇到错误时重试；失败记录保留"}', false],
+    ['Available skills\nError handling and timeout recovery', false],
+    ['{"isError":false,"content":[{"type":"text","text":"failure recovery"}]}', false],
+    ['{"isError":true,"content":[{"type":"text","text":"Unavailable"}]}', true],
+    ['{"ok":false,"error":"Unavailable"}', true],
+    ['Error: permission denied', true],
+    // Imported Claude history keeps result text without the original is_error.
+    ['MCP error -32603: request failed', true],
+    ['MCP error: request failed', true],
+    ['Available skills\nMCP error -32603: request failed is a recovery example', false],
+  ])('classifies MCP result %s as failure=%s', (result, failed) => {
+    expect(isToolResultFailureLike(describeToolUse('mcp__helper__call_tool', {}), result)).toBe(failed);
+    const row = message('mcp-result', {
+      label: 'mcp__helper__call_tool', body: '', secondaryBody: result,
+      source: { clientId: 'mcp-result', content: { toolName: 'mcp__helper__call_tool', input: {} }, createdAt: '2026-01-01T00:00:00.000Z' },
+    });
+    expect(summarizeToolRowPresentation(row).hasError).toBe(failed);
+  });
   it('exposes the same compact tool wording to remote channel previews', () => {
     expect(summarizeToolUseText('Read', { file_path: '/repo/src/app.ts' })).toEqual({
       label: '读取 app.ts',

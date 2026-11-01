@@ -30,6 +30,11 @@ export const BOT_SETTINGS_OPS = [
   'memory.update',
   'memory.delete',
   'capabilities.catalog',
+  'skills.core',
+  'skills.read',
+  'skills.save',
+  'skills.setEnabled',
+  'skills.delete',
   'autonomy.get',
   'autonomy.set',
   'autonomy.reset',
@@ -164,4 +169,5 @@ export const BOT_SETTINGS_CAPABILITY_FIELDS = [
   'memory',
   'inputHandoff',
   'allowSchedulerFollow',
+  'systemSkillsOff',
 ] as const;

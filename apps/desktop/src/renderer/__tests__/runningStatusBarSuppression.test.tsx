@@ -78,6 +78,14 @@ const RunningStatusBar = new Function(
   outputTokens: number;
   generationDurationMs: number;
   generationReliable?: boolean;
+  tokenSpeed?: {
+    rate: number;
+    average: number;
+    tokens: number;
+    elapsedMs: number;
+    streaming: boolean;
+    peak?: number;
+  };
 }>;
 
 afterEach(cleanup);
@@ -154,6 +162,41 @@ it('opens measured zero history and restores fallback across reliability and tur
   expect(trigger()).toBeNull();
   rerender(<RunningStatusBar {...props} startedAt={2} generationDurationMs={2000} />);
   expect(trigger()).not.toBeNull();
+});
+
+it('paused token speed hides the current rate but keeps average and peak', () => {
+  const speed = { rate: 100, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
+  const props = {
+    visible: true,
+    status: 'Running bash…',
+    startedAt: 1,
+    tokenUsage: 500,
+    outputTokens: 500,
+    generationDurationMs: 5_000,
+    generationReliable: true,
+    tokenSpeed: speed,
+  };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const trigger = () => container.querySelector('[data-running-status-meta] button');
+  fireEvent.click(trigger()!);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  const currentRate = () => screen.getByText('chat.runningStatus.currentRate').nextElementSibling;
+  const value = (label: string) => screen.getByText(label).nextElementSibling;
+  expect(currentRate()?.textContent).toContain('100');
+
+  // A tool call pauses generation: the cached live rate (fresh for 60s) must not
+  // be shown as a current speed, while average and peak still describe the turn.
+  rerender(
+    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average }} />,
+  );
+  expect(trigger()?.textContent).not.toContain('tokenRate');
+  expect(currentRate()?.textContent).toContain('—');
+  expect(value('chat.runningStatus.averageRate')?.textContent).not.toContain('—');
+  expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
+
+  // Streaming resumes: the live reading is back.
+  rerender(<RunningStatusBar {...props} />);
+  expect(currentRate()?.textContent).toContain('100');
 });
 
 it.each([true, false])(

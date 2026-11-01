@@ -13,6 +13,9 @@ export interface SessionPrRef {
   priority?: number;
   manuallyAdded?: boolean;
   removedAt?: number | null;
+  /** Absent on older hosts. Legacy references require explicit confirmation. */
+  associationSource?: string;
+  associationOrigin?: string | null;
 }
 
 /** Counts for the current PR head, across check runs and commit statuses. */
@@ -51,6 +54,12 @@ export type PrStatusResult =
       unresolvedCount: number | null;
       /** Missing on older hosts; null means unavailable, not zero. */
       checks?: PrChecksSummary | null;
+      headSha?: string;
+      baseBranch?: string;
+      reviewDecision?: string | null;
+      observedAt?: number;
+      revision?: string;
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;

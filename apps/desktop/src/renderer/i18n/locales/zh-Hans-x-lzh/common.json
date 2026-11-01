@@ -4860,9 +4860,6 @@
         "title": "群议参与之式",
         "hint": "bot 曾入之群列于此。「全响应」= 每讯皆览，bot 自度是否插言（每讯皆耗 token）。",
         "empty": "庭前尚寂，未见群聚。引 bot 入群，待有人发言，便现于此。",
-        "contactsOn": "群中发言者，将自记入智能通信录（总开关已启）。",
-        "contactsOff": "智能通信录未启，群中发言者不自记之。",
-        "contactsEnable": "启",
         "error": {
           "load": "未能读 Telegram 群列，请察连接后再试。",
           "save": "群参与之式未存，已复上回确认之式。",
@@ -5719,10 +5716,6 @@
         "ssh": {
           "name": "SSH 远方命令",
           "description": "借此机所设 SSH 连接，于远方之机上运行命令。"
-        },
-        "contacts": {
-          "name": "慧通信录",
-          "description": "查找、整理联系人数据与往来之录。"
         }
       }
     },
@@ -6208,9 +6201,6 @@
             "title": "群议参与之式",
             "hint": "官方 bot 所见之群，皆列于此。「尽应」仅于已绑定名籍之每则发言生效；他成员唯入此机群议上下文，不触发差事。",
             "empty": "群中尚无踪迹。将 bot 拉入群中，以已绑定之名籍发一则讯，即见于此。",
-            "contactsOn": "群中他发言者，将自记入慧通信录。",
-            "contactsOff": "慧通信录未开，群中他成员不会自被记住。",
-            "contactsEnable": "启",
             "error": {
               "load": "未能读 Telegram 群列表，请察连接后再试。",
               "save": "群参与之式未存，已复前番所确认之式。",
@@ -8288,186 +8278,6 @@
         "title": "删 “{{name}}” 乎？",
         "message": "删之，则新开或重启之 Agent 差事不再载此 MCP。",
         "confirm": "删"
-      }
-    },
-    "contacts": {
-      "title": "智通名录",
-      "description": "为 Agent 所立之人物与组织文件库：跨平台身份反查(电子邮件 / 飞书 / Slack / GitHub id → 此为何人)、关系背景及带日期之事件记录。Agent 于工作中自动积存，低置信条目入待确认队列，由君裁决。数据预设仅存此机，亦可由君打开设备间同步；查找与整理经君自有之模型处理。",
-      "enable": {
-        "label": "启智能通信录",
-        "description": "启之，则 Agent 可查找并自动采集人物信息(未确之条目入待确认)。关之，不碍于此浏览与管理既有数据。",
-        "toggleAria": "启闭智通名录"
-      },
-      "sync": {
-        "label": "于吾诸设备间同步",
-        "description": "于每台欲参与之桌面设备上各启一次。设备在线时自动同步；同一局域网优先直连，否则传端到端加密之中转数据。纯程序比对，不调用模型，亦不耗 token。",
-        "toggleAria": "启闭名录诸器同步",
-        "syncNow": "即刻同步",
-        "onlineDevices_other": "{{count}} 台他机在线",
-        "route": {
-          "lan": "近网直连",
-          "relay": "密传中转"
-        },
-        "status": {
-          "loading": "方读同步之状…",
-          "signInRequired": "登门 Cindy 名籍后，可于设备间同步",
-          "off": "同步已关",
-          "waiting": "候他台已启同步之桌面设备上线",
-          "syncing": "方安全同步…",
-          "ready": "万事俱备，只待设备上线，即自同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "系统安全保存不可用，无从保护设备私钥",
-          "peer-identity-changed": "设备身份有变，已暂停同步以护数据",
-          "sync-failed": "同步未成，将于设备下次在线时再试"
-        },
-        "toast": {
-          "enabled": "设备同步已启",
-          "disabled": "设备同步已关"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 组织 / {{groups}} 组",
-      "kind": {
-        "person": "人物",
-        "org": "组织"
-      },
-      "filters": {
-        "all": "全",
-        "person": "人物",
-        "org": "组织",
-        "pending": "待确"
-      },
-      "list": {
-        "searchPlaceholder": "寻姓名 / 电子邮件 / 关键词",
-        "newAria": "新立联系人",
-        "newNamePlaceholder": "姓名或组织名",
-        "newKindAria": "易类(人物 / 组织)",
-        "newConfirm": "立",
-        "groupFilterAria": "依分组筛选",
-        "groupFilterAll": "全分组",
-        "loadMore": "载更多",
-        "noResults": "无相合之联系人",
-        "empty": "通信录犹一卷素纸。启之，Agent 将于工作中自动积存；亦可点右上角 + 亲手增之。"
-      },
-      "detail": {
-        "empty": "于左侧择一联系人，以观其档",
-        "pendingBanner": "此乃 Agent 低置信采集之条目，请确认是否入册。",
-        "pendingConfirm": "准入册",
-        "pendingDiscard": "弃之",
-        "nameAria": "显名",
-        "deleteAria": "删档",
-        "summaryPlaceholder": "一行简介",
-        "identities": "名分",
-        "identityRemoveAria": "除身份 {{value}}",
-        "identityPlatformAria": "台",
-        "identityValuePlaceholder": "邮箱 / 平台 id / handle",
-        "identityAddAria": "增身份",
-        "narrative": "交谊与来历",
-        "narrativePlaceholder": "与君之关系、协作旧事、背景信息(Markdown)",
-        "agentNotes": "予 Agent 之令",
-        "agentNotesPlaceholder": "如：此乃老板之私人电子邮件，勿群发",
-        "events": "事件录",
-        "eventsEmpty": "尚无往事",
-        "eventDeleteAria": "删事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "所发何事",
-        "eventAddAria": "增事件",
-        "groups": "组别",
-        "groupRemoveAria": "自分组 {{name}} 移除",
-        "groupAddAria": "入分组",
-        "groupAddPlaceholder": "入分组…",
-        "discardChanges": "弃修改",
-        "save": "存之",
-        "identitiesEmpty": "身份未详",
-        "relations": "牵连",
-        "relationsEmpty": "尚无关联(所属组织 / 相关人物)",
-        "relationAddAria": "增关联",
-        "relationRemoveAria": "除与 {{name}} 之关联",
-        "relationVerbPlaceholder": "任职 / 家人…",
-        "relationTargetAria": "择关联之对象",
-        "relationTargetPlaceholder": "择人或组织…",
-        "relationNotePlaceholder": "备注(职位…)"
-      },
-      "deleteConfirm": {
-        "title": "删「{{name}}」乎？",
-        "description": "将并删其全部身份、事件记录与分组关系，不可复原。",
-        "confirm": "删",
-        "cancel": "罢"
-      },
-      "toast": {
-        "enabled": "智能通信录已启",
-        "disabled": "智能通信录已关",
-        "codexRefreshDeferred": "开关已存，然 Codex 正忙：将于重启应用后，对 Codex 差事生效",
-        "toggleFailed": "切换智能通信录未成",
-        "created": "已立「{{name}}」",
-        "createFailed": "立之未成",
-        "deleted": "已删「{{name}}」",
-        "deleteFailed": "删之未成",
-        "saved": "已存",
-        "saveFailed": "存之未成",
-        "confirmFailed": "确认入册未成",
-        "identityAddFailed": "增身份未成",
-        "identityRemoveFailed": "除身份未成",
-        "eventAddFailed": "增事件未成",
-        "eventDeleteFailed": "删事件未成",
-        "groupAddFailed": "入分组未成",
-        "groupRemoveFailed": "出分组未成",
-        "relationAddFailed": "增关联未成",
-        "relationRemoveFailed": "除关联未成"
-      },
-      "manage": "理",
-      "manager": {
-        "title": "智通名录",
-        "closeAria": "阖"
-      },
-      "merge": {
-        "button": "并重复之档",
-        "buttonAria": "并重复之档",
-        "hint": "择一份重复之档，将其身份、事件、关联并入「{{target}}」，而后删之。",
-        "searchPlaceholder": "寻重复之档…",
-        "confirmTitle": "以「{{source}}」并入「{{target}}」乎？",
-        "confirmDescription": "「{{source}}」之身份、事件、关联、分组将尽数迁入，其档随即删除，不可复原。",
-        "confirm": "并",
-        "success": "已以「{{source}}」并入「{{target}}」",
-        "failed": "合并未成"
-      },
-      "import": {
-        "title": "纳联系人",
-        "button": "纳",
-        "pickHint": "自外部来源批量导入。电子邮件/电话与既有文件相同者自动并入(不生重复)；名字相似者列入待人工确认之单。",
-        "sourceSystem": "系统通讯录",
-        "sourceSystemDesc": "唯读拉取，首次需系统授权",
-        "sourceVcf": "vCard 卷",
-        "sourceVcfDesc": ".vcf(通信录导出之通用格式)",
-        "emptySource": "此源之中，未见可纳之联系人。",
-        "permissionDenied": "未获通信录授权：请于 系统设置 → 隐私与安全性 → 自动化 中允许访问",
-        "systemReadFailed": "读取系统通信录未成",
-        "vcfParseFailed": "解析 vCard 卷未成",
-        "selectedCount": "已择 {{checked}} / {{total}}",
-        "groupPlaceholder": "导入后归入分组(可选，无则立之)",
-        "run": "纳 {{count}} 条",
-        "running": "方纳…",
-        "failed": "导入未成",
-        "doneSummary": "导入既毕：新立 {{created}} 人，并入既有文件 {{enriched}} 条，新立组织 {{orgs}} 个。济济一堂矣。",
-        "needsReview": "{{count}} 条与现存盘案名似，未自纳，请亲察：{{names}}",
-        "identityConflicts": "{{count}} 条记录之部分身份已属他人（{{names}}），未并入——请于管理界面确认是否同一人，再行合并",
-        "relationErrors": "{{count}} 条任职之系未能立（{{names}}）",
-        "skipped": "{{count}} 条见略(无效或出错)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "此身份已属另一联系人，请改为更新既有文件，或先合并",
-        "PERMISSION_DENIED": "系统通信录访问未获授权，请于 系统设置 > 隐私与安全性 > 自动化 中允许",
-        "UNSUPPORTED_CAPABILITY": "此平台不支持此操作",
-        "NOT_FOUND": "目标不存，或已删除",
-        "ALREADY_EXISTS": "已有同名或同内容之条目",
-        "INVALID_PARAMS": "输入无效，请检查后再试",
-        "INTERNAL": "操作未成，请稍后再试"
-      },
-      "guide": {
-        "hint": "交由 AI 代君补全联系人之档、处置待确认者、汰除重复，省君案牍之劳。",
-        "cta": "令 AI 助君理通信录",
-        "managementPrompt": "助吾理智能通信录。先查当前之状与既有工具，再引吾补联系人、整顿重复者与待确认者；凡写入、合并或删除，皆先请吾确认。"
       }
     },
     "remotePermission": {
@@ -11098,22 +10908,112 @@
       "skill": "技艺",
       "mcp": "MCP",
       "toolset": "内置器具",
-      "unavailable": "不可用",
       "empty": "无相符之才能",
-      "accessHint": "逐项择同僚可用之内置器具、MCP 与技艺。所改自下次请求起生效，已授权之群内请求亦然。",
-      "inheritedHint": "今从此机已启之器具。阖其一项，此单即只用君所择者。",
-      "selectedHint": "此单之中，同僚只用已选之项。",
-      "personalHint": "同僚自习之技艺，随同僚自载。",
       "unavailableHint": "此机或今之运行环境暂不可用，请先设连接或系统授权。",
       "notOnThisComputer": "此机不可用",
-      "configure": "往设之",
       "empty_toolset": "今之运行环境无可用之内置器具。",
       "empty_mcp": "尚未增自订 MCP 服务。",
       "empty_skill": "暂无可选之技艺。",
       "inputHandoff": {
         "title": "代书",
         "description": "遇须君亲书之登录信息、密码或验证码，许此同僚请君于任一设备填之。君所填者不交予它。"
-      }
+      },
+      "intro": "择此伴可用之技艺、器具与 MCP，自下一言始行。",
+      "alwaysOn": "常开",
+      "core": {
+        "group": "本技",
+        "name": "伙伴本技",
+        "hint": "开任务、联同伴、易模型、用器具与法器、记事。随 Cindy 更。",
+        "meta": "诸伴共之 · 常开 · 随 Cindy 更",
+        "note": "诸伴皆有之调度之能，不可关，不可改。欲其易法，于言谈中告之，彼自记为己之技艺。",
+        "covers": "所含",
+        "raw": "观原文",
+        "items": {
+          "tasks": {
+            "title": "任务",
+            "body": "度何时开后台任务，掌己所开之任务，携其果归于言谈；亦可至汝他机行事。"
+          },
+          "teammates": {
+            "title": "联同伴",
+            "body": "致书他伴，或为汝新立一伴。"
+          },
+          "models": {
+            "title": "模型与器具",
+            "body": "依汝之命易模型，因需寻用器具与法器。"
+          },
+          "memory": {
+            "title": "记事",
+            "body": "记汝所好与所历，用前先查，有变则更。"
+          },
+          "self": {
+            "title": "自知",
+            "body": "知己所能，为汝开关诸能；Cindy 之用法（添 Telegram、设 MCP、装法器），先阅帮助而后行。"
+          }
+        }
+      },
+      "system": {
+        "group": "系统技艺",
+        "meta": "已开 {{on}} / 共 {{total}}",
+        "pageMeta": "系统技艺 · 随 Cindy 更",
+        "use": "为此伴开之",
+        "whenOff": "关后",
+        "items": {
+          "todo": {
+            "name": "待办",
+            "hint": "记汝所嘱与彼所察之事，期至则告汝。",
+            "off": "不复记、理、告待办；旧有待办存焉，复开则续。"
+          },
+          "routine": {
+            "name": "常例",
+            "hint": "为汝立而守按时而行之常例。",
+            "off": "不复立、改常例；旧有常例照行，汝犹可于「常例」页理之。"
+          },
+          "follow": {
+            "name": "案头与督促",
+            "hint": "察汝诸任务之近况，督汝所托之任务。",
+            "off": "不复自察、自督汝之任务；汝犹可于言谈中问之。"
+          }
+        }
+      },
+      "learned": {
+        "group": "所习技艺",
+        "empty": "尚无所习之技艺。夜习将屡用之法辑为技艺，汝亦可于言谈中令其记之。",
+        "meta": "自习而得 · 更于 {{date}}",
+        "metaUndated": "自习而得",
+        "missing": "此技艺已不存。",
+        "use": "用此技艺",
+        "useHint": "关之则存其文，此伴暂不用之。",
+        "edit": "改",
+        "delete": "删",
+        "cancel": "罢",
+        "save": "存",
+        "saveFailed": "未能存，稍后再试。",
+        "deleteFailed": "未能删，稍后再试。",
+        "deleteTitle": "删「{{name}}」乎？",
+        "deleteBody": "删后此伴不复用此技艺，其文不可复。后若需之，可于言谈中令其复记。",
+        "unsavedTitle": "尚有未存之修改",
+        "unsavedDescription": "离去则舍此番于技艺之修改。",
+        "discard": "弃其修改",
+        "continueEditing": "续修",
+        "descriptionLabel": "何时用之",
+        "bodyLabel": "行法"
+      },
+      "local": {
+        "group": "本机技艺"
+      },
+      "followMeta": "随本机 · {{count}} 项",
+      "selectedMeta": "已择 {{count}} / 共 {{total}}",
+      "showRest": "示余 {{count}} 项",
+      "showLess": "收",
+      "manage": "理",
+      "toolSettings": "器具之设",
+      "notTurnedOn": "此机尚未开",
+      "turnOn": "往开",
+      "permissions": "权"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 之系统技艺「案头与督促」已关，于才能页复开之乃可用。",
+      "offHint": "系统技艺「{{skill}}」已关，于才能页复开之乃行。"
     },
     "guided": {
       "title": "立同僚",
@@ -14693,6 +14593,7 @@
           "hint": "顶列至多示 3 个，固定之 PR 居先",
           "empty": "贴 GitHub PR 链接即可增之",
           "removed": "已除 {{count}} 个",
+          "legacy": "待认旧引：{{count}}",
           "addLabel": "增 PR 链接",
           "add": "增 PR",
           "loading": "方读…",
@@ -15022,6 +14923,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "项目「{{projectName}}」中发现待导入的自动任务",
+        "review": "查看导入内容",
+        "title": "导入仓库自动任务",
+        "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增自动任务，它们可以执行命令、启动完全访问权限的 Agent。请仅导入你信任的内容。",
+        "accept": "确认导入",
+        "removed": "将删除：{{names}}"
+      },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 删 {{deleted}}",
         "installed": "案「{{projectName}}」之自运已装（{{summary}}）",
@@ -15196,6 +15105,7 @@
         "timeout": "时限（秒，可略）",
         "timeoutPlaceholder": "不限",
         "capabilities": {
+          "github_read": "读 GitHub",
           "jira_read": "读 Jira",
           "jira_comment": "评 Jira",
           "sessions_dispatch": "派差事",
@@ -15207,6 +15117,7 @@
         "capabilitiesSearch": "寻能",
         "capabilitiesEmpty": "无相合之能",
         "capabilityDescs": {
+          "github_read": "读 PR、CI、评议及所见之变；查询不系任务",
           "jira_read": "查读 Jira 单（依 key 读 / JQL 寻）",
           "jira_comment": "于 Jira 单增评",
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",

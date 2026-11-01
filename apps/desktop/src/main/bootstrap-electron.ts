@@ -347,10 +347,7 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import {
-  invalidatePiEnvironment,
-  shutdownPiEnvironment,
-} from './mcp-integrations/piEnvironment.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
 import { readCachedImage } from './cindy-media/readCachedImage';
@@ -800,7 +797,6 @@ import {
   suspendUsageLimitWaits,
   flushUsageLimitWaits,
   reconcileScheduledUsageLimitWaits,
-  scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   flushPluginTaskLifecycle,
@@ -977,8 +973,6 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
-import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
-import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -2038,11 +2032,6 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetLearnController();
     } catch (err) {
       authBoundaryLog.error(`resetLearnController on ${reason} failed (non-fatal):`, err);
-    }
-    try {
-      disposeDesktopContactsManager();
-    } catch (err) {
-      authBoundaryLog.error(`dispose contacts manager on ${reason} failed (non-fatal):`, err);
     }
     // Maker session storage resolves the current DbClient lazily. A late callback
     // from the previous owner must not survive long enough to write into the next
@@ -5275,14 +5264,6 @@ const registerIpcHandlers = () => {
     }
     writeLspModeEnabled(enabled);
     return { effective: 'next-session' as const };
-  });
-
-  // 智能通讯录 IPC —— 设置开关 + 数据 CRUD(设置页管理 UI 通道), 提前注册。
-  registerContactsIpc({
-    restartCodexAfterAuthModeChange,
-    shutdownCodexEnvironment,
-    scheduleDeferredCodexRestart,
-    invalidatePiEnvironment,
   });
 
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:

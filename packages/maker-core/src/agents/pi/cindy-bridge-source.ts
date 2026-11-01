@@ -3923,7 +3923,7 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
+  register(pi: any, options: { botMemoryFacade?: boolean; deniedTools?: string[] } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
     pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
     pi.on?.('tool_result', (event: any) => {
@@ -4211,8 +4211,9 @@ class CindyMcpGateway {
       { name: 'read_workbench_task', description: 'Read the recent bounded transcript of a task you follow (all tasks if you follow every task).', properties: { task_id: taskIdProperty }, required: ['task_id'] },
       { name: 'continue_workbench_task', description: 'Send one message into a task you follow so it continues. Use get_task_digest first; never resend after DELIVERY_UNKNOWN without checking.', properties: { task_id: taskIdProperty, message: { type: 'string', minLength: 1, maxLength: 4000 } }, required: ['task_id', 'message'] },
     ];
+    const deniedTools = new Set(options.deniedTools ?? []);
     for (const tool of [...routineTools, ...followUpTools]) {
-      if (!this.resolveDirectHelperTool(tool.name, {})) continue;
+      if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({
         name: tool.name,
         label: tool.name,
@@ -5690,7 +5691,7 @@ export default async function cindyBridge(piApi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean; deniedTools?: string[] };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -5717,7 +5718,10 @@ export default async function cindyBridge(piApi: any) {
   // every low-frequency/external MCP still stays behind discovery.
   if (servers.length > 0) {
     try {
-      mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
+      mcpGateway.register(pi, {
+        botMemoryFacade: cfg.botMemoryFacade === true,
+        deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],
+      });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools; companion facade=' + (cfg.botMemoryFacade === true) + ')');
     } catch (err) {
       console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));

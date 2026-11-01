@@ -54,6 +54,7 @@ const SUMMARY_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       headRefOid
+      reviewDecision
       reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage } }
       commits(last: 1) { nodes { commit { oid statusCheckRollup {
         contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } }
@@ -66,6 +67,7 @@ interface SummaryResponse {
   repository: {
     pullRequest: {
       headRefOid: string;
+      reviewDecision?: string | null;
       reviewThreads: { nodes: { isResolved: boolean }[]; pageInfo: { hasNextPage: boolean } };
       commits?: {
         nodes: { commit: { oid: string; statusCheckRollup: { contexts: RollupCounts } | null } }[];
@@ -80,6 +82,7 @@ export async function fetchPrSummary(
   q: PrStatusQuery,
 ): Promise<{
   headOid: string | null;
+  reviewDecision?: string | null;
   unresolved: number | null;
   checks: PrChecksSummary | null;
 }> {
@@ -102,5 +105,5 @@ export async function fetchPrSummary(
   const unresolved = pr.reviewThreads.pageInfo.hasNextPage
     ? null
     : pr.reviewThreads.nodes.filter((n) => !n.isResolved).length;
-  return { headOid: pr.headRefOid, unresolved, checks };
+  return { headOid: pr.headRefOid, unresolved, checks, reviewDecision: pr.reviewDecision ?? null };
 }

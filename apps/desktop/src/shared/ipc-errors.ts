@@ -167,8 +167,6 @@ export type IpcErrorCode =
   | 'REGION_MISMATCH'
   | 'CREDENTIAL_STORE_UNAVAILABLE'
   | 'AUTH_FLOW_SUPERSEDED'
-  // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
-  | 'IDENTITY_CONFLICT'
   // domain-specific
   | 'STALE_DIFF'
   | 'PUSH_LEASE_EXPIRED'
@@ -355,7 +353,6 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
-  'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
   'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
