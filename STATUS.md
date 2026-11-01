@@ -10,6 +10,22 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 2: ROADMAP 2.1b-1, `model-providers` projection and Settings UI listing for `providers.yaml` (`unit-tested`)
+
+**Outcome:**
+1. `packages/model-providers/src/providersFile.ts` + `packages/model-providers/src/index.ts` + `packages/model-providers/src/__tests__/providersFile.test.ts` (new, 2 tests): added `providerFileEntryToCatalogModels` (projects `ProviderFileEntry` + model ids into `CatalogModel[]` with declared `tools`, `vision`, and `contextLength`) and `projectProviderFileEndpoints` (merges validated `providers.yaml` entries with discovery probes in entry order, stripping stale model lists from `offline`/`error` probes) and exported the `providersFile` surface from `@cindy/model-providers` root barrel.
+2. `apps/desktop/src/renderer/components/settings/HarnessProvidersCard.tsx` (new), `apps/desktop/src/renderer/components/settings/HermesSection.tsx` (+6 lines), and `apps/desktop/src/renderer/__tests__/harnessProvidersCard.test.tsx` (new, 2 tests): `HarnessProvidersCard` reads `window.electronAPI.maker.providers.list()` and `discover()` and renders `HarnessProvidersCardView` inside Settings → Hermes Harness, listing each endpoint (`id`, `kind`, `local`/`remote`, `baseUrl`, `keyEnv` variable name or `keyless`, `tools`/`vision`/`ctx` capabilities, probe status and models) plus any `providers.yaml` validation issues.
+
+**Mutation checks (2):**
+- In `packages/model-providers/src/providersFile.ts`, removing the `online` guard when populating `models` in `projectProviderFileEndpoints` leaked stale model ids on an offline probe and failed `providersFile.test.ts` (1 failed, 1 passed); restored byte-identical.
+- In `apps/desktop/src/renderer/components/settings/HarnessProvidersCard.tsx`, disabling the `issues.length > 0` block failed `harnessProvidersCard.test.tsx` (`expected html to contain 'bad-entry:'`); restored byte-identical.
+
+**Not claimed:** not inspected in the running desktop app yet. `2.1b-live` stays open for the owner-clicked check in Settings → Hermes Harness.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Phase 1: ROADMAP 1.9b-3a, per-conversation usage and cost panel UI (`unit-tested`)
 
 **Outcome:**

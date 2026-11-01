@@ -9,6 +9,10 @@
  * the rest still load.
  */
 
+import type { ProbeLike } from './routeHealth.js';
+import type { CatalogModel } from './types.js';
+import { DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
+
 export const PROVIDER_FILE_KINDS = ['ollama', 'lmstudio', 'llamacpp', 'openai-compatible'] as const;
 export type ProviderFileKind = (typeof PROVIDER_FILE_KINDS)[number];
 
@@ -129,4 +133,94 @@ export function parseProvidersFile(doc: unknown): ProviderFileResult {
     else result.providers.push(out);
   });
   return result;
+}
+
+export type ProviderFileEndpointStatus = 'online' | 'offline' | 'error' | 'unprobed';
+
+/**
+ * Display and catalog projection of a `providers.yaml` endpoint merged with its
+ * latest discovery probe (ROADMAP 2.1b / 2.2b).
+ */
+export interface ProviderFileEndpointView extends ProviderFileEntry {
+  status: ProviderFileEndpointStatus;
+  models: string[];
+  latencyMs?: number;
+  error?: string;
+}
+
+/**
+ * Projects `providers.yaml` entries into `CatalogModel` records for a single
+ * endpoint, preserving declared tool/vision capabilities and context length.
+ */
+export function providerFileEntryToCatalogModels(
+  entry: ProviderFileEntry,
+  modelIds: readonly string[],
+): CatalogModel[] {
+  if (!entry || !Array.isArray(modelIds)) return [];
+  const contextWindow = entry.capabilities.contextLength ?? DEFAULT_CUSTOM_CONTEXT_WINDOW;
+  const hasExplicitContext = entry.capabilities.contextLength !== undefined;
+  const seen = new Set<string>();
+  const models: CatalogModel[] = [];
+
+  for (const rawId of modelIds) {
+    const id = typeof rawId === 'string' ? rawId.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      id,
+      name: id,
+      contextWindow,
+      contextWindowVerified: hasExplicitContext,
+      contextWindowExplicit: hasExplicitContext,
+      efforts: [],
+      defaultEffort: null,
+      supportsToolCalls: entry.capabilities.tools,
+      supportsImageInput: entry.capabilities.vision,
+      modalities: {
+        input: entry.capabilities.vision ? ['text', 'image'] : ['text'],
+        output: ['text'],
+      },
+      capabilities: {
+        toolCall: entry.capabilities.tools,
+        attachment: entry.capabilities.vision,
+      },
+    });
+  }
+
+  return models;
+}
+
+/**
+ * Merges validated `providers.yaml` entries with optional discovery probes in
+ * entry order. An offline or error probe never carries stale model ids.
+ */
+export function projectProviderFileEndpoints(
+  entries: readonly ProviderFileEntry[],
+  probes: readonly (ProbeLike & { latencyMs?: number })[] = [],
+): ProviderFileEndpointView[] {
+  if (!Array.isArray(entries)) return [];
+  const probeById = new Map(
+    (Array.isArray(probes) ? probes : []).map((probe) => [probe.id, probe]),
+  );
+
+  return entries.map((entry) => {
+    const probe = probeById.get(entry.id);
+    if (!probe) {
+      return {
+        ...entry,
+        status: 'unprobed',
+        models: [],
+      };
+    }
+    const online = probe.status === 'online';
+    return {
+      ...entry,
+      status: probe.status,
+      models: online && Array.isArray(probe.models) ? [...probe.models] : [],
+      ...(typeof probe.latencyMs === 'number' && Number.isFinite(probe.latencyMs)
+        ? { latencyMs: probe.latencyMs }
+        : {}),
+      ...(!online && probe.error ? { error: probe.error } : {}),
+    };
+  });
 }

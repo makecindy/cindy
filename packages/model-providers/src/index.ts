@@ -342,3 +342,16 @@ export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi }
 
 export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
 export * from './providerDetection.js';
+export {
+  PROVIDER_FILE_KINDS,
+  parseProvidersFile,
+  projectProviderFileEndpoints,
+  providerFileEntryToCatalogModels,
+  type ProviderFileCapabilities,
+  type ProviderFileEndpointStatus,
+  type ProviderFileEndpointView,
+  type ProviderFileEntry,
+  type ProviderFileIssue,
+  type ProviderFileKind,
+  type ProviderFileResult,
+} from './providersFile.js';

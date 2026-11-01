@@ -17,6 +17,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { invalidateHermesModelCatalog } from '@/hooks/useHermesModelCatalog';
+import { HarnessProvidersCard } from './HarnessProvidersCard';
 import {
   SETTINGS_CARD_CLASS,
   SETTINGS_ROW_CLASS,
@@ -264,6 +265,11 @@ export function HermesSection() {
             </Button>
           </div>
         </div>
+
+        <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+
+        {/* Row 2b: Provider Registry (~/.cindy-harness/providers.yaml) */}
+        <HarnessProvidersCard />
 
         <div className={SETTINGS_ROW_DIVIDER_CLASS} />
 
