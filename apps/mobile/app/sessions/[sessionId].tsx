@@ -6491,9 +6491,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftOverride?: string;
     documentOverride?: ComposerDocument;
     independentText?: string;
+    /** 编辑消息提交流程内部的重发:绕过编辑入口与提交锁。 */
+    messageEditResend?: boolean;
   } = {}) {
     const independent = options.independentText !== undefined;
     let messageAccepted = false;
+    // 编辑提交进行中(回退 → 重发 → 恢复),拒绝其它发送,避免重复发送。
+    if (messageEditSubmittingRef.current && !options.messageEditResend) return;
     // A committed outbox item may still own the draft shown during hydration.
     // Do not submit that snapshot before its durable handoff is reconciled.
     if (!composerDraftHydrated) return;
@@ -7973,13 +7977,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   /** 退出编辑并回填 stash。merge:rewind 已提交但重发没被受理,编辑内容不能丢,原草稿接在后面。 */
   const restoreMessageEditStash = useCallback((editing: MessageEditingState, mode: 'replace' | 'merge') => {
     const stashHasText = composerDocumentProjectedText(editing.stashedDocument).trim().length > 0;
+    const currentHasText = composerDocumentProjectedText(composerDocumentRef.current).trim().length > 0;
     const document = mode === 'replace'
       ? editing.stashedDocument
       : normalizeComposerDocument({
           version: 1,
           nodes: [
             ...composerDocumentRef.current.nodes,
-            ...(stashHasText ? [{ type: 'text' as const, text: '\n\n' }, ...editing.stashedDocument.nodes] : []),
+            ...(stashHasText
+              ? [
+                  ...(currentHasText ? [{ type: 'text' as const, text: '\n\n' }] : []),
+                  ...editing.stashedDocument.nodes,
+                ]
+              : []),
           ],
         });
     const current = mode === 'replace' ? [] : attachmentsRef.current;
@@ -8095,6 +8105,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (latestLoadedUserClientId && latestLoadedUserClientId !== editing.clientId) cancelMessageEdit();
   }, [cancelMessageEdit, latestLoadedUserClientId, messageEditing]);
 
+  // 编辑期间另一台控制端往队列里加了消息 → 与「队列非空不可编辑」同口径,退出编辑。
+  const pendingQueueCount = inputProjection.pendingQueue.length;
+  useEffect(() => {
+    if (!messageEditingRef.current || messageEditSubmittingRef.current) return;
+    if (pendingQueueCount > 0) cancelMessageEdit();
+  }, [cancelMessageEdit, messageEditing, pendingQueueCount]);
+
   async function submitMessageEdit(documentOverride?: ComposerDocument) {
     const editing = messageEditingRef.current;
     if (!editing || messageEditSubmittingRef.current || sendInFlightRef.current) return;
@@ -8120,40 +8137,48 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(t('session.messageEdit.queueNotEmpty'));
       return;
     }
+    // 提交锁覆盖「回退 → 重发 → 恢复草稿」全程;send() 对非内部调用在锁内直接拒绝,
+    // 避免等待期间用户再点发送造成重复发送。
     messageEditSubmittingRef.current = true;
     setMessageEditSubmitting(true);
     setError(null);
-    let updated: Awaited<ReturnType<typeof maker.rewindCommit>>;
     try {
-      updated = await commitMessageEditRewind({
-        rewindCommit: (opts) => maker.rewindCommit(sessionId, editing.clientId, opts),
-        ...(messageEditingRef.current?.rollbackHint?.kind === 'conversation-only'
-          ? { allowFileRestore: false as const }
-          : {}),
-        stillCurrent,
-      });
-    } catch (err) {
-      // rewind 未发生:保持编辑态(内容不丢),用户可重试或放弃。
-      if (stillCurrent()) setError(messageEditErrorText(err) ?? humanizeRemoteError(err));
-      return;
+      let updated: Awaited<ReturnType<typeof maker.rewindCommit>>;
+      try {
+        updated = await commitMessageEditRewind({
+          rewindCommit: (opts) => maker.rewindCommit(sessionId, editing.clientId, opts),
+          ...(messageEditingRef.current?.rollbackHint?.kind === 'conversation-only'
+            ? { allowFileRestore: false as const }
+            : {}),
+          stillCurrent,
+        });
+      } catch (err) {
+        // rewind 未发生:保持编辑态(内容不丢),用户可重试或放弃。
+        if (stillCurrent()) setError(messageEditErrorText(err) ?? humanizeRemoteError(err));
+        return;
+      }
+      // applySessionPatch 按显式 sessionId 写分片,即使用户已切走也要执行。
+      remoteSessionStore.applySessionPatch(deviceId, sessionId, updated);
+      if (!stillCurrent()) {
+        remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
+        return;
+      }
+      // 先退出编辑态(恢复正常草稿持久化),再按普通发送路径重发 composer 里的内容。
+      messageEditSeqRef.current += 1;
+      messageEditingRef.current = null;
+      setMessageEditing(null);
+      // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
+      // 同步只是尽力而为,失败不得打断重发与草稿恢复。
+      await send({ documentOverride: document, messageEditResend: true });
+      await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
+      if (outboxSessionAliveRef.current !== sessionId) return;
+      // 一律合并:等待期间用户新输入的内容不能被暂存草稿覆盖;重发成功时输入框为空,等价于恢复;
+      // 重发没被受理时编辑内容仍在输入框,原草稿接在后面。
+      restoreMessageEditStash(editing, 'merge');
     } finally {
       messageEditSubmittingRef.current = false;
       setMessageEditSubmitting(false);
     }
-    // applySessionPatch 按显式 sessionId 写分片,即使用户已切走也要执行。
-    remoteSessionStore.applySessionPatch(deviceId, sessionId, updated);
-    if (!stillCurrent()) {
-      remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
-      return;
-    }
-    // 先退出编辑态(恢复正常草稿持久化),再按普通发送路径重发 composer 里的内容。
-    messageEditSeqRef.current += 1;
-    messageEditingRef.current = null;
-    setMessageEditing(null);
-    await requestSync({ reason: 'rewind-commit', replaceMessages: true });
-    const accepted = await send({ documentOverride: document });
-    if (outboxSessionAliveRef.current !== sessionId) return;
-    restoreMessageEditStash(editing, accepted === true ? 'replace' : 'merge');
   }
 
   /**
@@ -8164,6 +8189,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
    */
   const beginQueueEdit = useCallback((item: QueuedRemoteMessage) => {
     if (queueAvailabilityReason || queueBusy) return;
+    // 两种编辑态共用 composer,不能并存;消息编辑会在队列出现内容时自行退出(见上方 effect)。
+    if (messageEditingRef.current) return;
     // 上一条的保存(update-content)在途时不允许进入/切换编辑:切换路径会立即解锁
     // 旧条目并回收其编辑期附件,与在途 RPC 竞争——桌面端可能用旧内容抢先派发,或
     // OSS 引用在物化完成前被删(review P2)。编辑生命周期的全部入口/出口由此都被
