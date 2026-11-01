@@ -9,6 +9,7 @@ import {
   type AudioTrace,
   type DictationRefinementContext,
   type EditableRange,
+  type RefineRequestBudget,
   type RefinementResult,
   type VoiceInputErrorCode,
   type VoiceInputDraftSource,
@@ -87,6 +88,11 @@ type MobileVoiceControllerOptions = {
     url: string;
     authorization: string;
   }>;
+  /**
+   * Refinement requests the managed voice session accepts. Speculative
+   * refinement stops early enough to leave one for the final text.
+   */
+  refineRequestBudget?: () => RefineRequestBudget | undefined;
   /** 托管润色 prompt cache 预热(voice-server refine-warmup);ASR 就绪后 fire-and-forget。 */
   warmRefiner?: (input: {
     system: string;
@@ -408,6 +414,7 @@ export function createMobileVoiceControllerSession(
     // Refine during a speech pause and show the result right away. The shared
     // controller only acts on it when a refiner exists (refinement enabled).
     pauseRefinementEnabled: true,
+    refineRequestBudget: options.refineRequestBudget,
     retryEmptyTranscript: true,
     // A reconnect allocates another managed session and can hit the account
     // limit; report that instead of the generic "stopped receiving" failure.
