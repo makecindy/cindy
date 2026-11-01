@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InputHandoffSnapshot } from '@cindy/device-link';
 import type { HandoffDriver } from '../macDriver.js';
+import { buildInputHandoffContinuation } from '../service.js';
 import {
   InputHandoffSession,
   resolveHandoffTarget,
@@ -174,7 +175,15 @@ describe('a target window that is minimized', () => {
     const { session, finished } = start(driver, { app: 'Google Chrome' });
     await session.start();
     expect(raised).toEqual([]);
-    expect(finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
+    expect(finished[0]).toMatchObject({
+      status: 'failed',
+      failure: 'target_gone',
+      ambiguousTitles: ['主页 / X', 'App Store Connect'],
+    });
+    // The agent is told which windows there were and how to ask again.
+    expect(buildInputHandoffContinuation(finished[0])).toMatch(
+      /several windows .*App Store Connect.*target\.window_title/s,
+    );
   });
 
   it('never offers the address bar when no page can be read', async () => {
@@ -227,13 +236,20 @@ describe('resolveHandoffTarget with minimized windows', () => {
 
   it('finds a named window in any process of the same browser', () => {
     const second = { ...chrome, pid: 21 };
-    const apps = [{ ...chrome, windows: [window(0, 'X', false)] }, { ...second, windows: [window(0, 'Login', true), window(1, 'Other', false)] }];
-    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'login' }, 1)).toMatchObject({ pid: 21, minimized: true });
+    const apps = [
+      { ...chrome, windows: [window(0, 'X', false)] },
+      { ...second, windows: [window(0, 'Login', true), window(1, 'Other', false)] },
+    ];
+    expect(
+      resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'login' }, 1),
+    ).toMatchObject({ pid: 21, minimized: true });
     // A pid is exact, and with no name to look for the first process stands.
     expect(resolveHandoffTarget(list(apps), { pid: 21, windowTitle: 'login' }, 1)?.pid).toBe(21);
     // A title nothing matches is a miss, not whichever window has focus.
     expect(resolveHandoffTarget(list(apps), { pid: 20, windowTitle: 'login' }, 1)).toBeNull();
-    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'nope' }, 1)).toBeNull();
+    expect(
+      resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'nope' }, 1),
+    ).toBeNull();
     expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)?.pid).toBe(20);
   });
 

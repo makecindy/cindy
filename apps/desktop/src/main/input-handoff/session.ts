@@ -81,6 +81,8 @@ export interface HandoffResult {
   finalOrigin?: string;
   /** Device that answered the last applied step; absent when no values were applied. */
   answeredOn?: InputHandoffHolder;
+  /** The program had several windows and the request named none: their titles, for asking again. */
+  ambiguousTitles?: string[];
   /** A QR code from the agent's own screenshot: the owner reports the scan, Cindy cannot see it. */
   scanned?: true;
 }
@@ -273,6 +275,7 @@ export class InputHandoffSession {
   private asked = false;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
+  private ambiguousTitles: string[] | undefined;
   private watchTimer: ReturnType<typeof setTimeout> | undefined;
   private watchList: NativeWindowList | null = null;
   private fieldsGoneReads = 0;
@@ -444,7 +447,10 @@ export class InputHandoffSession {
       const target = this.resolveTarget(windows);
       // What the window watch compares against, so a page renaming its window from here on is not a closed window.
       this.watchList = windows;
-      if (!target || ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid)) {
+      const ambiguous = target ? ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid) : null;
+      if (!target || ambiguous) {
+        // Several windows and no title: say so, with their titles, so the agent can ask again naming one.
+        if (ambiguous) this.ambiguousTitles = [...new Set(ambiguous)].slice(0, 8);
         this.end('failed', 'failure', 'target_gone');
         return;
       }
@@ -453,8 +459,9 @@ export class InputHandoffSession {
       if (target.minimized) await this.coverBeforeRestoring(target);
       const restored = await this.restoreTarget(target);
       const step = await this.readFirstStep(restored);
-      // The code and screenshot probes below raise the window: an unreadable page is covered before them.
-      if (!step || step.pageMissing) this.coverUnreadablePage(target);
+      // The code and screenshot probes below raise the window: an unreadable page is covered before them,
+      // by the title it has now (reading may have renamed the window).
+      if (!step || step.pageMissing) this.coverUnreadablePage(this.target ?? target);
       if (step && actionable(step)) {
         // A sign-in happens on the window itself, wherever the owner answers from.
         if (step.signIn && !restored) {
@@ -1151,6 +1158,7 @@ export class InputHandoffSession {
       ...(this.target?.window.title ? { finalWindow: this.target.window.title.slice(0, 200) } : {}),
       ...(this.step?.source.origin ? { finalOrigin: this.step.source.origin } : {}),
       ...(this.answeredOn ? { answeredOn: { ...this.answeredOn } } : {}),
+      ...(this.ambiguousTitles ? { ambiguousTitles: this.ambiguousTitles } : {}),
     });
   }
 

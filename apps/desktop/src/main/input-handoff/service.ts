@@ -160,7 +160,9 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     ...(result.finalOrigin ? [`origin=${result.finalOrigin}`] : []),
     ...(result.answeredOn ? [`answered_on=${answeredOnFact(result.answeredOn)}`] : []),
   ].join(' ');
-  const next = result.scanned && result.status === 'succeeded'
+  const next = result.ambiguousTitles?.length
+    ? `The program has several windows (${result.ambiguousTitles.map((title) => JSON.stringify(title)).join(', ')}) and the request named none, so nothing was shown to the owner. Request input handoff again with target.window_title naming the one that shows the step.`
+    : result.scanned && result.status === 'succeeded'
     ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
     : result.failure === 'nothing_to_fill'
     ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
