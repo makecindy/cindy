@@ -1134,7 +1134,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
 
   if (isVersionlessAppVersion(app.getVersion())) {
     log.info('Versionless build (placeholder %s) — in-app update disabled', app.getVersion());
-    currentStatus = 'idle';
+    setStatus('idle');
     return 'idle';
   }
 
@@ -1155,7 +1155,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const manifest = manifestOverride ?? await fetchManifest();
   if (!manifest) {
     log.info('Manifest fetch failed');
-    if (!wasReady) currentStatus = 'idle';
+    if (!wasReady) setStatus('idle');
     return 'manifest_failed';
   }
 
@@ -1173,7 +1173,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     if (wasReady) {
       discardStagedPatchFiles();
     } else {
-      currentStatus = 'idle';
+      setStatus('idle');
     }
     return 'manifest_failed';
   }
@@ -1183,7 +1183,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       log.info('Discarding staged patch because the current manifest no longer advertises an upgrade');
       discardStagedPatchFiles();
     } else {
-      currentStatus = 'idle';
+      setStatus('idle');
     }
     return 'idle';
   }
@@ -1196,7 +1196,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     if (wasReady) {
       discardStagedPatchFiles();
     } else {
-      currentStatus = 'idle';
+      setStatus('idle');
     }
     return 'idle';
   }
@@ -1207,7 +1207,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     if (wasReady) {
       discardStagedPatchFiles();
     } else {
-      currentStatus = 'idle';
+      setStatus('idle');
     }
     return 'idle';
   }
@@ -1414,7 +1414,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       failed: true,
       error: err instanceof DownloadError ? err.code : 'UNKNOWN',
     });
-    currentStatus = 'error';
+    setStatus('error');
     return 'download_failed';
   }
 }

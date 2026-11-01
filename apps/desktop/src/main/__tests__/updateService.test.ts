@@ -2669,6 +2669,52 @@ describe('Windows updater prerequisites', () => {
   });
 });
 
+// PR #7694: checkForUpdate must deliver terminal states to mounted sidebars.
+// Existing result/splash assertions missed update-status, leaving the spinner stuck.
+// Unit tier: real service entry, mocked network/window; no real download or relaunch.
+describe('sidebar terminal update status', () => {
+  it('ends checking on no upgrade, unusable asset/version, and manifest failure', async () => {
+    const service = await freshUpdateService('darwin');
+    const send = vi.fn();
+    browserWindowGetAllWindows.mockReturnValue([
+      { isDestroyed: () => false, webContents: { send } } as never,
+    ]);
+    const missingAsset = { ...updateManifest('0.0.65'), app: { version: '0.0.65' } };
+    for (const manifest of [
+      updateManifest('0.0.64'), updateManifest('0.0.63'),
+      updateManifest('invalid'), missingAsset, null,
+    ]) {
+      send.mockClear();
+      fetchManifest.mockResolvedValue(manifest);
+      await service.checkForUpdate();
+      expect(send.mock.calls.filter(([channel]) => channel === 'update-status')
+        .map(([, payload]) => payload.status)).toEqual(['checking', 'idle']);
+      expect(service.getUpdateStatus()).toBe('idle');
+    }
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('ends downloading on failure and allows the next check to finish idle', async () => {
+    const service = await freshUpdateService('darwin');
+    const send = vi.fn();
+    browserWindowGetAllWindows.mockReturnValue([
+      { isDestroyed: () => false, webContents: { send } } as never,
+    ]);
+    download.mockRejectedValue(new Error('network unavailable'));
+    await expect(service.checkForUpdate(updateManifest('0.0.65')))
+      .resolves.toBe('download_failed');
+    const statuses = () => send.mock.calls.filter(([channel]) => channel === 'update-status')
+      .map(([, payload]) => payload.status);
+    expect(statuses()[0]).toBe('checking');
+    expect(statuses()).toContain('downloading');
+    expect(statuses().at(-1)).toBe('error');
+    expect(send).toHaveBeenCalledWith('app-update-progress', expect.objectContaining({ failed: true }));
+    send.mockClear();
+    await service.checkForUpdate(updateManifest('0.0.64'));
+    expect(statuses()).toEqual(['checking', 'idle']);
+  });
+});
+
 describe('splash 启动下载 0% 显式广播', () => {
   interface SentIpc {
     channel: string;

@@ -2,7 +2,8 @@ import { Button } from '@/components/ui/button';
 /**
  * UpdateBanner — F4: Sidebar update notification banner.
  * ---------------------------------------------------------------------------
- * Shown when the auto-update system has downloaded and verified a new version
+ * Shows check/download feedback, then the existing relaunch banner when the
+ * auto-update system has downloaded and verified a new version
  * (status === 'ready'), or while it's busy preparing an even newer one on top
  * of the already-ready patch (status === 'superseding'). Sits between the upper
  * content slot and UserInfoSection in the Sidebar shell.
@@ -80,7 +81,7 @@ const UPDATE_BUTTON_TREATMENT =
   '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:hover:[--button-face-bg:var(--update-btn-hover)] enabled:hover:[--button-face-border:var(--update-btn-border)] enabled:active:[--button-face-bg:var(--update-btn-hover)] enabled:active:[--button-face-border:var(--update-btn-border)]';
 
 export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
-  const { status, version, errorCode } = useUpdateStatus();
+  const { status, version, errorCode, progress } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
   // 新一版更新到达时 useDeferUpdateBannerWhileBusy 会清掉上一版的决定并重新探针。
@@ -402,6 +403,42 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
       {content}
     </>
   );
+
+  // Transfer feedback belongs above the account row, even while tasks are busy.
+  // No relaunch action is available until the existing ready state takes over.
+  if (status === 'checking' || status === 'downloading') {
+    const label = t(status === 'checking'
+      ? 'splash.tips.checkingUpdate'
+      : 'titleBar.updateCheckToast.downloading');
+    const percent = status === 'downloading' && typeof progress === 'number' && Number.isFinite(progress)
+      ? Math.max(0, Math.min(100, Math.round(progress)))
+      : undefined;
+    return (
+      <div className="flex flex-col gap-2 border-t border-sidebar-border px-3 py-3">
+        <div className="flex items-center gap-2 text-xs text-sidebar-muted" role="status">
+          <Spinner size={16} className="shrink-0" />
+          {!isCollapsed && <span className="min-w-0 flex-1">{label}</span>}
+          {isCollapsed && <span className="sr-only">{label}</span>}
+          {!isCollapsed && percent !== undefined && <span className="tabular-nums">{percent}%</span>}
+        </div>
+        {status === 'downloading' && (
+          <div
+            role="progressbar"
+            aria-label={label}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            className="h-1 overflow-hidden rounded-full bg-sidebar-border"
+          >
+            <div
+              className="h-full origin-left rounded-full bg-sidebar-muted motion-safe:transition-transform motion-safe:duration-150"
+              style={{ transform: `scaleX(${(percent ?? 0) / 100})` }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // Banner is visible for ready (relaunch available), superseding (preparing
   // a newer version on top of an already-ready patch), or error fallback
