@@ -122,3 +122,11 @@ app-runtime、cindy-terminal 类型检查通过。maker-shared 没有 typecheck 
 沿用既有生产入口测试：taskActionAuthorization、botWorkbenchAccess、forwardedRequest 三文件 145 项通过（9.40 秒）；原发送端失败已消除。companion-core、app-runtime、cindy-terminal 类型检查通过。Desktop 完整类型检查仍有 232 条诊断（本批之前 241），本批授权及原话捕获模块无诊断。
 
 Terminal 宿主五项定向集成因 Windows libuv `src/win/fs-event.c:72` 原生断言崩溃，继发 ERR_IPC_CHANNEL_CLOSED；启用 Chokidar polling 和缩小至四项分别重试仍复现，未获得有效通过结果。未修改产品监听行为、放宽测试或将该组计为成功。此项、其它 Desktop 类型错误、Orca 测试门禁及主干冲突仍待解决，PR 保持草稿，在线 VPS 未修改。
+
+### Windows 临时目录别名复验（2026-11-01）
+
+上述 libuv 崩溃与本机 TEMP 的 Windows 8.3 路径别名有关：普通 realpath 保留短用户名，realpathSync.native 返回长用户名。仅将测试进程 TEMP/TMP 指向同一物理目录的长路径，同组 5 项宿主集成通过（50.42 秒）。测试夹具现统一先用 realpathSync.native 解析临时目录，再创建隔离子目录；未修改产品 watcher 或断言。
+
+恢复默认 TEMP/TMP 后，同组 5 passed、120 skipped（53.83 秒，收集 39.82 秒、执行 13.60 秒），Terminal 类型检查通过。沿用真实宿主与 SQLite 的既有集成用例，没有新增用例、模块重载或真实等待；该存量宿主文件的收集成本仍超过单测预算。本项只验证测试环境恢复，不代表产品已全面支持 Windows 短路径监听，也不代表完整宿主回归或 CI 已通过。
+
+完整宿主文件复查为 116 passed、9 failed（251.76 秒，收集 41.27 秒、执行 210.09 秒），没有原生监听崩溃。失败分别为恢复归档任务仍返回 archived、五处宿主路径比较差异、跨电脑切换 5000ms 超时、脚本用例清理 ENOTEMPTY，以及项目自动化按斜杠形式重复登记同一目录。需分别确认产品回归与断言语义，不将这些失败归为已解决。原始 test-hygiene 扫描与 origin/main 基线比较，仅 Orca worker creation 测试的 sourceReads=1 超标；未修改基线。

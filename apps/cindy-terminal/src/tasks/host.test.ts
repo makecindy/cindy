@@ -38,6 +38,7 @@ import { TerminalConfiguration } from '../configuration.js';
 import { TerminalProtectedInput } from '../protected-input.js';
 import { TerminalSecretStore } from '../secrets.js';
 import { access, appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {admitTaskAction} from '@cindy/app-runtime/taskActionAuthorization';
@@ -75,6 +76,9 @@ import type { TextChannelIM, ImFinalOutput, RichChannelIM, IMMessageEvent, IMCar
 import { ui as wechatUi } from '@cindy/im-runtime/channels/wechat/uiText';
 
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+// Windows TEMP can contain an 8.3 alias. Native watchers receive long paths from
+// the OS; mixing them with an alias can abort libuv before JS can handle an error.
+const temporaryRoot = realpathSync.native(os.tmpdir());
 const roots: string[] = [];
 const schedulers: TerminalSchedulerHost[] = [];
 const hosts: TerminalTaskHost[] = [];
@@ -230,7 +234,7 @@ function engine(beforeStart?: (input: RuntimeInput, options: StartSessionOptions
 }
 
 async function setup(native = engine(), overrides: Partial<ConstructorParameters<typeof TerminalTaskHost>[0]> = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-terminal-task-test-'));
+  const root = await mkdtemp(path.join(temporaryRoot, 'cindy-terminal-task-test-'));
   roots.push(root);
   const vault = new Map<string, string>();
   const secrets: TerminalSecrets = { get: async key => vault.get(key) ?? null, set: async (key, value) => { vault.set(key, value); }, delete: async key => { vault.delete(key); } };
@@ -523,7 +527,7 @@ describe('terminal task host', () => {
   // synthetic external rollout through the original scanner and importer;
   // scanning is read-only and repeated explicit imports retain one task.
   it('imports a selected native transcript through the original local API', async () => {
-    const fakeHome = await mkdtemp(path.join(os.tmpdir(), 'cindy-import-home-')); roots.push(fakeHome);
+    const fakeHome = await mkdtemp(path.join(temporaryRoot, 'cindy-import-home-')); roots.push(fakeHome);
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
     const environment = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'APPDATA', 'XDG_CONFIG_HOME'] as const;
     const before = environment.map(key => process.env[key]);
@@ -953,7 +957,7 @@ describe('terminal task host', () => {
   // cancellation must fence late creation, and native runtime closure must
   // precede the actual encrypted worktree recycler.
   it('claims GUI worktree precreation and restores it after native task archival', async () => {
-    const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'terminal-worktree-task-'))); roots.push(profile);
+    const profile = await realpath(await mkdtemp(path.join(temporaryRoot, 'terminal-worktree-task-'))); roots.push(profile);
     const owner = path.join(profile, 'owners', 'b'.repeat(32));
     const f = await setup(engine(), { profileDir: owner });
     const worktrees = await createTerminalWorktrees({ profile, root: owner, tasks: f.host.storage, logger, guard() {},
@@ -1828,7 +1832,7 @@ describe('terminal task host', () => {
   // The terminal SQLite schema must preserve the shared cursor receipt and
   // bot namespace rules, including a daemon restart between inbound turns.
   it('persists group history and compensated cursors without mixing bot identities', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-terminal-group-test-')); roots.push(root);
+    const root = await mkdtemp(path.join(temporaryRoot, 'cindy-terminal-group-test-')); roots.push(root);
     await mkdir(path.join(root, 'im'));
     const original = new Database(path.join(root, 'im', 'history.sqlite'));
     original.exec(GROUP_WINDOW_SCHEMA_SQL); original.pragma('user_version = 1'); original.close();
@@ -3131,7 +3135,7 @@ describe('terminal task host', () => {
   // Starting the host and showing model/permission choices must precede engine
   // installation. The normal fixture has a provisioned Claude binary.
   it('starts on a fresh computer before any native engine is installed', async () => {
-    const root=await mkdtemp(path.join(os.tmpdir(),'cindy-terminal-no-engines-'));roots.push(root);
+    const root=await mkdtemp(path.join(temporaryRoot,'cindy-terminal-no-engines-'));roots.push(root);
     const missing=path.join(root,'not-installed');
     const host=new TerminalTaskHost({profileDir:root,logger,binaryPaths:{'claude-code':missing,codex:missing,pi:missing},secretStore:{get:async()=>null,set:async()=>{},delete:async()=>{}},emit(){}});hosts.push(host);
     await host.ready;
@@ -4514,7 +4518,7 @@ createInterface({input:process.stdin}).on('line', line => {
   });
 
   it('exports peer and OSS files without overwriting an existing destination', async () => {
-    const root=await mkdtemp(path.join(os.tmpdir(),'cindy-download-test-'));roots.push(root);
+    const root=await mkdtemp(path.join(temporaryRoot,'cindy-download-test-'));roots.push(root);
     const destination=path.join(root,'download.txt');
     const files={receive:async <T>(_peer:string,_url:string,makeSink:Parameters<import('../remote/files.js').TerminalFilePeerService['receive']>[2]):Promise<T>=>{
       const metadata={ticket:'fixture',size:5,mimeType:'text/plain'};
