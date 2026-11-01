@@ -54,6 +54,11 @@ interface HermesUsagePayload {
   durationMs?: number;
   /** Model id the CLI reported in its `system/init` event. */
   model?: string;
+  /**
+   * providers.yaml endpoint id when the turn ran on a per-session route (e.g.
+   * "lmstudio-local"). Absent = the Hermes home route (ROADMAP 1.9b-3c).
+   */
+  provider?: string;
 }
 
 function asCount(value: unknown): number {
@@ -101,7 +106,10 @@ export function recordSessionHermesTurnUsage(
     // The CLI's own report wins: it names the model this turn actually ran
     // on, even when the home default changed in between.
     const model = asText(usage.model) ?? asText(route.model);
-    const provider = asText(route.provider);
+    // A per-session route (LM Studio, Ollama, …) names its own endpoint; only a turn on
+    // the home route takes the home provider. Otherwise a local model was labelled and
+    // priced as the home provider's (owner report 2026-11-01: "deepseek/google/gemma-…").
+    const provider = asText(usage.provider) ?? asText(route.provider);
     const turnUsageDetails = buildTurnUsageDetails({
       inputTokens,
       outputTokens,

@@ -19,6 +19,20 @@ export interface ResolvedModelRoute {
   provider: string;
   baseUrl: string;
   apiKey?: string;
+  /** The providers.yaml entry id this route uses (e.g. "lmstudio-local"). */
+  providerId?: string;
+}
+
+/**
+ * Last endpoint each discovered model was found on. Discovery forgets a model the moment its
+ * endpoint goes offline or unloads it; without this the same model id would stop resolving and
+ * be sent to the Hermes home provider instead (a different, possibly paid, endpoint).
+ */
+const rememberedEndpointByModel = new Map<string, string>();
+
+/** Test-only reset. */
+export function resetRememberedModelEndpointsForTest(): void {
+  rememberedEndpointByModel.clear();
 }
 
 export interface ModelRouteResolverOptions {
@@ -95,8 +109,19 @@ export function resolveModelRoute(
       if (providerMap.has(pId) && models.includes(trimmed)) {
         targetProviderId = pId;
         targetModel = trimmed;
+        rememberedEndpointByModel.set(trimmed, pId);
         break;
       }
+    }
+  }
+
+  // 5. A model discovered earlier keeps its endpoint while that endpoint is offline/unloaded,
+  // so the turn fails on the right endpoint (preflight) instead of moving to another provider.
+  if (!targetProviderId) {
+    const remembered = rememberedEndpointByModel.get(trimmed);
+    if (remembered && providerMap.has(remembered)) {
+      targetProviderId = remembered;
+      targetModel = trimmed;
     }
   }
 
@@ -113,5 +138,6 @@ export function resolveModelRoute(
     provider: 'custom',
     baseUrl: normalizeBaseUrl(entry.baseUrl),
     ...(apiKey ? { apiKey } : {}),
+    providerId: targetProviderId,
   };
 }

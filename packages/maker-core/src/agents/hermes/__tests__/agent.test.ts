@@ -629,6 +629,32 @@ describe('HermesAgent', () => {
     }
   });
 
+  it('refuses to send when the route preflight fails, before anything reaches the daemon', async () => {
+    // ROADMAP 2.4c: LM Studio quit / model unloaded used to hang the turn for minutes.
+    const daemon = await startDaemon();
+    const checked: string[] = [];
+    const handle = await start(buildAgent({
+      deps: {
+        preflightHermesRoute: async (model) => {
+          checked.push(model);
+          return model === 'gemma-local:2'
+            ? { ok: false, message: '"gemma-local:2" is not loaded in lmstudio-local (http://127.0.0.1:1234).' }
+            : { ok: true };
+        },
+      },
+    }));
+    try {
+      await handle.setModel!('gemma-local:2');
+      await expect(handle.send({ type: 'user', content: 'hi' }))
+        .rejects.toThrow('"gemma-local:2" is not loaded in lmstudio-local');
+      expect(daemon.sendTexts).toEqual([]);
+      expect(daemon.methods).not.toContain('query/send');
+      expect(checked).toEqual(['gemma-local:2']);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('handle.model follows a successful setModel, keeping the Cindy sentinel', async () => {
     // Session.model reads handle.model and assumes it tracks switches; runtime
     // profiles (desktop readSessionRuntimeProfiles) report live.model. A fixed

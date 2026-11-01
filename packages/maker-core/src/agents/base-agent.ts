@@ -748,6 +748,14 @@ export interface AgentDeps {
   resolveHermesManagerSocketPath?: (sessionId?: string) => string | undefined;
 
   /**
+   * Hermes-only: check the providers.yaml endpoint behind a model before a turn
+   * (ROADMAP 2.4c). Defaults to `preflightModelRoute`; tests inject a stub.
+   */
+  preflightHermesRoute?: (
+    model: string,
+  ) => Promise<{ ok: true } | { ok: false; message: string; providerId?: string }>;
+
+  /**
    * Hermes-only: registers this Cindy session with the tool bridge and returns
    * the non-secret env (`CINDY_BRIDGE_SESSION`) the shim reads via `${VAR}` in
    * config.yaml. Absent or failing → the session runs without Cindy tools.

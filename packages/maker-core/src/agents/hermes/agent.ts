@@ -38,6 +38,7 @@ import { normalizeHermesEvent, type NormalizedHermesTokens } from './translator.
 import { createHermesTransport, type HermesTransport } from './transport.js';
 import { collectHermesProviderEnv } from './hermes-provider-env.js';
 import { resolveModelRoute } from '../../providers/model-route-resolver.js';
+import { preflightModelRoute } from '../../providers/route-preflight.js';
 
 const HERMES_DEFAULT_MODEL_ID = 'hermes-default';
 /** Advertised window; the daemon does not report a runtime value. */
@@ -349,6 +350,10 @@ export class HermesAgent extends BaseAgent {
     // mid-session). The Cindy-side session model is not a substitute: it is
     // either the 'hermes-default' sentinel or an override for the *next* turn.
     let turnModel: string | undefined;
+    // providers.yaml endpoint id of the current turn's per-session route (undefined =
+    // Hermes home route). Stamped on the done usage so the turn is labelled and priced
+    // by the endpoint it actually ran on (ROADMAP 1.9b-3c).
+    let turnProviderId: string | undefined;
     // Monotonic per-send epoch. `session/closed` has no epoch on the wire, so
     // each result-settled turn leaves exactly one close to be consumed; any
     // other close belongs to the currently active epoch only.
@@ -556,6 +561,7 @@ export class HermesAgent extends BaseAgent {
                 // The model the tokens were spent on, as the CLI reported it.
                 // Without it the tokens cannot be priced at all.
                 ...(turnModel ? { model: turnModel } : {}),
+                ...(turnProviderId ? { provider: turnProviderId } : {}),
               },
             },
             source: 'hermes',
@@ -659,6 +665,7 @@ export class HermesAgent extends BaseAgent {
       queue.end();
     });
 
+    const preflightRoute = this.deps.preflightHermesRoute ?? ((model: string) => preflightModelRoute(model));
     // The current Cindy model id ('hermes-default' sentinel or an override).
     // Session.model reads it and expects it to follow successful switches.
     let currentModel = input.model;
@@ -682,6 +689,12 @@ export class HermesAgent extends BaseAgent {
             'hermes daemon connection lost; start a new session to reconnect',
           );
         }
+        // Fail fast when the session's local/API endpoint is down or lacks the model,
+        // instead of letting the Hermes CLI retry for minutes (ROADMAP 2.4c). Never
+        // switches model: the owner decides what to use instead.
+        const preflight = await preflightRoute(currentModel);
+        if (!preflight.ok) throw new Error(preflight.message);
+        turnProviderId = resolveModelRoute(currentModel)?.providerId;
         const text = await flattenUserMessage(message);
         // Mark the turn before the RPC so a terminal notification arriving in
         // the same socket chunk cannot be cleared by the accepted-send path.

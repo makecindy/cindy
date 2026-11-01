@@ -10,6 +10,33 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Fail fast on a down local endpoint (2.4c) + correct provider label (1.9b-3c) (`unit-tested`)
+
+**Why:** owner quit LM Studio's window; its server kept running with no model. A Hermes turn on `google/gemma-4-26b-a4b-qat:2` showed "Working…" for minutes, then LM Studio's raw "HTTP 400: No models loaded". The cost panel labelled Gemma turns `deepseek/…`.
+
+**Changes:**
+- `packages/maker-core/src/providers/route-preflight.ts` (new): `preflightModelRoute(model)` resolves the route; for a providers.yaml endpoint it probes the model list (2.5 s, same probe as discovery: listed host only, no redirects). Returns offline / error / model-not-loaded with a named message, else ok. Home route → ok, no I/O.
+- `model-route-resolver.ts`: routes carry `providerId`; discovered models are remembered per endpoint (step 5), so discovery forgetting an offline/unloaded model no longer sends that id to the Hermes home provider.
+- `agents/hermes/agent.ts`: `send()` runs the preflight first (injectable `AgentDeps.preflightHermesRoute`) and throws its message before the "Working…" status and before `query/send`. It records `turnProviderId` and stamps it as `usage.provider` on the done event.
+- `apps/desktop/src/main/maker-ipc/sessionHermesTurnUsage.ts`: `provider = usage.provider ?? home route provider`.
+
+**Tests:** maker-core providers 59/59 (+5), Hermes agent 45/45 (+1), sessionHermesTurnUsage 6/6 (+1). Mutation checks: dropping the agent throw fails the agent test; disabling resolver step 5 fails 3 preflight/memory tests; reverting the provider precedence fails the usage test.
+
+**Gates (cloud, Node 22.23.4):** serial typecheck `EXIT=0`; `test:runner` 607/0; test-hygiene PASS. maker-core full unit: 6137 pass, 2 fail, both environmental and Pi-only: `cindyBridgeSource.test.ts` (missing `apps/ripgrep-bin/linux-x64/rg` in this container; fails identically with this change stashed) and `cindySubagentRunner.test.ts` (known `/bin/ps` environment item in ROADMAP Debt). **Owner's Mac (Node 22):** related unit tier green: `apps/desktop unit` PASS (327 s), `packages/maker-core unit` PASS, every other workspace PASS.
+
+**Owner live checks (same day): both ✅ `live-proven`.** 1.9b-3c: a new Gemma chat's panel row reads `lmstudio-local/google/gemma-4-…` 14.0k tok · unpriced (was `deepseek/…`). 2.4c: Gemma unloaded in LM Studio, "hi" → the composer shows "Could not complete the reply" (Retry / Error Details) at once, no hang, no model switch. Polish left for later: show the named reason without expanding Error Details; offer a one-click alternative model.
+
+---
+
+## 2026-11-01 — Owner click-throughs: 1.9b-3b, 2.1b-live, 2.4b-live (results + two defects found)
+
+- **1.9b-3b ✅ `live-proven` with a defect.** The header token chip opened the panel: "3 turns · in 56.0k · out 387 · cache R 2.8k · Cost ~$0.0046 (partial)"; per model "deepseek/google/gemma-4-… 41.5k tok · unpriced", "deepseek/deepseek-flash 17.7k tok · $0.0046"; unpriced notice for gemma. **Defect (new 1.9b-3c):** `sessionHermesTurnUsage.ts` stamps every Hermes turn with the *home* route provider (`readHermesRoute` → deepseek), even when the turn ran on a per-session custom route (LM Studio). Gemma is labelled `deepseek/…`, and a local model whose id matches a priced provider model could be mis-priced.
+- **2.1b-live ✅ `live-proven`.** Owner confirmed the providers card in Settings → General → Hermes Harness.
+- **2.4b-live ❌ not proven.** Gemma chat, LM Studio quit, "hi" sent. **No paid fallback happened** (safety rule held). But (a) no blocked banner, and (b) the turn sat on "Working…" for 3m27s+ with no error. Causes: (a) the chat model was `google/gemma-4-26b-a4b-qat:2` (LM Studio loaded a second instance), which does not exactly match the owner's `gemma-local` route model; more generally `assessSessionRouteHealth` only checks `routing.yaml` routes, so discovered-endpoint models are never checked. (b) Nothing preflights the custom endpoint before a Hermes turn, so the CLI waits on a dead `127.0.0.1:1234`. **Proposed 2.4c:** preflight the resolved custom endpoint before a Hermes send and fail fast with a named error and one-click alternative (hot path; needs `live-proven`).
+- 2.5b-live not yet run.
+
+---
+
 ## 2026-11-01 — ROADMAP 1.6b plugin switch `live-proven` (owner)
 
 After pulling `claude/jolly-brown-n5edmp` and restarting, the owner used Settings → General → Hermes Harness → Plugins:
