@@ -95,7 +95,11 @@ export type VoiceCallStatus = {
   questionElsewhere: boolean;
 };
 /** Level-only updates keep PCM-rate meters from cloning the call record over IPC. */
-export type VoiceCallStatusUpdate = { status: VoiceCallStatus | null } | { level: number };
+export type VoiceCallStatusUpdate =
+  | { status: VoiceCallStatus | null }
+  | { level: number }
+  /** The main window's call host can (or can no longer) receive commands. Never broadcast. */
+  | { ready: boolean };
 export type VoiceCallCommand =
   | { type: 'start'; bot: VoiceCallBot; sessionId: string }
   | {

@@ -240,6 +240,30 @@ it('keeps Resume unavailable while the page still holds the call paused', async 
   expect(resume.disabled).toBe(true);
 });
 
+// Review finding: the pause reason lived only in the page's slot, so leaving the
+// task dropped it and enabled Resume while the operation was still running.
+it('keeps the call paused after the page holding the pause unmounts', async () => {
+  function Shell({ show }: { show: boolean }) {
+    return (
+      <MemoryRouter>
+        <VoiceCallFloatingSlot />
+        <GlobalVoiceCallHost />
+        {show ? (
+          <VoiceCallComposerSlot sessionId="a" questionBridge={bridge} blocked openTask={vi.fn()} />
+        ) : null}
+      </MemoryRouter>
+    );
+  }
+  const view = render(<Shell show />);
+  await begin();
+  expect(phase()).toBe('bots.voiceMode.status.confirmation');
+  view.rerender(<Shell show={false} />);
+  await act(async () => {});
+  expect(phase()).toBe('bots.voiceMode.status.confirmation');
+  const resume = screen.getByRole('button', { name: /bots.voiceMode.resume/ }) as HTMLButtonElement;
+  expect(resume.disabled).toBe(true);
+});
+
 // Review finding: a settings drawer covering the card must not take spoken answers.
 it('treats a question card without a bridge as off screen', async () => {
   function Page() {

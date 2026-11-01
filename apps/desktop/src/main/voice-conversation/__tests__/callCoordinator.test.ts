@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   coordinator = new VoiceCallCoordinator();
   coordinator.configure({ hostSender: () => HOST, send, onActiveChange });
+  coordinator.publish(HOST, { ready: true });
 });
 
 // Product rule: one call per device, owned by the main window. Unit, real
@@ -67,6 +68,20 @@ it('reserves the line for the first start until the host publishes or the reserv
   vi.advanceTimersByTime(10_000);
   expect(coordinator.command(start('fifth'))).toBe(true);
   vi.useRealTimers();
+});
+
+// Review finding: a start sent while the main window boots would be dropped
+// yet acknowledged, reserving the line for nothing.
+it('refuses a start until the host listens and again after it is gone', () => {
+  const start = { type: 'start', sessionId: 's', bot: { id: 'b', name: 'B' } } as const;
+  const fresh = new VoiceCallCoordinator();
+  fresh.configure({ hostSender: () => HOST, send, onActiveChange });
+  expect(fresh.command(start)).toBe(false);
+  expect(send).not.toHaveBeenCalled();
+  fresh.publish(HOST, { ready: true });
+  expect(fresh.command(start)).toBe(true);
+  fresh.windowGone(HOST);
+  expect(fresh.command(start)).toBe(false);
 });
 
 it('accepts status only from the main window and shows it only to windows that asked', () => {

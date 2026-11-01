@@ -21,12 +21,14 @@ import {
 } from './CompanionVoicePanel';
 import { CompanionVoiceToolbar } from './CompanionVoiceToolbar';
 import {
+  clearVoiceCallPageBlocked,
   installVoiceCallHost,
   publishVoiceCallStatus,
   registerVoiceCallSlot,
   sendVoiceCallCommand,
   useFloatingVoiceCallSlot,
   useFloatingVoiceCallSlotElement,
+  useVoiceCallPageBlocked,
   useVoiceCallSlot,
   useVoiceCallStatus,
   useVoiceCallSummary,
@@ -101,6 +103,8 @@ function HostedVoiceCall({
   );
   const binding = useSessionBinding(sessionId);
   const slot = useVoiceCallSlot(sessionId);
+  const pageBlocked = useVoiceCallPageBlocked(sessionId);
+  useEffect(() => () => clearVoiceCallPageBlocked(sessionId), [sessionId]);
   const floating = useFloatingVoiceCallSlot();
   const [callId, setCallId] = useState<string | null>(null);
   const [frame, setFrame] = useState<VoicePresentation | null>(null);
@@ -116,7 +120,7 @@ function HostedVoiceCall({
     binding.attached ||
     light.queuePaused ||
     // Page-local reasons stay part of the live state, so Resume cannot outrun them.
-    slot?.blocked,
+    pageBlocked,
   );
   const questionAsked = light.pendingAskUser !== null;
   // Only a card visible in this window can take a voice answer; a settings
@@ -213,8 +217,11 @@ export function GlobalVoiceCallHost() {
   useEffect(() => {
     const dispose = installVoiceCallHost(handleCommand);
     const removeCommands = window.electronAPI.voiceConversation.onCallCommand?.(handleCommand);
+    // Only now can Main hand this window a start without it being dropped.
+    window.electronAPI.voiceConversation.publishCallStatus?.({ ready: true });
     return () => {
       removeCommands?.();
+      window.electronAPI.voiceConversation.publishCallStatus?.({ ready: false });
       dispose();
       publishRemote(null);
     };

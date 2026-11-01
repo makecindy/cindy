@@ -31,6 +31,8 @@ let removeRemote: (() => void) | null = null;
 let localCommands: ((command: VoiceCallCommand) => boolean) | null = null;
 let floatingSlot: HTMLElement | null = null;
 const slots = new Map<string, VoiceCallSlot>();
+/** Tasks whose page left while holding the call paused; only the page can say it cleared. */
+const latchedBlocked = new Set<string>();
 const statusListeners = new Set<() => void>();
 const slotListeners = new Set<() => void>();
 
@@ -54,6 +56,7 @@ function setStatus(next: VoiceCallStatus | null): void {
 }
 
 function applyRemote(update: VoiceCallStatusUpdate): void {
+  if ('ready' in update) return;
   if ('status' in update) setStatus(update.status);
   else if (status) setStatus({ ...status, state: { ...status.state, level: update.level } });
 }
@@ -124,16 +127,32 @@ export function useVoiceCallSlot(sessionId: string | null | undefined): VoiceCal
   );
 }
 
+/** Page-local pause reasons of a task, kept after its page unmounts. */
+export function useVoiceCallPageBlocked(sessionId: string): boolean {
+  return useSyncExternalStore(
+    subscribeSlots,
+    () => slots.get(sessionId)?.blocked ?? latchedBlocked.has(sessionId),
+  );
+}
+
+export function clearVoiceCallPageBlocked(sessionId: string): void {
+  latchedBlocked.delete(sessionId);
+}
+
 export function useFloatingVoiceCallSlot(): HTMLElement | null {
   return useSyncExternalStore(subscribeSlots, () => floatingSlot);
 }
 
 export function registerVoiceCallSlot(sessionId: string, slot: VoiceCallSlot): () => void {
   slots.set(sessionId, slot);
+  // The page is back and reports its live state again.
+  latchedBlocked.delete(sessionId);
   notify(slotListeners);
   return () => {
     if (slots.get(sessionId) !== slot) return;
     slots.delete(sessionId);
+    // Leaving the task page does not end its handoff or Make lock: stay paused.
+    if (slot.blocked) latchedBlocked.add(sessionId);
     notify(slotListeners);
   };
 }

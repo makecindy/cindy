@@ -56,6 +56,7 @@ export function getVoiceSettingsHostApi(): VoiceSettingsHostApi | null {
 function readVoiceCallStatusUpdate(raw: unknown): VoiceCallStatusUpdate | null {
   const value = requireObject(raw);
   if (value.status === null) return { status: null };
+  if (typeof value.ready === 'boolean') return { ready: value.ready };
   if (typeof value.level === 'number' && Number.isFinite(value.level))
     return { level: value.level };
   const status = value.status as Partial<VoiceCallStatus> | undefined;

@@ -27,6 +27,8 @@ export class VoiceCallCoordinator {
   private starting: ReturnType<typeof setTimeout> | null = null;
   /** The host window may already be gone when its destruction is reported. */
   private lastHost: number | null = null;
+  /** The host has subscribed to commands; false while it boots or reloads. */
+  private hostReady = false;
   private readonly subscribers = new Set<number>();
 
   configure(deps: Deps): void {
@@ -41,12 +43,17 @@ export class VoiceCallCoordinator {
   publish(sender: number, update: VoiceCallStatusUpdate): void {
     if (sender !== this.deps?.hostSender()) return;
     this.lastHost = sender;
+    if ('ready' in update) {
+      this.hostReady = update.ready;
+      return;
+    }
     this.apply(update, sender);
   }
 
   command(command: VoiceCallCommand): boolean {
     const host = this.deps?.hostSender() ?? null;
-    if (host === null) return false;
+    // A command sent before the host listens would vanish while looking accepted.
+    if (host === null || !this.hostReady) return false;
     // The call in progress keeps the line; a second one never replaces it.
     if (command.type === 'start') {
       if (this.status?.open || this.starting) return false;
@@ -62,6 +69,7 @@ export class VoiceCallCoordinator {
     this.subscribers.delete(sender);
     if (sender !== this.deps?.hostSender() && sender !== this.lastHost) return;
     this.lastHost = null;
+    this.hostReady = false;
     this.clearStarting();
     if (this.status) this.apply({ status: null }, sender);
   }
@@ -74,6 +82,7 @@ export class VoiceCallCoordinator {
   private apply(update: VoiceCallStatusUpdate, sender: number): void {
     this.clearStarting();
     const wasActive = this.status?.open ?? false;
+    if ('ready' in update) return;
     if ('status' in update) this.status = update.status;
     else if (this.status)
       this.status = { ...this.status, state: { ...this.status.state, level: update.level } };
