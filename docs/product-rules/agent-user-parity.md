@@ -78,7 +78,8 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 协同 / Worker | 其他仓库的新 worktree 默认使用主任务记住的源分支，失效回退当前分支 | 有（返回实际源分支与原因；显式参数优先） | 无 |
 | 定时任务 | 列出、详情、运行记录、修改、暂停、恢复、删除、立即运行     | 有   | 有（2026-10-14） |
 | 定时任务 | 选择远程／分享供应商模型（运行位置、引擎、模型与速度）及清除覆盖恢复跟随；绑定任务或持续模式切回本机须保留完整引擎／模型选择 | 有   | 有（设置或清除模型选择均核验目标电脑的 `supportsScheduleAgentDeviceSelection`） |
-| 定时任务 | 新建、安装检查脚本                                         | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
+| 定时任务 | 新建（可指定目标电脑）                                     | 有 | 有（2026-11-01；目标电脑须支持远程创建） |
+| 定时任务 | 安装检查脚本                                               | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
@@ -215,5 +216,7 @@ Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full A
 2026-10-16：个人发布 prepare 返回包内 releaseNotes 和远端只读预检；submit 前重新校验所见快照内容。
 `ghost_cancel_plugin_review` 使用本人版本的精确 revision，区分停止上传与取消审核，沿现有 Full Access/Auto/Ask 授权。
 旧版本包仍可安装，成功提审后的同版本不再支持改包重提。
+
+自动化与例行任务的插件前置检查（2026-10-31）：桌面「前置检查」与 `schedule_create` / `schedule_update` / `routine_save` 共用 `preRunPlugin`（插件实例 id + 出错处理），Agent 与用户能力一致；只能在插件所在的电脑上设置，跨电脑的 `schedule_update` 明确拒绝。
 
 伙伴例行任务送达与发现（2026-10-30）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。

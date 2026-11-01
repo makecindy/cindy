@@ -1090,6 +1090,7 @@
     "allow": "許遠端桌面",
     "allowHint": "許已登門之同名籍裝置，覽並操作此機之一切應用程式。須並啟上方之裝置控制。",
     "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。",
+    "inputUnsupported": "Cindy 暫不支援此機目前桌面環境的遠端鍵鼠控制。",
     "controlUnavailable": "遠方之機暫不能受操作，請察遠端控制權限與連線，而後重連。",
     "beingControlled": "桌面方受遠端控制",
     "beingViewed": "桌面方受遠端檢視",
@@ -1215,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暫不支援剪貼簿同步，已略之",
     "clipboardSyncTooLarge": "內容逾剪貼簿同步之大小上限，已略之",
     "clipboardSyncPermission": "剪貼簿同步須貼上之權，授之後歸此視窗即復",
-    "clipboardSyncWaiting": "遠方之機的剪貼簿暫不能存取（或已鎖定螢幕），解鎖後將自動續同步。",
     "lockingOnExit": "方鎖定此機…",
     "idleLock": "閒置後斷連並鎖定螢幕",
     "idleNever": "永不",
@@ -1333,6 +1333,20 @@
       "lock-corrupt": "此機資料之維護鎖紀錄已損，暫不能確知是否仍有程式用之。請重啟電腦而後開 Cindy；若仍不能啟，請聯絡支援人員。切勿刪資料庫檔案。",
       "lock-unreadable": "不能讀存此機資料之維護鎖。請察資料目錄之存取權限；復存取後重啟。若仍未成，請聯絡支援人員。",
       "recovery-busy": "另一 Cindy 執行個體方察此機資料之維護鎖。請稍後重啟。"
+    },
+    "passiveCorrupt": {
+      "title": "共享資料庫不可復原",
+      "description": "今以唯讀／共享之式運行，Cindy 不自行復原或改動此共享資料庫。若另有實例共用同一 userData，請先關閉而重試，或改以 --isolated 啟動。"
+    },
+    "corrupt": {
+      "title": "本地資料庫不可開",
+      "description": "本地資料庫或已損毀，或為共用同一資料之他 Cindy 實例所佔。若他實例已開，請先關閉而重試；仍不可，則無可用備份能自動復原，請複製技術細節告知團隊，以求協助復原資料。",
+      "copy": "複製技術細節"
+    },
+    "initFailed": {
+      "title": "本地資料庫啟動失敗",
+      "description": "本地資料庫未能啟動。請先重試；若仍失敗，請將下列技術細節告知團隊。",
+      "retry": "重試啟動資料庫"
     },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中輟",
@@ -5374,7 +5388,6 @@
         "title": "用我之瀏覽器登入態",
         "description": "Agent 將以君於 Chrome、Edge 或 Brave 中已登入之身分造訪網站。",
         "toggleAria": "用我之瀏覽器登入態",
-        "unavailableEmbedded": "僅於獨立瀏覽器生效。關之則刪已複製之登入檔。",
         "confirmTitle": "許 Agent 用君之瀏覽器登入態乎？",
         "confirmDescription": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。可隨時關之，拷貝即刪。",
         "confirmDescriptionMac": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。讀 Chrome 登入檔另需「完全磁碟存取權」。可隨時關之，拷貝即刪。",
@@ -7517,6 +7530,9 @@
         "agentDelegationDetail": "同僚依委派範圍行事，並受自動審核；不冒主人之名，不改同僚權柄。",
         "agentTargets": "可向案、現有差事與同僚遣訊",
         "agentTargetsDetail": "可觀此機案目錄、差事與同僚之名及識別碼，於案中新開差事，或向現有差事、同僚遣送文字與圖。或觸發 AI 運行並生模型費用。此投遞介面本身不能讀他差事之歷程、改其設定或止之。",
+        "agentObserve": "可觀此機案中差事之目與其狀",
+        "agentObserveDetail": "可觀已登記之此機案中差事之題、Agent 之類、歸檔與否及其狀（方行、待理、近動之時），並於主窗啟某差事。不能讀訊、謀劃與文件，亦不能遣訊或改差事。",
+        "agentObserveRequest": "確認觀差事之權柄",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentErrand": "可立差事、行事並讀結果",
@@ -7603,7 +7619,13 @@
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
-        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}"
+        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
+        "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
+        "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
+        "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "subscribeStartTask": "可為新差事擇模型",
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
       },
       "connections": {
         "confirmTitle": "增連線位址",
@@ -7739,6 +7761,22 @@
         "reveal": "顯於差事錄",
         "revealed": "差事已顯於差事錄",
         "revealFailed": "未能令差事顯於差事錄"
+      },
+      "handoff": {
+        "title": "對話中交予法器之卷",
+        "description": "此乃君於對話中交予此法器之卷之副本，七日不用則自刪。",
+        "empty": "對話中尚未交卷予此法器。",
+        "loadFailed": "卷之列表讀取未成，請稍後再試。",
+        "refresh": "重整",
+        "openInFinder": "於 Finder 中啟之",
+        "openInExplorer": "於檔案總管中啟之",
+        "meta": "{{size}} · 交於 {{handedAt}} · {{expiresAt}} 自刪",
+        "delete": "刪",
+        "deleteNamed": "刪 {{name}}",
+        "deleteTitle": "刪此卷乎？",
+        "deleteDescription": "刪之，則法器與已開之頁皆不得復用「{{name}}」，且不可復原。",
+        "deleteFailed": "刪除未成，請稍後再試。",
+        "cancel": "罷"
       },
       "library": {
         "title": "久藏之庫",
@@ -8186,6 +8224,20 @@
         "importing": "方納卷",
         "finished": "卷已理畢",
         "importFinished": "卷已納畢"
+      },
+      "controlPoints": {
+        "description": "此法器可於自動化或例行差事運行前行檢：僅能略過或止此番運行，不能代君准允。",
+        "inactive": "尚不可用。更新或重裝此法器時許之即可。",
+        "points": {
+          "will-routine-run": "同僚例行差事運行前",
+          "will-schedule-run": "自動化運行前",
+          "will-start-task": "開新差事時"
+        },
+        "title": "行前檢查",
+        "usage": "用法：編輯自動化或例行差事時，於「預檢」擇之。",
+        "descriptionWithStartTask": "僅於君所擇之差事介入：運行前僅能略過或止此番，開新差事時僅為首言擇模型一次。皆不能代君准允。",
+        "titleWithStartTask": "法器介入之時",
+        "usageStartTask": "用法：於新任務之模型擇器中，擇其所供之模型。"
       }
     },
     "mcp": {
@@ -10514,6 +10566,7 @@
       "header": {
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
+        "queued": "{{name}} 候次",
         "planning": "{{name}} 方籌畫…"
       },
       "memberCount_one": "{{count}} 人",
@@ -10700,6 +10753,9 @@
         "hostNotReady": "Cindy 尚在準備，請稍後再試",
         "planOpen": "方分工中，畢或止後，方可另籌",
         "planClosed": "此籌畫已終或已更",
+        "revisionConflict": "工作狀態已更，未能完成操作",
+        "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
+        "nothingToStop": "目前無可停止之工作",
         "invalidAttachment": "附件不能讀，請重擇後再遣。",
         "attachmentUnavailable": "未能自手機取回附件，請察裝置連線後再試。",
         "attachmentTooLarge": "附件逾 100 MB，請擇較小之卷。",
@@ -11449,6 +11505,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "啟對話",
+      "inCallWith": "正與 {{name}} 通話",
       "showDetails": "展通話錄",
       "hideDetails": "收通話錄",
       "transcriptTitle": "今所辨之文",
@@ -11517,6 +11575,7 @@
       "unsent": "尚未遣 · 可選文錄之",
       "hint": "稍頓即自遣，回覆由 AI 之聲朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務有問待答 · 通話如故",
         "idle": "君備則始",
         "connecting": "方接語音辨識…",
         "listening": "方聆",
@@ -11532,6 +11591,7 @@
         "muted": "麥克風已闔 · 仍可聆聽"
       },
       "errors": {
+        "busy": "語音為他事所占，請畢之再試。",
         "connection": "語音連線中斷，未遣之文已留。",
         "microphone": "麥克風已止，請查權柄與裝置連線後再續。",
         "send": "此訊未獲接收，文已留。",
@@ -12418,6 +12478,7 @@
         "titleLocal": "改回此機執行 Agent？",
         "titleOther": "改於「{{device}}」執行 Agent？",
         "description": "原機之言談錄不能攜來，將撰為交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
+        "descriptionNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改撰交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
         "confirm": "換機執行",
         "cancel": "一仍其舊"
       }
@@ -12655,6 +12716,7 @@
     "cindyServiceUnavailable": "Cindy 官方聲服暫不可用，請察網路，或易其服源。",
     "asrServiceUnavailable": "識聲之服連線未成，請察網路，或稍後再試。",
     "emptyTranscript": "已聞其聲，而未識一字，請再試。",
+    "speakerFiltered": "他人之聲已略",
     "connectionInterrupted": "聲之連線中斷，請察網路後再試。",
     "recognitionStalled": "識聲不復有所回，請再試。",
     "transcriptKept": "{{message}}（所識之文已存，可徑修之）",
@@ -13830,6 +13892,14 @@
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",
       "closeFailed": "刪追問未成，請稍後再試。"
+    },
+    "pluginModelRoute": {
+      "kept": {
+        "failed": "{{plugin}} 未及回應，此差事用",
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用",
+        "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用"
+      },
+      "routed": "為此差事擇用"
     }
   },
   "ccAgent": {
@@ -15244,7 +15314,27 @@
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",
         "templateParamRequired": "請填{{label}}",
-        "templateApplyFailed": "範本不可套，請察參數而後再試"
+        "templateApplyFailed": "範本不可套，請察參數而後再試",
+        "preRunPluginRequired": "請為預檢擇一法器"
+      },
+      "preRunPlugin": {
+        "choose": "擇法器",
+        "empty": "尚無可行前檢之法器。請裝能行前檢之法器，并於安裝或更新時許之。",
+        "hint": "法器可放行、略此番或止此番運行，不能代君准允何事。",
+        "onFailure": {
+          "allow": "照常運行",
+          "block": "止之并錄為未成",
+          "skip": "略此番"
+        },
+        "onFailureLabel": "法器有失時",
+        "source": {
+          "plugin": "法器",
+          "script": "脚本"
+        },
+        "sourceLabel": "檢查之法",
+        "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",
+        "unavailable": "法器不可用",
+        "unavailableHint": "此法器已不可用。未改擇他器前，運行時依「法器有失時」之設處置。"
       }
     },
     "chips": {
@@ -15728,6 +15818,7 @@
       "titleRevealPath": "許 Agent 取此媒體卷於此機之路徑？",
       "count": "{{count}} 卷",
       "descriptionAttachments": "下列之卷在今差事之工作目錄外。許之，則交此法器處之(其唯得內容指紋，不得路徑)。",
+      "descriptionHandoff": "下列之卷在今差事之工作目錄外。許之，則此法器得其副本(不得路徑)，副本七日不用則自刪。",
       "descriptionDir": "下列目錄/卷在今差事之工作目錄外。許之，則其中之卷交此法器上呈(其唯得一次性票據，不得路徑)。",
       "descriptionSaveDir": "下列目錄在今差事之工作目錄外。許之，此法器可將取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路徑唯於君許之後返予今之 Agent，並入言談錄；配對之裝置或同步此錄。此舉不授法器讀卷之權柄。",
@@ -17614,6 +17705,15 @@
         "skillDisabled": "停技藝「{{title}}」",
         "skillMerged": "併技藝「{{title}}」入「{{into}}」而停之"
       }
+    },
+    "checkSource": "檢查之法",
+    "remote": {
+      "pause": "暫停例行差事",
+      "resume": "續行例行差事",
+      "addSchedule": "增定時條件",
+      "addInterval": "增間隔條件",
+      "addEvent": "增事件條件",
+      "filterField": "篩選欄位"
     }
   },
   "cindyMakeDoctor": {

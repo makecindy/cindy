@@ -1228,7 +1228,6 @@
     "clipboardSyncSkipped": "This format is not supported for clipboard sync and was skipped.",
     "clipboardSyncTooLarge": "Content exceeds the clipboard sync size limit and was skipped.",
     "clipboardSyncPermission": "Clipboard sync needs paste access. Allow it, then return to this window to resume.",
-    "clipboardSyncWaiting": "The remote computer’s clipboard is not available right now (it may be locked). Sync resumes automatically.",
     "lockingOnExit": "Locking computer…",
     "idleLock": "Disconnect and lock when idle",
     "idleNever": "Never",
@@ -1348,6 +1347,10 @@
       "lock-unreadable": "The local data maintenance lock could not be read or saved. Check access to the data directory, then reopen it after access is restored. Contact support if this continues.",
       "recovery-busy": "Another Cindy instance is checking the local data maintenance lock. Reopen the local data shortly."
     },
+    "passiveCorrupt": {
+      "title": "Shared database can't be recovered",
+      "description": "Cindy is running in read-only / shared mode and will not automatically recover or modify this shared database. If another instance uses the same userData, close it and retry, or start with --isolated."
+    },
     "databaseCleanup": {
       "interruptedTitle": "Database Cleanup Was Interrupted",
       "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
@@ -1362,6 +1365,16 @@
     "preparing": {
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. Fetching the new version, please wait…",
       "progress": "{{progress}}% downloaded"
+    },
+    "initFailed": {
+      "title": "Local database failed to start",
+      "description": "The local database couldn't start. Try again first. If it keeps failing, share the technical details below with the team.",
+      "retry": "Retry Starting Database"
+    },
+    "corrupt": {
+      "title": "Local database can't be opened",
+      "description": "The local database may be damaged, or it may be in use by another Cindy instance sharing the same data. If another instance is open, close it and retry. If the problem persists, no usable backup could restore it automatically; copy the technical details and share them with the team to get help recovering your data.",
+      "copy": "Copy Technical Details"
     },
     "noUpdate": {
       "title": "Local data can't be opened right now",
@@ -5418,7 +5431,6 @@
         "title": "Use my browser logins",
         "description": "The agent will open sites with your signed-in Chrome, Edge, or Brave accounts.",
         "toggleAria": "Use my browser logins",
-        "unavailableEmbedded": "Only applies to the standalone browser. Switching it off deletes the copied login files.",
         "confirmTitle": "Let the agent use your browser logins?",
         "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
         "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
@@ -7527,6 +7539,20 @@
         "unknownPublisher": "Unknown publisher",
         "unknownReviewerDetail": "The package claims a review, but this Cindy version does not recognize the reviewer key, so it is not shown as reviewed."
       },
+      "controlPoints": {
+        "title": "Pre-run checks",
+        "description": "This plugin can check automations or routines before they run. It can skip or stop a run, never approve one for you.",
+        "titleWithStartTask": "When this plugin steps in",
+        "descriptionWithStartTask": "It only steps in for tasks where you chose it: before a run it can only skip or stop that run, and for a new task it picks a model once, for the first message. It can never approve anything for you.",
+        "usage": "To use it, choose it under Pre-run check when editing an automation or routine.",
+        "usageStartTask": "To use it, choose a model it provides in a new task’s model picker.",
+        "points": {
+          "will-schedule-run": "Before an automation runs",
+          "will-routine-run": "Before a teammate routine runs",
+          "will-start-task": "When a new task starts"
+        },
+        "inactive": "Not available yet. Allow it when you update or reinstall this plugin."
+      },
       "perm": {
         "mail": "Use mail drafts and send cards",
         "mailDetail": "Edit and sync drafts in a card, with confirmation and an undo countdown before sending.",
@@ -7561,6 +7587,9 @@
         "agentDelegationDetail": "Companions may perform the delegated task under Auto review. Does not impersonate the owner or change companion permissions.",
         "agentTargets": "Can send messages to projects, existing tasks and companions",
         "agentTargetsDetail": "Can view local project directories and task and companion names and IDs, create tasks in projects, and send text and images to existing tasks and companions. May trigger AI execution and model charges. This delivery API itself cannot read other tasks’ history, change their settings, or stop them.",
+        "agentObserve": "Can view task lists and status in local projects",
+        "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
+        "agentObserveRequest": "Review task viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -7593,6 +7622,12 @@
         "subscribeHooksDetail": "Reviews each message before sending: it may block it or rewrite the text before it goes out; blocked messages can be edited and resent.",
         "subscribeAssistantReply": "Can read and rewrite the AI's replies",
         "subscribeAssistantReplyDetail": "Processes each AI reply after it completes: it may polish or rewrite the text (replacing it directly, without keeping the original), or replace the reply bubble with its own rendered card (in that case the original text is kept and can be viewed with one tap).",
+        "subscribeScheduleRun": "Can check chosen automations before they run",
+        "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
+        "subscribeRoutineRun": "Can check chosen teammate routines before they run",
+        "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
+        "subscribeStartTask": "Can choose the model for new tasks",
+        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. It decides once; the model doesn’t change during the task.",
         "card": "Renders message cards",
         "cardExternalLink": "Cards may declare external links that open your browser after confirmation",
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
@@ -7783,6 +7818,22 @@
         "reveal": "Show in Task List",
         "revealed": "Task shown in the task list",
         "revealFailed": "Could not show the task in the task list"
+      },
+      "handoff": {
+        "title": "Files handed to this plugin in chats",
+        "description": "Copies of files you handed to this plugin in chats. Each copy is deleted automatically after 7 days without use.",
+        "empty": "No files have been handed to this plugin in chats yet.",
+        "loadFailed": "Couldn't load the file list. Try again later.",
+        "refresh": "Refresh",
+        "openInFinder": "Open in Finder",
+        "openInExplorer": "Open in File Explorer",
+        "meta": "{{size}} · Handed over {{handedAt}} · Deleted automatically {{expiresAt}}",
+        "delete": "Delete",
+        "deleteNamed": "Delete {{name}}",
+        "deleteTitle": "Delete this file?",
+        "deleteDescription": "After deletion, the plugin and any open pages can no longer use “{{name}}”. This can't be undone.",
+        "deleteFailed": "Couldn't delete the file. Try again later.",
+        "cancel": "Cancel"
       },
       "library": {
         "title": "Durable library",
@@ -10748,6 +10799,9 @@
         "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
         "planOpen": "A work split is underway. Finish or stop it before starting another.",
         "planClosed": "This plan has already ended or been updated.",
+        "revisionConflict": "The work changed before this action could be completed.",
+        "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",
+        "nothingToStop": "There is no active work to stop.",
         "invalidAttachment": "This attachment cannot be read. Select it again and send.",
         "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
         "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
@@ -11498,6 +11552,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Open conversation",
+      "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
       "hideDetails": "Hide call transcript",
       "transcriptTitle": "Current transcription",
@@ -11566,6 +11622,7 @@
       "unsent": "Not sent · select the text to copy it",
       "hint": "Pause to send. Replies are read aloud with an AI voice. Speak at any time to interrupt.",
       "status": {
+        "questionElsewhere": "A question is waiting in the task · call continues",
         "idle": "Ready when you are",
         "connecting": "Connecting to speech recognition…",
         "listening": "Listening",
@@ -11581,6 +11638,7 @@
         "muted": "Microphone off · You can still listen"
       },
       "errors": {
+        "busy": "Voice is in use by another call, read-aloud, preview or dictation. End it and try again.",
         "connection": "Voice connection interrupted. Your unsent text is kept below.",
         "microphone": "Microphone stopped. Check its permission and connection, then resume.",
         "send": "This message was not accepted. Your text is kept below.",
@@ -12467,6 +12525,7 @@
         "titleLocal": "Run the Agent on this computer again?",
         "titleOther": "Run the Agent on “{{device}}”?",
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
         "cancel": "Keep as is"
       }
@@ -12710,6 +12769,7 @@
     "cindyServiceUnavailable": "The Cindy voice service is unavailable. Check your network or switch service source.",
     "asrServiceUnavailable": "Voice recognition service failed to connect. Check your network and try again.",
     "emptyTranscript": "Speech was detected, but no text was recognized. Please try again.",
+    "speakerFiltered": "Ignored someone else's voice",
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
@@ -12735,6 +12795,14 @@
     "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "chose for this task",
+      "kept": {
+        "no-opinion": "{{plugin}} kept your choice for this task:",
+        "failed": "{{plugin}} didn’t answer in time, so this task uses",
+        "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses"
+      }
+    },
     "teammateProcess": {"record":"Activity","operations":"Activity log","elapsed":"Working for {{duration}}","took":"Took {{duration}}","processing":"Working","worked":"Activity","thinking":"Thinking","thought":"Thought","failed_one":"{{count}} call failed","failed_other":"{{count}} calls failed","separator":", ","actions":{"running":{"read":"Reading files","edit":"Editing files","search":"Searching","web":"Browsing the web","command":"Running commands","tools":"Using tools","delegate":"Delegating work","plan":"Updating the plan"},"done":{"read":"Read files","edit":"Edited files","search":"Searched","web":"Browsed the web","command":"Ran commands","tools":"Used tools","delegate":"Delegated work","plan":"Updated the plan"}}},
     "imageDelivery": {
       "stored": "Image delivered",
@@ -15266,6 +15334,25 @@
         },
         "browse": "Choose a script file (or drag one onto the input)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Check with",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Before each run, Cindy asks the plugin you choose. It can let the run go ahead, skip this run, or stop it. It can never approve anything that needs your confirmation.",
+        "choose": "Choose a plugin",
+        "unavailable": "Unavailable plugin",
+        "unavailableHint": "This plugin is no longer available. Until you choose another one, runs follow “If the plugin fails”.",
+        "hint": "The plugin can let the run go ahead, skip this run, or stop it. It can never approve anything for you.",
+        "empty": "No plugin can check runs yet. Install a plugin that supports pre-run checks and allow it when you install or update it.",
+        "onFailureLabel": "If the plugin fails",
+        "onFailure": {
+          "allow": "Run as usual",
+          "skip": "Skip this run",
+          "block": "Stop and mark as failed"
+        }
+      },
       "validation": {
         "nameRequired": "Name is required",
         "promptRequired": "Prompt is required",
@@ -15278,6 +15365,7 @@
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
+        "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
       }
@@ -15764,6 +15852,7 @@
       "titleRevealPath": "Allow the Agent to receive this media file's local path?",
       "count": "{{count}} files",
       "descriptionAttachments": "The files below are outside this session's working directory. If you allow, they will be handed to this plugin (it only receives content fingerprints, never paths).",
+      "descriptionHandoff": "The files below are outside this session's working directory. If you allow, the plugin receives copies of them (never their paths); the copies are deleted automatically after 7 days without use.",
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
@@ -17586,6 +17675,7 @@
     "sessionModeFresh": "New session each trigger (isolate context)",
     "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
     "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+    "checkSource": "Check with",
     "checkCommand": "Pre-run check command",
     "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
     "timeoutMs": "Check timeout (ms, blank for no limit)",
@@ -17651,6 +17741,14 @@
         "skillDisabled": "Disabled skill “{{title}}”",
         "skillMerged": "Merged skill “{{title}}” into “{{into}}” and disabled it"
       }
+    },
+    "remote": {
+      "pause": "Pause Routine",
+      "resume": "Resume Routine",
+      "addSchedule": "Add Schedule",
+      "addInterval": "Add Interval",
+      "addEvent": "Add Event Trigger",
+      "filterField": "Filter Field"
     }
   },
   "cindyMakeDoctor": {

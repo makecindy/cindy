@@ -15,7 +15,15 @@ export type CapabilitySourceKind =
   | 'user-skill'
   | 'project-skill'
   | 'harness-builtin'
-  | 'harness-plugin';
+  | 'harness-plugin'
+  /**
+   * An MCP server the user registered in the harness's own config (for
+   * example `~/.claude.json`). It is user-owned, but only that harness can
+   * see it, so a route needs the harness id to be applied. Used only to
+   * replace a server with the Cindy capability that wraps the same engine
+   * (`cua-driver` → `cindy_computer`), never to hide an unrelated user server.
+   */
+  | 'user-mcp';
 
 export type CapabilitySurface = 'skill' | 'plugin' | 'mcp' | 'app' | 'tool';
 
@@ -51,7 +59,7 @@ interface HarnessOwnedCapabilitySourceSelector
   extends CapabilitySourceSelectorBase {
   kind: Extract<
     CapabilitySourceKind,
-    'harness-builtin' | 'harness-plugin'
+    'harness-builtin' | 'harness-plugin' | 'user-mcp'
   >;
   /**
    * Adapter id such as `codex` or `claude-code`.
@@ -115,8 +123,24 @@ export function isHarnessOwnedCapabilitySource(
 ): source is HarnessOwnedCapabilitySourceSelector {
   return (
     source.kind === 'harness-builtin' ||
-    source.kind === 'harness-plugin'
+    source.kind === 'harness-plugin' ||
+    source.kind === 'user-mcp'
   );
+}
+
+/**
+ * A `user-mcp` route replaces a server registered on THIS computer with a Cindy host
+ * capability that exists only in a local in-process runtime. A remote (SSH) runtime
+ * reads the remote user's own MCP config and has no such replacement, so the denial
+ * must not reach it: dropping the server there would remove a working capability
+ * and offer nothing in its place.
+ */
+export function withoutUserMcpRoutes(
+  policy: CapabilityRoutingPolicy | undefined,
+): CapabilityRoutingPolicy | undefined {
+  if (!policy) return policy;
+  const overrides = policy.overrides.filter((route) => route.source.kind !== 'user-mcp');
+  return overrides.length === policy.overrides.length ? policy : { overrides };
 }
 
 export function findCapabilityRouteOverride(
@@ -222,10 +246,13 @@ export function findClaudeMcpCapabilityRoute(
       isHarnessOwnedCapabilitySource(directive.source) &&
       directive.source.harness === 'claude-code' &&
       directive.source.surface === 'mcp' &&
-      !hasClaudeMcpPrefixCollision(
-        directive.source.id,
-        nonHarnessServerIds,
-      ) &&
+      // A user-mcp route names the user's own server on purpose; the collision
+      // guard below exists only to keep harness routes off user servers.
+      (directive.source.kind === 'user-mcp' ||
+        !hasClaudeMcpPrefixCollision(
+          directive.source.id,
+          nonHarnessServerIds,
+        )) &&
       toolName.startsWith(claudeMcpToolPrefix(directive.source.id)),
   );
 }

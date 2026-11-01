@@ -25,6 +25,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
@@ -257,6 +258,8 @@ async function visualMockInvoke<T = unknown>(
     } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const mailResult = realData ? undefined : mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args);
+  if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
   if (pluginResult !== undefined) return pluginResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
@@ -567,6 +570,7 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 
 function visualMockSession(id: string): RemoteSession {
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
+  if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
     || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
@@ -592,6 +596,12 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === VISUAL_MAIL_DRAFT_SESSION_ID) return [
+    message(sessionId, 'mail-draft-user', 'user', '帮我回复 Avery，说两个问题都记下了，约下周二或周三下午通话。', -60000),
+    message(sessionId, 'mail-draft-call', 'tool_use', { toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'google-gmail', tool: 'gmail_run' }, toolUseId: 'mail-draft-call' }, -50000),
+    message(sessionId, 'mail-draft-result', 'tool_result', JSON.stringify({ ok: true, result: { draft: 'saved', xdt_card_id: VISUAL_MAIL_DRAFT_CALL_ID } }), -49000, { toolUseId: 'mail-draft-call' }),
+    message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+  ];
   if (sessionId === 'visual-teammate-process') return [
     message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
     message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
@@ -639,7 +649,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : null,
+        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });
@@ -939,6 +949,7 @@ function visualMockFileBrowserEntries() {
     { type: 'file', name: 'README.md', relPath: 'README.md', size: 4820, mtimeMs: NOW - 900_000 },
     { type: 'file', name: 'visual-report.md', relPath: 'visual-report.md', size: 78, mtimeMs: NOW - 300_000 },
     { type: 'file', name: 'chart.png', relPath: 'chart.png', size: 48_112, mtimeMs: NOW - 240_000 },
+    { type: 'file', name: 'quarterly-report.pdf', relPath: 'quarterly-report.pdf', size: 248_000, mtimeMs: NOW - 180_000 },
     { type: 'file', name: 'demo.mp4', relPath: 'demo.mp4', size: 4_820_000, mtimeMs: NOW - 120_000 },
   ];
 }

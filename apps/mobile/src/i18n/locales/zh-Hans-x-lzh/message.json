@@ -162,6 +162,7 @@
     "mediaErrorLine": "谬误：{{message}}",
     "mediaDeviceLinkHint": "启之前，手机将先请远程设备上呈此媒体。",
     "controlDelete": "删讯",
+    "controlEdit": "修",
     "controlRewind": "归于此",
     "controlFork": "自此新开差事",
     "markdownDocAriaLabel": "讯之正文",
@@ -318,7 +319,15 @@
     "learnFailed": "技艺修习未能启",
     "learnBusyBody": "已有一修习差事方行，候其毕再试。",
     "learnFailedBody": "启之未成：{{detail}}",
-    "unknownError": "不明之谬"
+    "unknownError": "不明之谬",
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 为此差事择用 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用 {{model}}",
+        "failed": "{{plugin}} 未及回应，此差事用 {{model}}",
+        "unavailable-route": "{{plugin}} 所择之模型今不可用，此差事用 {{model}}"
+      }
+    }
   },
   "queuePresentation": {
     "panel": {

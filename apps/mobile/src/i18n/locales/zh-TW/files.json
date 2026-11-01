@@ -102,6 +102,7 @@
     "fetchAvFailed": "取回失敗：{{detail}}",
     "fetchPdfFailed": "取回 PDF 失敗：{{detail}}",
     "fetchingPdf": "正在從電腦取回 PDF…",
+    "androidPdfHint": "Android 暫不支援在 Cindy 內預覽 PDF。點下方「匯出 / 分享」，選擇 PDF 閱讀器開啟。",
     "unsupportedType": "此型別暫不支援在手機上預覽",
     "oversize": "檔案超過預覽上限（{{size}}），可下載原檔案檢視",
     "oversizeUnknown": "過大",

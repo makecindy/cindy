@@ -1,3 +1,5 @@
+import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+
 /** Optional author content, never a capability grant or a model system instruction. */
 export interface GhostRecommendation {
   id: string;
@@ -5,7 +7,7 @@ export interface GhostRecommendation {
   prompt: string;
   locales?: Partial<
     Record<
-      "en" | "zh-CN" | "zh-TW" | "ja" | "ko",
+      GhostLocale,
       { label: string; prompt: string }
     >
   >;
@@ -51,7 +53,7 @@ export function validateGhostRecommendations(
       if (!object(raw.locales)) return fail;
       for (const [locale, entry] of Object.entries(raw.locales)) {
         if (
-          !["en", "zh-CN", "zh-TW", "ja", "ko"].includes(locale) ||
+          !(GHOST_LOCALES as readonly string[]).includes(locale) ||
           !object(entry) ||
           Object.keys(entry).some((k) => k !== "label" && k !== "prompt") ||
           !text(entry.label, 120) ||

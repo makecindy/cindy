@@ -21,6 +21,9 @@ import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
 import { createIpcError } from '../../../../shared/ipc-errors';
+import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
+import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
+import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -104,6 +107,7 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 
 async function submit(options: {
   entry?: 'send' | 'goal';
+  pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -163,6 +167,7 @@ async function submit(options: {
   const listAgentSkills = vi.fn(async (_agent, params) => ({ success: true,
     skills: params?.workingDir === worktreePath ? worktreeSkills : options.skills ?? [],
   }));
+  const createNote = vi.fn(async () => ({}));
   const invokeRemote = vi.fn(async (_deviceId, channel, args) => {
     if (channel === 'maker:list-agent-skills') return listAgentSkills(args[0], args[1]);
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
@@ -178,7 +183,8 @@ async function submit(options: {
   vi.stubGlobal('window', { electronAPI: {
     deviceLink: { invoke: invokeRemote },
     worktreeCreate: vi.fn(async () => ({ ok: true, meta: { path: worktreePath, branch: 'cindy/creator' } })),
-    localDb: { sessions: { create: ipcCreate } }, maker: {
+    ghosts: { routeNewTask: options.pluginRoute },
+    localDb: { sessions: { create: ipcCreate }, messages: { list: async () => [{ role: 'user', createdAt: '2026-10-31T00:00:00.000Z' }], create: createNote } }, maker: {
     enableOrca,
     setGoal, listAgentSkills,
     listDesktopCommands: async () => ({ success: true, commands: [] }),
@@ -189,7 +195,8 @@ async function submit(options: {
     catch (error) { errors.push(error); return null; }
   });
   const sendMessage = vi.fn(async (_id, _text, model, effort) => {
-    admit({ model, effort, agentKind, providerId: selectedProviderId });
+    // The session sends on the provider it was created with, as setSessionRuntime records it.
+    admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
     return true;
   });
   let done!: () => void;
@@ -200,7 +207,8 @@ async function submit(options: {
   const setPending = vi.fn();
   const toastError = vi.fn();
   const environment = {
-    deviceDisplayName,
+    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote,
+    activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, window,
     localProviders: providers, localProvidersLoading: false, providers,
     capabilityAgentKind: agentKind, persistedAgentKind: agentKind,
@@ -288,7 +296,7 @@ async function submit(options: {
     }
     await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca, createNote };
   } finally { vi.unstubAllGlobals(); }
 }
 
@@ -450,6 +458,58 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ providers: [provider(providerId, ['high'])], submittedEffort: 'medium' });
     expect(String(result.errors[0])).toContain('not supported');
     expect(result.sendMessage).not.toHaveBeenCalled();
+  });
+  // 「让插件选」: the choice replaces the route for this one create, and a failed plugin
+  // must not stop the send. Same callback harness; only the plugin answer differs.
+  it('creates and sends with the route the plugin chose, without changing the draft default', async () => {
+    const result = await submit({
+      providers: [provider(), provider('other', ['high'])], effort: 'medium',
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId,
+        reason: 'fixture', route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession.mock.calls[0][0]).toMatchObject({ providerId: 'other', effort: 'high' });
+    expect(result.sendMessage.mock.calls[0][3]).toBe('high');
+    expect(result.environment.chatPrefs.effort).toBe('medium');
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // Review of #8245: a first message starting with a slash command is handed to the session view,
+  // and that early return used to skip the note.
+  it('writes the plugin note when the first message is handed off as a slash command', async () => {
+    const result = await submit({
+      message: '/status', providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+        route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.setPending).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // /goal also starts a new task, so the picker's "Let a plugin choose" must apply to it too.
+  it('creates a goal task with the route the plugin chose', async () => {
+    const result = await submit({
+      entry: 'goal', providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+        route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ providerId: 'other', effort: 'high' });
+    expect(result.setGoal).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  it('keeps the selected route and still sends when the plugin call fails', async () => {
+    const result = await submit({
+      providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => { throw new Error('plugin down'); },
+    });
+    expect(result.createSession.mock.calls[0][0]).toMatchObject({ providerId });
+    expect(result.sendMessage).toHaveBeenCalledOnce();
+    expect(result.createNote).not.toHaveBeenCalled();
   });
   it('does not use a different provider when the submitted identity is absent', async () => {
     const result = await submit({ providerId: 'absent' });

@@ -77,6 +77,7 @@ import {
   session,
   shell,
   Tray,
+  webContents,
 } from 'electron';
 import {
   resolveVibrancyConfig,
@@ -1162,6 +1163,8 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
   getGhostBrowserExtensionSlot,
+  screenGhostControlPoint,
+  resolveGhostControlPointPlugin,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1200,6 +1203,8 @@ import {
 } from './scheduler-host/index.js';
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
+import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
+import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
@@ -1269,9 +1274,23 @@ configureRoutineHost({
   },
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
+  screenControlPoint: screenGhostControlPoint,
+  resolvePreRunPlugin: resolveGhostControlPointPlugin,
 });
 // 伙伴自主跟进：跟随例行任务引擎生命周期（引擎每次创建后重新登记 host:sessions 事件源）。
 configureBotAutonomyHost({ getMainWindow: () => mainWindowRef });
+voiceCallCoordinator.configure({
+  hostSender: () => {
+    const win = mainWindowRef;
+    return win && !win.isDestroyed() && !win.webContents.isDestroyed() ? win.webContents.id : null;
+  },
+  send: (sender, channel, payload) => {
+    const target = webContents.fromId(sender);
+    if (target && !target.isDestroyed()) target.send(channel, payload);
+  },
+  onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
+  leaseHeld: hasVoiceConversationLease,
+});
 initBotAutonomy();
 
 /**
@@ -1348,6 +1367,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       feishuIm,
       logger: createSchedulerLogger('scheduler-host'),
       ...automationGitBaselineHooks,
+      screenControlPoint: screenGhostControlPoint,
+      resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
@@ -3238,6 +3259,8 @@ const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
   },
 });
 let mainWindowBackgroundThrottlingAllowed = true;
+let mainWindowHasRunningTurn = false;
+let mainWindowHasVoiceCall = false;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
 let updatePresentationRecoveryInitialized = false;
@@ -3756,7 +3779,18 @@ function applyMainWindowBackgroundThrottling(): void {
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
-  const nextAllowed = !hasRunningTurn;
+  mainWindowHasRunningTurn = hasRunningTurn;
+  syncMainWindowBackgroundThrottling();
+}
+
+/** The live call runs in the main window, including while that window is hidden. */
+function setMainWindowBackgroundThrottlingForVoiceCall(active: boolean): void {
+  mainWindowHasVoiceCall = active;
+  syncMainWindowBackgroundThrottling();
+}
+
+function syncMainWindowBackgroundThrottling(): void {
+  const nextAllowed = !mainWindowHasRunningTurn && !mainWindowHasVoiceCall;
   if (mainWindowBackgroundThrottlingAllowed === nextAllowed) return;
   mainWindowBackgroundThrottlingAllowed = nextAllowed;
   applyMainWindowBackgroundThrottling();
@@ -7671,14 +7705,17 @@ const registerIpcHandlers = () => {
     'fs:resolve-path-batch',
     async (
       _event: Electron.IpcMainInvokeEvent,
-      params: { hrefs: string[]; workingDir: string },
+      params: { hrefs: string[]; workingDir: string; revalidateNegative?: boolean },
     ): Promise<
       Record<string, { status: 'unique' | 'multiple' | 'none'; candidates: string[] }>
     > => {
       try {
-        return await resolveWorkspacePathBatchCached(params.hrefs, params.workingDir, {
-          isPathAllowed,
-        });
+        return await resolveWorkspacePathBatchCached(
+          params.hrefs,
+          params.workingDir,
+          { isPathAllowed },
+          params.revalidateNegative === true,
+        );
       } catch (err) {
         createLogger('fs:resolve-path-batch').error('failed', { error: String(err) });
         const fallback: Record<
@@ -9554,7 +9591,16 @@ app.on('ready', async () => {
           });
         });
       }
-      await refreshPluginUsageBindings();
+      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
+      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
+      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
+      try {
+        await refreshPluginUsageBindings();
+      } catch (error) {
+        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       checkDatabaseSizeWarningAtStartup();
       // Bot recovery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,

@@ -99,6 +99,7 @@
     "incomplete": "La saisie vocale n'a pas abouti. Réessayez.",
     "missingRefinerTargetProvider": "L'affinage vocal est indisponible. Reconnectez-vous à {{appName}} et réessayez.",
     "emptyTranscript": "La reconnaissance vocale n'a renvoyé aucun texte. Enregistrez à nouveau.",
+    "speakerFiltered": "Voix d'une autre personne ignorée",
     "connectionInterrupted": "La connexion vocale a été interrompue. Vérifiez votre réseau et réessayez.",
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",

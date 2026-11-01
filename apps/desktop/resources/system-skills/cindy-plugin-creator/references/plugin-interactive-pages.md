@@ -26,16 +26,15 @@
 | 包内静态 HTML | 小表单、固定图表，界面和插件一起发布 | static |
 | Cindy 对话中的 AI 生成完整 HTML | 用户临时需要组合界面，数据由既有工具提供 | loader 的 show_page |
 
-首屏可以来自后端、包内静态 HTML 或对话 AI；后端是可选的，插件也可以只用自己的存储
-（[library §4.10.1](plugin-files-and-library.md)）和 Cindy 能力自闭环。之后页面脚本
-查询 JSON、更新局部；无论首屏由谁生成，都遵守同样的工具、凭证和数据规则，不必每点
-一次按钮就重新生成界面。
+后端可选：插件也可以只用自己的存储（[library §4.10.1](plugin-files-and-library.md)）
+自闭环，页面写法不变。无论首屏由谁生成，之后页面脚本都查询 JSON、更新局部，遵守同样的
+工具、凭证和数据规则。
 
 ### 2. 运行完整示例
 
 复制 [loader](examples/interactive-pages/loader/) 到自己的插件源码目录。默认
 `USE_MOCK = true`，在 main.js 内模拟后端，不联网、不需要账号或凭证。可以直接
-打包；要安装时，先取得用户明确的安装指示。
+打包；安装前先取得用户明确的指示。
 
 ```js
 // 打包只生成 .cindy，不会安装或发布。
@@ -75,7 +74,7 @@ ghost_forge_install({ dir: '<插件源码目录的绝对路径>' });
 `model` 表示 AI 可发现和调用；`app` 表示页面可调用。只写 `["app"]` 的工具
 不会出现在 AI 工具清单中，也不能直接 `ghost_call`。省略 visibility 时，有 UI
 声明的工具同时对两者可见；未写 UI 声明的工具仍只对 AI 可见。需要文件时再加入
-示例里的文件工具，删掉不用的能力声明。不要用一个工具靠参数切换读和写。
+示例里的文件工具，删掉不用的能力声明。
 
 ### 4. main.js 为第一次调用准备整页
 
@@ -104,7 +103,7 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
 
 `content` 是给 AI 和用户的一句话摘要。根 `_meta.view.html` 给页面，不放进模型
 上下文；`structuredContent` 适合 JSON 数据，但它也对 AI 可见。HTML 内不要放
-凭证，也不要把不必要的大数据塞进结果。
+凭证或不必要的大数据。
 
 由 AI 写首屏时使用 show_page({title,html})，返回结构相同。生成页面的 LLM（后端模型或
 对话 AI）读[MCP Apps 页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)；
@@ -131,8 +130,8 @@ app.ontoolresult = async result => {
 await app.connect();
 ```
 
-生成的页面用同一个标准 import，创建自己的 App 并 connect。Cindy 为所有页面始终
-提供 SDK 并随宿主升级，无需 CDN，也不写死 SDK 文件地址；自带 SDK 的页面仍可用自己的副本。
+生成的页面用同一个标准 import，创建自己的 App 并 connect。SDK 由 Cindy 为所有页面
+提供并随宿主升级，不用 CDN，不写死 SDK 地址；自带 SDK 的页面仍可用自己的副本。
 
 生成的页面不要等初始 `ontoolresult` 再渲染：加载器已接收它，重新连接不会
 重发最初的输入和结果。把首屏数据写进 HTML，或在确实需要新数据时主动调用
@@ -165,9 +164,8 @@ for (const item of result.structuredContent.items) {
 ### 7. 表单和写操作
 
 使用 `<form>`，在 `submit` 事件里先调用 `preventDefault()`，再调用工具。
-点击提交按钮和在输入框按 Enter 都会自然触发 submit，无需额外处理点击或键盘。
+点提交按钮和按 Enter 都会触发 submit，不用另外处理。
 CSP 的 `form-action 'none'` 禁止原生 action 提交；提交数据必须走工具。
-页面自己的 fetch 不会带 Cindy 保管的凭证。
 
 下面省略了按钮状态和请求编号管理；完整写法见
 [静态表单](examples/interactive-pages/static/ui/page.html)。
@@ -185,7 +183,7 @@ form.onsubmit = async event => {
 };
 ```
 
-request 包含 `path`、`body` 和 `idempotencyKey`。等待期间禁用重复提交，失败时保留输入。
+request 包含 `path`、`body` 和 `idempotencyKey`；失败时保留输入。
 
 同一内容重试沿用 request 中的编号；用户改了内容才创建新请求。写入方（插件存储
 或后端）按“当前用户 + 编号”去重，正式后端用数据库唯一约束，并拒绝同编号不同内容。
@@ -194,8 +192,8 @@ request 包含 `path`、`body` 和 `idempotencyKey`。等待期间禁用重复�
 ### 8. 偶尔切换整块内容，保留脚本
 
 多数交互使用 JSON；需要改变布局时，调用 `load_view({intent,fields})`，后端返回
-可信的内容片段，替换指定容器。这里约定返回的是容器内容，不含另一份 html/head/body
-和脚本。`open_view` 返回完整文档，两者不要混用。
+可信的内容片段，替换指定容器：只含容器内容，不含 html/head/body 和脚本；
+`open_view` 才返回完整文档，两者不要混用。
 
 ```js
 const result = await app.callServerTool({
@@ -209,13 +207,10 @@ bindContentEvents();
 innerHTML 只接转义过动态值的可信模板，不接普通数据。片段中的 script 不执行；
 常驻脚本负责绑定事件。要保留的输入先存到页面状态，替换后恢复。
 
-整份文档只在加载器首屏替换；标准工具集里没有向页面返回完整文档的工具，页面
-不要把 load_view 片段 write 进整个文档。换内容一律替换容器，保留脚本和连接。
+整份文档只在加载器首屏替换；不要把 load_view 片段 write 进整个文档，换内容一律替换
+容器，保留脚本和连接。
 
 ### 9. 接上真实后端与文件
-
-不需要业务后端时，main.js 直接把数据存在插件自己的存储里（library，§4.10.1），
-页面写法不变；需要后端数据时再按下面接入。
 
 把示例 `USE_MOCK` 改为 false，同时替换 BASE 和清单里的占位域名。路径由 main.js
 校验：只允许相对路径、固定前缀，不接受完整网址、父目录或编码绕过。后端继续
@@ -224,10 +219,19 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 凭证只由 main.js 发起的 cindy.fetch 使用，值由 Cindy 注入；页面和 main.js 都不要
 尝试读回。声明方式见[网络 §4.7](plugin-network.md)。
 
-文件有两种常用入口：页面调用 pick_files 选择文件，再 upload_files 上传；或者 AI
-用 `ghost_call.dir` 交接单文件，import_file 在这次调用里立即上传暂存，只把批次号
-和预览交给页面，用户再点确认。不要把交接 token、本机路径或原始文件字节放进 HTML。
-完整步骤见[文件导入示例](examples/interactive-pages/README.md#文件导入)。
+页面选文件：pick_files 写入 Library，再 upload_files 上传。接收用户在对话里发的表格，
+必须用声明了 `cindy_handoff_files` 的工具（0.1.123-beta 起，规则见
+[§4.10.3](plugin-files-and-library.md)）：AI 用 ghost_call 的 attachments 交给它 → Cindy
+存副本，插件只收到 `handoff:` 引用 → 首屏只显示名称和大小，按钮带上引用 → 用户点击时
+插件用 `upload.handoff` 上传，或页面在本机读取。工具说明写明「用户在对话里发的文件，
+用 ghost_call 的 attachments 交给本工具」。没声明就只能走 `ghost_call.dir`：一次性票据
+须在那次调用里立即暂存，做不到点按钮才处理。不要把交接 token、本机路径或原始文件字节
+放进 HTML。完整步骤见[文件导入示例](examples/interactive-pages/README.md#文件导入)。
+
+```json
+{ "name": "import_file",
+  "parameters": { "type": "object", "properties": { "cindy_handoff_files": { "type": "array" } } } }
+```
 
 预览图片或下载文件时，工具返回 resource_link，页面读取内容块的
 `_meta['cindy/file'].url`。不要自己拼只读地址，也不要把临时地址当持久引用。

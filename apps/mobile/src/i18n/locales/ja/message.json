@@ -162,6 +162,7 @@
     "mediaErrorLine": "エラー: {{message}}",
     "mediaDeviceLinkHint": "開く前に、スマートフォンからリモートデバイスにこのメディアのアップロードを依頼します。",
     "controlDelete": "メッセージを削除",
+    "controlEdit": "編集",
     "controlRewind": "ここまで戻る",
     "controlFork": "ここから新しいセッションを始める",
     "markdownDocAriaLabel": "メッセージ本文",
@@ -261,6 +262,14 @@
     "waitingMessage": "送信待ちのメッセージ:{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} がこのタスクに {{model}} を選びました",
+      "kept": {
+        "no-opinion": "{{plugin}} は今回モデルを変えませんでした。このタスクは {{model}} を使います",
+        "failed": "{{plugin}} から時間内に応答がなかったため、このタスクは {{model}} を使います",
+        "unavailable-route": "{{plugin}} が選んだモデルは使えないため、このタスクは {{model}} を使います"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "コンテキストを整理して続行しました",
       "labelTimeout": "直前の応答がなかったため、整理して続行しました",

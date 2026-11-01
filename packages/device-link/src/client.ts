@@ -329,8 +329,10 @@ export interface DeviceLinkClientOptions {
   /** Optional local counters; no content/identities, never part of delivery decisions. */
   invokeMetrics?: {
     enabled(): boolean;
-    record(event: { channel: string; phase: 'sent' | 'result'; payloadBytes?: number;
-      notModified?: boolean; gzip?: boolean }): void;
+    record(event: { channel: string; phase: 'sent' | 'result' | 'decoded'; payloadBytes?: number;
+      notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void;
+    /** Coarser or finer metric row than the channel. Must return fixed names only, never ids or content. */
+    label?(channel: string, args: unknown[] | undefined): string;
   };
   /**
    * 只服务跨账号 peer(共享任务 / 供应商分享)的专用连接:同账号 peer 的路由帧在入站边界丢弃。
@@ -1740,9 +1742,9 @@ export class DeviceLinkClient {
         'invoke-result',
         timeoutMs,
       );
-      this.reportInvokeMetric(payload.channel, env.payload as InvokeResultPayload);
+      this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
       const result = transfer
-        ? transfer.decode(env.payload as InvokeResultPayload)
+        ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
         : env.payload as InvokeResultPayload;
       return result.ok
         ? {
@@ -1929,14 +1931,26 @@ export class DeviceLinkClient {
 
   // ─── 内部:请求配对 ─────────────────────────────────────────────────────────
 
-  private reportInvokeMetric(channel: string, result?: InvokeResultPayload): void {
+  private invokeMetricChannel(payload: InvokePayload): string {
+    return this.opts.invokeMetrics?.label?.(payload.channel, payload.args) ?? payload.channel;
+  }
+
+  private reportInvokeMetric(payload: InvokePayload, result?: InvokeResultPayload): void {
     try {
       if (!this.opts.invokeMetrics?.enabled()) return;
+      const channel = this.invokeMetricChannel(payload);
       this.opts.invokeMetrics.record(result === undefined ? { channel, phase: 'sent' } : {
         channel, phase: 'result', payloadBytes: byteLength(JSON.stringify(result)),
         notModified: result.ok && result.transfer?.notModified === true,
         gzip: result.ok && typeof result.transfer?.gzipBase64 === 'string',
       });
+    } catch { /* Diagnostics must never affect delivery or response decoding. */ }
+  }
+
+  private reportInvokeDecode(payload: InvokePayload, timing: { inflateMs: number; parseMs: number }): void {
+    try {
+      if (!this.opts.invokeMetrics?.enabled()) return;
+      this.opts.invokeMetrics.record({ channel: this.invokeMetricChannel(payload), phase: 'decoded', ...timing });
     } catch { /* Diagnostics must never affect delivery or response decoding. */ }
   }
 
@@ -2013,7 +2027,7 @@ export class DeviceLinkClient {
         noteFirstWrite: () => {
           if (firstWriteAt !== undefined) return;
           firstWriteAt = this.monotonicNow();
-          if (env.kind === 'invoke') this.reportInvokeMetric((env.payload as InvokePayload).channel);
+          if (env.kind === 'invoke') this.reportInvokeMetric(env.payload as InvokePayload);
           // Only the first write can move the deadline. Replays and partial writes
           // cannot extend it; total transport lifetime is at most sendWaitMs + timeout.
           deadlineMonotonicAt = Math.min(firstWriteAt + timeout, startedMonotonicAt + sendWaitMs + timeout);

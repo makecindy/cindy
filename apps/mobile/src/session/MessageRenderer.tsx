@@ -34,6 +34,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
+import { MessageListRevealContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -68,6 +69,7 @@ import {
   MessageSquare,
   Monitor,
   RefreshCw,
+  Pencil,
   PencilLine,
   Share as ShareIcon,
   Send,
@@ -545,6 +547,11 @@ export interface MobileMessageDraft {
 
 export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
 
+/** 编辑最后一条用户消息:载入 composer 的正文 + 原消息附件(重发时原样带回)。 */
+export interface MobileMessageEditDraft extends MobileMessageDraft {
+  attachments: readonly NormalizedAttachment[];
+}
+
 /** Desktop BotAvatar `sm` beside teammate replies; exported so the host renders a matching portrait. */
 export const COMPANION_AVATAR_SIZE = 28;
 const COMPANION_AVATAR_GAP = 10;
@@ -622,6 +629,10 @@ interface MessageActions {
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
   onOpenSessionLink?: (url: string) => void;
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
+  /** 编辑最后一条用户消息(对齐桌面铅笔入口);未传时不显示。 */
+  onEditMessage?: (clientId: string, draft: MobileMessageEditDraft) => void;
+  /** 正在 composer 里编辑的消息:它的编辑按钮保持禁用。 */
+  editingMessageClientId?: string | null;
   onEnterShareSelection?: (clientId: string) => void;
   onShareableMessageViewChange?: (clientId: string, view: View | null) => void;
   shareSelectionActive?: boolean;
@@ -647,6 +658,8 @@ interface MessageActions {
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** 含自动续跑合成行、排除 steer 的最后一条用户输入。 */
   lastUserInputClientId?: string | null;
+  /** 已加载窗口里最后一条用户消息(含 steer):只有它挂编辑入口。 */
+  lastUserMessageClientId?: string | null;
 }
 
 export function MessageRenderer({
@@ -681,6 +694,8 @@ export function MessageRenderer({
   onOpenSourceDevice,
   onOpenSessionLink,
   onPreviewRewind,
+  onEditMessage,
+  editingMessageClientId,
   onEnterShareSelection,
   shareSelectionActive,
   shareSelectionBusy,
@@ -806,6 +821,10 @@ export function MessageRenderer({
   );
   const lastUserInputClientId = useMemo(
     () => findLastUserInputClientId(itemsForStructureRef.current),
+    [itemStructureIdentity],
+  );
+  const lastUserMessageClientId = useMemo(
+    () => findLastUserMessageClientId(itemsForStructureRef.current),
     [itemStructureIdentity],
   );
   const focusedItemKeyRef = useRef(focusedItemKey);
@@ -1751,6 +1770,8 @@ export function MessageRenderer({
     onOpenSourceDevice,
     onOpenSessionLink,
     onPreviewRewind,
+    onEditMessage,
+    editingMessageClientId,
     onEnterShareSelection,
     onShareableMessageViewChange: handleShareableMessageViewChange,
     onOpenPayload: openPayload,
@@ -1768,6 +1789,7 @@ export function MessageRenderer({
     busyAction,
     firstUserMessageClientId,
     lastUserInputClientId,
+    lastUserMessageClientId,
     makerTurnRunning,
     continuationTurnClientId,
     continuationInFlightProjectionCapability,
@@ -1792,6 +1814,7 @@ export function MessageRenderer({
     firstUserMessageClientId,
     isSessionStreaming,
     lastUserInputClientId,
+    lastUserMessageClientId,
     makerTurnRunning,
     onCopyMessageLink,
     onAddMessageToComposer,
@@ -1807,6 +1830,8 @@ export function MessageRenderer({
     onRetryImageDelivery,
     onOpenSessionLink,
     onPreviewRewind,
+    onEditMessage,
+    editingMessageClientId,
     onEnterShareSelection,
     handleShareableMessageViewChange,
     onResolveRemoteMedia,
@@ -1840,6 +1865,19 @@ export function MessageRenderer({
   shareSelectionActiveRef.current = shareSelectionActive;
   const topOverlayHeightRef = useRef(topOverlayHeight);
   topOverlayHeightRef.current = topOverlayHeight;
+  const bottomOverlayHeightRef = useRef(bottomOverlayHeight);
+  bottomOverlayHeightRef.current = bottomOverlayHeight;
+  const revealWindowRect = useCallback(async (rect: { top: number; bottom: number }) => {
+    const list = listRef.current;
+    const frame = list ? await measureInWindow(list.getNativeScrollRef()) : null;
+    if (!frame || !listRef.current) return;
+    const top = frame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
+    const bottom = frame.y + frame.height - (bottomOverlayHeightRef.current ?? 0) - spacing.sm;
+    const delta = rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : rect.top < top ? rect.top - top : 0;
+    if (Math.abs(delta) < 1) return;
+    scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
+  }, [scrollToOffsetProgrammatically]);
+  const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2757,6 +2795,7 @@ export function MessageRenderer({
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
+    <MessageListRevealContext.Provider value={revealContextValue}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2889,6 +2928,7 @@ export function MessageRenderer({
         />
       )}
     </View>
+    </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>
@@ -3512,6 +3552,16 @@ function MessageBubble({
     && item.message.kind === 'user'
     && !isFirstUserMessage
   );
+  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑;
+  // 运行中也显示(点了先停止当前回复)。
+  const canEdit = !!(
+    showCompletedActionBar
+    && clientId
+    && actions.onEditMessage
+    && item.message.kind === 'user'
+    && clientId === actions.lastUserMessageClientId
+  );
+  const editing = canEdit && clientId === actions.editingMessageClientId;
   // 对齐桌面:任务运行中也保留删除入口,点了由页面提示等回复结束,不让菜单项时有时无。
   const canDelete = !!(
     showCompletedActionBar
@@ -3595,13 +3645,14 @@ function MessageBubble({
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
+    canEdit,
     canFork,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
     // 金额与 token 回退占同一格,任一有值就保留该位置。
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
+  }), [canCopy, canEdit, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const threadEligible = !actions.intermediateProcess && actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
     && !!companionReplyQuoteFor(item.message);
   const hasActions = !actions.intermediateProcess && (actionBar.items.length > 0 || canShare || !!threadEligible);
@@ -3654,6 +3705,16 @@ function MessageBubble({
       });
       return;
     }
+    if (id === 'edit' && clientId) {
+      actions.onEditMessage?.(clientId, {
+        document: composerDraftDocument ?? composerDocumentFromSerializedMessage(draftBody),
+        text: draftText,
+        quotes: messageQuotes,
+        ...(item.message.quotesEncoded === true ? { orderedBody: draftBody } : {}),
+        attachments: item.message.attachments ?? [],
+      });
+      return;
+    }
     if (id === 'fork' && clientId) {
       actions.onForkMessage?.(
         clientId,
@@ -3678,6 +3739,7 @@ function MessageBubble({
     composerDraftDocument,
     copyMessage,
     draftBody,
+    item.message.attachments,
     item.message.kind,
     item.message.quotesEncoded,
     messageQuotes,
@@ -4105,7 +4167,7 @@ function MessageBubble({
                     buttonSize={actionBar.buttonSize}
                     busy={id === 'fork' && forkBusy}
                     copyState={copyState}
-                    disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
+                    disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying') || (id === 'edit' && editing)}
                     id={id}
                     iconSize={actionBar.iconSize}
                     onPress={() => selectControlAction(id)}
@@ -4804,7 +4866,8 @@ function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem;
       ? <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
       : <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
           streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />)}
-    {flattened.loaders.some(loader => loader.loading) && <ActivityIndicator color={colors.textSecondary} />}
+    {/* Live turns already spin in the header; a detail-read row would come and go and shift the list. */}
+    {!item.isStreaming && flattened.loaders.some(loader => loader.loading) && <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />}
     {flattened.loaders.filter(loader => loader.failed).map(loader => <Pressable key={loader.key} accessibilityRole="button"
       onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>)}
     {item.isStreaming && segments.at(-1)?.kind === 'content' && <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} failed={false} />}
@@ -6061,15 +6124,15 @@ function MarkdownBodyBase({
       const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
-          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
                 paddingBottom: layout.codePaddingVertical,
-                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
+                paddingTop: layout.codePaddingVertical,
               },
+              showCodeCopyButton && styles.markdownCodeContentWithCopy,
             ]}
           >
             <HighlightedCodeText
@@ -6081,6 +6144,7 @@ function MarkdownBodyBase({
               text={block.text}
             />
           </View>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
         </View>
       );
     }
@@ -8530,8 +8594,8 @@ function MessageShareButton({
   );
 }
 
-function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'fork' {
-  return id === 'copy' || id === 'fork';
+function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'edit' | 'fork' {
+  return id === 'copy' || id === 'edit' || id === 'fork';
 }
 
 function messageControlActionLabel(
@@ -8540,6 +8604,7 @@ function messageControlActionLabel(
 ): string {
   if (id === 'copy') return copyActionLabel(copyState);
   if (id === 'delete') return i18n.t('message.renderer.controlDelete');
+  if (id === 'edit') return i18n.t('message.renderer.controlEdit');
   if (id === 'rewind') return i18n.t('message.renderer.controlRewind');
   return i18n.t('message.renderer.controlFork');
 }
@@ -8547,6 +8612,7 @@ function messageControlActionLabel(
 function messageControlActionTestID(id: MobileMessageControlActionId): string {
   if (id === 'copy') return 'message.copyButton';
   if (id === 'delete') return 'message.deleteButton';
+  if (id === 'edit') return 'message.editButton';
   if (id === 'rewind') return 'message.rewindButton';
   return 'message.forkButton';
 }
@@ -8569,6 +8635,7 @@ function messageControlActionIcon(
         : <Copy color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   }
   if (id === 'delete') return <Trash2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
+  if (id === 'edit') return <Pencil color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   if (id === 'rewind') return <Undo2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   return <Split color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
 }
@@ -8627,6 +8694,30 @@ function findFirstUserMessageClientIdInItem(
     }
   }
   return undefined;
+}
+
+/** 编辑入口的目标:最后一条真实用户消息。自动续跑等合成触发行不是用户发言,必须跳过(桌面同口径)。 */
+export function findLastUserMessageClientId(items: readonly MobileMessageRenderItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const found = findLastUserMessageClientIdInItem(items[index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLastUserMessageClientIdInItem(
+  item: MobileMessageRenderItem | MobileWorkChildItem,
+): string | null {
+  if (item.type === 'message' && item.message.role === 'user') {
+    return item.message.isSyntheticTrigger || item.message.systemCardType ? null : messageClientId(item);
+  }
+  if (item.type === 'work_group') {
+    for (let index = item.children.length - 1; index >= 0; index--) {
+      const found = findLastUserMessageClientIdInItem(item.children[index]);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 function findLastUserInputClientId(items: readonly MobileMessageRenderItem[]): string | null {
@@ -9274,6 +9365,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   markdownCodeContent: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+  },
+  markdownCodeContentWithCopy: {
+    // Keep code beside the floating action and its hitSlop, including on one-line blocks.
+    paddingRight: spacing.sm + spacing.xxl + spacing.md,
+    minHeight: spacing.sm + spacing.xxl + spacing.sm,
   },
   markdownCodeText: {
     color: colors.textPrimary,

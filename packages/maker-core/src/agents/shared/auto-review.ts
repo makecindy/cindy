@@ -17,7 +17,7 @@
  *   - `prompt` / `prompt-each-time`：历史风险等级，均交 AI 判断 allow / block / ask。
  *
  * 本文件只分类风险，不决定弹窗。下面的“必问/逐次确认”注释描述旧等级名称；
- * Auto 的最终决策统一由 resolveAutoReviewDecision 给出：只有模型 ask 或审阅故障
+ * Auto 的最终决策统一由 resolveAutoReviewDecision 给出：模型 ask、审阅故障或完整证据超出预算
  * 才交给用户，高风险名称、路径未知或 requireConsent 本身不能硬转人工。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
@@ -51,7 +51,10 @@ import { parseShellInputRedirections } from './shell-input-redirections.js';
 export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
 
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
-export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+/** Bound synchronous shell/path parsing separately from the model's full evidence. */
+export const MAX_AUTO_REVIEW_STATIC_TEXT_CHARS = 4_096;
+/** Full command bodies (including document rewrites) must reach review without truncation. */
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 131_072;
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
@@ -4572,7 +4575,7 @@ const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
  * 序列)静态不可证清白 → fail-closed。
  */
 function isInternalFetchTarget(t: string): boolean {
-  if (t.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return true;
+  if (t.length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return true;
   const forms: string[] = [t];
   let cur = t;
   for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
@@ -6574,8 +6577,8 @@ export function classifyShellCommand(
 ): ReviewVerdict {
   if (typeof command !== 'string') return 'prompt';
   // Keep the primitive length barrier next to the parsers, including for direct
-  // classifier callers. Auto's outer evidence guard already blocks this action.
-  if (command.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return 'prompt';
+  // classifier callers. Longer commands go to full model review, not this parser.
+  if (command.length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'prompt';
   if (command.trim().length === 0) return 'prompt';
   // The shared path matcher deliberately accepts only complete path values. Shell
   // commands need argument-aware scanning so a trailing pipe/comment cannot hide a

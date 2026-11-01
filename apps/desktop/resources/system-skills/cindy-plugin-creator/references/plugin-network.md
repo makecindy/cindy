@@ -387,6 +387,15 @@ const uploaded = await cindy.fetch({
 
 下载成功时从 downloaded.library 取 path、bytes、sha256 和 ref，失败不提供半个文件。
 upload.library 与 upload.hashes 二选一，最多 4 个文件，单件 64 MiB、总量 128 MiB。
+对话交接的副本用 `upload.handoff:['handoff:<uuid>']`，与两者三选一，见 4.10.3。
 超限返回 TOO_LARGE；下载到 Library 单件上限 8 GiB，仍受磁盘空间约束。
 401 时的令牌重试按本章各凭证规则（exchange / OAuth 对写请求也会重试一次）；插件代码不要再自行重试
 有副作用的调用，后端仍按请求编号去重。页面调用及文件预览见[§4.23](plugin-interactive-pages.md)。
+
+### MCP Apps 页面生成手册头
+
+主机给 `cindy.fetch` 自动加 `Cindy-MCP-Apps-Manual`（手册 CDN 地址，
+`mcp-apps/manual/<客户端版本号>/<sha256>.md`）与 `Cindy-MCP-Apps-Manual-Sha256`，供后端生成页面的模型使用。
+缺省仅当 `callId` 对应工具在 `mcpApps.ui.tools` 中对模型可见（`visibility` 含 `"model"` 或省略）时带；
+`mcpAppsManual: true` 强制带（如 `load_view` 要片段），`false` 不带。只发往已声明主机，跳到其它主机即删；
+自带的同名头被剥除。开发版（0.0.0）、Node 工作进程与旧版 Cindy 不带：后端缺头时用缓存手册，按 sha256 缓存与校验。

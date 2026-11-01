@@ -21,7 +21,7 @@ describe('chatFileChipMenuModel', () => {
   });
 
   it('文件动作集:预览 / 文件浏览器查看 / 发送 / 复制 / 分享', () => {
-    expect(chatFileChipMenuRows(file).map((r) => r.key)).toEqual([
+    expect(chatFileChipMenuRows(file, 'ios').map((r) => r.key)).toEqual([
       'open',
       'revealInBrowser',
       'sendToSession',
@@ -31,7 +31,7 @@ describe('chatFileChipMenuModel', () => {
   });
 
   it('目录动作集:无预览/分享,打开即文件浏览器', () => {
-    expect(chatFileChipMenuRows(dir).map((r) => r.key)).toEqual([
+    expect(chatFileChipMenuRows(dir, 'ios').map((r) => r.key)).toEqual([
       'open',
       'sendToSession',
       'copyPath',
@@ -39,11 +39,24 @@ describe('chatFileChipMenuModel', () => {
   });
 
   it('workdir 外文件动作集:无「在文件浏览器中查看」(定位不到外部路径)', () => {
-    expect(chatFileChipMenuRows(outsideFile).map((r) => r.key)).toEqual([
+    expect(chatFileChipMenuRows(outsideFile, 'ios').map((r) => r.key)).toEqual([
       'open',
       'sendToSession',
       'copyPath',
       'share',
     ]);
+  });
+
+  it('Android 的 PDF 不给「快速预览」(WebView 不渲染 PDF),仍可分享', () => {
+    const pdf: ChatFilePathTarget = { kind: 'file', relPath: 'documents/报告.PDF', absPath: '/w/documents/报告.PDF' };
+    expect(chatFileChipMenuRows(pdf, 'android').map((r) => r.key)).toEqual([
+      'revealInBrowser',
+      'sendToSession',
+      'copyPath',
+      'share',
+    ]);
+    expect(chatFileChipMenuRows(pdf, 'ios')[0]?.key).toBe('open');
+    // 非 PDF 文件在 Android 上照常预览。
+    expect(chatFileChipMenuRows(file, 'android')[0]?.key).toBe('open');
   });
 });

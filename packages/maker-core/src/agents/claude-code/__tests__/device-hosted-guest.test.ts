@@ -134,7 +134,13 @@ const HOST_MODELS = ['shared/model-a', 'shared/model-b', 'other/model-c'].map((i
 
 async function startHostedSession(
   guest: boolean,
-  overrides: { guestProvider?: DeviceHostedGuestProvider | null; providerId?: string; local?: boolean } = {},
+  overrides: {
+    guestProvider?: DeviceHostedGuestProvider | null;
+    providerId?: string;
+    local?: boolean;
+    ghostRosterSnapshot?: string;
+    mcpServers?: string[];
+  } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -188,7 +194,7 @@ async function startHostedSession(
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/t/tok/',
     tunnelToken: 'tok',
-    mcpServers: [],
+    mcpServers: overrides.mcpServers ?? [],
     mirrorRoot,
     ...(guest ? { guest: true } : {}),
     ...(guest && overrides.guestProvider !== null ? { guestProvider: overrides.guestProvider ?? GUEST_PROVIDER } : {}),
@@ -199,6 +205,7 @@ async function startHostedSession(
     providerId: overrides.providerId ?? 'shared-provider',
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(overrides.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: overrides.ghostRosterSnapshot } : {}),
     ...(overrides.local ? {} : { deviceHosted }),
   });
   liveHandles.push(handle);
@@ -236,6 +243,21 @@ describe('Claude Code device-hosted guest sessions', () => {
     // 不带本机的插件清单与通讯录说明(system prompt 改动已经维护者确认)。
     expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
     expect(options.systemPrompt?.append).not.toContain(CONTACTS_RULES_DISABLED);
+  });
+
+  // 插件工具经隧道回到任务所在电脑：花名册用那台带来的快照，本机的仍不进来；那台没提供插件工具就不注入。
+  it('injects the task computer roster instead of this computer roster when its plugin tools are tunnelled', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    for (const guest of [true, false]) {
+      const { options } = await startHostedSession(guest, { ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+      expect(options.systemPrompt?.append).toContain(ownerRoster);
+      expect(options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+    }
+    const { options } = await startHostedSession(true, { ghostRosterSnapshot: ownerRoster, mcpServers: [] });
+    expect(options.systemPrompt?.append).not.toContain(ownerRoster);
+    // 任务所在电脑没有可召回的插件(空快照)：同账号也不能退回本机的花名册。
+    const empty = await startHostedSession(false, { ghostRosterSnapshot: '', mcpServers: ['cindy'] });
+    expect(empty.options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
   });
 
   it('routes only through the shared provider: route token, shared models, no host subagent model', async () => {

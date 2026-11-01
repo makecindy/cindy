@@ -7,6 +7,7 @@
 import { i18n } from '@/i18n';
 import type { ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
+import { lacksInlinePreview } from '@/session/pdfSystemOpen';
 
 export type ChatFileChipMenuActionKey =
   | 'open'
@@ -33,8 +34,10 @@ export function chatFileChipMenuTitle(target: ChatFilePathTarget): string {
  * 特有动作(对齐桌面右键「打开文件所在目录」语义:定位到父目录)。
  * workdir 外文件(relPath 为 null)没有「在文件浏览器中查看」——文件浏览器
  * 以 workdir 为根,定位不到外部路径;其余动作走 absPath 通道照常可用。
+ * 安卓上的 PDF 没有应用内预览(WebView 不渲染 PDF),不给「快速预览」,用「分享」。
+ * platformOs 传 Platform.OS。
  */
-export function chatFileChipMenuRows(target: ChatFilePathTarget): ChatFileChipMenuRow[] {
+export function chatFileChipMenuRows(target: ChatFilePathTarget, platformOs: string): ChatFileChipMenuRow[] {
   if (target.kind === 'directory') {
     return [
       { key: 'open', label: i18n.t('composer.attachments.fileMenu.openBrowser') },
@@ -43,7 +46,9 @@ export function chatFileChipMenuRows(target: ChatFilePathTarget): ChatFileChipMe
     ];
   }
   return [
-    { key: 'open', label: i18n.t('composer.attachments.fileMenu.quickPreview') },
+    ...(lacksInlinePreview(target.absPath, platformOs)
+      ? []
+      : [{ key: 'open', label: i18n.t('composer.attachments.fileMenu.quickPreview') } as const]),
     ...(target.relPath !== null
       ? [{ key: 'revealInBrowser', label: i18n.t('composer.attachments.fileMenu.revealInBrowser') } as const]
       : []),

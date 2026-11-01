@@ -74,6 +74,13 @@ explain why any highly relevant check was not run.
    you accept that permission scope.
 6. Wait for CI and review; do not push directly to `main`.
 
+If your change comes with troubleshooting conclusions, design rationale, or
+operating procedures that the next person will also need, put them in the
+relevant `docs/` page or test, not only in the pull request discussion or your
+personal notes. The
+[development workflow rules](docs/dev-rules/development-workflow.md#4-项目知识放在哪里)
+(in Chinese) list where each kind of knowledge belongs.
+
 Small documentation fixes are welcome as pull requests. For larger changes to
 architecture, protocols, database migrations, permissions, or user data,
 please open an issue first to discuss scope and compatibility.

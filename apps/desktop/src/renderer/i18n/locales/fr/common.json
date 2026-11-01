@@ -1119,6 +1119,7 @@
     "allow": "Autoriser le bureau à distance",
     "allowHint": "Autorisez vos appareils connectés à voir et utiliser toutes les apps de cet ordinateur. Activez aussi le contrôle de l'appareil ci-dessus.",
     "permissionHint": "Sur l'ordinateur, autorisez l'enregistrement de l'écran et l'accessibilité dans les réglages système, puis reconnectez-vous.",
+    "inputUnsupported": "L'environnement de bureau actuel de cet ordinateur ne prend pas en charge le contrôle à distance du clavier et de la souris dans Cindy.",
     "controlUnavailable": "L'ordinateur distant ne peut pas recevoir de saisie. Vérifiez ses autorisations de contrôle et sa connexion, puis reconnectez-vous.",
     "beingControlled": "Votre bureau est contrôlé à distance",
     "beingViewed": "Votre bureau est visionné à distance",
@@ -1244,7 +1245,6 @@
     "clipboardSyncSkipped": "Ce format n'est pas pris en charge par la synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncTooLarge": "Le contenu dépasse la taille maximale de synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncPermission": "La synchronisation du presse-papiers nécessite l'accès au collage. Autorisez-le, puis revenez à cette fenêtre pour reprendre.",
-    "clipboardSyncWaiting": "Le presse-papiers de l'ordinateur distant n'est pas disponible pour le moment (il est peut-être verrouillé). La synchronisation reprendra automatiquement.",
     "lockingOnExit": "Verrouillage de l'ordinateur…",
     "idleLock": "Déconnecter et verrouiller en cas d'inactivité",
     "idleNever": "Jamais",
@@ -1364,6 +1364,20 @@
       "lock-corrupt": "Le verrou de maintenance des données locales est endommagé ; Cindy ne peut donc pas confirmer s'il est encore utilisé. Redémarrez votre ordinateur, puis rouvrez Cindy. Si le problème persiste, contactez le support. Ne supprimez pas les fichiers de la base de données.",
       "lock-unreadable": "Le verrou de maintenance des données locales n'a pas pu être lu ou enregistré. Vérifiez l'accès au répertoire de données, puis rouvrez-les une fois l'accès rétabli. Contactez le support si le problème persiste.",
       "recovery-busy": "Une autre instance de Cindy vérifie le verrou de maintenance des données locales. Rouvrez les données locales dans un instant."
+    },
+    "passiveCorrupt": {
+      "title": "Impossible de récupérer la base de données partagée",
+      "description": "Cindy s'exécute en mode lecture seule ou partagé et ne récupérera ni ne modifiera automatiquement cette base de données partagée. Si une autre instance utilise les mêmes userData, fermez-la et réessayez, ou démarrez avec --isolated."
+    },
+    "corrupt": {
+      "title": "Impossible d'ouvrir la base de données locale",
+      "description": "La base de données locale est peut-être endommagée, ou utilisée par une autre instance de Cindy partageant les mêmes données. Si une autre instance est ouverte, fermez-la et réessayez. Si le problème persiste, aucune sauvegarde utilisable n'a pu la restaurer automatiquement ; copiez les détails techniques et transmettez-les à l'équipe pour obtenir de l'aide à la récupération de vos données.",
+      "copy": "Copier les détails techniques"
+    },
+    "initFailed": {
+      "title": "Échec du démarrage de la base de données locale",
+      "description": "La base de données locale n'a pas pu démarrer. Réessayez d'abord. Si l'échec persiste, transmettez les détails techniques ci-dessous à l'équipe.",
+      "retry": "Réessayer le démarrage de la base de données"
     },
     "databaseCleanup": {
       "interruptedTitle": "Le nettoyage de la base de données a été interrompu",
@@ -5472,7 +5486,6 @@
         "title": "Utiliser mes connexions du navigateur",
         "description": "L'Agent ouvrira les sites avec les comptes auxquels vous êtes connecté dans Chrome, Edge ou Brave.",
         "toggleAria": "Utiliser mes connexions du navigateur",
-        "unavailableEmbedded": "S'applique uniquement au navigateur autonome. Le désactiver supprime les fichiers de connexion copiés.",
         "confirmTitle": "Autoriser l'Agent à utiliser vos connexions du navigateur ?",
         "confirmDescription": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
         "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. La lecture des fichiers de connexion de Chrome nécessite également l'accès complet au disque. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
@@ -7593,6 +7606,20 @@
         "unknownPublisher": "Éditeur inconnu",
         "unknownReviewerDetail": "Le paquet affirme avoir passé une revue, mais cette version de Cindy ne reconnaît pas la clé du relecteur : il n'est donc pas affiché comme ayant passé la revue."
       },
+      "controlPoints": {
+        "title": "Vérifications avant exécution",
+        "description": "Ce plugin peut vérifier les automatisations ou routines avant leur exécution. Il peut ignorer ou arrêter une exécution, jamais l’approuver à ta place.",
+        "titleWithStartTask": "Quand ce plugin intervient",
+        "descriptionWithStartTask": "Il n’intervient que dans les tâches où tu l’as choisi : avant une exécution, il peut seulement l’ignorer ou l’arrêter ; pour une nouvelle tâche, il choisit un modèle une seule fois, pour le premier message. Il n’approuve jamais rien à ta place.",
+        "usage": "Pour l’utiliser, choisis-le dans Vérification préalable en modifiant une automatisation ou une routine.",
+        "usageStartTask": "Pour l’utiliser, choisissez un modèle qu’il propose dans le sélecteur de modèles d’une nouvelle tâche.",
+        "points": {
+          "will-schedule-run": "Avant l’exécution d’une automatisation",
+          "will-routine-run": "Avant l’exécution d’une routine d’un coéquipier",
+          "will-start-task": "Au démarrage d’une nouvelle tâche"
+        },
+        "inactive": "Pas encore disponible. Autorise-le lors de la mise à jour ou de la réinstallation de ce plugin."
+      },
       "perm": {
         "mail": "Utiliser les brouillons d'e-mail et les cartes d'envoi",
         "mailDetail": "Modifier et synchroniser des brouillons dans une carte, avec confirmation et compte à rebours d'annulation avant l'envoi.",
@@ -7627,6 +7654,9 @@
         "agentDelegationDetail": "Les coéquipiers peuvent effectuer la tâche déléguée sous approbation automatique. Ne se fait pas passer pour le propriétaire et ne modifie pas les autorisations des coéquipiers.",
         "agentTargets": "Peut envoyer des messages aux projets, aux tâches existantes et aux compagnons",
         "agentTargetsDetail": "Peut voir les répertoires des projets locaux ainsi que les noms et ID des tâches et des coéquipiers, créer des tâches dans les projets, et envoyer du texte et des images aux tâches et coéquipiers existants. Peut déclencher une exécution IA et des frais de modèle. Cette API d'envoi ne peut elle-même ni lire l'historique des autres tâches, ni modifier leurs paramètres, ni les arrêter.",
+        "agentObserve": "Peut voir la liste et l'état des sessions des projets locaux",
+        "agentObserveDetail": "Peut voir le titre, le type d'Agent, l'archivage et l'état (en cours, action requise, dernière activité) des sessions des projets locaux enregistrés, et ouvrir une session dans la fenêtre principale. Ne peut pas lire les messages, les plans ni les fichiers, ni envoyer de messages ou modifier les sessions.",
+        "agentObserveRequest": "Vérifier l'autorisation de voir les sessions",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
@@ -7659,6 +7689,12 @@
         "subscribeHooksDetail": "Vérifie chaque message avant l'envoi : il peut le bloquer ou en réécrire le texte avant qu'il parte ; les messages bloqués peuvent être modifiés et renvoyés.",
         "subscribeAssistantReply": "Peut lire et réécrire les réponses de l'IA",
         "subscribeAssistantReplyDetail": "Traite chaque réponse de l'IA une fois terminée : il peut en peaufiner ou réécrire le texte (en le remplaçant directement, sans conserver l'original), ou remplacer la bulle de réponse par sa propre carte (dans ce cas, le texte original est conservé et consultable d'un simple toucher).",
+        "subscribeScheduleRun": "Peut vérifier les automatisations choisies avant leur exécution",
+        "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
+        "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",
@@ -7849,6 +7885,22 @@
         "reveal": "Afficher dans la liste des tâches",
         "revealed": "Tâche affichée dans la liste des tâches",
         "revealFailed": "Impossible d'afficher la tâche dans la liste des tâches"
+      },
+      "handoff": {
+        "title": "Fichiers transmis à ce plugin dans les conversations",
+        "description": "Copies des fichiers que vous avez transmis à ce plugin dans les conversations. Chaque copie est supprimée automatiquement après 7 jours sans utilisation.",
+        "empty": "Aucun fichier n'a encore été transmis à ce plugin dans une conversation.",
+        "loadFailed": "Impossible de charger la liste des fichiers. Réessayez plus tard.",
+        "refresh": "Actualiser",
+        "openInFinder": "Ouvrir dans le Finder",
+        "openInExplorer": "Ouvrir dans l'Explorateur de fichiers",
+        "meta": "{{size}} · Transmis le {{handedAt}} · Supprimé automatiquement le {{expiresAt}}",
+        "delete": "Supprimer",
+        "deleteNamed": "Supprimer {{name}}",
+        "deleteTitle": "Supprimer ce fichier ?",
+        "deleteDescription": "Après suppression, le plugin et les pages ouvertes ne pourront plus utiliser « {{name}} ». Cette action est irréversible.",
+        "deleteFailed": "Impossible de supprimer le fichier. Réessayez plus tard.",
+        "cancel": "Annuler"
       },
       "library": {
         "title": "Bibliothèque persistante",
@@ -10840,6 +10892,9 @@
         "chatUnavailable": "Le service de conversation est indisponible. Vérifiez votre connexion et réessayez.",
         "importPending": "L'historique du groupe est encore en cours de synchronisation. Réessayez plus tard.",
         "requestTimeout": "Le résultat n'est pas encore confirmé. Actualisez pour vérifier avant de réessayer.",
+        "revisionConflict": "Le travail a changé avant que cette action puisse être effectuée.",
+        "stopOwnershipUnknown": "Impossible d’arrêter une partie du travail, car son demandeur n’a pas pu être vérifié.",
+        "nothingToStop": "Il n’y a aucun travail en cours à arrêter.",
         "permissionDenied": "Vous n'avez pas l'autorisation de gérer ce groupe.",
         "serviceError": "Le service de conversation n'a pas pu traiter la requête. Réessayez plus tard.",
         "groupArchived": "Ce groupe est archivé. Cette action n'est pas disponible.",
@@ -11592,6 +11647,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Ouvrir la conversation",
+      "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
       "hideDetails": "Masquer la transcription de l'appel",
       "transcriptTitle": "Transcription en cours",
@@ -11660,6 +11717,7 @@
       "unsent": "Non envoyé · sélectionnez le texte pour le copier",
       "hint": "Faites une pause pour envoyer. Les réponses sont lues à voix haute par une voix IA. Parlez à tout moment pour interrompre.",
       "status": {
+        "questionElsewhere": "Une question attend dans la tâche · l’appel continue",
         "idle": "Prêt quand vous l'êtes",
         "connecting": "Connexion à la reconnaissance vocale…",
         "listening": "À l'écoute",
@@ -11675,6 +11733,7 @@
         "muted": "Micro désactivé · Vous pouvez toujours écouter"
       },
       "errors": {
+        "busy": "La voix est utilisée par un autre appel, une lecture, un aperçu ou une dictée. Terminez-le et réessayez.",
         "connection": "Connexion vocale interrompue. Votre texte non envoyé est conservé ci-dessous.",
         "microphone": "Le micro s'est arrêté. Vérifiez son autorisation et sa connexion, puis reprenez.",
         "send": "Ce message n'a pas été accepté. Votre texte est conservé ci-dessous.",
@@ -12562,6 +12621,7 @@
         "titleLocal": "Exécuter à nouveau l'Agent sur cet ordinateur ?",
         "titleOther": "Exécuter l'Agent sur « {{device}} » ?",
         "description": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
+        "descriptionNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "confirm": "Changer d'ordinateur",
         "cancel": "Ne rien changer"
       }
@@ -12811,6 +12871,7 @@
     "cindyServiceUnavailable": "Le service vocal Cindy est indisponible. Vérifiez votre réseau ou changez de source de service.",
     "asrServiceUnavailable": "Impossible de se connecter au service de reconnaissance vocale. Vérifiez votre réseau et réessayez.",
     "emptyTranscript": "Une voix a été détectée, mais aucun texte n'a été reconnu. Veuillez réessayer.",
+    "speakerFiltered": "Voix d'une autre personne ignorée",
     "connectionInterrupted": "La connexion vocale a été interrompue. Vérifiez votre réseau et réessayez.",
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",
@@ -12836,6 +12897,14 @@
     "verificationFailed": "Cindy n'a pas pu confirmer le rétablissement de la connexion ChatGPT. Vérifiez à nouveau."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "a choisi pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise"
+      }
+    },
     "imageDelivery": {
       "stored": "Image transmise",
       "failed": "Échec de la transmission de l'image. Réessayez de transférer l'image existante.",
@@ -15442,6 +15511,25 @@
         },
         "browse": "Choisir un fichier de script (ou le faire glisser sur le champ)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Vérifier avec",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Avant chaque exécution, Cindy consulte le plugin choisi. Il peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place ce qui demande ta confirmation.",
+        "choose": "Choisir un plugin",
+        "unavailable": "Plugin indisponible",
+        "unavailableHint": "Ce plugin n’est plus disponible. Tant que tu n’en choisis pas un autre, le réglage « Si le plugin échoue » s’applique.",
+        "hint": "Le plugin peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place.",
+        "empty": "Aucun plugin ne peut encore vérifier les exécutions. Installe un plugin compatible avec les vérifications préalables et autorise-le lors de l’installation ou de la mise à jour.",
+        "onFailureLabel": "Si le plugin échoue",
+        "onFailure": {
+          "allow": "Exécuter normalement",
+          "skip": "Ignorer cette exécution",
+          "block": "Arrêter et marquer comme échouée"
+        }
+      },
       "validation": {
         "nameRequired": "Le nom est obligatoire",
         "promptRequired": "Le prompt est obligatoire",
@@ -15454,6 +15542,7 @@
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
+        "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
       }
@@ -15941,6 +16030,7 @@
       "titleRevealPath": "Autoriser l'Agent à recevoir le chemin local de ce fichier multimédia ?",
       "count": "{{count}} fichiers",
       "descriptionAttachments": "Les fichiers ci-dessous se trouvent en dehors du répertoire de travail de cette session. Si vous l'autorisez, ils seront transmis à ce plugin (il ne reçoit que des empreintes de contenu, jamais les chemins).",
+      "descriptionHandoff": "Les fichiers ci-dessous se trouvent hors du répertoire de travail de cette session. Si vous autorisez, le plugin en reçoit des copies (jamais leurs chemins) ; les copies sont supprimées automatiquement après 7 jours sans utilisation.",
       "descriptionDir": "Le répertoire ou fichier ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ses fichiers seront transmis à ce plugin pour envoi (il ne reçoit qu'un ticket à usage unique, jamais les chemins).",
       "descriptionSaveDir": "Le répertoire ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ce plugin pourra y enregistrer des fichiers téléchargés (les fichiers existants ne sont jamais écrasés).",
       "descriptionRevealPath": "Le chemin n'est renvoyé à l'Agent actuel qu'après votre autorisation et sera ajouté à l'historique de la conversation ; les appareils associés peuvent synchroniser cet historique. Cela n'accorde à aucun plugin l'accès au fichier.",
@@ -17780,6 +17870,7 @@
     "sessionModeFresh": "Nouvelle session à chaque déclenchement (isoler le contexte)",
     "sessionModeHint": "Le mode persistant conserve une seule conversation pour la routine. Le mode nouvelle session crée puis ferme une conversation isolée à chaque déclenchement.",
     "quietHint": "Signaler uniquement les changements ou les problèmes. Désactivez pour les rappels et les messages planifiés.",
+    "checkSource": "Vérifier avec",
     "checkCommand": "Commande de vérification préalable",
     "checkHint": "Facultatif. Vérifie sur l'ordinateur avant chaque exécution : le code de sortie 2 ignore l'exécution, 0 la poursuit, les erreurs restent visibles. Videz le champ pour la retirer.",
     "timeoutMs": "Délai de vérification (ms, vide pour aucune limite)",
@@ -17848,6 +17939,14 @@
       "pendingTurns_many": "{{count}} échanges",
       "lastLearned_many": "{{count}} modifications",
       "readTurns_many": "{{count}} échanges lus"
+    },
+    "remote": {
+      "pause": "Suspendre la routine",
+      "resume": "Reprendre la routine",
+      "addSchedule": "Ajouter un horaire",
+      "addInterval": "Ajouter un intervalle",
+      "addEvent": "Ajouter un déclencheur d’événement",
+      "filterField": "Champ de filtre"
     }
   },
   "cindyMakeDoctor": {

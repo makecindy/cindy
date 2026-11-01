@@ -2640,6 +2640,176 @@ it('tells the model the call_tool envelope instead of forwarding a flattened env
   expect(requests[0].params).toEqual({ name: 'status', arguments: { args: ['x'], name: 'y' } });
 });
 
+it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // 双包裁决代拉内层 list_tools: 返回真实 Cindy 形状 — 不传 category 只有类目概览, 无工具 schema。
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, categories: [{ name: 'read', tool_count: 4 }, { name: 'write', tool_count: 3 }] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    // 真实 cindy_memory 的两入口形态: 只向 MCP 暴露 list_tools + call_tool(token economy),
+    // memory_write 藏在服务端自家 registry, 不进 tools/list。
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 2026-10-31 实测双包形状一: {name:外层名, args:{name:内层名, args:参数}} ——
+  // 转发到服务端只会拿到 UNKNOWN_TOOL(requested=call_tool), 模型无从自纠; 桥在本地看穿。
+  // 形状一/二里的内层工具都不在本地工具表(真实服务不进 tools/list), 靠两入口形状判定拦截。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 双包形状二: {name:正确名, args:{args:参数}} —— 参数藏在第二层 args 里。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 信封 name 填了入口工具名 call_tool 本身。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { type: 'project' } },
+  })).rejects.toThrow(/must be the INNER tool/);
+  // 形状二触发过一次内层 list_tools 代拉(schemaless → 两入口启发式), 之后不再发请求。
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  // 正确信封原样放行。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+it('passes through inner tools that legitimately declare an args parameter, repeatedly', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('acme_tools', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 第三方信封 MCP 的内层工具合法声明 args 参数(数组): 与双包同形, 必须按 schema 放行。
+    { name: 'run', inputSchema: { type: 'object', properties: { args: { type: 'array' } }, required: ['args'] } },
+    // 宽松 schema 内层工具(无 properties): 判定不了是否接受 args → 无可靠判据, 放行不误拦。
+    { name: 'eval', inputSchema: { type: 'object' } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'acme_tools', tool: 'call_tool' });
+  // 合法 args 参数连续调用两次都放行: 拦截是确定性的, 不存在“重发原样调用就放行”的出口,
+  // 所以放行必须一次到位。
+  const legalCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'run', args: { args: ['--version'] } } };
+  await gateway.executeCall(legalCall);
+  await gateway.executeCall(legalCall);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: ['--version'] } },
+  });
+  // 宽松内层 schema(无 properties) + args 参数: 判定不了 → 启发式放行, 连续两次透传。
+  const looseCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'eval', args: { args: { code: '1+1' } } } };
+  await gateway.executeCall(looseCall);
+  await gateway.executeCall(looseCall);
+  expect(requests).toHaveLength(4);
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'eval', args: { args: { code: '1+1' } } },
+  });
+  // 信封 name 查无此工具: 先代拉内层 list_tools(本 fixture 无内层列表 → 解析失败回退启发式),
+  // acme 暴露了 run/eval(非两入口) → 放行给服务端报 UNKNOWN_TOOL。
+  await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(6);
+});
+
+it('probes the inner list_tools of a third-party two-entry gateway and passes legal args params', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  // 第三方两入口 mimics: MCP 层只有 call_tool/list_tools, 内层工具藏在自家 registry,
+  // 但 list_tools 返回带 schema 的工具列表(greptile P1 场景: 内层合法声明对象型 args 参数)。
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, tools: [
+        { name: 'run', description: 'd', inputSchema: { type: 'object', properties: { args: { type: 'object' } }, required: ['args'] } },
+      ] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('stealth_tools', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'stealth_tools', tool: 'call_tool' });
+  // 内层 run 声明了 args 参数 → 代拉 list_tools 后放行, 不永久拒绝。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work' } } } });
+  expect(requests).toHaveLength(2);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work' } } },
+  });
+  // 代拉结果按 server 缓存: 第二次合法调用与查无此工具都不再发 list_tools。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work2' } } } });
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(4);
+  expect(requests[2].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work2' } } },
+  });
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'nope', args: { args: { x: 1 } } },
+  });
+});
+
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

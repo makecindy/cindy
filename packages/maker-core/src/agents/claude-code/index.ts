@@ -111,6 +111,7 @@ import {
   capabilitySelectionAddedByPlanEdit,
   findClaudeMcpCapabilityRoute,
   isCapabilityRouteInvocationAllowed,
+  withoutUserMcpRoutes,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
@@ -227,6 +228,7 @@ import {
   DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
+  deviceHostedGhostRoster,
   deviceHostedGuestAgentDenial,
   deviceHostedGuestClaudeMdExcludes,
   deviceHostedMcpUrl,
@@ -1387,6 +1389,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
+    // The routing policy this session actually runs under: user-registered MCP denials
+    // (cua-driver → cindy_computer) apply to local runtimes only; see withoutUserMcpRoutes.
+    const capabilityRouting = opts.remoteHostId
+      ? withoutUserMcpRoutes(this.deps.capabilityRouting)
+      : this.deps.capabilityRouting;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Claude Code sessions only');
     }
@@ -1728,10 +1735,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     const hostSystemPrompt = opts.botRuntimeProfile
       ? undefined
       : this.deps.runtimeConfig.systemPrompt;
-    // 受邀者(另一个账号)的托管会话不带本机的插件清单(本机用户安装与启用的插件)。
-    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile || hosted?.guest
+    // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具在那台，本机装的插件不进这个任务。
+    const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
       ? ''
-      : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      : hosted
+        ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
+        : localGhostRoster();
 
     // mutable closure — setVendorOptions 在 handle 上对外暴露,**原地合并** patch。
     // 关键: 不能用 `vo = {...vo, ...patch}` 重赋值 — Claude SDK 在 startSession 时
@@ -1835,7 +1845,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 加上设备托管时交给 cindy_exec 顶替的本机工具。启动时快照, 整条会话不变。
     const claudeDisallowedTools = [...new Set([
       ...(hosted ? DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS : []),
-      ...buildClaudeDisallowedTools(reviewMode ? undefined : this.deps.capabilityRouting),
+      ...buildClaudeDisallowedTools(reviewMode ? undefined : capabilityRouting),
     ])];
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
@@ -2248,7 +2258,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         )
       : mergeClaudeHookSets(
           buildClaudeLocalToolGuardHooks(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             () => activeCapabilitySelectionText,
             (toolName, route) => {
               log.warn('downstream MCP source denied by host PreToolUse route', {
@@ -2286,7 +2296,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
-        this.deps.capabilityRouting,
+        capabilityRouting,
         toolName,
         nonHarnessMcpServerNames,
       );
@@ -2550,7 +2560,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         appendActiveCapabilitySelectionText(
           capabilitySelectionAddedByPlanEdit(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             'claude-code',
             plan,
             decision.editedPlan,
@@ -2931,7 +2941,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         fastMode: opts.fastModePolicy?.isAllowed() === false ? false : mutableFastMode,
         fastModeAllowed: opts.fastModePolicy?.isRequestAllowed?.() ?? opts.fastModePolicy?.isAllowed(),
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
-        capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
+        capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
       if (Object.keys(disabledSkillOverrides).length > 0) {
         settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
@@ -3846,7 +3856,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = [
-          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteToolGuards(capabilityRouting),
           ...buildClaudeRemoteRootOnlyToolGuards(),
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
@@ -4022,7 +4032,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkInPlanMode = false;
                 appendActiveCapabilitySelectionText(
                   capabilitySelectionAddedByPlanEdit(
-                    this.deps.capabilityRouting,
+                    capabilityRouting,
                     'claude-code',
                     plan,
                     decision.editedPlan,

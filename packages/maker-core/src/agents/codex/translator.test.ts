@@ -1373,6 +1373,21 @@ describe('translateItemNotification contextCompaction', () => {
 });
 
 describe('translateItemNotification commandExecution output normalization', () => {
+  it.each(['declined', 'failed', 'completed'] as const)('keeps empty %s command results truthful and readable', async (status) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    translateItemNotification('completed', { threadId: 't', turnId: 'turn',
+      item: { type: 'commandExecution', id: 'empty', command: 'pwd', status, aggregatedOutput: '' },
+    }, queue, makeCtx(newCodexRuntimeState()));
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const result = events.find(event => event.type === 'tool_result_full')!;
+    expect(result.data).toMatchObject({ isError: status !== 'completed',
+      fullText: status === 'completed' ? '' : expect.stringMatching(/declined|failed/),
+    });
+    expect(JSON.stringify(result)).not.toContain('rejected by user');
+  });
+
   it('keeps the raw PowerShell wrapper command and emits a display command for tool_use display', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

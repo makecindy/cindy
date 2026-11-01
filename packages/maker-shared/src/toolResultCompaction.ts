@@ -41,6 +41,7 @@ export function sanitizeToolResultDiagnostics(value: unknown): ToolResultDiagnos
       'COMPUTER_DRIVER_INCOMPATIBLE', 'STALE_SNAPSHOT', 'SECURE_FIELD',
       'PATH_NOT_ALLOWED', 'REQUEST_CANCELLED', 'ACTION_OUTCOME_UNKNOWN',
       'POSTCONDITION_NOT_SATISFIED', 'DESKTOP_INPUT_BUSY', 'DESKTOP_INPUT_YIELDED', 'APP_NOT_INSTALLED',
+      'USER_INPUT_ACTIVE', 'HOTKEY_BLOCKED', 'COMPUTER_USE_DISABLED',
       'window_id_not_found', 'window_not_found', 'stale_element_token',
       'screenshot_context_missing', 'capture_expired', 'typed_output_mismatch',
       'background_unavailable', 'browser_consent_required',

@@ -31,7 +31,7 @@
 - 用户磁盘上的原始文件如果只需就地读取，可以继续走已有受控本地文件通道；不要仅为
   预览就复制一份。远程设备或 SSH 文件必须保留真实来源，不能把远程绝对路径当成本机路径。
 - docx、PDF、zip 等非媒体文件不进入媒体字节仓，继续使用已有 `xdt-file` 等受控文件
-  通道。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
+  通道。交给插件的非媒体文件同样不入仓，由插件交接副本（`ghost-handoff`，7 天未使用即删除）承接。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
 - 飞书、Discord、Telegram、企业微信四个个人 IM 渠道的入站附件，去处只由 `@cindy/im` 的
   `classifyInboundAttachment` 判定（MIME 或扩展名任一命中即可）：
   - 图片与音视频经 `IMHost.media` 进总仓（`cacheImage` 一律带 `staging: true`，另有
@@ -145,16 +145,26 @@
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
 - 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
-  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
-  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
-  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
-  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
-  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
-  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
-  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
-  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
-  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
-  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
+  按「版本号 + 内容」寻址发布：对象名为 `mcp-apps/manual/<版本号>/<sha256>.md`，客户端用 `app.getVersion()`
+  与内置手册的 sha256 拼 `{cdnBaseUrl}/mcp-apps/manual/<版本号>/<sha256>.md` 交给业务后端。版本号便于排查
+  对应哪个客户端；sha256 保证同一版本号打出不同手册（重新出包、各区域从不同提交出包）时不会悄悄对错文件。
+  路径约定只在 `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台
+  打包出同一份字节、同一个 sha256。仓库 `apps/desktop/package.json` 的版本是占位的 0.0.0，打包时才临时写入真实
+  版本，所以脚本三种模式都从 `package-desktop.mjs` 产出的 `build-info.json`（`--build-info=<路径>`，必填）读取版本号、
+  区域与发版提交：版本无关包（version 为 null）、0.0.0 及带路径字符的版本号直接报错，开发版（0.0.0）没有发布的手册；
+  `commitSha` 必须等于当前检出的 HEAD 且手册没有未提交改动，否则报错，由此自动保证在这个包的发版提交上执行。
+  打包侧（`package-desktop.mjs`）在有版本打包时拒绝带未提交改动的手册，并把安装包里实际打进去的手册写入
+  `build-info.json` 的 `mcpAppsManual: { sha256, size }`（版本无关包或没有内置手册时为 `null`）；发布脚本要求
+  检出里手册的 sha256 与 size 与它一致，缺这个字段（旧打包脚本产出）也拒绝，需重新打包。
+  对应客户端上线前，对每个区域的 `build-info.json`（`apps/desktop/release/artifacts/<region>/<version>/<platform-arch>/`）
+  各执行一次 `node --env-file=<发布配置> scripts/publish-page-manual.mjs --build-info=<路径>`（发版提交里没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：global 与 cn 两份
+  `build-info.json` 的 `node scripts/publish-page-manual.mjs --build-info=<路径> --check-cdn` 都通过，即本版本的手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时
+  不再上传，上传仍带 `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。客户端开始在 `cindy.fetch` 中自动
+  带手册地址（`Cindy-MCP-Apps-Manual` / `-Sha256` 请求头，`apps/desktop/src/main/cindy-brain/mcpAppsManualHeaders.ts`）
+  后，**每个发版版本、每个区域都必须发布手册**，否则该版本带出去的地址会 404；因此带地址的客户端上线前，必须先把
+  这一步接进发版流程。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
@@ -379,6 +389,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   是否仍被消息引用，不能在正文尚未替换地址时删除导入正在复用的引用。
   无可信 SDK session、原生长目录 hash 布局、SSH 或已删除源文件不能靠此恢复；未成功
   导入的直接路径仍依赖源文件存在，不得声称已持久入库。
+- Desktop 本机任务的消息里，嵌入的图片、视频、音频若写的是相对路径，直接拼到任务工作
+  目录找不到时，复用正文路径 chip 的同一套解析（`fs:resolve-path`：任务工作目录内按后缀
+  搜索，唯一命中才采用）换成真实文件；没有命中或命中多个时保持原拼接。Agent 常先进入
+  子文件夹工作再交付相对该子文件夹的路径，这一兜底让播放器与正文路径的结论一致。搜索
+  默认跳过 `out`、`build`、`dist` 等目录，但路径自己点名经过的那一层会进入（`renders/out/
+  clip.mp4` 只进入父目录为 `renders` 的 `out`，首段就是被跳过目录时仍跳过；批量解析时
+  这一放行只对点名它的那条路径生效）。解析
+  完成前不加载媒体，避免播放器先用拼接地址进入失败态；含 `%` 的路径不搜索（主进程查找前
+  会解码，可能换成另一个文件）；查找前把 `./`、重复分隔符、`..` 规范掉（越出任务目录的路径不搜索），
+  没有命中时仍按原始写法加载。本地音频统一走 `xdt-audio://`，`xdt-file://` 只放行图片和
+  视频。只在会话视图已确认任务在本机执行时搜索（`ChatSessionFileContext` 的
+  `localConfirmed`）：远程任务仍按拼接结果经远程媒体通道取件；设备归属可能晚于首次渲染
+  才注入，归属未确认前同样不搜索。伙伴协作卡展开的子任务结果按子任务自己的归属判定（父任务
+  是本机不代表子任务是本机）；右栏 Cindy Make 页签按宿主给出的归属判定。没有命中 / 命中多个
+  不是最终结论（回复可能先引用产物、文件后写出）：新挂载、流式结束、窗口重新聚焦时重查，
+  主进程同时跳过它对否定结论的 30 秒缓存；流式结束 / 聚焦时若有更早发出的查找还没回来，
+  它回来仍未命中就再补查一次；流式结束随渲染方式切换而重挂载时，由新实例接上这一时机；
+  从未命中变成找到时重建媒体元素（文件恰好写在直接拼接位置时地址不变，失败态不会自行重试）；
+  唯一命中不重查。实现见 `useWorkspaceMediaPath.tsx`。
 - Desktop 的图片加载失败默认显示暂不可用，通过现有 preload 图片读取接口确认源文件
   `ENOENT`（IPC `NOT_FOUND`）才显示缺失；不使用被受管协议 CORS 策略禁止的 renderer fetch。
   流式输出时保留加载状态，流式结束、地址更新、窗口重新聚焦或网络恢复时自然重试，

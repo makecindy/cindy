@@ -5085,9 +5085,10 @@ describe('AgentIslandService native publishing', () => {
       }
     ).handleNativeLayoutPreference.bind(service);
 
+    // The carrier fits the wider mode, so expanding and collapsing never resize the window.
     setLayoutPreference({ compactContentWidth: 250 });
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
-    expect(latestNativeFrame(publish)).toMatchObject({ width: 290 });
+    expect(latestNativeFrame(publish)).toMatchObject({ width: 600, contentWidth: 250 });
 
     const request: InteractionRequest = {
       kind: 'permission',
@@ -5098,15 +5099,15 @@ describe('AgentIslandService native publishing', () => {
     };
     handleInteractionRequestForTest(service, { sessionId: 's1', agentKind: 'codex' }, request);
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
-    expect(latestNativeFrame(publish)).toMatchObject({ width: 600 });
+    expect(latestNativeFrame(publish)).toMatchObject({ width: 600, contentWidth: 440 });
 
     setLayoutPreference({ expandedContentWidth: 700 });
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
-    expect(latestNativeFrame(publish)).toMatchObject({ width: 860 });
+    expect(latestNativeFrame(publish)).toMatchObject({ width: 860, contentWidth: 700 });
 
     service.handleInteractionDismissed('s1', 'r1');
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
-    expect(latestNativeFrame(publish)).toMatchObject({ width: 290 });
+    expect(latestNativeFrame(publish)).toMatchObject({ width: 860, contentWidth: 250 });
     expect(mocks.writeLayoutPreference).toHaveBeenCalledWith(1, expect.objectContaining({
       compactContentWidth: 250,
     }));
@@ -5115,7 +5116,7 @@ describe('AgentIslandService native publishing', () => {
     }));
   });
 
-  it('republishes expanded height from native content measurement', async () => {
+  it('republishes expanded height from native content measurement without resizing the carrier', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
@@ -5140,12 +5141,12 @@ describe('AgentIslandService native publishing', () => {
 
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
     expand();
-    expect(latestNativeFrame(publish)).toMatchObject({ height: 270 });
+    expect(latestNativeFrame(publish)).toMatchObject({ height: 640 });
 
     setContentHeight(126);
 
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ measuredContentHeight: 126 });
-    expect(latestNativeFrame(publish)).toMatchObject({ height: 214 });
+    expect(latestNativeFrame(publish)).toMatchObject({ height: 640 });
   });
 
   it('collapses a click-expanded island from the compact-position click', async () => {
@@ -5258,8 +5259,8 @@ describe('AgentIslandService native publishing', () => {
       });
 
       const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-      expect(framesById.get(1)).toMatchObject({ width: 368 });
-      expect(framesById.get(2)).toMatchObject({ width: 600 });
+      expect(framesById.get(1)).toMatchObject({ contentWidth: 328 });
+      expect(framesById.get(2)).toMatchObject({ contentWidth: 440 });
       vi.runOnlyPendingTimers();
     } finally {
       vi.useRealTimers();
@@ -5485,8 +5486,8 @@ describe('AgentIslandService native publishing', () => {
       setLayoutPreference({ displayId: 2, compactContentWidth: 420, centerXRatio: 0.25 });
 
       let framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-      expect(framesById.get(1)).not.toMatchObject({ width: 460 });
-      expect(framesById.get(2)).toMatchObject({ width: 460 });
+      expect(framesById.get(1)).not.toMatchObject({ contentWidth: 420 });
+      expect(framesById.get(2)).toMatchObject({ contentWidth: 420 });
       expect(mocks.writeLayoutPreference).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(150);
@@ -5498,8 +5499,8 @@ describe('AgentIslandService native publishing', () => {
       setLayoutPreference({ displayId: 1, compactContentWidth: 300 });
 
       framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-      expect(framesById.get(1)).toMatchObject({ width: 340 });
-      expect(framesById.get(2)).toMatchObject({ width: 460 });
+      expect(framesById.get(1)).toMatchObject({ contentWidth: 300 });
+      expect(framesById.get(2)).toMatchObject({ contentWidth: 420 });
       expect(mocks.writeLayoutPreference).toHaveBeenCalledTimes(1);
 
       setLayoutDragActive(false);
@@ -5537,8 +5538,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(1)).toMatchObject({ width: 340 });
-    expect(framesById.get(2)).toMatchObject({ width: 460 });
+    expect(framesById.get(1)).toMatchObject({ contentWidth: 300 });
+    expect(framesById.get(2)).toMatchObject({ contentWidth: 420 });
   });
 
   it('does not reuse an identity-less compact width on a multi-display notch screen', async () => {
@@ -5620,8 +5621,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(1)).toMatchObject({ x: 684, width: 360, contentWidth: 320 });
-    expect(framesById.get(2)).toMatchObject({ width: 250, contentWidth: 210 });
+    expect(framesById.get(1)).toMatchObject({ contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ contentWidth: 210 });
   });
 
   it('applies native layout preferences to the emitting display instead of the current target display', async () => {
@@ -5706,8 +5707,8 @@ describe('AgentIslandService native publishing', () => {
       displayBounds: mocks.primaryDisplay.bounds,
     });
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(1)).toMatchObject({ width: 540, contentWidth: 500 });
-    expect(framesById.get(2)).toMatchObject({ width: 360, contentWidth: 320 });
+    expect(framesById.get(1)).toMatchObject({ contentWidth: 500 });
+    expect(framesById.get(2)).toMatchObject({ contentWidth: 320 });
   });
 
   it('trusts matching native display ids when vertical frame coordinates differ', async () => {
@@ -5895,8 +5896,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(1)).toMatchObject({ width: 360, contentWidth: 320 });
-    expect(framesById.get(2)).toMatchObject({ width: 540, contentWidth: 500 });
+    expect(framesById.get(1)).toMatchObject({ contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ contentWidth: 500 });
     const persisted = mocks.writeLayoutPreferences.mock.calls.at(-1)?.[0] as Map<number, AgentIslandLayoutPreference> | undefined;
     expect(persisted?.get(2)).toEqual(expect.objectContaining({
       compactContentWidth: 500,
@@ -5997,8 +5998,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
 
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(1)).toMatchObject({ width: 360, contentWidth: 320 });
-    expect(framesById.get(2)).toMatchObject({ width: 540, contentWidth: 500 });
+    expect(framesById.get(1)).toMatchObject({ contentWidth: 320 });
+    expect(framesById.get(2)).toMatchObject({ contentWidth: 500 });
     expect(mocks.writeLayoutPreferences).toHaveBeenCalledTimes(1);
     const persisted = mocks.writeLayoutPreferences.mock.calls[0]?.[0] as Map<number, AgentIslandLayoutPreference>;
     expect(Array.from(persisted.keys())).toEqual([2, 1]);
@@ -6549,7 +6550,7 @@ describe('AgentIslandService native publishing', () => {
     expect(framesById.get(2)).toMatchObject({
       displayId: 2,
       displayBounds: notchedDisplay.bounds,
-      width: 360,
+      contentWidth: 320,
     });
   });
 
@@ -6702,58 +6703,48 @@ describe('AgentIslandService native publishing', () => {
 
     setLayoutPreference({ displayId: 2, centerXRatio: 0.25 });
     let framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
-    expect(framesById.get(2)).toMatchObject({
-      width: 340,
-    });
     expect(framesById.get(2)?.contentWidth).toBeCloseTo(299.68);
 
     setLayoutPreference({ displayId: 2, centerXRatio: 0.5, compactContentWidth: 180 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 180,
-      width: 220,
     });
 
     setLayoutPreference({ displayId: 2, compactContentWidth: 230 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 244,
-      width: 284,
     });
 
     setLayoutPreference({ displayId: 2, compactContentWidth: 250 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 250,
-      width: 290,
     });
 
     setLayoutPreference({ displayId: 2, compactContentWidth: 80 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 180,
-      width: 220,
     });
 
     setLayoutPreference({ displayId: 2, centerXRatio: 0.25, compactContentWidth: 180 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 180,
-      width: 220,
     });
 
     setLayoutPreference({ displayId: 2, compactContentWidth: 80 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 80,
-      width: 120,
     });
 
     setLayoutPreference({ displayId: 2, compactContentWidth: 250 });
     framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({
       contentWidth: 250,
-      width: 290,
     });
   });
 });

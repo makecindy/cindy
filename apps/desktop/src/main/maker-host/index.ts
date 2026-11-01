@@ -25,7 +25,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
-import { setPluginModelPickerAgentProvider } from '../cindy-brain/ghostModelPicker.js';
+import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -200,6 +200,7 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
+import { createDesktopInputShellGuardHooks } from './claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -423,6 +424,7 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
+setPluginRouteAgentStatusProvider(async (agent) => _maker?.getAgentStatus(agent as AgentKind));
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
 
 export function handleRemoteWorkerBridge(
@@ -1498,6 +1500,9 @@ export function getMaker(): Maker {
       //   (slack-empty-cursor-hook 已随 slack-official MCP 集成退役 2026-07-15:
       //    它只认老集成的 mcp__slack__* 工具名;空 cursor 清洗移入 cindy-slack
       //    意识的 slack_call_tool。)
+      //   - desktop-input-shell-guard-hook: Bash 里模拟桌面键鼠(osascript keystroke /
+      //     cliclick / CGEvent / cua-driver CLI)在 Computer Use 开启时一律拒绝,理由指向
+      //     cindy_computer;完全访问档同样生效(与能力路由守卫同一机制)。
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
@@ -1508,6 +1513,10 @@ export function getMaker(): Maker {
           ],
         },
         createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+        createDesktopInputShellGuardHooks(
+          () => getPluginRegistry().isEnabled('computer'),
+          desktopMakerLogger,
+        ),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
@@ -2944,6 +2953,8 @@ export function getMaker(): Maker {
         mcpProviders: () => _mcpProviders.pi ?? _mcpProviders.codex ?? [],
         prepareMcpBridge: getPiExtraSpawnConfig,
         makerMemory: () => makerMemoryManager,
+        // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
+        ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。

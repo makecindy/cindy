@@ -179,7 +179,11 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   当前请求本身完整送达。
 - **停止只停自己的**：普通成员点停止，停掉自己发起的请求与安排、以及自己的伙伴在替别人做的事；
   别人发起、别人的伙伴在做的继续进行。群主或管理员在还有别人的工作时，停止会多出「全部停止」。
-  没权限停的那一项跳过，不让整次停止失败。
+  没权限停的那一项继续跳过，其余可停止项仍继续处理；已经停止的部分保留。
+  没有可停止项、存在因发起人缺失而无法判断停止权限的项，或服务端拒绝后重读仍不能确认已结束或正在停止时，
+  返回相应原因，不报告停止成功。具体实现与回归见
+  [`chatServer.ts`](../../apps/desktop/src/main/maker-ipc/chatServer.ts) 与
+  [`chatServer.test.ts`](../../apps/desktop/src/main/maker-ipc/__tests__/chatServer.test.ts)（#8045）。
 
 ### 4.1 一轮从哪里开始
 

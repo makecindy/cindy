@@ -80,6 +80,7 @@ const createUninstall = createGhostProductionCallbacks<{
 }>({ functions: ['uninstallGhostAndCleanupLocked'] });
 // MCP can write fs data directly. Uninstall must wait for exit before removing
 // either the package or root:data. Existing Node-only ordering missed this owner.
+// Chat file handoff copies are plugin-private too and go with the same uninstall.
 it.each([false, true])('uninstall cannot delete private data before MCP exits (failed=%s)', async (failed) => {
   let finish!: () => void;
   const exit = new Promise<void>(resolve => { finish = resolve; });
@@ -101,8 +102,9 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     ownerScopedUserDataPath: (...parts: string[]) => '/owner/' + parts.join('/'), activeOwnerScopeKey: () => 'owner',
     pluginTaskUninstaller: async (_id: string, run: () => Promise<void>) => run(), currentPluginUsageService: () => null,
     pluginDownloads: { removePlugin: async () => {} }, removeGhostSecrets: noop,
-    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), log: { warn: noop, info: noop },
+    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), publishedModelsStore: () => ({}), log: { warn: noop, info: noop },
     fs: { promises: { rm: vi.fn(async (dir: string) => { expect(dir).toBe('/owner/ghost-fs/fixture'); events.push('data-removed'); }) } },
+    getGhostHandoffStore: () => ({ removeInstance: async (id: string) => { expect(id).toBe('fixture'); events.push('handoff-removed'); } }),
     getGhostLibrarySlot: () => { throw new Error('no library'); },
     ledger: { removeRefs: async () => 0 }, forgetGhostRecentUsage: () => null,
     forgetGhostRecommendations: noop, extinguishGhostUnread: noop, badgeSlotSingleton: null,
@@ -112,5 +114,5 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
   const result = failed ? expect(work).rejects.toThrow('stop failed') : expect(work).resolves.toBeUndefined();
   await Promise.resolve(); expect(events).toEqual([]);
   finish(); await result;
-  expect(events).toEqual(failed ? [] : ['ui-revoked', 'package-removed', 'data-removed']);
+  expect(events).toEqual(failed ? [] : ['ui-revoked', 'package-removed', 'data-removed', 'handoff-removed']);
 });

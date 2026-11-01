@@ -531,6 +531,29 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  // Unit regression: the reported disabled-host UX had only a generic Connect
+  // action. Exercise the real screen with enabled=false, then enable the host
+  // and use the explicit check action; existing cases did not cover this path.
+  it("guides a disabled host and checks again before connecting", async () => {
+    let enabled = false;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities" ? { ...result, enabled } : result;
+    });
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    expect(host.textContent).toContain("remoteDesktop.disabled");
+    expect(button("connect")).toBeNull();
+    expect(button("reconnectAfterPermissions")).not.toBeNull();
+    expect(requests().some((request) => request.op === "start")).toBe(false);
+    enabled = true;
+    await act(async () => button("reconnectAfterPermissions").click());
+    expect(host.textContent).not.toContain("remoteDesktop.disabled");
+    expect(requests().some((request) => request.op === "start")).toBe(true);
+  });
+
   it.each([false, true])(
     "allows the Wayland consent window while keeping the overall wait bounded (native=%s)",
     async (native) => {
