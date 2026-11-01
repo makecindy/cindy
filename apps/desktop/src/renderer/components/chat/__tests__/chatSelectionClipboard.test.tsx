@@ -500,6 +500,36 @@ describe('chat selection clipboard', () => {
     expect(pasted.textContent).toContain('Ambient');
   });
 
+  // Review 4434198424: ordinary image fixtures never load a tall attachment.
+  // Unit: load the real component's 10:1 image, then copy mixed text through
+  // the production event; exported geometry must survive removal of its parent.
+  it('bounds a loaded long attachment independently of its preview wrapper', async () => {
+    productionSelectionCss();
+    const { root, select, copy } = setup(<><p>before tall image</p>
+      <ChatImageView src="https://example.com/tall.png" filename="Tall attachment" variant="user-attached" />
+      <p>after tall image</p></>);
+    const image = root.querySelector('img')!;
+    Object.defineProperties(image, { naturalWidth: { value: 1000 }, naturalHeight: { value: 10000 } });
+    fireEvent.load(image);
+    await waitFor(() => expect(image.style.objectFit).toBe('cover'));
+    select();
+    const { event, clipboardData } = copy();
+    expect(event.defaultPrevented).toBe(true);
+    const pasted = document.createElement('div');
+    pasted.innerHTML = clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    const target = pasted.querySelector('img')!;
+    expect(target.style.width).toBe('240px');
+    expect(target.style.maxWidth).toBe('100%');
+    expect(target.style.maxHeight).toBe('240px');
+    expect(target.style.height).toBe('auto');
+    expect(target.style.aspectRatio).toBe('1 / 1');
+    expect(target.style.objectFit).toBe('cover');
+    expect(target.style.objectPosition).toBe('top');
+    expect(target.src).toBe(image.src);
+    expect(pasted.textContent).toContain('before tall image');
+    expect(pasted.textContent).toContain('after tall image');
+  });
+
   it.each(['#fffdf5', '#171717'])('exports semantic HTML without the %s theme', (background) => {
     const { root, select, copy } = setup(`<p class="theme" style="background:${background};color:red">Hello <strong>world</strong></p><p><a href="https://example.com" style="background-color:${background}">guide</a> <code class="token" style="color:blue">x &lt; y</code></p>`);
     select();
@@ -689,6 +719,26 @@ describe('chat selection clipboard', () => {
     expect(pasted.querySelector('svg path')?.getAttribute('d')).toBe('M 1 30 L 80 30');
     expect(pasted.querySelector('svg line')?.getAttribute('y2')).toBe('40');
     expect(pasted.querySelector('svg text')?.textContent).toBe('diagram label');
+  });
+
+  // Review 4434198428: full-list coverage misses an omitted prefix. Unit:
+  // select across two real Markdown list items and keep their original numbers;
+  // raw HTML variants exercise the same handler's start/reversed/value semantics.
+  it.each([
+    { content: <MarkdownRenderer workingDir="" content={'1. first\n2. second\n3. third'} />, start: 2 },
+    { content: '<ol start="7"><li>first</li><li>second</li><li>third</li></ol>', start: 8 },
+    { content: '<ol reversed><li>first</li><li>second</li><li>third</li></ol>', start: 2 },
+    { content: '<ol><li value="10">first</li><li>second</li><li>third</li></ol>', start: 11 },
+  ])('retains the first selected ordered-list number $start', ({ content, start }) => {
+    const { root, select, copy } = setup(content);
+    const items = root.querySelectorAll('li');
+    select(items[1]!.firstChild!, items[2]!.firstChild!);
+    const { event, clipboardData } = copy();
+    expect(event.defaultPrevented).toBe(true);
+    const pasted = document.createElement('div');
+    pasted.innerHTML = clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    expect([...pasted.querySelectorAll('li')].map(item => item.textContent)).toEqual(['second', 'third']);
+    expect(pasted.querySelector('ol')!.start).toBe(start);
   });
 
   it('omits transparent hover toolbars without losing visible code or graphics', () => {

@@ -61,8 +61,27 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
   };
   const whitespaceOf = (element: Element): string => inheritedStyle(element, 'white-space');
   const preservesWhitespace = (value: string): boolean => /^(pre|pre-wrap|pre-line|break-spaces)$/.test(value);
+  const sourceByCopy = new WeakMap<Element, Element>();
+  const preserveOrderedStart = (source: Element, copy: Element): void => {
+    if (!source.matches('ol')) return;
+    const first = [...copy.children].find(child => child.matches('li'));
+    const original = first && sourceByCopy.get(first);
+    if (!original) return;
+    const list = source as HTMLOListElement;
+    const items = [...list.children].filter(child => child.matches('li')) as HTMLLIElement[];
+    let ordinal = list.hasAttribute('start') ? list.start : list.reversed ? items.length : 1;
+    for (const item of items) {
+      if (/^[+-]?\d+$/.test(item.getAttribute('value')?.trim() ?? '')) ordinal = item.value;
+      if (item === original) {
+        (copy as HTMLOListElement).start = ordinal;
+        return;
+      }
+      ordinal += list.reversed ? -1 : 1;
+    }
+  };
   const shell = (element: Element): Element => {
     const copy = element.cloneNode(false) as Element;
+    sourceByCopy.set(copy, element);
     for (const attribute of ['style', 'class', 'bgcolor', 'color']) copy.removeAttribute(attribute);
     if (element.matches('[role="button"], [data-inline-reference-chip]') && !element.matches('a[href]')) {
       // React actions are not cloned. Export clickable content as ordinary
@@ -93,12 +112,28 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     if (element.matches('[data-chat-image-preview] img, img[data-gallery-src]')) {
       // The image is content; the surrounding lightbox button is application
       // chrome. Keep only its inline sizing limits, never theme declarations.
-      for (const property of ['width', 'height', 'max-width', 'max-height', 'object-fit']) {
+      for (const property of ['width', 'height', 'max-width', 'max-height', 'object-fit', 'object-position']) {
         const value = (element as HTMLImageElement).style.getPropertyValue(property);
         if (value) (copy as HTMLImageElement).style.setProperty(property, value);
       }
       const fit = styleOf(element).objectFit;
       if (fit) (copy as HTMLImageElement).style.objectFit = fit;
+      // Tall attachment thumbnails put their square bounds on the parent and
+      // fill it with percentage dimensions. That containing block is stripped
+      // during copy; materialize its bounded geometry on the detached image.
+      const image = element as HTMLImageElement;
+      const parent = image.parentElement as HTMLElement | null;
+      const width = parent?.style.width;
+      const ratio = parent?.style.aspectRatio;
+      if (image.style.width === '100%' && image.style.height === '100%' &&
+          width && ratio && /^\d+(?:\.\d+)?px$/.test(width) && /^1(?:\s*\/\s*1)?$/.test(ratio)) {
+        const target = copy as HTMLImageElement;
+        target.style.width = width;
+        target.style.maxWidth = '100%';
+        target.style.height = 'auto';
+        target.style.maxHeight = width;
+        target.style.aspectRatio = ratio;
+      }
       // A gallery image remains content after its live preview action is gone.
       copy.removeAttribute('role');
       copy.removeAttribute('tabindex');
@@ -313,6 +348,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
       const selected = cloneSelected(child);
       if (selected) copy.appendChild(selected);
     }
+    preserveOrderedStart(element, copy);
     // Empty semantic nodes carry spacing/list positions; SVG leaf geometry
     // carries drawing commands without text children. Do not prune either.
     const preservesEmpty = element.matches('br, img, hr, th, td') ||
@@ -350,6 +386,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     if (ancestor.matches(SEMANTIC_CONTAINER_SELECTOR) || preservesWhitespace(whitespaceOf(ancestor))) {
       const wrapper = shell(ancestor);
       wrapper.appendChild(fragment);
+      preserveOrderedStart(ancestor, wrapper);
       fragment = wrapper;
     }
     ancestor = ancestor.parentElement;
