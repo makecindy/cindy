@@ -156,7 +156,7 @@ import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, com
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
-import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { clearXaiRateLimitSnapshot, readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
@@ -601,7 +601,7 @@ import {
   sessions,
   schedules,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { botModelRouteRuntimeKey, nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import {
   cindyAutoRouteToFollow,
@@ -1396,6 +1396,7 @@ import {
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
+  recordSkippedSessionRuntimeFallbackRoutes,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -1538,8 +1539,14 @@ import {
 } from './interruptedTurnAutoResume.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
 import {
+  isAccountUsageExhausted,
+  isSameAccountRoute,
   isBotCandidateUnavailable,
   canResumeAfterRuntimeFallback,
+  usageExhaustionScope,
+  isRouteExhaustedForCandidate,
+  isCandidateQuotaBlocked,
+  type UsageExhaustionScope,
   type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
 
@@ -17390,6 +17397,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     current: SessionRuntimeProfile,
     controlSessionId = sessionId,
+    excludeFailedAccount: UsageExhaustionScope | boolean = false,
+    expectedGeneration?: number,
   ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -17433,20 +17442,99 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';
-    const currentHarness = current.agentKind === 'codex'
+    const currentHarness: 'codex' | 'pi' | 'claude' = current.agentKind === 'codex'
       ? 'codex'
       : current.agentKind === 'pi'
         ? 'pi'
         : 'claude';
+    const scope: UsageExhaustionScope | null = typeof excludeFailedAccount === 'string'
+      ? excludeFailedAccount
+      : excludeFailedAccount ? 'account' : null;
+    const currentRoute: {
+      harness: 'codex' | 'pi' | 'claude';
+      model: string;
+      providerId: string | null;
+      agentDeviceId: string | null | undefined;
+    } = {
+      harness: currentHarness,
+      model: current.model,
+      providerId: current.providerId,
+      agentDeviceId: current.agentDeviceId,
+    };
+    let codexBuckets: Record<string, import('@cindy/maker-shared/codex-usage-buckets').BucketSnapshotLike> | null = null;
+    if (scope === 'bucket' && currentHarness === 'codex' && current.providerId && !row.remoteHostId) {
+      try {
+        if (current.agentDeviceId) {
+          const reply = await remoteBackgroundInvoke(current.agentDeviceId, 'maker:usage:account', ['codex', current.providerId]);
+          if (reply.ok && reply.result && typeof reply.result === 'object') {
+            const data = reply.result as { providerId?: unknown; appServerBuckets?: Record<string, import('@cindy/maker-shared/codex-usage-buckets').BucketSnapshotLike> | null };
+            if (data.providerId !== undefined ? data.providerId === current.providerId : current.providerId === 'openai') {
+              codexBuckets = data.appServerBuckets ?? null;
+            }
+          }
+        } else {
+          const snap = await readCodexAccountUsageSnapshot(current.providerId).catch(() => null);
+          codexBuckets = snap?.appServerBuckets ?? null;
+        }
+      } catch {
+        codexBuckets = null;
+      }
+    }
+    const providers = await getDesktopProviderService().listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    }).catch(() => []);
+    const resolveDefaultProvider = (route: AccountRoute): string | null => {
+      if (route.providerId) return route.providerId;
+      return effectiveSourceIdForModel(
+        providers,
+        null,
+        route.model ?? '',
+        toAgentKind(route.harness),
+      );
+    };
+    // Ask each configured fallback for its own model quota before choosing it.
+    // shortcut: only routes using this computer's login are read; remote-device candidates keep the static rule.
+    const liveLimits = new Map<string, { limited: boolean } | null | undefined>();
+    const candidateBuckets = new Map<string, Record<string, import('@cindy/maker-shared/codex-usage-buckets').BucketSnapshotLike> | null>();
+    if (!row.remoteHostId) {
+      await Promise.all(chain.filter((candidate) => !candidate.agentDeviceId).map(async (candidate) => {
+        const key = botModelRouteRuntimeKey(candidate);
+        const providerId = resolveDefaultProvider(candidate);
+        liveLimits.set(key, await readAccountUsageLimit(
+          toAgentKind(candidate.harness), providerId, candidate.model,
+        ).catch(() => undefined));
+        if (candidate.harness === 'codex' && providerId) {
+          const snap = await readCodexAccountUsageSnapshot(providerId).catch(() => null);
+          candidateBuckets.set(key, snap?.appServerBuckets ?? null);
+        }
+      }));
+    }
+    const isBlocked = (candidate: BotModelRoute) => isCandidateQuotaBlocked(
+      candidate,
+      currentRoute,
+      scope,
+      liveLimits.get(botModelRouteRuntimeKey(candidate)),
+      codexBuckets,
+      resolveDefaultProvider,
+      candidateBuckets.get(botModelRouteRuntimeKey(candidate)),
+    );
     const control = getSessionRuntimeControlSnapshot(controlSessionId);
+    if (scope && expectedGeneration !== undefined) {
+      const exhaustedKeys = chain
+        .filter(isBlocked)
+        .map(botModelRouteRuntimeKey);
+      recordSkippedSessionRuntimeFallbackRoutes(controlSessionId, expectedGeneration, exhaustedKeys);
+    }
     const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
       : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
         .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
     const route = nextBotModelRoute(
       chain,
-      { harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId },
+      currentRoute,
       control.visitedRoutes,
-      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
+      (candidate) => (!controlSession?.remoteHostId || candidate.harness === currentHarness) &&
+        !isBlocked(candidate),
     );
     return {
       isBot: true,
@@ -17509,6 +17597,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
+    excludeFailedAccount: UsageExhaustionScope | boolean = false,
   ): Promise<RuntimeFallbackResult<Session>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: Session | null = null;
@@ -17528,7 +17617,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
-      const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective);
+      const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective, sessionId, excludeFailedAccount, profiles.control.generation);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
@@ -17599,7 +17688,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         failed: SessionRuntimeProfile,
       ): Promise<boolean> => {
         if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
-        const next = await readBotFallbackCandidate(sessionId, currentForFallback);
+        const next = await readBotFallbackCandidate(sessionId, currentForFallback, sessionId, excludeFailedAccount, profiles.control.generation);
         candidate = next.candidate;
         return candidate !== null;
       };
@@ -20352,6 +20441,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const requireRouteChange = botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
+      const exhaustionScope = requireRouteChange ? usageExhaustionScope(signals) : null;
+      const excludeFailedAccount = exhaustionScope ?? false;
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -20414,6 +20505,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 decision.attemptToken,
                 requireRouteChange,
                 () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId),
+                excludeFailedAccount,
               );
               fallbackRebuildSession = fallback.session;
               if (!attempt.isCurrent()) return;
