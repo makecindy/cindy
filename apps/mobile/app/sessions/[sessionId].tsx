@@ -182,6 +182,7 @@ import { InteractionPanel, type MobilePlanViewerState } from '@/session/Interact
 import {
   COMPANION_AVATAR_SIZE,
   MessageRenderer,
+  findLastUserMessageClientId,
   type CompanionQuoteOptions,
   type MobileMessageActionBusyKind,
   type MobileMessageDraft,
@@ -6586,9 +6587,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const replyQuoteAtSend = outboxEligible && !independent ? getPendingCompanionReplyQuote(sessionId) ?? undefined : undefined;
     const uploadsInFlight = outboxEligible && !independent ? getPendingUploadCount() : 0;
     const willHaveAttachments = !independent && (attachmentsRef.current.length > 0 || uploadsInFlight > 0);
-    const earlyLocalCommand = independent || willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
+    // 编辑重发的是已捕获的原文,不再按命令解释(/side、/goal 等会改道并清空输入框);与桌面
+    // 编辑重发直接 sendMessage 同口径。
+    const earlyLocalCommand = independent || options.messageEditResend || willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
     const pendingSkillAtSend = pendingSkillSelectionRef.current;
-    const parsedDesktopCommandAtSend = independent ? null : parseMobileDesktopCommand(body, commandsAtSend);
+    const parsedDesktopCommandAtSend = independent || options.messageEditResend ? null : parseMobileDesktopCommand(body, commandsAtSend);
     const eligibleDesktopCommand = willHaveAttachments && !['goal', 'side'].includes(parsedDesktopCommandAtSend?.name ?? '')
       ? null : parsedDesktopCommandAtSend;
     const earlyDesktopCommand =
@@ -7976,8 +7979,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
   /** 退出编辑并回填 stash。merge:rewind 已提交但重发没被受理,编辑内容不能丢,原草稿接在后面。 */
   const restoreMessageEditStash = useCallback((editing: MessageEditingState, mode: 'replace' | 'merge') => {
-    const stashHasText = composerDocumentProjectedText(editing.stashedDocument).trim().length > 0;
-    const currentHasText = composerDocumentProjectedText(composerDocumentRef.current).trim().length > 0;
+    // 用「有内容」而非投影文字判断:只含引用块的草稿投影文字为空,但不能丢。
+    const stashHasText = composerDocumentHasContent(editing.stashedDocument);
+    const currentHasText = composerDocumentHasContent(composerDocumentRef.current);
     const document = mode === 'replace'
       ? editing.stashedDocument
       : normalizeComposerDocument({
@@ -8092,13 +8096,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
   // 编辑期间会话来了新的用户消息(自动化注入、另一台控制端) → 本条不再是最后一条,
   // 继续发送会把新消息一起回退。直接退出编辑(桌面同款);发送途中由被控端权威校验兜底。
-  const latestLoadedUserClientId = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const row = messages[index];
-      if (row.role === 'user') return row.clientId || row.id;
-    }
-    return null;
-  }, [messages]);
+  const latestLoadedUserClientId = useMemo(
+    () => findLastUserMessageClientId(messageListItems),
+    [messageListItems],
+  );
   useEffect(() => {
     const editing = messageEditingRef.current;
     if (!editing || messageEditSubmittingRef.current) return;

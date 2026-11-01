@@ -8694,7 +8694,8 @@ function findFirstUserMessageClientIdInItem(
   return undefined;
 }
 
-function findLastUserMessageClientId(items: readonly MobileMessageRenderItem[]): string | null {
+/** 编辑入口的目标:最后一条真实用户消息。自动续跑等合成触发行不是用户发言,必须跳过(桌面同口径)。 */
+export function findLastUserMessageClientId(items: readonly MobileMessageRenderItem[]): string | null {
   for (let index = items.length - 1; index >= 0; index--) {
     const found = findLastUserMessageClientIdInItem(items[index]);
     if (found) return found;
@@ -8705,7 +8706,9 @@ function findLastUserMessageClientId(items: readonly MobileMessageRenderItem[]):
 function findLastUserMessageClientIdInItem(
   item: MobileMessageRenderItem | MobileWorkChildItem,
 ): string | null {
-  if (item.type === 'message' && item.message.role === 'user') return messageClientId(item);
+  if (item.type === 'message' && item.message.role === 'user') {
+    return item.message.isSyntheticTrigger || item.message.systemCardType ? null : messageClientId(item);
+  }
   if (item.type === 'work_group') {
     for (let index = item.children.length - 1; index >= 0; index--) {
       const found = findLastUserMessageClientIdInItem(item.children[index]);
