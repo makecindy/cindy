@@ -25,6 +25,25 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
   }) as ChatMessage;
 
 describe('collectGhostCallsByUserTurn', () => {
+  it('keeps explicit ownership across display reordering and unloaded inputs', () => {
+    const call = { ...ghostCall('t1', 'art'), replyToClientId: 'u1' };
+    const map = collectGhostCallsByUserTurn([user('u1'), user('u2'), call]);
+    expect([...(map.get('u1') ?? [])]).toEqual(['art']);
+    expect(map.has('u2')).toBe(false);
+    expect(collectGhostCallsByUserTurn([user('u2'), call]).size).toBe(0);
+  });
+
+  it('uses persisted chronology for legacy calls reordered behind a newer user', () => {
+    const at = (seconds: number) => new Date(seconds * 1000).toISOString();
+    const oldUser = user('u1', { createdAt: at(1), rowid: 1 });
+    const newUser = user('u2', { createdAt: at(2), rowid: 3 });
+    const call = { ...ghostCall('t1', 'art'), createdAt: at(2), rowid: 2 };
+    const map = collectGhostCallsByUserTurn([oldUser, newUser, call]);
+    expect([...(map.get('u1') ?? [])]).toEqual(['art']);
+    expect(map.has('u2')).toBe(false);
+    expect(collectGhostCallsByUserTurn([newUser, call]).size).toBe(0);
+  });
+
   it('does not merge root and organization calls with the same ghost id', () => {
     const root = { ...ghostCall('t1', 'helper'), toolInput: { ghost_id: 'helper', namespace: null, tool: 'run' } };
     const organization = { ...ghostCall('t2', 'helper'), toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } };

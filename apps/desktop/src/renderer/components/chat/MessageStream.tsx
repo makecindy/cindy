@@ -798,8 +798,9 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
 
 /**
  * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
- * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
- * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
+ * 优先使用持久化的回复归属，旧记录按持久化时间与 rowid 定位 user；只有
+ * 缺少时间的旧记录才使用数组相邻关系，避免展示重排把历史调用挂给新消息。
+ * 即"这条 user 触发的那一轮里,
  * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
  * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
  * 判据全取自会话历史(user 消息 + ghost_call tool_use 都已持久化),不落
@@ -809,6 +810,14 @@ export function collectGhostCallsByUserTurn(
   messages: readonly ChatMessage[],
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
+  const users = messages.filter(m => m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger);
+  const userIds = new Set(users.map(m => m.clientId));
+  const time = (m: ChatMessage) => Date.parse(m.createdAt ?? '');
+  const compare = (a: ChatMessage, b: ChatMessage) =>
+    time(a) - time(b) ||
+    (typeof a.rowid === 'number' && Number.isFinite(a.rowid) &&
+      typeof b.rowid === 'number' && Number.isFinite(b.rowid) ? a.rowid - b.rowid : 0);
+  const timedUsers = users.filter(m => Number.isFinite(time(m))).sort(compare);
   let currentUserClientId: string | null = null;
   for (const m of messages) {
     if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) {
@@ -816,17 +825,31 @@ export function collectGhostCallsByUserTurn(
       continue;
     }
     if (
-      currentUserClientId &&
       isGhostCallToolName(m.toolName) &&
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
+      let owner = currentUserClientId;
+      if (m.replyToClientId) {
+        owner = userIds.has(m.replyToClientId) ? m.replyToClientId : null;
+      } else if (Number.isFinite(time(m)) && timedUsers.length) {
+        // Upper bound in persisted order, independent of the display array.
+        let lo = 0;
+        let hi = timedUsers.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (compare(timedUsers[mid], m) <= 0) lo = mid + 1;
+          else hi = mid;
+        }
+        owner = lo > 0 ? timedUsers[lo - 1].clientId : null;
+      }
+      if (!owner) continue;
       const input = m.toolInput as Record<string, unknown>;
       const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
       if (!gid) continue;
-      const set = out.get(currentUserClientId) ?? new Set<string>();
+      const set = out.get(owner) ?? new Set<string>();
       set.add(gid);
-      out.set(currentUserClientId, set);
+      out.set(owner, set);
     }
   }
   return out;
