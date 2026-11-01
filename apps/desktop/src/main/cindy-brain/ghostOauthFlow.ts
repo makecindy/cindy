@@ -65,6 +65,7 @@ export interface GhostOauthClientConfig {
    * 服务商特有的授权页附加参数,由意识声明(平台不预设 provider 语义):
    * Google 要 refresh token 需 `access_type=offline` + `prompt=consent`,
    * Atlassian 需 `audience=api.atlassian.com` + `prompt=consent`。
+   * 直连 tokenUrl 时,授权 URL 的 resource 原样随授权码交换提交(RFC 8707)。
    * 协议保留参数(response_type / client_id / redirect_uri / state / scope /
    * code_challenge*)不可覆盖,撞名忽略。
    */
@@ -818,6 +819,12 @@ async function runGhostOauthFlow(
     form.set('client_id', clientId);
     if (config.clientSecret) form.set('client_secret', config.clientSecret);
     if (verifier) form.set('code_verifier', verifier);
+    // RFC 8707: preserve the resource indicators actually sent during authorization,
+    // including URL query values and extraAuthorizeParams overrides. Other
+    // authorize-only parameters (prompt, state, etc.) must not reach this endpoint.
+    for (const resource of authorizeUrl.searchParams.getAll('resource')) {
+      form.append('resource', resource);
+    }
 
     let res: Response;
     try {

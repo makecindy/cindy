@@ -135,6 +135,7 @@ describe('startGhostOauthFlow', () => {
       expect(form.get('code')).toBe('code-abc');
       expect(form.get('client_id')).toBe('client-123');
       expect(form.get('client_secret')).toBeNull();
+      expect(form.has('resource')).toBe(false);
       expect(String(input)).toBe(BASE_CONFIG.tokenUrl);
       return jsonResponse({
         access_token: 'at-1',
@@ -169,6 +170,48 @@ describe('startGhostOauthFlow', () => {
       // 60s 安全余量已扣除。
       expect(result.bundle.expiresAt).toBeLessThanOrEqual(Date.now() + 3600 * 1000);
     }
+  });
+
+  it.each<{
+    name: string;
+    authorizeUrl: string;
+    extraAuthorizeParams: Record<string, string>;
+    resources: string[];
+  }>([
+    {
+      name: 'extraAuthorizeParams resource overrides the URL value',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fold.example.com`,
+      extraAuthorizeParams: { resource: 'https://mcp.example.com/mcp?tenant=a&region=b', prompt: 'consent' },
+      resources: ['https://mcp.example.com/mcp?tenant=a&region=b'],
+    },
+    {
+      name: 'repeated resource indicators in the authorize URL',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fa.example.com&resource=https%3A%2F%2Fb.example.com`,
+      extraAuthorizeParams: { prompt: 'consent' },
+      resources: ['https://a.example.com', 'https://b.example.com'],
+    },
+  ])('token exchange preserves $name', async ({ authorizeUrl, extraAuthorizeParams, resources }) => {
+    let authorizedResources: string[] = [];
+    const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const form = new URLSearchParams(String(init?.body ?? ''));
+      expect(form.getAll('resource')).toEqual(resources);
+      expect(form.getAll('resource')).toEqual(authorizedResources);
+      expect(form.has('prompt')).toBe(false);
+      expect(form.has('state')).toBe(false);
+      return jsonResponse({ access_token: 'fake-resource-token' });
+    });
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, authorizeUrl, extraAuthorizeParams },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      openExternal: (url) => {
+        authorizedResources = new URL(url).searchParams.getAll('resource');
+        return browserRedirect(url, (au) => ({
+          code: 'fake-resource-code', state: au.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('clientSecret 提供时进表单;extra 参数上 URL 且保留参数不可覆盖', async () => {
