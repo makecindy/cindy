@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { maskColorComments } from './hardcoded-color-match.mjs';
 
 // Read the generation contract, not a second hand-maintained token allowlist.
 // readSpacingVariables(root) is fresh per call so audit({root}) always honours
@@ -93,6 +94,48 @@ export function classifyDesignLayer({ member, layer, radius, evidence = false })
     : { classification: 'registered-value-violation', reason: `${member}: this visible layer requires ${expected} at all four corners (DESIGN §5).` };
 }
 
+/** DESIGN §5 corner-radius inventory: 0 / 2px (registered data marks) / 4px
+ * (keycaps; other 4px usages are registered debt) / 8px / 12px / pill. Values
+ * outside that set have no legitimate layer anywhere, so a new one blocks.
+ * Theme-derived named steps resolve with the default --radius (8px): md = 6px,
+ * 2xl = 16px, 3xl = 24px. var()/calc()/% values stay report-only. */
+const GOVERNED_RADIUS_PX = new Set([0, 2, 4, 8, 12, 9999]);
+const NAMED_RADIUS_PX = { md: 6, '2xl': 16, '3xl': 24 };
+export function offScaleRadius(raw) {
+  let px;
+  const tailwind = /^rounded(?:-(?:[trblse]|tl|tr|bl|br|ss|se|es|ee))?(?:-(.+))?$/.exec(raw);
+  if (tailwind) {
+    const value = tailwind[1];
+    if (value === undefined) return null;
+    const arbitrary = /^\[([^\]]+)\]$/.exec(value);
+    if (arbitrary) {
+      // Tailwind turns `_` into a space, so rounded-[8px_10px] / [6px_12px/4px] is a shorthand:
+      // check every item; var() / calc() / % items stay report-only.
+      for (const part of arbitrary[1].split(/[_/\s]+/).filter(Boolean)) {
+        const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(part);
+        if (!literal) continue;
+        const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
+        if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
+      }
+      return null;
+    } else px = NAMED_RADIUS_PX[value];
+  } else {
+    // Literal CSS / style-object radius: every value in a shorthand (6px 10px, 8px / 12px)
+    // must be on the inventory; trailing !important or a quote is not part of the value.
+    const css = /^(?:setProperty\(\s*['"][\w-]+['"]\s*,|border[\w-]*?[Rr]adius['"]?\s*\]?\s*(?::|=))\s*([\s\S]*)$/.exec(raw);
+    if (!css) return null;
+    const values = css[1].replace(/!\s*important/i, '').split(/[\s/]+/).filter(Boolean);
+    for (const value of values) {
+      const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(value.replace(/^['"`]+|['"`]+$/g, ''));
+      if (!literal) continue; // var() / calc() / % / keywords stay report-only
+      const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
+      if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
+    }
+    return null;
+  }
+  return px === undefined || GOVERNED_RADIUS_PX.has(px) ? null : px;
+}
+
 /** `className`-bearing attributes are the literal style context this reporter
  * recognises. A palette-shaped token anywhere else in the source — help text,
  * test data, diagnostics prose — is not a class candidate, so reporting it
@@ -127,12 +170,128 @@ function classNameValueSpans(source) {
   return spans;
 }
 
-export function reportDesignLayers(file, source, changed, locate, spacingVariables) {
+/** Spans of `cn(` / `clsx(` / `cva(` / `twMerge(` / `classNames(` argument lists: class strings
+ * assembled outside a className attribute are still a style context. */
+function classHelperSpans(source) {
+  const spans = [];
+  for (const match of source.matchAll(/(?<![\w$.])(?:cn|clsx|cva|twMerge|classNames)\s*\(/g)) {
+    const start = match.index + match[0].length;
+    let depth = 1, quote = '';
+    for (let i = start; i < source.length; i++) {
+      const char = source[i];
+      if (quote) { if (char === '\\') i++; else if (char === quote) quote = ''; continue; }
+      if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+      if (char === '(') depth++;
+      else if (char === ')' && --depth === 0) { spans.push([start, i]); break; }
+    }
+  }
+  return spans;
+}
+
+const UTILITY_WORDS = new Set(['flex', 'grid', 'block', 'inline', 'hidden', 'relative', 'absolute', 'fixed', 'sticky', 'border',
+  'truncate', 'transition', 'shadow', 'underline', 'static', 'contents', 'container', 'rounded', 'italic', 'uppercase']);
+/** Start index of the string / template literal that encloses `index` (same lexical rules as
+ * insideStringLiteral), or -1 when `index` is in code. */
+function enclosingStringStart(source, index) {
+  let mode = 'code', start = -1;
+  const exprDepth = [];
+  for (let i = 0; i < index; i++) {
+    const char = source[i], next = source[i + 1];
+    if (mode === 'code') {
+      if (char === '/' && next === '/') mode = 'line';
+      else if (char === '/' && next === '*') { mode = 'block'; i++; }
+      else if (char === "'") { mode = 'sq'; start = i; }
+      else if (char === '"') { mode = 'dq'; start = i; }
+      else if (char === '`') { mode = 'tpl'; start = i; }
+      else if (char === '{' && exprDepth.length) exprDepth[exprDepth.length - 1]++;
+      else if (char === '}' && exprDepth.length) { if (exprDepth[exprDepth.length - 1] === 0) { exprDepth.pop(); mode = 'tpl'; } else exprDepth[exprDepth.length - 1]--; }
+    } else if (mode === 'sq' || mode === 'dq') {
+      if (char === '\\') i++;
+      else if (char === '\n' || char === (mode === 'sq' ? "'" : '"')) mode = 'code';
+    } else if (mode === 'tpl') {
+      if (char === '\\') i++;
+      else if (char === '`') mode = 'code';
+      else if (char === '$' && next === '{') { exprDepth.push(0); mode = 'code'; i++; }
+    } else if (mode === 'line') { if (char === '\n') mode = 'code'; }
+    else if (mode === 'block' && char === '*' && next === '/') { mode = 'code'; i++; }
+  }
+  return mode === 'sq' || mode === 'dq' || mode === 'tpl' ? start : -1;
+}
+
+/** The whole enclosing string (template literals may span lines; `${…}` parts are blanked) is a bare
+ * class list: every token class-like. */
+function insideClassListLiteral(source, index) {
+  const start = enclosingStringStart(source, index);
+  if (start < 0) return false;
+  const quote = source[start];
+  let text = '';
+  for (let i = start + 1; i < source.length; i++) {
+    const char = source[i];
+    if (char === '\\') { text += ' '; i++; continue; }
+    if (char === quote || (quote !== '`' && char === '\n')) break;
+    if (quote === '`' && char === '$' && source[i + 1] === '{') {
+      let depth = 0;
+      for (; i < source.length; i++) { if (source[i] === '{') depth++; else if (source[i] === '}' && --depth === 0) break; }
+      text += ' ';
+      continue;
+    }
+    text += char;
+  }
+  const tokens = text.split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every(t => /^[\w!:[\]/.%()#&>*~@=,+-]+$/.test(t) && (/[-:[]/.test(t) || UTILITY_WORDS.has(t)));
+}
+/** True when `index` sits inside a string literal or template text (prose, help text, embedded CSS),
+ * tracked lexically from the start of the file: ' and " end at the line break, template literals span
+ * lines, `${ … }` is code again, comments are skipped. */
+function insideStringLiteral(source, index) {
+  let mode = 'code';
+  const exprDepth = [];
+  for (let i = 0; i < index; i++) {
+    const char = source[i], next = source[i + 1];
+    if (mode === 'code') {
+      if (char === '/' && next === '/') mode = 'line';
+      else if (char === '/' && next === '*') { mode = 'block'; i++; }
+      else if (char === "'") mode = 'sq';
+      else if (char === '"') mode = 'dq';
+      else if (char === '`') mode = 'tpl';
+      else if (char === '{' && exprDepth.length) exprDepth[exprDepth.length - 1]++;
+      else if (char === '}' && exprDepth.length) { if (exprDepth[exprDepth.length - 1] === 0) { exprDepth.pop(); mode = 'tpl'; } else exprDepth[exprDepth.length - 1]--; }
+    } else if (mode === 'sq' || mode === 'dq') {
+      if (char === '\\') i++;
+      else if (char === '\n' || char === (mode === 'sq' ? "'" : '"')) mode = 'code';
+    } else if (mode === 'tpl') {
+      if (char === '\\') i++;
+      else if (char === '`') mode = 'code';
+      else if (char === '$' && next === '{') { exprDepth.push(0); mode = 'code'; i++; }
+    } else if (mode === 'line') { if (char === '\n') mode = 'code'; }
+    else if (mode === 'block' && char === '*' && next === '/') { mode = 'code'; i++; }
+  }
+  return mode === 'sq' || mode === 'dq' || mode === 'tpl';
+}
+
+/** DESIGN §5 keeps intrinsic content geometry (icon masks, illustration
+ * shapes) outside the radius inventory. Authors declare it in a comment on the
+ * same line or one of the two lines above: `design: intrinsic-geometry — <why>` (the reason is required). */
+// Must be a real comment (// … , /* … */, <!-- … -->) carrying a non-empty reason after a dash or colon.
+const INTRINSIC_GEOMETRY = /design:\s*intrinsic-geometry\s*(?:[—–:-]+)\s*[^\s*/>-]/;
+function declaresIntrinsicGeometry(rawSource, line) {
+  if (!rawSource) return false;
+  // Keep only real comment text (strings keep their `//` but are not comments): a marker quoted
+  // inside a string literal never declares anything.
+  const masked = maskColorComments(rawSource);
+  let commentsOnly = '';
+  for (let i = 0; i < rawSource.length; i++) commentsOnly += rawSource[i] !== masked[i] ? rawSource[i] : (rawSource[i] === '\n' ? '\n' : ' ');
+  const lines = commentsOnly.split('\n');
+  return lines.slice(Math.max(0, line - 3), line).some(text => INTRINSIC_GEOMETRY.test(text));
+}
+
+export function reportDesignLayers(file, source, changed, locate, spacingVariables, rawSource) {
   const findings = [];
   // Candidate reporting only: a palette utility is not proof of its rendered
   // role. Leave dynamic classes, CSS named values and exemptions to review.
   const paletteUtility = /(?<![\w-])(?:bg|text|border|ring|fill|stroke|outline|decoration|shadow)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-(?:50|[1-9]00|950)(?:\/(?:\d+|\[[^\]\n]+\]))?(?![\w-])/g;
   const classSpans = classNameValueSpans(source);
+  const helperSpans = classHelperSpans(source);
   for (const match of source.matchAll(paletteUtility)) {
     if (!classSpans.some(([start, end]) => match.index >= start && match.index < end)) continue;
     const pos = locate(match.index);
@@ -143,14 +302,18 @@ export function reportDesignLayers(file, source, changed, locate, spacingVariabl
       suggestion: 'Use the matching semantic theme role on a production surface; preserve sanctioned content and legacy overrides. This report does not add blocking scope.',
     });
   }
-  const patterns = /\brounded(?:-(?:\[[^\]\n]+\]|[\w-]+))?|\bborder(?:-radius|Radius)\s*:\s*[^;,}\n]+|\b(?:[pm][xytrblse]?|gap(?:-[xy])?|space-[xy])-\[[^\]\n]+\]/g;
+  const patterns = /\brounded(?:-(?:[trblse]|tl|tr|bl|br|ss|se|es|ee)(?=-))?(?:-(?:\[[^\]\n]+\]|[\w-]+))?|\b(?:border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius|border(?:(?:Top|Bottom)(?:Left|Right)|(?:Start|End)(?:Start|End))?Radius)['"]?\s*\]?\s*(?::|=(?!=))\s*[^;,}]+|\bsetProperty\(\s*['\"]border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius['\"]\s*,\s*[^;)]+|\b(?:[pm][xytrblse]?|gap(?:-[xy])?|space-[xy])-\[[^\]\n]+\]/g;
   for (const match of source.matchAll(patterns)) {
-    const pos = locate(match.index);
-    if (!changed.has(pos.line)) continue;
+    const start = locate(match.index);
+    // A multi-line declaration counts as changed when ANY line it spans was added/edited.
+    const endLine = locate(Math.max(match.index, match.index + match[0].trimEnd().length - 1)).line;
+    const changedLine = [...changed].filter(line => line >= start.line && line <= endLine).sort((a, b) => a - b)[0];
+    if (changedLine === undefined) continue;
+    const pos = changedLine === start.line ? start : { line: changedLine, column: 1 };
     const tagStart = source.lastIndexOf('<', match.index);
     const tagEnd = source.indexOf('>', match.index);
     const tag = tagStart >= 0 && tagEnd >= 0 ? source.slice(tagStart, tagEnd + 1) : '';
-    const isRadius = /^(rounded|border)/.test(match[0]);
+    const isRadius = /^(rounded|border|setProperty)/.test(match[0]);
     let member, layer, evidence = false;
     if (/\/usage\/Usage(?:Heatmap|TokenBars)\.tsx$|\/UsageHeatmap\.tsx$/.test(file)) {
       member = /data-usage-mark="(usage-heatmap-day|usage-token-bar)"/.exec(tag)?.[1];
@@ -163,6 +326,39 @@ export function reportDesignLayers(file, source, changed, locate, spacingVariabl
     const radius = /^rounded-\[([^\]]+)\]$/.exec(match[0])?.[1] ?? match[0].replace(/^rounded-/, '');
     const judgement = isRadius ? classifyDesignLayer({ member, layer, radius, evidence })
       : classifySpacing(match[0], spacingVariables);
+    const offScale = isRadius ? offScaleRadius(match[0].trim()) : null;
+    if (offScale !== null && declaresIntrinsicGeometry(rawSource, start.line)) {
+      findings.push({ file, ...pos, rule: 'off-scale-radius', value: match[0], disposition: 'report',
+        classification: 'declared-intrinsic-geometry',
+        reason: `Resolves to ${offScale}px; declared intrinsic content geometry (DESIGN §5), so it is outside the radius inventory.`,
+        suggestion: 'Reviewer: confirm the shape belongs to the content itself (icon mask, illustration), not to a control, container or row highlight.' });
+      continue;
+    }
+    // Block only where the value really styles something: a class attribute / cn() argument / bare class
+    // list, a style-object `borderRadius:` outside any string, or a CSS-file declaration. Prose and
+    // diagnostics that merely mention a radius stay a report.
+    const raw = match[0].trim();
+    const inSpan = spans => spans.some(([a, b]) => match.index >= a && match.index < b);
+    const styleContext = /^rounded/.test(raw)
+      ? inSpan(classSpans) || inSpan(helperSpans) || insideClassListLiteral(source, match.index)
+      : /^(?:border[A-Z]|setProperty)/.test(raw)
+        // A quoted static key ('borderRadius': / ['borderRadius'] =) is code: judge the position of its opening quote.
+        ? !insideStringLiteral(source, /^border[\w-]*?[Rr]adius['"]\s*\]?\s*[:=]/.test(raw) && /['"]/.test(source[match.index - 1]) ? match.index - 1 : match.index)
+        : /\.(?:css|scss|less|html)$/.test(file);
+    if (offScale !== null && !styleContext) {
+      findings.push({ file, ...pos, rule: 'off-scale-radius', value: match[0], disposition: 'report',
+        classification: 'off-scale-radius-unconfirmed-context',
+        reason: `Resolves to ${offScale}px, outside the DESIGN §5 radius inventory, but it is not in a confirmed style context (class attribute, cn() call, class list, style object or CSS file).`,
+        suggestion: 'If this styles a visible layer, use a governed radius (rounded-full / rounded-xl / rounded-lg); if it is prose or an embedded CSS string, ignore this report.' });
+      continue;
+    }
+    if (offScale !== null) {
+      findings.push({ file, ...pos, rule: 'off-scale-radius', value: match[0], disposition: 'block',
+        classification: 'off-scale-radius',
+        reason: `Resolves to ${offScale}px, outside the DESIGN §5 radius inventory (0 / 2 / 4 / 8 / 12px / pill); no layer may use it.`,
+        suggestion: 'Assign the visible layer through DESIGN §5: ordinary control frame → rounded-full, container → rounded-xl (12px), inner control / textarea / row highlight → rounded-lg (8px). Intrinsic content geometry (icon mask, illustration) is outside the inventory: add a `design: intrinsic-geometry — <reason>` comment on this line or just above. A genuinely new shape needs a design ruling first.' });
+      continue;
+    }
     findings.push({ file, ...pos, rule: isRadius ? 'visible-layer-radius' : 'role-spacing',
       value: match[0], disposition: 'report', ...judgement,
       suggestion: isRadius

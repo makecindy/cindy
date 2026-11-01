@@ -29,11 +29,16 @@ const UI_PATH_PREFIXES = [
   'apps/mobile/src/theme/',
 ];
 const UI_FILE_SUFFIXES = ['.css', '.scss', '.less'];
+// Mobile 界面不只在上面几个目录（插件、远程桌面、输入接力等也有界面），
+// src 下的 .tsx 一律视为 UI 文件。
+const MOBILE_UI_ROOT = 'apps/mobile/src/';
 
 const FIELD_LABEL = '引用的设计规范';
-// 设计规范文档引用特征：docs/design-rules/ 目录或其下具体文档名。
+// 设计规范文档引用特征：docs/design-rules/ 目录，或现行规范文档的确切文件名（区分大小写，
+// 不再让任意 `*-design.md` 因包含 "design.md" 而误过）。Mobile 文字规范在
+// apps/mobile/docs/mobile-design-guide.md，AGENTS.md 要求 Mobile 文字改动引用它。
 const DESIGN_DOC_PATTERN =
-  /(docs\/design-rules\/|DESIGN\.md|cindy-design-system|token-decision-table)/i;
+  /(docs\/design-rules\/|(?<![\w-])DESIGN\.md(?![\w-]|\.\w)|(?<![\w-])(?:cindy-design-system|token-decision-table|design-governance|ios-native-design|usage-history-charts|mobile-design-guide)(?:\.md)?(?![\w-]|\.\w))/;
 // 已删除的设计文档：只剔除它自己的名字或路径（可带 docs/design-rules/ 前缀和 .md 后缀）再判断，
 // 否则 `docs/design-rules/figma-component-spec.md §4` 仍会因目录前缀被当作有效依据。
 // 不能按整段非空白字符剔除：中文 Markdown 常把链接无空格连写，会连带删掉紧挨着的有效引用。
@@ -48,7 +53,8 @@ const CHECKLIST_LINE_PATTERN = /^\s*[-*+]\s*\[[ xX]\]/;
 export function isUiPath(path) {
   return (
     UI_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-    UI_FILE_SUFFIXES.some((suffix) => path.endsWith(suffix))
+    UI_FILE_SUFFIXES.some((suffix) => path.endsWith(suffix)) ||
+    (path.startsWith(MOBILE_UI_ROOT) && path.endsWith('.tsx'))
   );
 }
 
