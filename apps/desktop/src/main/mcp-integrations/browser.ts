@@ -251,6 +251,10 @@ const externalChromeBackend = new ExternalChromeBackend(
     createRuntime: createManagedRuntime,
     cdpHttpUrl: () => currentGuardIdentity().cdpHttpUrl,
     managedUserDataDir: () => currentGuardIdentity().managedUserDataDir,
+    // The failed-stop teardown may only run for a request that targeted this
+    // browser: the MCP stop tool threads a resolved profile name, and a stale
+    // one 404s before dispatch — that error must never kill the active browser.
+    managedProfileName: () => activeManagedProfileName(readBrowserBackendSettings().useRealProfile),
     // The vendored stop can only signal a process it launched. On Windows the
     // spawned browser is a short-lived launcher, so once it exits the runtime
     // has no PID left while the real browser keeps the CDP port — every later
