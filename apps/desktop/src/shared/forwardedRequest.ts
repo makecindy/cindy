@@ -1,4 +1,5 @@
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale.js';
+export { verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
 import en from '../renderer/i18n/locales/en/common.json';
 import zhCN from '../renderer/i18n/locales/zh-CN/common.json';
 import zhTW from '../renderer/i18n/locales/zh-TW/common.json';

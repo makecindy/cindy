@@ -100,3 +100,15 @@ agent-input-coordinator.test.ts 的远程入队与插话测试曾从 register.ts
 保留原有三组 unit 断言，15 passed、582 skipped，最终定向运行 11.71 秒（收集 11.02 秒、执行 227ms）；未新增测试文件。该存量巨型文件包含 597 项测试和大量运行时依赖，冷收集已超过 5 秒预算，本轮不增加逐例加载或真实等待。完整文件复查 583 passed、14 failed，29.18 秒；此前 576 passed、21 failed，消除 7 项失效源码夹具造成的失败。余下失败涉及插话失败后的活跃状态、调度人工恢复、拒绝 compact 后的恢复与伙伴原话转发，不能宣称队列整体通过。
 
 共享 app-runtime、cindy-terminal 类型检查通过；Desktop 完整检查仍为 259 条诊断，本次夹具和 makerInputSubmission 无新增诊断。门禁原始 scanRepository 复查先前五个文件，仅 orcaWorkerCreationService.test.ts 仍有 sourceReads=1，其余不再命中。正式门禁仍受当前分支的既有基线上调阻挡，尚未收紧基线。继续处理 Orca 生产授权入口和共享运行时的行为迁移；PR 仍为草稿。
+
+### 调度恢复与已核实原话迁移（2026-11-01）
+
+从主干迁回共享协调器的调度失败继续资格：仅已持久化且未成功撤回的调度失败设置 errorCanContinue，停止／清错重置资格，不保存或重放已结束的调度 prompt。投影字段为可选，旧宿主缺失时客户端按不可继续处理；Desktop/Mobile 已有消费者。插话被 vendor 拒绝后若产品仍有活跃后台工作，不再合成 done 或错误地启动下一轮。
+
+迁回 verifiedOwnerRequestText 及审核历史恢复中的原话读取：只接受已有 host-owned 回执中的 true 标记、来源任务和消息标识及非空原话；未核实回执、插件与共享访客历史不会因此成为主人授权。队列发送、插话和持久化历史使用同一解析器；不修改系统提示词。发送端伙伴身份裁决与 IM 主人输入读取尚待迁移，不能声称原话链路已完整接通。
+
+既有 agent-input-coordinator 全文件 597 项通过（修复前 14 失败）；与 autoReviewUserIntent、forwardedRequest、数据库 autoReviewProjection 合跑 693 passed、3 failed，31.32 秒。三项失败均在 forwardedRequest 的发送端：尚未接入 ownerVerified 参数及 ownerChannelInputEvidence，未放宽断言。Terminal 真实宿主定向集成 4 passed、121 skipped，54.41 秒。没有新增测试或改动既有测试断言。
+
+app-runtime、cindy-terminal 类型检查通过。maker-shared 没有 typecheck script，因此额外执行其 build（tsc --noEmit）：发现存量 findLastIndex 与 ES2022 lib 不兼容，改为等价倒序查找后通过；五组空列表、无撤销、仅撤销及多次撤销输入与原行为一致。该改动不提高运行时语言版本要求。主干冲突、完整 CI、正式 test-hygiene 与发送端身份迁移仍未完成，在线 VPS 不变。
+
+最终 Desktop 全量检查为 241 条诊断（本批之前 259），共享恢复与原话解析代码无新增诊断；队列测试中仍有原有重复 statDirectory 夹具字段的诊断，发送端缺失接口也仍报告类型错误。未将这些错误隐藏或标为通过。文档检查 10 项通过，diff 检查通过。

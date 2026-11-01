@@ -104,7 +104,8 @@ export interface CindyMakeHistoryState {
 }
 /** The last undo removes all preceding active changes; reapply starts a new effective delta. */
 export function activeFeatureReceipts(receipts: MakeFeatureReceipt[]): MakeFeatureReceipt[] {
-  const lastUndo = receipts.findLastIndex((receipt) => receipt.action === 'revert');
+  let lastUndo = receipts.length - 1;
+  while (lastUndo >= 0 && receipts[lastUndo].action !== 'revert') lastUndo -= 1;
   return receipts.slice(lastUndo + 1).filter((receipt) => receipt.action !== 'revert');
 }
 /** One policy for both the visible controls and Main's action admission. */

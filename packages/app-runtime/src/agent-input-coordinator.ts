@@ -1,4 +1,5 @@
 import { FORWARDED_REQUEST_RECEIPT, type ForwardedRequestSource } from '@cindy/maker-shared/forwarded-request-types';
+import { verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '@cindy/maker-shared/botGroupChat';
@@ -113,9 +114,11 @@ const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
 type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
 
-/** Typed Host continuations carry provenance, never user-authored permission text. */
+/** Typed Host continuations carry provenance, never user-authored permission text.
+ * A teammate relay the sending host verified as the owner's request carries the owner's words. */
 function queuedAutoReviewText(item: AgentInputQueuedMessage): string {
-  return typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : '';
+  return typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText
+    : verifiedOwnerRequestText(item.autoReviewUserText) ?? '';
 }
 
 function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
@@ -249,6 +252,7 @@ export interface AgentInputSendOpts {
    * 也不参与任何权限判定;刻意不复用 `origin`(那是 scheduler 的 turn origin)。
    */
   sourceOrigin?: AgentInputQueuedMessage['origin'];
+  [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   /** Main-owned clear token captured when this input became active. */
@@ -758,6 +762,8 @@ interface SessionInputState {
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
+  /** The failed scheduled input was persisted before its recovery was released. */
+  errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
   toolLoop: AgentInputToolLoopDetails | null;
   stickyError: string | null;
@@ -895,6 +901,7 @@ function createInitialInputState(
     activeTurn: null,
     error: null,
     errorReason: null,
+    errorCanContinue: false,
     toolLoop: null,
     stickyError: null,
     autoResumePending: null,
@@ -1133,19 +1140,21 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
   state.toolLoop = null;
+  state.errorCanContinue = false;
 }
 
 function setErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
   signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
 ): void {
   state.errorReason =
     typeof signals?.reason === 'string' && signals.reason.length > 0 ? signals.reason : null;
   state.toolLoop = parseAgentInputToolLoopDetails(signals?.toolLoop) ?? null;
+  state.errorCanContinue = false;
 }
 
 function isActiveTurnDispatched(active: ActiveTurn): boolean {
@@ -2643,6 +2652,10 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: appMessageGuard } : {}),
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
+        ...(verifiedOwnerRequestText(item.autoReviewUserText) !== undefined ? {
+          [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(item.autoReviewUserText),
+          [FORWARDED_REQUEST_RECEIPT]: item.autoReviewUserText,
+        } : {}),
         ...(item.autoReviewUserText && typeof item.autoReviewUserText === 'object' && item.autoReviewUserText.kind === 'delegated-continuation'
           ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         ...(typeof item.autoReviewUserText !== 'object' && readAutoReviewUserText(item.persistedContent) === null
@@ -2717,6 +2730,13 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
         // tracker, 否则下面 fallback / drain 仍会被假忙挡住 (见 deps 注释)。
         this.deps.reconcileTurnIdle?.(sessionId);
+        // A vendor can reject foreground steering while the product still owns
+        // a background continuation. Only confirmed idle permits synthetic done.
+        if (this.deps.isTurnRunning(sessionId)) {
+          this.clearDirectSteeringItem(latest, item.clientId);
+          this.emit(sessionId);
+          return finishSteerRequest(false);
+        }
         // 已派发的 activeTurn + 权威无活跃 turn ⇒ 那一轮其实已结束但 done
         // 事件丢失 (zombie turn)。合成 done 边界收掉它, 否则 fallback drain 会
         // 被这个尸体 activeTurn 永久挡住。pre-dispatch (send 还在飞) 的
@@ -4017,12 +4037,13 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         const schedulerItem = active.item && isSchedulerOriginItem(active.item);
         const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, active.item);
         const scheduledQuota = isScheduledQuotaRecovery(active.item, message, signals);
+        setErrorProjectionSignals(state, signals);
         const outcome = this.setActiveTurnRecovery(state, active.item, {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
+          persistedFailure: true,
         });
         if (outcome === 'dropped-scheduler') {
           state.error = message ?? state.error;
-          setErrorProjectionSignals(state, signals);
           // **紧随的 done 必须被配对吃掉。**各 agent 的失败收尾都是 terminal error 后再补
           // 一个 done;普通用户项靠下方"!active && recovery.kind==='active-turn'"那道守卫
           // 挡住它,而 scheduler 项恰恰没有 recovery 可挡 —— done 会一路落到方法尾部的
@@ -4052,10 +4073,9 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
           clearErrorProjectionSignals(state);
         } else {
           state.error = message ?? state.error;
-          setErrorProjectionSignals(state, signals);
           // 限额失败保留 Retry 与等待；其它确定性错误仍交给 runner 收口。
           if (schedulerItem && !scheduledQuota) {
-            state.recovery = null;
+            this.setActiveTurnRecovery(state, active.item, { persistedFailure: true });
             this.markPendingExternalTerminalDone(sessionId, state);
             this.emit(sessionId);
             this.scheduleDrainAfterExternalTurnSettles(
@@ -4505,6 +4525,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
+      ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       recovery,
@@ -5103,6 +5124,8 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
+        ...(verifiedOwnerRequestText(head.autoReviewUserText) !== undefined
+          ? { [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(head.autoReviewUserText) } : {}),
         ...(head.autoReviewUserText && typeof head.autoReviewUserText === 'object' && head.autoReviewUserText.kind === 'delegated-continuation'
           ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         messageUuid: active.messageUuid,
@@ -5336,7 +5359,9 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
       latest.stickyError = null;
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
-      const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
+      const schedulerOrigin = this.setActiveTurnRecovery(latest, head, {
+        persistedFailure: !rewound,
+      }) === 'dropped-scheduler';
       // 已落库的派发失败必须立刻放开边界。否则 coordinator 会一直占着 activeTurn,
       // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
       latest.activeTurn = null;
@@ -5489,14 +5514,16 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
     // 调度来源的 prompt **不留 active-turn recovery**。它的 Retry 走的是普通用户 turn:
     // 没有 scheduler 回调、没有 run 跟踪 —— 而这条 run 此刻已经顺延或落终态了,留着就等于
     // 让一条已收口的调度 prompt 之后还能被人手动跑一次(review #944 第九轮 P1)。
-    // 失败本身经 scheduler 自己的运行历史 + 通知呈现,不靠这里的重试入口。
+    // 未撤回的失败只授予隐藏续跑资格,不保留或重放已结束的 scheduler prompt。
     // 注:isPromptTracked 用的 hasQueuedItemWhere 默认不含 recovery,所以摘掉它不会影响
     // runner 的排队存活探测。
-    const schedulerOrigin = this.setActiveTurnRecovery(latest, item) === 'dropped-scheduler';
     const cancelledByUserBoundary =
       latest.queueAbortPending &&
       result.kind === 'session-dispatch' &&
       result.reason === 'cancelled-before-dispatch';
+    const schedulerOrigin = this.setActiveTurnRecovery(latest, item, {
+      persistedFailure: !rewoundScheduler && !cancelledByUserBoundary,
+    }) === 'dropped-scheduler';
     if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
     this.notifyUndispatchedUserTurn(
       sessionId,
@@ -5976,7 +6003,9 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
       state.stickyError = null;
       // 同 onTurnEvent / handleSendNotDispatched:scheduler 的 prompt 不留重试入口
       // (判据内建在 setActiveTurnRecovery,第十八轮 P1)。
-      const schedulerOrigin = this.setActiveTurnRecovery(state, item) === 'dropped-scheduler';
+      const schedulerOrigin = this.setActiveTurnRecovery(state, item, {
+        persistedFailure: true,
+      }) === 'dropped-scheduler';
       this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
       this.host.logger.warn(
         schedulerOrigin
@@ -6537,7 +6566,8 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
    * 不要再直接写 `state.recovery = { kind: 'active-turn', ... }`。
    *
    * Schedule 的瞬时错误与账号限额可保留 recovery，复用普通聊天的恢复路径；
-   * 其余失败由 runner 收口。
+   * 其余失败由 runner 收口；仍在历史里的失败输入可单独授予隐藏续跑资格，
+   * 不保留或重放旧 scheduler prompt。
    *
    * @returns `kept` = 留下了;`dropped-scheduler` = 因 scheduler 来源被摘掉,此时队列少了
    * 「用户点 clearError / Retry」这个唤醒源,调用方通常要补一次 scheduleDrain(Stop 那条
@@ -6548,14 +6578,18 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
   private setActiveTurnRecovery(
     state: SessionInputState,
     item: AgentInputQueuedMessage | null | undefined,
-    opts?: { allowSchedulerAutoResume?: boolean },
+    opts?: { allowSchedulerAutoResume?: boolean; persistedFailure?: boolean },
   ): 'kept' | 'dropped-scheduler' | 'no-item' {
+    state.errorCanContinue = false;
     if (!item) {
       state.recovery = null;
       return 'no-item';
     }
     if (isSchedulerOriginItem(item) && !opts?.allowSchedulerAutoResume) {
       state.recovery = null;
+      // This is the sole granting boundary. Stop, rewound rows and controls
+      // never pass persistedFailure; dispatch errors and terminal settlement do.
+      state.errorCanContinue = opts?.persistedFailure === true;
       return 'dropped-scheduler';
     }
     state.recovery = { kind: 'active-turn', item };
@@ -7105,7 +7139,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
       // Scheduler recovery only belongs to the live auto-resume attempt. Once
       // that attempt ends, the runner settles the failed run; keeping Retry
       // here would block every later fire (and replay outside run accounting).
-      this.setActiveTurnRecovery(state, state.recovery.item);
+      this.setActiveTurnRecovery(state, state.recovery.item, { persistedFailure: true });
       // Reuse normal scheduler failure settlement, including its bounded wait
       // for a paired done, so an old terminal cannot clear the next turn.
       this.markPendingExternalTerminalDone(sessionId, state);
@@ -7399,12 +7433,13 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
       const deferredPersistSuppressed = terminalEvent.resumableCandidate === true;
       const schedulerItem = active.item && isSchedulerOriginItem(active.item);
       const scheduledQuota = isScheduledQuotaRecovery(active.item, terminalEvent.message, terminalEvent.signals);
+      setErrorProjectionSignals(state, terminalEvent.signals);
       const outcome = this.setActiveTurnRecovery(state, active.item, {
         allowSchedulerAutoResume: Boolean(schedulerItem && deferredPersistSuppressed) || scheduledQuota,
+        persistedFailure: true,
       });
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
-        setErrorProjectionSignals(state, terminalEvent.signals);
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: true,
@@ -7445,7 +7480,6 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
         clearErrorProjectionSignals(state);
       } else {
         state.error = terminalEvent.message ?? state.error;
-        setErrorProjectionSignals(state, terminalEvent.signals);
         // 先登记换电脑，再移交候选期暂存的错误；否则 host 会先放出错误卡与 Worker 失败回报。
         if (outcome === 'kept' && active.item && terminalEvent.supersededByUser !== true) {
           this.holdForProviderGroupSwitch(
@@ -7461,7 +7495,7 @@ export class AgentInputCoordinator<SharedTaskCapture = unknown> {
           });
         }
         if (schedulerItem && !scheduledQuota) {
-          state.recovery = null;
+          this.setActiveTurnRecovery(state, active.item, { persistedFailure: true });
           this.markPendingExternalTerminalDone(sessionId, state);
           this.emit(sessionId);
           this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-prompt-terminal-error');
