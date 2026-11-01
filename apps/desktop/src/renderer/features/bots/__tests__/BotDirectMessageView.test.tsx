@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { copyRenderedSelection } from '../../../../test/vitest/rendererSelectionStyles';
+
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -113,6 +115,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotDirectMessageView', () => {
+  // Review 4362888100: this independent chat does not render MessageStream.
+  it('sanitizes selection copy through the real private-thread view', async () => {
+    render(<TestPage />);
+    const message = await screen.findByText('Can you check this?');
+    const { event, formats } = copyRenderedSelection(message);
+    expect(event.defaultPrevented).toBe(true);
+    expect(formats.get('text/plain')).toBe('Can you check this?');
+    expect(formats.get('text/html')).toContain('Can you check this?');
+    expect(formats.get('text/html')).not.toMatch(/class=|background|color:/);
+  });
+
   it('shows both sides read-only, renders the hard-limit ending, and returns to the source timeline', async () => {
     render(<TestPage />, { reactStrictMode: true });
     expect(await screen.findByText('Can you check this?')).toBeTruthy();

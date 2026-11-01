@@ -1,3 +1,4 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
  * 「N 条回复」分隔、回复按作者五分钟合并；有新回复且读者在底部时跟到底。
@@ -638,7 +639,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               </Tip>
             ) : null}
         </>}>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
+        <div ref={scrollRef} onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onScroll={(event) => {
             const element = event.currentTarget;
             const wasAtBottom = stickToBottomRef.current;

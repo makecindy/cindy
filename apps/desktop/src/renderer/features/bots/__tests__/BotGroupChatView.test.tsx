@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { copyRenderedSelection } from '../../../../test/vitest/rendererSelectionStyles';
+
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import userEvent from '@testing-library/user-event';
@@ -369,6 +371,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  // Review 4362888100: main group and thread timelines own separate scroll roots.
+  it.each(['group', 'thread'])('sanitizes selection copy in the real %s timeline', async (timeline) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    renderView();
+    let message = await screen.findByText('@小满 帮我查余票');
+    if (timeline === 'thread') {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      message = await within(screen.getByRole('complementary')).findByText('Reply to u1');
+    }
+    const text = message.textContent!;
+    const { event, formats } = copyRenderedSelection(message);
+    expect(event.defaultPrevented).toBe(true);
+    expect(formats.get('text/plain')).toBe(text);
+    expect(formats.get('text/html')).toContain(text);
+    expect(formats.get('text/html')).not.toMatch(/class=|background|color:/);
+  });
+
   // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.
   it('keeps a skipped message reachable by pagination after multiple deltas overtake a full page', async () => {
     const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) =>
