@@ -276,9 +276,14 @@ function stampBlockAfterTurnStart(
 // In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
 // so expanding midway does not depend on deltas a collapsed controller never received.
 const historyThinkingBlocks = new Map<string, Map<string, Message>>();
+// blockIds whose `final` arrived while its queued write has not settled yet. Those
+// snapshots survive turn boundaries (the write's release callback owns them); a
+// snapshot without a final belongs to a dead attempt and is dropped on turn settle.
+const historyThinkingFinalBlocks = new Map<string, Set<string>>();
 const historyThinkingOwners = new Map<string, OwnerScope>();
 export function clearSessionThinkingSnapshots(sessionId: string): void {
   historyThinkingBlocks.delete(sessionId);
+  historyThinkingFinalBlocks.delete(sessionId);
   historyThinkingOwners.delete(sessionId);
 }
 export function getSessionThinkingSnapshots(sessionId: string): Message[] {
@@ -1606,6 +1611,8 @@ export function onThinkingEvent(
   const releaseSnapshot = () => {
     if (blocks.get(blockId) !== finalSnapshot) return;
     blocks.delete(blockId);
+    const finals = historyThinkingFinalBlocks.get(sessionId);
+    if (finals?.delete(blockId) && finals.size === 0) historyThinkingFinalBlocks.delete(sessionId);
     if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
       historyThinkingBlocks.delete(sessionId);
       historyThinkingOwners.delete(sessionId);
@@ -1613,6 +1620,9 @@ export function onThinkingEvent(
   };
 
   if (data.stage === 'final') {
+    const finals = historyThinkingFinalBlocks.get(sessionId) ?? new Set<string>();
+    finals.add(blockId);
+    historyThinkingFinalBlocks.set(sessionId, finals);
     const finishedAt = receivedAt;
     const text = typeof data.text === 'string' ? data.text : '';
     const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
@@ -2134,14 +2144,43 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
 }
 
 /**
+ * 逻辑 turn 终态时丢弃从未收到 final/redacted 的在途思考快照。
+ *
+ * 这些块属于中途死掉的尝试(连接断开 / 供应商失败 / 用户中断):final 永远不会来,
+ * 永远不会落库,而快照若留着,历史视图读取会把它们当 live 行追加到时间线末尾,
+ * 运行中工作组的「正在工作…」预览就被钉死在这些早已结束的历史思考上
+ * (实测:一次 pi-gateway 断连后,5 条泄漏快照长期霸占预览)。仍在流式的块每条
+ * delta 都会重新 set 回缓存,清掉只会影响已死块。已收到 final 的块不受影响:
+ * 它们的写已入队,由写完成的 release 回调收口;写失败时的保留是既有契约
+ * (messagePersistBroadcaster.test.ts 'keeps failed final thinking until explicit cleanup')。
+ */
+function releaseUnfinalizedThinkingSnapshots(sessionId: string): void {
+  const blocks = historyThinkingBlocks.get(sessionId);
+  if (!blocks) return;
+  const finals = historyThinkingFinalBlocks.get(sessionId);
+  for (const blockId of [...blocks.keys()]) {
+    if (finals?.has(blockId)) continue;
+    blocks.delete(blockId);
+  }
+  if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
+    historyThinkingBlocks.delete(sessionId);
+    historyThinkingFinalBlocks.delete(sessionId);
+    historyThinkingOwners.delete(sessionId);
+  }
+}
+
+/**
  * turn 结束(done)时重置 per-turn 状态(对齐老 renderer 在 done case 把两个 Map 置空 +
  * lastAgentMeta 清空)。assistant block 已在 done 边界 flush;此处清 tool_result 相关 Map
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
   assistantItemPersistIds.delete(sessionId);
-  // Event-stream completion is not a persistence barrier. Thinking snapshots
-  // survive until their write succeeds or an explicit history/owner cleanup.
+  // Event-stream completion is not a persistence barrier. Snapshots that already
+  // saw `final` survive until their queued write settles (or an explicit
+  // history/owner cleanup); blocks that never saw one belong to a dead attempt —
+  // keeping them would let the history view read them as live rows forever.
+  releaseUnfinalizedThinkingSnapshots(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);

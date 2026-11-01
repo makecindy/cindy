@@ -2042,6 +2042,29 @@ describe('done orphan:残留 buffer 在 turn 末 flush', () => {
 });
 
 describe('thinking persistence', () => {
+  it('drops interrupted thinking at the turn boundary but keeps finalized blocks pending write', async () => {
+    // 回归：turn 中途死掉的思考块(无 final)若留在快照里,历史视图会把它当 live 行
+    // 追加到时间线末尾,「正在工作…」预览被钉死在早已结束的历史思考上。
+    // 旧实现里 resetTurnPersistState 不碰快照,本用例在修复前返回两条而失败。
+    let finishWrite!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishWrite = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'start', blockId: 'dead-thought' }, null);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'dead-thought', text: 'streamed, then the attempt died' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'sealed-thought', text: 'complete thought' }, null);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'sealed-thought', content: expect.objectContaining({ text: 'complete thought' }),
+    })]);
+    // Drain before resolving: the queued write must consume its pending mock first,
+    // otherwise the module-level writeChain stalls for every later test.
+    await flushWrites();
+    finishWrite();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('keeps final thinking across terminal resets until the queued write succeeds', async () => {
     let finishWrite!: () => void;
     vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
