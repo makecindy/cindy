@@ -427,6 +427,14 @@ describe('InputHandoffCard', () => {
       await waitFor(() => expect(mocks.openRemoteDesktop).toHaveBeenCalledWith({ deviceId: 'mac', name: 'Studio', handoff: 'req1' }));
     });
 
+    it('lets the owner say when, if the page could not be read', () => {
+      stubDesktop();
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn({ picture: true, controls: [] })} />);
+      expect(screen.getByRole('status').textContent).toBe('inputHandoff.directSignIn.hintUnread');
+      expect(screen.getByRole('button', { name: 'inputHandoff.action.openPlainWindow' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'inputHandoff.action.done' })).toBeTruthy();
+    });
+
     it('keeps the form from another computer when there is no live view', () => {
       mocks.hostDeviceId = 'mac';
       render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);

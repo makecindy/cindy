@@ -188,11 +188,20 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
     status = t('inputHandoff.qr.scanned');
     actions = [skip, handBack];
   } else if (snapshot.phase === 'ready' && directSignIn) {
-    status = t('inputHandoff.directSignIn.hint');
+    // With a picture the page could not be read, so the end cannot be seen either: the owner says when.
+    const unread = snapshot.picture === true;
+    status = t(unread ? 'inputHandoff.directSignIn.hintUnread' : 'inputHandoff.directSignIn.hint');
     actions = [
       skip,
+      ...(unread ? [{ ...handBack, primary: false }] : []),
       {
-        label: t(onThisComputer ? 'inputHandoff.action.openWindow' : 'inputHandoff.action.openRemoteDesktop'),
+        label: t(
+          !onThisComputer
+            ? 'inputHandoff.action.openRemoteDesktop'
+            : unread
+              ? 'inputHandoff.action.openPlainWindow'
+              : 'inputHandoff.action.openWindow',
+        ),
         primary: true,
         onClick: () => {
           void window.electronAPI.maker.raiseInputHandoff(snapshot.requestId).catch(() => setError(t('inputHandoff.error.raise')));

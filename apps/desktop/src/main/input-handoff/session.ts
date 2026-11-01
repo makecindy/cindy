@@ -337,9 +337,15 @@ export class InputHandoffSession {
       && (this.phase === 'ready' || this.phase === 'finishing') && this.options.liveView?.() === true;
   }
 
+  /**
+   * The owner does this on the window: a sign-in, or a browser page nothing can be
+   * read from (the form could only be guessed at). `picture` then stays the way to
+   * answer from a device with no live view.
+   */
   private directSignInOffered(): boolean {
-    return !this.ended && this.phase === 'ready' && this.signInMode && !this.picture && !this.qrState
-      && !!this.step?.signIn && !this.step.deviceCode && !!this.options.driver.raise;
+    if (this.ended || this.phase !== 'ready' || this.qrState || !this.options.driver.raise) return false;
+    if (this.picture) return !this.pictureChosen && !!this.step?.pageMissing;
+    return this.signInMode && !!this.step?.signIn && !this.step.deviceCode;
   }
 
   /** The owner chose to sign in on the window: show it to them. */
@@ -991,8 +997,9 @@ export class InputHandoffSession {
 
   /** Waiting on a form nobody has started answering through the card, so the window is the only news. */
   private watching(): boolean {
-    return !this.ended && !this.busy && this.phase === 'ready' && !this.holder && !this.picture && !this.qrState
-      && !!this.target && !!this.step && actionable(this.step) && !this.step.deviceCode;
+    if (this.ended || this.busy || this.phase !== 'ready' || this.holder || this.qrState || !this.target) return false;
+    if (this.picture) return !this.pictureChosen;
+    return !!this.step && actionable(this.step) && !this.step.deviceCode;
   }
 
   /**
@@ -1032,7 +1039,13 @@ export class InputHandoffSession {
     if (window.minimized) return;
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
     const step = await this.read().catch(() => null);
-    if (!step || step.pageMissing || !this.watching() || !this.step) return;
+    if (!step || step.pageMissing || !this.watching()) return;
+    // Answering on a picture because nothing could be read: now something can.
+    if (this.picture) {
+      if (actionable(step)) this.present(step, true);
+      return;
+    }
+    if (!this.step) return;
     if (this.signInMode ? step.signIn : actionable(step)) {
       this.fieldsGoneReads = 0;
       if (fieldShape(step) !== fieldShape(this.step)) {

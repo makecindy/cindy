@@ -246,6 +246,9 @@ it("sends a sign-in to the live view, and keeps the form when there is none", as
     pathname: "/devices/desktop/[deviceId]",
     params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
   });
+  const unread = mount(step({ directSignIn: true, liveView: true, picture: true, controls: [] }));
+  expect(unread.container.textContent).toContain("interaction.inputHandoff.directSignIn.hintUnread");
+  expect(buttons(unread.container)).toContain("interaction.inputHandoff.action.done");
   const noLive = mount(step({ directSignIn: true }));
   expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
 });

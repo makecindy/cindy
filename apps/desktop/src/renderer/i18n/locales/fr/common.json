@@ -16081,6 +16081,7 @@
       "backToForm": "Retour au formulaire",
       "liveView": "Vue en direct",
       "openWindow": "Ouvrir la fenêtre de connexion",
+      "openPlainWindow": "Ouvrir la fenêtre",
       "openRemoteDesktop": "Ouvrir le bureau à distance",
       "fill": "Remplir",
       "skip": "Passer",
@@ -16091,6 +16092,7 @@
       "scan": "Scanner"
     },
     "directSignIn": {
+      "hintUnread": "Cette page est illisible. Travaillez directement dans la fenêtre, puis rendez la main à l'Agent ou envoyez un message.",
       "hint": "Connectez-vous directement dans la fenêtre. La suite reprendra automatiquement."
     },
     "remoteUnavailable": "Cet ordinateur ne peut pas recevoir de saisie à distance. Terminez cette étape sur l'ordinateur hôte, puis rendez la main à l'Agent.",

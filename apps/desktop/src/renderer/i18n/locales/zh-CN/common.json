@@ -15836,6 +15836,7 @@
       "backToForm": "回到表单",
       "liveView": "实时画面",
       "openWindow": "打开登录窗口",
+      "openPlainWindow": "打开窗口",
       "openRemoteDesktop": "打开远程桌面",
       "fill": "填写",
       "skip": "跳过",
@@ -15846,6 +15847,7 @@
       "scan": "扫码"
     },
     "directSignIn": {
+      "hintUnread": "这个页面的内容读不到，请直接在窗口里操作，完成后点「交还给 Agent」或发消息告诉我。",
       "hint": "请直接在窗口里登录，完成后会自动继续。"
     },
     "remoteUnavailable": "这台电脑不能从远程接收输入。请在宿主电脑上完成这一步，再交还给 Agent。",

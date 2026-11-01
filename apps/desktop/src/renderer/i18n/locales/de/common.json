@@ -15937,6 +15937,7 @@
       "backToForm": "Zurück zum Formular",
       "liveView": "Live-Ansicht",
       "openWindow": "Anmeldefenster öffnen",
+      "openPlainWindow": "Fenster öffnen",
       "openRemoteDesktop": "Remote-Desktop öffnen",
       "fill": "Ausfüllen",
       "skip": "Überspringen",
@@ -15947,6 +15948,7 @@
       "scan": "Scannen"
     },
     "directSignIn": {
+      "hintUnread": "Diese Seite lässt sich nicht lesen. Arbeite direkt im Fenster und gib danach an den Agent zurück oder sende eine Nachricht.",
       "hint": "Melde dich direkt im Fenster an. Danach geht es automatisch weiter."
     },
     "remoteUnavailable": "Dieser Computer kann keine Remote-Eingaben empfangen. Schließe diesen Schritt auf dem Host-Computer ab und gib dann an den Agent zurück.",

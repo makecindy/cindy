@@ -16081,6 +16081,7 @@
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
       "openWindow": "Abrir janela de início de sessão",
+      "openPlainWindow": "Abrir janela",
       "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
       "fill": "Preencher",
       "skip": "Ignorar",
@@ -16091,6 +16092,7 @@
       "scan": "Ler código"
     },
     "directSignIn": {
+      "hintUnread": "Não foi possível ler esta página. Trabalhe diretamente na janela e, ao terminar, devolva ao agente ou envie uma mensagem.",
       "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",

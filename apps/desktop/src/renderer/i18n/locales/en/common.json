@@ -15903,6 +15903,7 @@
       "backToForm": "Back to form",
       "liveView": "Live View",
       "openWindow": "Open sign-in window",
+      "openPlainWindow": "Open window",
       "openRemoteDesktop": "Open remote desktop",
       "fill": "Fill In",
       "skip": "Skip",
@@ -15913,6 +15914,7 @@
       "scan": "Scan"
     },
     "directSignIn": {
+      "hintUnread": "This page can't be read. Work directly in the window, then choose Hand Back to Agent or send a message.",
       "hint": "Sign in directly in the window. Cindy continues on its own when you finish."
     },
     "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",

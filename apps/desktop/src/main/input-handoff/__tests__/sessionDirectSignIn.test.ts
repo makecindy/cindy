@@ -208,6 +208,47 @@ describe('a sign-in step', () => {
   });
 });
 
+describe('a browser page that cannot be read', () => {
+  const unreadable = () => {
+    const { driver, state } = desktop();
+    const read = driver.snapshot.bind(driver);
+    const seen = { readable: false };
+    driver.snapshot = async (pid, window) => {
+      const shot = await read(pid, window);
+      return 'nodes' in shot && !seen.readable ? { ...shot, nodes: [screens.email[0]] } : shot;
+    };
+    driver.capture = async () => ({ jpeg: Buffer.from('jpeg'), width: 8, height: 8, frame });
+    return { driver, state, seen };
+  };
+
+  it('is done on the window too, with the picture kept for devices without a live view', async () => {
+    const { driver } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    expect(run.latest()).toMatchObject({ phase: 'ready', picture: true, directSignIn: true });
+    run.session.cancel();
+  });
+
+  it('goes back to the form flow as soon as the page can be read', async () => {
+    const { driver, seen } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    seen.readable = true;
+    await vi.waitFor(() => expect(run.latest().picture).toBeUndefined());
+    expect(run.latest()).toMatchObject({ directSignIn: true });
+    run.session.cancel();
+  });
+
+  it('ends when its window closes', async () => {
+    const { driver, state } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    state.closed = true;
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
+  });
+});
+
 describe('a waiting card watching its window', () => {
   it('ends when a form that is not a sign-in goes away', async () => {
     const { driver, state } = desktop('address');

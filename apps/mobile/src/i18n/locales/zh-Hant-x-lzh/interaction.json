@@ -309,6 +309,7 @@
       "scan": "掃碼"
     },
     "directSignIn": {
+      "hintUnread": "此頁之文不可讀，請逕於窗中為之，畢則點「交還於 Agent」或發訊告我。",
       "hint": "請逕於窗中登入，畢則自續。"
     },
     "remoteUnavailable": "此機不能自遠端受書。請於主機之上竟此步，再交還 Agent。",
