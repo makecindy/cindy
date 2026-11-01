@@ -21,6 +21,7 @@ import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { companionMessageBubble } from './companionMessageAppearance';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
@@ -3833,6 +3834,7 @@ function MessageBubble({
         presentation.density === 'compact' && styles.bubbleCompact,
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
+        actions.companion && isUser && !item.message.systemCardType && styles.companionUserBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
         actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
@@ -8918,7 +8920,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bubbleRich: {
     gap: spacing.sm,
   },
-  companionAnswer: { backgroundColor: colors.surface, borderWidth: 0, paddingHorizontal: 0 },
+  companionAnswer: companionMessageBubble(colors),
+  companionUserBubble: { borderWidth: 0 },
   companionQuote: { alignSelf: 'stretch', marginBottom: spacing.xs },
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
   companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
