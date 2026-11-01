@@ -571,3 +571,13 @@ test('Tailwind arbitrary shorthand radii are checked item by item', () => {
     assert.deepEqual(dispositions(value), [], value);
   }
 });
+
+test('quoted and bracketed static radius keys are code, not prose', () => {
+  const file = `${renderer}components/Example.tsx`;
+  const dispositions = source => inspect(file, source).filter(f => f.rule === 'off-scale-radius').map(f => f.disposition);
+  for (const source of ["const s = { 'borderRadius': 6 };", 'const s = { "borderRadius": 6 };', "style['borderRadius'] = '6px';",
+    "const s = { 'borderTopLeftRadius': 10 };"]) assert.deepEqual(dispositions(source), ['block'], source);
+  for (const source of ["style['borderRadius'] = '8px';", "const s = { 'borderRadius': 12 };"]) assert.deepEqual(dispositions(source), [], source);
+  // A quoted mention inside prose is still just prose.
+  for (const source of ['const h = "borderRadius: 6 is bad";', "const h = 'use borderRadius: 6';"]) assert.deepEqual(dispositions(source), ['report'], source);
+});

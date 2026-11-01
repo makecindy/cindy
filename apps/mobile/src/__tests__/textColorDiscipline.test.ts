@@ -66,6 +66,7 @@ const KNOWN_TEXT_COLOR_DEBT = new Map<string, number>([
   ['src/session/SessionUsageSummary.tsx quotaWarn quotaBarWarn', 1], // 额度条专用色,规范写明不用于百分比文字
   ['src/session/SessionUsageSummary.tsx quotaCrit quotaBarCrit', 1], // 同上
   ['src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider', 1], // 规范写明「新回复」分隔线文字保持 text-primary
+  ['src/session/ContextSheetGoalView.tsx textColor prop statusRecording', 1], // 目标视图操作按钮文字用录制状态色,该 token 定义只供状态指示
   ['src/session/InteractionPanel.tsx inline statusReady', 1], // 就绪阶段文字用品牌 teal,规范只登记了状态点
   ['src/session/SessionImportSheet.tsx warn warningFg', 1], // 警告文字用金色前景,规范只登记了图标与皇冠 // 借用确认钮底色,待设计裁决
 ]);
@@ -162,11 +163,15 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
     const span = balancedFrom(source, attr.index! + attr[0].length);
     for (const expr of colorExprs(span)) for (const token of resolve(expr, attr.index!)) found.push({ where: 'inline', token });
   }
+  // 自定义组件把文字颜色当 prop 传下去(textColor={…} / labelColor={…} 等),最终写进 <Text> 的 color。
+  for (const prop of source.matchAll(/\b(text|label|title|subtitle|value|foreground)Color=\{([^}]*)\}/g)) {
+    for (const token of resolve(prop[2], prop.index!)) found.push({ where: `${prop[1]}Color prop`, token });
+  }
   // SwiftUI 的 foregroundStyle 也给形状、渐变、图标上色,这些所有者排除;文字控件与可复用修饰器都统计。
   for (const call of source.matchAll(/foregroundStyle\(([^)]*)\)/g)) {
     const owner = enclosingTag(source, call.index!);
     if (owner && SWIFTUI_NON_TEXT.has(owner)) continue;
-    for (const token of tokensIn(call[1])) found.push({ where: 'foregroundStyle', token });
+    for (const token of resolve(call[1], call.index!)) found.push({ where: 'foregroundStyle', token });
   }
   return found;
 }
@@ -197,6 +202,10 @@ describe('text color discipline', () => {
     expect(tokens('const x = { fontSize: typeScale.body, color: c.inputCaret }')).toEqual(['inputCaret']);
     expect(tokens('<Text modifiers={[foregroundStyle(ok ? colors.textSecondary : colors.cta)]} />')).toEqual(['textSecondary', 'cta']);
     expect(tokens('<Circle modifiers={[foregroundStyle(colors.statusReady)]} />')).toEqual([]);
+    expect(tokens('<Row textColor={colors.border} />')).toEqual(['border']);
+    expect(tokens('<Row textColor={on ? colors.textPrimary : colors.border} labelColor={colors.textSecondary} />')).toEqual(['textPrimary', 'border', 'textSecondary']);
+    expect(tokens('const fg = on ? colors.ctaText : colors.border;\n<Text modifiers={[foregroundStyle(fg)]} />')).toEqual(['ctaText', 'border']);
+    expect(scanPlaceholderColors('<TextInput placeholderTextColor={colors.textPlaceholder} />')).toEqual(['textPlaceholder']);
     expect(tokens('<TextField modifiers={[foregroundStyle(colors.border)]} />')).toEqual(['border']);
     // 局部别名与对象简写:颜色先存进变量再写进样式,也要追到最终 token。
     expect(tokens('const color = on ? colors.destructive : colors.border;\n<Text style={{ color }} />')).toEqual(['destructive', 'border']);
