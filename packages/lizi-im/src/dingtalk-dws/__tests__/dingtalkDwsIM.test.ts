@@ -99,6 +99,9 @@ function makeRunner(options: { identity?: unknown; available?: boolean } = {}) {
       calls.push({ args, cwd: opts?.cwd });
       if (args[0] === 'auth') return options.identity ?? IDENTITY;
       if (args[1] === '+chat-messages') return history.shift() ?? { messages: [] };
+      if (args[1] === '+conversation-info') {
+        return { result: { conversationInfo: { title: '项目群', openConversationId: args[3] } } };
+      }
       return { success: true };
     }),
     spawnStream: vi.fn(() => {
@@ -319,6 +322,25 @@ describe('DingTalkDwsIM inbound', () => {
       speaker: { id: 'owner-open', name: '张三', isOwner: true },
       replyContext: { author: '同事', text: '上面的方案' },
     });
+    await im.dispose();
+  });
+
+  // 群名进渠道说明，Agent 才知道是哪个群；同一群只查一次。
+  it('names the group from conversation-info and caches it per conversation', async () => {
+    const { im, streams, messages, calls } = await connected();
+    await bindOwner(im, streams[0]);
+    const mention = {
+      type: DWS_EVENT_MENTION,
+      conversation_id: 'cid-group',
+      sender: '张三',
+      sender_open_dingtalk_id: 'owner-open',
+      content: '@Cindy 助手 在吗',
+    };
+    streams[0].emit({ ...mention, event_id: 'e1', message_id: 'g1' });
+    streams[0].emit({ ...mention, event_id: 'e2', message_id: 'g2' });
+    await flush();
+    expect(messages.map((m) => m.interactionSource?.chatName)).toEqual(['项目群', '项目群']);
+    expect(calls.filter((c) => c.args[1] === '+conversation-info')).toHaveLength(1);
     await im.dispose();
   });
 

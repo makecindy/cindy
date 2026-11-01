@@ -85,6 +85,13 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 `agentMeta.delivery='steer'` 落库，本条自己的 ack / 回调直接收口，回复由正在跑的那一轮输出（Agent 可随时
 用 dws 回消息）；任一条件不满足或插话失败照常排队。机器人方式只在一轮结束时回复，不提供该开关。
 
+钉钉账号的群上下文（`dingtalk/groupContext.ts`）与飞书 / Telegram 同口径：每行发言人后标 `createTime`
+解析出的发送时间（`formatImHistoryTime`），块尾附 `formatImHistoryTimeNote` 的时区与整理时刻，避免模型
+把昨天的讨论当成今天的语境；解析不了的时间不标。群 @ 消息经 `dws chat +conversation-info` 取群名
+（按会话缓存 30 分钟，查不到缓存 5 分钟），写进 `interactionSource.chatName`，渠道说明因此带
+「钉钉群「群名」chat_id=…」，末尾再提示可用 `dws chat +chat-messages --open-conversation-id <chat_id>`
+读取更早的群历史。
+
 ## 2. 状态清单
 
 只列跨轮持有、会影响正确性的状态。「去向」：**保留**（留在渠道适配）、**并入**（进共用流程，

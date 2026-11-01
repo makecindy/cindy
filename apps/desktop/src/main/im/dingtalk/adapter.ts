@@ -47,6 +47,10 @@ export function dingtalkSessionIdFor(appKey: string, userId: string): string {
   return `dingtalk_${encodedIdentity}`;
 }
 
+/** 钉钉账号群轮次的 `[渠道说明]` 末尾提示：上下文之外的群历史怎么取。 */
+export const DINGTALK_DWS_GROUP_TOOLS_HINT =
+  '本轮附带的群上下文只有最近几十条; 需要更早的讨论可用 dws 读取: `dws chat +chat-messages --open-conversation-id <chat_id>`(chat_id 即上面的值), 按时间判断哪些是今天的话题。';
+
 function sanitizeSpeaker(value: string): string {
   return value
     // eslint-disable-next-line no-control-regex
@@ -174,7 +178,15 @@ export function buildDingTalkAdapter(
       (ownerGroupTurnPolicies.has(policy) ||
         (dwsGuestGroupTurnPolicies.has(policy) && deps.readAccess().guestFullAccess)),
     // 群里发言人已由下面的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
-    channelNoteSourceFor: (event) => imChannelNoteSourceFromEvent(event, { omitSender: true }),
+    // 「钉钉账号」方式下群说明末尾点一句 dws 读历史的方式，上下文只带最近几十条，
+    // 需要更早的讨论时 Agent 可以按 chat_id 自己去拉。
+    channelNoteSourceFor: (event) => {
+      const source = imChannelNoteSourceFromEvent(event, { omitSender: true });
+      const dws = !companion && 'getMode' in dingtalkIm && dingtalkIm.getMode() === 'dws';
+      return dws && source.chatKind === 'group' && source.chatId
+        ? { ...source, toolsHint: DINGTALK_DWS_GROUP_TOOLS_HINT }
+        : source;
+    },
     // 群: 先把这条入窗, 再拼「自上次以来群里的消息」前缀(与 Telegram 同一张表、同一套
     // 游标语义, 游标在消息被受理后 commit), 然后是发言人行与正文。
     prepareAgentTurnText: async (event) => {

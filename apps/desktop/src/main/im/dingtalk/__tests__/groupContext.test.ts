@@ -41,6 +41,24 @@ describe('buildDingTalkGroupContextPrefix', () => {
     expect(built?.prefix).not.toContain('@Cindy 总结');
   });
 
+  // 昨天的讨论不能被当成今天的语境：每行带发送时间，块尾给出整理时刻。
+  it('stamps each line with its send time and closes with the time reference', () => {
+    const now = new Date(2026, 9, 31, 9, 30).getTime();
+    const built = buildDingTalkGroupContextPrefix(
+      [
+        { ...message('1', '甲', '昨天的方案'), createTime: '2026-10-30 18:05:00' },
+        { ...message('2', '乙', '今天聊发布'), createTime: '2026-10-31 09:12:00' },
+        { ...message('3', '丙', '时间缺失'), createTime: '' },
+      ],
+      'trigger',
+      now,
+    );
+    expect(built?.prefix).toContain(
+      '[甲] 10-30 18:05 昨天的方案\n[乙] 10-31 09:12 今天聊发布\n[丙] 时间缺失\n</group_chat_context>',
+    );
+    expect(built?.prefix).toContain('本段上下文整理于 2026-10-31 09:30');
+  });
+
   it('returns null when nothing but the trigger is available', () => {
     expect(buildDingTalkGroupContextPrefix([message('1', '甲', 'hi')], '1')).toBeNull();
     expect(buildDingTalkGroupContextPrefix([], 'x')).toBeNull();

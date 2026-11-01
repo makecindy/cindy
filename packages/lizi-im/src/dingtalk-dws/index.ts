@@ -53,6 +53,8 @@ export type { DwsRunner, DwsStreamProcess } from './runner.js';
 const ENABLED_SECRET = 'dingtalk-dws-enabled';
 const OWNER_SECRET = 'dingtalk-dws-owner';
 const DEDUP_TTL_MS = 5 * 60 * 1_000;
+const GROUP_TITLE_TTL_MS = 30 * 60_000;
+const GROUP_TITLE_MISS_TTL_MS = 5 * 60_000;
 const DEDUP_CAPACITY = 2_048;
 const READY_TIMEOUT_MS = 45_000;
 const STOP_GRACE_MS = 5_000;
@@ -123,6 +125,8 @@ export class DingTalkDwsIM extends BaseIM {
   private readonly stateHandlers = new Set<() => void>();
   private readonly seen = new Map<string, number>();
   private readonly laneQueues = new Map<string, Promise<void>>();
+  /** 群名缓存（conversationId → 名称 + 查询时刻）；查不到的也短暂记一下，避免每条消息都去查。 */
+  private readonly groupTitles = new Map<string, { title: string; at: number }>();
   private readonly pendingReplies = new PendingReplies({
     alreadyPending: 'DINGTALK_INTERACTION_ALREADY_PENDING',
     timeout: 'DINGTALK_INTERACTION_TIMEOUT',
@@ -520,6 +524,7 @@ export class DingTalkDwsIM extends BaseIM {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.laneQueues.clear();
+    this.groupTitles.clear();
     this.pendingReplies.rejectAll('DINGTALK_DISCONNECTED');
     const proc = this.proc;
     this.proc = null;
@@ -612,10 +617,16 @@ export class DingTalkDwsIM extends BaseIM {
     if (generation !== this.generation) return;
     const ownAttachments = media.byMessage.get(message.messageId) ?? [];
     const replyAttachments = quotedId ? (media.byMessage.get(quotedId) ?? []) : [];
+    // 群名写进渠道说明，Agent 知道是哪个群；查询失败只是不带群名。
+    const groupTitle = isGroup ? await this.groupTitle(message.conversationId) : '';
+    if (generation !== this.generation) return;
 
     const event: IMMessageEvent = {
       channelName: 'dingtalk',
-      interactionSource: { senderName: message.senderName },
+      interactionSource: {
+        senderName: message.senderName,
+        ...(groupTitle ? { chatName: groupTitle } : {}),
+      },
       senderId: userId,
       chatId: message.conversationId,
       contextId: this.contextId,
@@ -846,6 +857,28 @@ export class DingTalkDwsIM extends BaseIM {
       // 损坏的记录按未绑定处理。
     }
     return null;
+  }
+
+  private async groupTitle(conversationId: string): Promise<string> {
+    const now = Date.now();
+    const cached = this.groupTitles.get(conversationId);
+    if (cached && now - cached.at < (cached.title ? GROUP_TITLE_TTL_MS : GROUP_TITLE_MISS_TTL_MS)) {
+      return cached.title;
+    }
+    let title = '';
+    try {
+      const result = await this.runner.runJson(
+        ['chat', '+conversation-info', '--group', conversationId, '-f', 'json'],
+        { timeoutMs: 15_000 },
+      );
+      const root = isRecord(result) && isRecord(result.result) ? result.result : result;
+      const info = isRecord(root) && isRecord(root.conversationInfo) ? root.conversationInfo : null;
+      title = info ? str(info.title).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64) : '';
+    } catch (error) {
+      this.log.warn(`dingtalk dws group title lookup failed: ${safeErrorCode(error)}`);
+    }
+    this.groupTitles.set(conversationId, { title, at: now });
+    return title;
   }
 
   private isDuplicate(key: string): boolean {
