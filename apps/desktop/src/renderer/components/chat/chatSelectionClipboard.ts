@@ -197,11 +197,13 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     const style = styleOf(source);
     const gap = style.columnGap && style.columnGap !== 'normal'
       ? style.columnGap : style.gap.split(/\s+/).at(-1) ?? '';
+    // Grid cells remain distinct even with zero gap (for example sheet numbers).
+    const gridCells = ['grid', 'inline-grid'].includes(style.display);
     // Flex gaps carry word boundaries even when adjacent JSX has no whitespace.
     // Export text separators rather than retaining the application's layout CSS.
-    if (['flex', 'inline-flex'].includes(style.display) &&
+    if (gridCells || (['flex', 'inline-flex'].includes(style.display) &&
         !style.flexDirection.startsWith('column') && (parseFloat(gap) > 0 ||
-          ['space-between', 'space-around', 'space-evenly'].includes(style.justifyContent))) {
+          ['space-between', 'space-around', 'space-evenly'].includes(style.justifyContent)))) {
       let previous: Node | undefined;
       for (const child of [...copy.childNodes]) {
         if (previous && !/\s$/.test(previous.textContent ?? '') && !/^\s/.test(child.textContent ?? '')) {

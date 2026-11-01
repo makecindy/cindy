@@ -18,7 +18,7 @@ import { ChatImageView } from '../ChatImageView';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MarkdownMermaidBlock } from '../MarkdownMermaidBlock';
 import { UserMessageImageLink } from '../UserMessageImageLink';
-import { GeneratedFilesCard, _clearLocalGeneratedFileStatCache } from '../GeneratedFilesCard';
+import { ArtifactPreview, GeneratedFilesCard, _clearLocalGeneratedFileStatCache } from '../GeneratedFilesCard';
 import { SystemCard } from '../SystemCard';
 import { BotAvatar } from '../../../features/bots/BotAvatar';
 import { VideoSitePreview } from '../VideoSitePreview';
@@ -313,6 +313,29 @@ describe('chat selection clipboard', () => {
       Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
       _clearLocalGeneratedFileStatCache();
     }
+  });
+
+  // Review4434597238: actual XLSX preview grid with adjacent numeric cells.
+  // Include a row-only Range so the grid is also the common selection element.
+  it.each([false, true])('preserves sheet cell boundaries (row only=%s)', async rowOnly => {
+    const { root, select, copy } = setup(<><p>before sheet</p>
+      <ArtifactPreview title="Numbers" artifact={{ format: 'xlsx', preview: {
+        kind: 'sheet', rows: [['10', '20'], ['30', '40']], hasHeader: false,
+      } }} /><p>after sheet</p></>);
+    await installRendererClipboardStyles(root);
+    const rows = [...root.querySelectorAll('span')].filter(e => getComputedStyle(e).display === 'grid');
+    expect(rows).toHaveLength(2);
+    select(rowOnly ? rows[0] : root);
+    const formats = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = formats.find(([type]) => type === 'text/html')![1];
+    for (const value of [pasted.textContent!, formats.find(([type]) => type === 'text/plain')![1]]) {
+      expect(value).toMatch(/10\s+20/);
+      expect(value).not.toContain('1020');
+      if (rowOnly) expect(value).not.toMatch(/30|40|before sheet|after sheet/);
+      else { expect(value).toMatch(/30\s+40/); expect(value).toContain('after sheet'); }
+    }
+    expect(pasted.innerHTML).not.toMatch(/background|class=/);
   });
 
   // Review #4359931559: the real bar renderer uses empty div geometry rather
