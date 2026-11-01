@@ -11,7 +11,7 @@
 import { useMemo } from 'react';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
+import { groupSkillhubSessions } from '../lib/groupSkillhubSessions';
 import { useProvisionalDraftProjectTaskId } from '@/features/cc-agent/hooks/useProvisionalDraftProjectTaskId';
 import { useSkillhubTarget } from '../SkillhubTargetContext';
 
@@ -24,15 +24,16 @@ export function useProjectsForPicker(): { projects: PickerProject[]; loading: bo
   const target = useSkillhubTarget();
   const { sessions, isLoading } = useCCSessions();
   const provisionalDraftTaskId = useProvisionalDraftProjectTaskId();
+  const localPlatform = window.electronAPI?.platform ?? '';
 
   const projects = useMemo<PickerProject[]>(() => {
     if (isLoading) return [];
-    const { projects: grouped } = groupSessions(sessions, { provisionalDraftTaskId });
+    const { projects: grouped } = groupSkillhubSessions(sessions, { provisionalDraftTaskId, localPlatform });
     return grouped.map((p) => ({
       projectRoot: p.workingDir,
       displayName: p.displayName,
     }));
-  }, [sessions, isLoading, provisionalDraftTaskId]);
+  }, [sessions, isLoading, provisionalDraftTaskId, localPlatform]);
 
   return target ? { projects: target.projects, loading: !target.state.bootstrapped } : { projects, loading: isLoading };
 }

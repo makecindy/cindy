@@ -20,10 +20,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Outlet, useMatch } from 'react-router-dom';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
+import { normalizeWorkingDirForStorage, workingDirComparisonKey } from '../../../shared/workingDir';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import { useRegisterCCAgentSidebar } from '@/features/cc-agent/useRegisterCCAgentSidebar';
 import { createLogger } from '@/lib/logger';
 
@@ -38,6 +37,7 @@ import {
 } from './hooks/useSkillhub';
 import { useSkillSync } from './hooks/useSkillSync';
 import { projectHash } from './lib/projectHash';
+import { groupSkillhubSessions } from './lib/groupSkillhubSessions';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCatalogDevice } from '@/features/plugin/useCatalogDevice';
 
@@ -140,21 +140,29 @@ export function useSkillhubStoreSync(): void {
   // 这就是点击闪烁和 DetailView 短暂 "skill not found" 的来源；因此必须等
   // isLoading=false 后再同步项目列表。
   const { sessions, isLoading: sessionsLoading } = useCCSessions();
+  const localPlatform = window.electronAPI?.platform ?? '';
 
   const skillhubProjects = useMemo<SkillhubProject[] | null>(() => {
     if (sessionsLoading) return null;
-    const { projects } = groupSessions(sessions, { includePinnedInProjects: true, includeDraftsInProjects: true });
+    const { projects } = groupSkillhubSessions(sessions, {
+      includePinnedInProjects: true, includeDraftsInProjects: true, localPlatform,
+    });
     const catalogue = new Map<string, SkillhubProject>();
     for (const project of projects.filter((p) => p.scope === 'local')) {
-      const roots = [project.workingDir, ...project.sessions.map((s) => normalizeWorkingDirForStorage(s.workingDir))];
+      const sessionRoots = project.sessions.map((s) => normalizeWorkingDirForStorage(s.workingDir));
+      // Worktree roots are scanned separately; keep their casing representative
+      // stable too, even though groupSessions orders sessions by recent activity.
+      if (localPlatform === 'win32') sessionRoots.sort();
+      const roots = [project.workingDir, ...sessionRoots];
       for (const root of roots) {
-        if (!root || catalogue.has(root)) continue;
-        catalogue.set(root, { projectRoot: root, hash: projectHash(root),
+        const key = workingDirComparisonKey(root, { windows: localPlatform === 'win32' });
+        if (!root || key === null || catalogue.has(key)) continue;
+        catalogue.set(key, { projectRoot: root, hash: projectHash(root),
           displayName: root === project.workingDir ? project.displayName : `${project.displayName} · ${root.split('/').at(-1)}` });
       }
     }
     return [...catalogue.values()];
-  }, [sessions, sessionsLoading]);
+  }, [sessions, sessionsLoading, localPlatform]);
 
   useEffect(() => {
     setSkillhubDataOwner(dataOwnerId);
