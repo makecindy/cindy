@@ -24,6 +24,8 @@ import path from 'node:path';
  * stays decoupled from Electron / userData paths (design rule 2).
  */
 export interface HostKeyStore {
+  /** Actual backing file, when file-based; used in connection repair guidance. */
+  readonly filePath?: string;
   /** Trusted fingerprint for `key`, or null when the host is unknown. */
   get(key: string): Promise<string | null>;
   /**
