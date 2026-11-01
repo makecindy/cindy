@@ -359,6 +359,8 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Host denial paired by thread, turn and item; never inferred from empty output. */
+  approvalDenialReason?: string;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
   onSamplingAttemptFailed?: () => void;
   /**
@@ -1503,7 +1505,14 @@ function handleCommandExecution(
       // #3793:bwrap 沙箱初始化失败(命令从未执行)时追加宿主归因标注,
       // 模型不再盲目重试,用户在工具卡里能看到原因。健康与普通失败路径原样。
       fullText: annotateSandboxInitFailure(
-        stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        [
+          ...(isError && ctx.approvalDenialReason ? [ctx.approvalDenialReason] : []),
+          stripTerminalControlSequences(item.aggregatedOutput ?? ''),
+        ].filter(Boolean).join('\n\n') || (isError
+          ? item.status === 'declined'
+            ? 'Command execution was declined. No rejection reason was provided.'
+            : 'Command execution failed without output.'
+          : ''),
         isError,
         item.command,
       ),
@@ -1768,7 +1777,6 @@ function handleFileChange(
   ctx: CodexTranslateContext,
 ): void {
   if (phase !== 'completed') return;
-  void ctx;
   queue.push({
     type: 'tool_use',
     data: {
@@ -1782,7 +1790,10 @@ function handleFileChange(
   const summary = item.changes.map((c) => `${c.kind.type} ${c.path}`).join('\n');
   queue.push({
     type: 'tool_result_full',
-    data: { toolUseId: item.id, fullText: summary, isError },
+    data: { toolUseId: item.id, fullText: [
+      ...(isError && ctx.approvalDenialReason ? [ctx.approvalDenialReason] : []),
+      summary,
+    ].filter(Boolean).join('\n\n') || (isError ? 'File change failed without a reported reason.' : ''), isError },
     source: 'codex',
   });
   queue.push({

@@ -55,12 +55,12 @@ describe('remote file preview pager wiring', () => {
   });
 
   it('reserves horizontal gestures for the PDF WebView', () => {
-    expect(source).toContain("current.previewKind !== 'pdf'");
+    expect(source).toContain("current.previewKind === 'pdf' && PDF_PREVIEWS_INLINE");
   });
 
   it('HTML 渲染态同样让出外层横滑,让内层 WebView 能横向平移', () => {
     // 固定宽度布局 / 放大后需要横向平移,pager 抢走手势就永远看不到超出视口的内容。
-    expect(source).toContain("scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}");
+    expect(source).toContain("scrollEnabled={!(current.previewKind === 'pdf' && PDF_PREVIEWS_INLINE) && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}");
     const markdownReader = readSource('src/session/MarkdownFileReader.tsx');
     expect(markdownReader).toContain('injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}');
     expect(markdownReader).toContain('onMessage={onPageSwipe ? handleMessage : undefined}');

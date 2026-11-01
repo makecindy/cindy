@@ -949,6 +949,7 @@ function visualMockFileBrowserEntries() {
     { type: 'file', name: 'README.md', relPath: 'README.md', size: 4820, mtimeMs: NOW - 900_000 },
     { type: 'file', name: 'visual-report.md', relPath: 'visual-report.md', size: 78, mtimeMs: NOW - 300_000 },
     { type: 'file', name: 'chart.png', relPath: 'chart.png', size: 48_112, mtimeMs: NOW - 240_000 },
+    { type: 'file', name: 'quarterly-report.pdf', relPath: 'quarterly-report.pdf', size: 248_000, mtimeMs: NOW - 180_000 },
     { type: 'file', name: 'demo.mp4', relPath: 'demo.mp4', size: 4_820_000, mtimeMs: NOW - 120_000 },
   ];
 }

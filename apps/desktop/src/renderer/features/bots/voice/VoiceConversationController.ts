@@ -1,4 +1,5 @@
 import type {
+  VoiceCallSnapshot,
   VoiceConversationApi,
   VoiceConversationSelection,
   VoiceExitDecision,
@@ -35,36 +36,8 @@ type ExitReason =
 type QueuedUtterance = { text: string; id?: string };
 type IntentExitReason = 'voice_command' | 'farewell' | 'semantic';
 
-export type VoicePhase =
-  | 'idle'
-  | 'connecting'
-  | 'microphone'
-  | 'listening'
-  | 'thinking'
-  | 'preparing'
-  | 'speaking'
-  | 'paused'
-  | 'error';
-export type VoiceSnapshot = {
-  callRecord?: import('@cindy/maker-core').VoiceCallRecord;
-  phase: VoicePhase;
-  transcript: string;
-  unsent: string;
-  /** Partial question answers must never be concatenated into ordinary chat. */
-  questionDraft?: string;
-  level: number;
-  error: 'connection' | 'microphone' | 'send' | 'speech' | 'speechTimeout' | null;
-  muted: boolean;
-  microphonePending: boolean;
-  microphoneError: boolean;
-  /** "Recognize my voice" just muted someone else; cleared shortly after. */
-  speakerFiltered: boolean;
-  exitCountdown: {
-    reason: 'idle' | 'farewell' | 'semantic';
-    secondsRemaining: number;
-    waitingForSend?: boolean;
-  } | null;
-};
+export type VoicePhase = VoiceCallSnapshot['phase'];
+export type VoiceSnapshot = VoiceCallSnapshot;
 interface Microphone {
   onPcm16k(callback: (chunk: PcmChunk) => void): void;
   start(): Promise<void>;
@@ -542,8 +515,9 @@ export class VoiceConversationController {
       if (!current()) return;
       this.setReplyPhase(this.pendingInput ? 'thinking' : null);
       this.updateMessages(this.latestMessages);
-    } catch {
-      if (current()) this.fail('connection');
+    } catch (error) {
+      if (current())
+        this.fail(extractIpcError(error)?.code === 'VOICE_CONVERSATION_BUSY' ? 'busy' : 'connection');
     }
   }
 

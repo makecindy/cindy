@@ -8384,11 +8384,12 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     expect((handled[1]!.payload as InvokePayload).transfer?.ifNoneMatch).toEqual(expect.any(String));
     expect(resultBytes() - firstBytes).toBeLessThan(1_000);
     // Unit: measure encoded logical payloads, not the reconstructed full page.
-    expect(metrics.mock.calls.map(([event]) => event.phase)).toEqual(['sent', 'result', 'sent', 'result']);
+    expect(metrics.mock.calls.map(([event]) => event.phase)).toEqual(['sent', 'result', 'decoded', 'sent', 'result', 'decoded']);
+    expect(metrics.mock.calls[2][0]).toMatchObject({ inflateMs: expect.any(Number), parseMs: expect.any(Number) });
     const encodedResponses = (relay.deliveredTo.get('ios') ?? []).filter(env => env.kind === 'invoke-result')
       .map(env => Buffer.byteLength(parseTransportPayload(env.payload)?.data ?? JSON.stringify(env.payload)));
     expect(metrics.mock.calls[1][0]).toMatchObject({ gzip: true, notModified: false, payloadBytes: encodedResponses[0] });
-    expect(metrics.mock.calls[3][0]).toMatchObject({ notModified: true, payloadBytes: encodedResponses[1] });
+    expect(metrics.mock.calls[4][0]).toMatchObject({ notModified: true, payloadBytes: encodedResponses[1] });
     // A failed diagnostics sink cannot turn a valid response into a failed read.
     metrics.mockImplementation(() => { throw new Error('diagnostic sink failed'); });
     // Each call returns its own object: a consumer mutating one result cannot corrupt the cache.

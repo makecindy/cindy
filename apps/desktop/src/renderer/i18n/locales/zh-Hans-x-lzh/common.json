@@ -1334,6 +1334,20 @@
       "lock-unreadable": "不能读存此机数据之维护锁。请察数据目录之访问权限；复访问后重启。若仍未成，请联系支持人员。",
       "recovery-busy": "另一 Cindy 运行个体方察此机数据之维护锁。请稍后重启。"
     },
+    "passiveCorrupt": {
+      "title": "共享数据库不可复原",
+      "description": "今以只读／共享之式运行，Cindy 不自行复原或改动此共享数据库。若另有实例共用同一 userData，请先关闭而重试，或改以 --isolated 启动。"
+    },
+    "corrupt": {
+      "title": "本地数据库不可开",
+      "description": "本地数据库或已损毁，或为共用同一数据之他 Cindy 实例所占。若他实例已开，请先关闭而重试；仍不可，则无可用备份能自动复原，请复制技术细节告知团队，以求协助复原数据。",
+      "copy": "复制技术细节"
+    },
+    "initFailed": {
+      "title": "本地数据库启动失败",
+      "description": "本地数据库未能启动。请先重试；若仍失败，请将下列技术细节告知团队。",
+      "retry": "重试启动数据库"
+    },
     "databaseCleanup": {
       "interruptedTitle": "数据库清理中辍",
       "interruptedDescription": "数据库清理异常中断。请重启 Cindy，系统将依维护纪录安全复原。",
@@ -11491,6 +11505,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "启对话",
+      "inCallWith": "正与 {{name}} 通话",
       "showDetails": "展通话录",
       "hideDetails": "收通话录",
       "transcriptTitle": "今所辨之文",
@@ -11559,6 +11575,7 @@
       "unsent": "尚未遣 · 可选文录之",
       "hint": "稍顿即自遣，回复由 AI 之声朗读。随时开口即可插话。",
       "status": {
+        "questionElsewhere": "任务有问待答 · 通话如故",
         "idle": "君备则始",
         "connecting": "方接语音辨识…",
         "listening": "方聆",
@@ -11574,6 +11591,7 @@
         "muted": "麦克风已阖 · 仍可聆听"
       },
       "errors": {
+        "busy": "语音为他事所占，请毕之再试。",
         "connection": "语音连接中断，未遣之文已留。",
         "microphone": "麦克风已止，请查权柄与设备连接后再续。",
         "send": "此讯未获接收，文已留。",
@@ -12460,6 +12478,7 @@
         "titleLocal": "改回此机运行 Agent？",
         "titleOther": "改于「{{device}}」运行 Agent？",
         "description": "原机之言谈录不能携来，将撰为交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
+        "descriptionNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改撰交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
         "confirm": "换机运行",
         "cancel": "一仍其旧"
       }

@@ -1365,6 +1365,20 @@
       "lock-unreadable": "Le verrou de maintenance des données locales n'a pas pu être lu ou enregistré. Vérifiez l'accès au répertoire de données, puis rouvrez-les une fois l'accès rétabli. Contactez le support si le problème persiste.",
       "recovery-busy": "Une autre instance de Cindy vérifie le verrou de maintenance des données locales. Rouvrez les données locales dans un instant."
     },
+    "passiveCorrupt": {
+      "title": "Impossible de récupérer la base de données partagée",
+      "description": "Cindy s'exécute en mode lecture seule ou partagé et ne récupérera ni ne modifiera automatiquement cette base de données partagée. Si une autre instance utilise les mêmes userData, fermez-la et réessayez, ou démarrez avec --isolated."
+    },
+    "corrupt": {
+      "title": "Impossible d'ouvrir la base de données locale",
+      "description": "La base de données locale est peut-être endommagée, ou utilisée par une autre instance de Cindy partageant les mêmes données. Si une autre instance est ouverte, fermez-la et réessayez. Si le problème persiste, aucune sauvegarde utilisable n'a pu la restaurer automatiquement ; copiez les détails techniques et transmettez-les à l'équipe pour obtenir de l'aide à la récupération de vos données.",
+      "copy": "Copier les détails techniques"
+    },
+    "initFailed": {
+      "title": "Échec du démarrage de la base de données locale",
+      "description": "La base de données locale n'a pas pu démarrer. Réessayez d'abord. Si l'échec persiste, transmettez les détails techniques ci-dessous à l'équipe.",
+      "retry": "Réessayer le démarrage de la base de données"
+    },
     "databaseCleanup": {
       "interruptedTitle": "Le nettoyage de la base de données a été interrompu",
       "interruptedDescription": "Le nettoyage de la base de données s'est arrêté de façon inattendue. Redémarrez Cindy pour qu'elle puisse reprendre en toute sécurité à partir de l'état de maintenance enregistré.",
@@ -11633,6 +11647,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Ouvrir la conversation",
+      "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
       "hideDetails": "Masquer la transcription de l'appel",
       "transcriptTitle": "Transcription en cours",
@@ -11701,6 +11717,7 @@
       "unsent": "Non envoyé · sélectionnez le texte pour le copier",
       "hint": "Faites une pause pour envoyer. Les réponses sont lues à voix haute par une voix IA. Parlez à tout moment pour interrompre.",
       "status": {
+        "questionElsewhere": "Une question attend dans la tâche · l’appel continue",
         "idle": "Prêt quand vous l'êtes",
         "connecting": "Connexion à la reconnaissance vocale…",
         "listening": "À l'écoute",
@@ -11716,6 +11733,7 @@
         "muted": "Micro désactivé · Vous pouvez toujours écouter"
       },
       "errors": {
+        "busy": "La voix est utilisée par un autre appel, une lecture, un aperçu ou une dictée. Terminez-le et réessayez.",
         "connection": "Connexion vocale interrompue. Votre texte non envoyé est conservé ci-dessous.",
         "microphone": "Le micro s'est arrêté. Vérifiez son autorisation et sa connexion, puis reprenez.",
         "send": "Ce message n'a pas été accepté. Votre texte est conservé ci-dessous.",
@@ -12603,6 +12621,7 @@
         "titleLocal": "Exécuter à nouveau l'Agent sur cet ordinateur ?",
         "titleOther": "Exécuter l'Agent sur « {{device}} » ?",
         "description": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
+        "descriptionNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "confirm": "Changer d'ordinateur",
         "cancel": "Ne rien changer"
       }

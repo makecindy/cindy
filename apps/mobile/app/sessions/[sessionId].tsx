@@ -9059,6 +9059,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         movable: agentLocationMovable,
         session: currentSession,
         intent: agentSwitchIntent,
+        sourceAgentKind: sessionAgentKind,
+        targetAgentKind: modelSheetAgentKind,
         catalogDeviceId: null,
         deviceName: remoteAgentDeviceName,
         hostName: controlledComputerName,
@@ -9148,6 +9150,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       movable: agentLocationMovable,
       session: currentSession,
       intent: agentSwitchIntent,
+      sourceAgentKind: sessionAgentKind,
+      targetAgentKind: config.agent,
       catalogDeviceId,
       deviceName: remoteAgentDeviceName,
       hostName: controlledComputerName,
@@ -9215,6 +9219,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         movable: agentLocationMovable,
         session: currentSession,
         intent: agentSwitchIntent,
+        sourceAgentKind: sessionAgentKind,
+        targetAgentKind: sessionAgentKind,
         catalogDeviceId: null,
         deviceName: remoteAgentDeviceName,
         hostName: controlledComputerName,
@@ -9499,7 +9505,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       onOpenPath: openChatPathTarget,
       onLongPressPath: (target) => {
         if (usesSystemActionMenu()) {
-          const rows = chatFileChipMenuRows(target);
+          const rows = chatFileChipMenuRows(target, Platform.OS);
           void showActionMenu({
             cancelLabel: t('session.common.cancel'),
             items: rows.map((row) => ({ key: row.key, label: row.label })),

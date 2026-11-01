@@ -1762,6 +1762,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     speak: (input) => ipcRenderer.invoke('voice-conversation:speak', input),
     readSpeech: (callId, requestId) => ipcRenderer.invoke('voice-conversation:read-speech', callId, requestId),
     interrupt: (callId) => ipcRenderer.invoke('voice-conversation:interrupt', callId),
+    callStatus: () => ipcRenderer.invoke('voice-conversation:call-status'),
+    publishCallStatus: (update) => ipcRenderer.send('voice-conversation:call-publish', update),
+    callCommand: (command) => ipcRenderer.invoke('voice-conversation:call-command', command),
+    onCallStatus: (callback) => {
+      const listener = (_event: unknown, update: Parameters<typeof callback>[0]) => callback(update);
+      ipcRenderer.on('voice-conversation:call-status-changed', listener);
+      return () => ipcRenderer.removeListener('voice-conversation:call-status-changed', listener);
+    },
+    onCallCommand: (callback) => {
+      const listener = (_event: unknown, command: Parameters<typeof callback>[0]) => callback(command);
+      ipcRenderer.on('voice-conversation:call-command', listener);
+      return () => ipcRenderer.removeListener('voice-conversation:call-command', listener);
+    },
     onEvent: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
       ipcRenderer.on('voice-conversation:event', listener);

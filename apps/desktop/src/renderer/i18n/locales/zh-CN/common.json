@@ -1334,6 +1334,10 @@
       "lock-unreadable": "无法读取或保存本地数据的维护锁。请检查数据目录的访问权限；恢复访问后重新打开。若仍失败，请联系支持人员。",
       "recovery-busy": "另一个 Cindy 实例正在检查本地数据的维护锁。请稍后重新打开。"
     },
+    "passiveCorrupt": {
+      "title": "共享数据库无法恢复",
+      "description": "当前以只读／共享模式运行，Cindy 不会自动恢复或修改该共享数据库。若另有实例在使用同一份 userData，请先关闭后重试；也可改用 --isolated 启动。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "数据库清理中断",
       "interruptedDescription": "数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。",
@@ -1348,6 +1352,16 @@
     "preparing": {
       "description": "本地数据已由更新版本的 Cindy 升级，当前版本无法打开。正在获取新版本，请稍候…",
       "progress": "已下载 {{progress}}%"
+    },
+    "initFailed": {
+      "title": "本地数据库启动失败",
+      "description": "本地数据库未能正常启动。请先重试；若持续失败，请将下方技术细节反馈给开发团队。",
+      "retry": "重试启动数据库"
+    },
+    "corrupt": {
+      "title": "本地数据库无法打开",
+      "description": "本地数据库可能已损坏，也可能正被共用同一份数据的其他 Cindy 实例占用。若已打开其他实例，请先关闭后重试；若仍失败，说明没有可用备份能够自动恢复，请复制技术细节并反馈给开发团队，以获取数据恢复协助。",
+      "copy": "复制技术细节"
     },
     "noUpdate": {
       "title": "本地数据暂时无法打开",
@@ -11491,6 +11505,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "打开对话",
+      "inCallWith": "正在与 {{name}} 通话",
       "showDetails": "展开通话记录",
       "hideDetails": "收起通话记录",
       "transcriptTitle": "当前识别文字",
@@ -11559,6 +11575,7 @@
       "unsent": "尚未发送 · 可选中文字复制",
       "hint": "停顿后自动发送，回复由 AI 语音朗读。随时开口即可插话。",
       "status": {
+        "questionElsewhere": "任务里有问题等你回答 · 仍在通话",
         "idle": "准备好就开始",
         "connecting": "正在连接语音识别…",
         "listening": "正在听",
@@ -11574,6 +11591,7 @@
         "muted": "麦克风已关闭 · 可以继续收听"
       },
       "errors": {
+        "busy": "语音正被其他通话、朗读、试听或听写占用，请结束后重试。",
         "connection": "语音连接中断，未发送的文字已保留。",
         "microphone": "麦克风已停止，请检查权限和设备连接后继续。",
         "send": "这条消息未被接收，文字已保留。",
@@ -12460,6 +12478,7 @@
         "titleLocal": "改回这台电脑运行 Agent？",
         "titleOther": "改到「{{device}}」上运行 Agent？",
         "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
+        "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "confirm": "换电脑运行",
         "cancel": "保持不变"
       }

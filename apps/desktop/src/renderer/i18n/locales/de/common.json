@@ -1347,6 +1347,20 @@
       "lock-unreadable": "Die Wartungssperre der lokalen Daten konnte nicht gelesen oder gespeichert werden. Prüfe den Zugriff auf das Datenverzeichnis und öffne die Daten erneut, sobald der Zugriff wiederhergestellt ist. Kontaktiere den Support, falls das Problem weiterhin besteht.",
       "recovery-busy": "Eine andere Cindy-Instanz prüft gerade die Wartungssperre der lokalen Daten. Öffne die lokalen Daten in Kürze erneut."
     },
+    "passiveCorrupt": {
+      "title": "Gemeinsame Datenbank kann nicht wiederhergestellt werden",
+      "description": "Cindy läuft im schreibgeschützten bzw. gemeinsamen Modus und stellt diese gemeinsame Datenbank nicht automatisch wieder her und ändert sie nicht. Verwendet eine andere Instanz dieselben userData, schließe sie und versuche es erneut, oder starte mit --isolated."
+    },
+    "corrupt": {
+      "title": "Lokale Datenbank kann nicht geöffnet werden",
+      "description": "Die lokale Datenbank ist möglicherweise beschädigt oder wird von einer anderen Cindy-Instanz mit denselben Daten verwendet. Falls eine andere Instanz geöffnet ist, schließe sie und versuche es erneut. Besteht das Problem weiter, konnte kein verwendbares Backup sie automatisch wiederherstellen; kopiere die technischen Details und teile sie dem Team mit, um Hilfe bei der Datenwiederherstellung zu erhalten.",
+      "copy": "Technische Details kopieren"
+    },
+    "initFailed": {
+      "title": "Lokale Datenbank konnte nicht gestartet werden",
+      "description": "Die lokale Datenbank konnte nicht gestartet werden. Versuche es zuerst erneut. Falls es weiterhin fehlschlägt, teile dem Team die technischen Details unten mit.",
+      "retry": "Datenbankstart erneut versuchen"
+    },
     "databaseCleanup": {
       "interruptedTitle": "Datenbankbereinigung wurde unterbrochen",
       "interruptedDescription": "Die Datenbankbereinigung wurde unerwartet beendet. Starte Cindy neu, damit die Wiederherstellung anhand des gespeicherten Wartungszustands sicher erfolgen kann.",
@@ -11538,6 +11552,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Unterhaltung öffnen",
+      "inCallWith": "Im Anruf mit {{name}}",
       "showDetails": "Anruftranskript anzeigen",
       "hideDetails": "Anruftranskript ausblenden",
       "transcriptTitle": "Aktuelle Transkription",
@@ -11606,6 +11622,7 @@
       "unsent": "Nicht gesendet · Text zum Kopieren auswählen",
       "hint": "Mach eine Sprechpause zum Senden. Antworten werden mit einer KI-Stimme vorgelesen. Sprich jederzeit, um zu unterbrechen.",
       "status": {
+        "questionElsewhere": "Eine Frage wartet in der Aufgabe · Anruf läuft weiter",
         "idle": "Bereit, wenn du es bist",
         "connecting": "Verbindung zur Spracherkennung wird hergestellt…",
         "listening": "Hört zu",
@@ -11621,6 +11638,7 @@
         "muted": "Mikrofon aus · Du kannst weiter zuhören"
       },
       "errors": {
+        "busy": "Die Sprachfunktion wird von einem anderen Anruf, Vorlesen, einer Hörprobe oder Diktat verwendet. Beende diese und versuche es erneut.",
         "connection": "Sprachverbindung unterbrochen. Dein ungesendeter Text bleibt unten erhalten.",
         "microphone": "Mikrofon gestoppt. Prüfe Berechtigung und Verbindung und fahre dann fort.",
         "send": "Diese Nachricht wurde nicht angenommen. Dein Text bleibt unten erhalten.",
@@ -12507,6 +12525,7 @@
         "titleLocal": "Agent wieder auf diesem Computer ausführen?",
         "titleOther": "Agent auf „{{device}}“ ausführen?",
         "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
+        "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "confirm": "Computer wechseln",
         "cancel": "So beibehalten"
       }
