@@ -339,7 +339,6 @@ it('keeps the Android model draft on save failure and blocks a conflicting heade
 // and actions use the real mobile parser and production host grant flow; native drawing is mocked.
 const { createBotRemoteSettingsResource } = await vi.importActual<{ createBotRemoteSettingsResource: (deps: any) => any }>(
   '../../../desktop/src/main/localDb/ipc/botRemoteSettingsResource.ts');
-const { parseCompanionProfileData } = await import('@/session/companionProfileData');
 it.each(['android', 'ios'])('opens, saves and resets media settings from the %s menu, hiding them on older hosts', async platform => {
   h.platform = platform;
   const image = { providerId: 'images-account', modelId: 'draw' };
