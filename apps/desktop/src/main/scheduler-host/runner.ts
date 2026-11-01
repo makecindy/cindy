@@ -1161,6 +1161,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           const liveSession = this.deps.maker.getSession(sessionId);
           if (
             liveSession &&
+            !(liveSession.agentDeviceId && !liveSession.remoteHostId) &&
             crossesCodexAppliedCustomProviderIdentity({
               agentKind: liveSession.agentKind,
               remoteHostId: liveSession.remoteHostId,
@@ -1455,7 +1456,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId ??
         materializedDefaultProviderId ??
         currentProviderId;
-      const credentialSwitchInput = liveSession && !agentDeviceId
+      // Remote native identities belong to the execution computer, not this host's
+      // provider registry. Its handle still owns requiresModelSwitchRebuild below.
+      const credentialSwitchInput = liveSession && !agentDeviceId &&
+        !(liveSession.agentDeviceId && !liveSession.remoteHostId)
         ? {
             agentKind: liveSession.agentKind,
             remoteHostId: liveSession.remoteHostId,
@@ -1654,8 +1658,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       heartbeatProviderId ??
       null;
     const mustSyncReusedPiRoute = !resolvedSelection && reusedLiveSession && effectiveAgentKind === 'pi';
+    const mustSyncRemoteRoute = !resolvedSelection && !!session.agentDeviceId && !session.remoteHostId &&
+      (heartbeatModelChanged || !!schedule.model?.trim() || !!explicitProviderId);
     let modelSwitchApplied = true;
-    if ((heartbeatModelChanged && effectiveAgentKind !== 'pi') || mustSyncReusedPiRoute) {
+    if ((heartbeatModelChanged && effectiveAgentKind !== 'pi') || mustSyncReusedPiRoute || mustSyncRemoteRoute) {
       try {
         if (mustSyncReusedPiRoute) {
           if (!this.deps.applyPiModelSelectionUnderLock) {
@@ -1678,6 +1684,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
               resumeSessionId: latest?.sdkSessionId ?? undefined,
             });
           }
+        } else if (mustSyncRemoteRoute) {
+          await session.setModel(model, { providerId: reusedPiRouteProviderId });
         } else {
           await session.setModel(model);
         }
@@ -1690,6 +1698,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
             { cause: err },
           );
+        }
+        if (mustSyncRemoteRoute) {
+          throw new Error('Scheduled remote route sync failed before dispatch', { cause: err });
         }
         if (mustSyncReusedPiRoute) {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
@@ -2058,6 +2069,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // 形态的改道热换即可生效(PR #744 review 第二十七轮)。
           if (
             effectiveAgentKind !== 'pi' &&
+            !(session.agentDeviceId && !session.remoteHostId) &&
             shouldCloseSessionForCredentialSwitch({
               agentKind: session.agentKind,
               remoteHostId: session.remoteHostId,
@@ -2711,7 +2723,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 跳过并留日志，thread/store 已错配时 fail-closed。
         try {
           await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
-        } catch (err) {
+        } catch (caught) {
+          // A failed remote preflight (including a disconnected computer) cannot
+          // fall through to dispatch with an unvalidated execution route.
+          const err = live.agentDeviceId && !live.remoteHostId &&
+            !(caught instanceof QueuedModelSwitchRebuildRequiredError) &&
+            !(caught instanceof QueuedRouteDisabledError) &&
+            !(caught instanceof QueuedPiRouteSyncError)
+            ? new QueuedRouteDisabledError('Scheduled remote route validation failed before queued dispatch', { cause: caught })
+            : caught;
           if (
             err instanceof QueuedRouteDisabledError ||
             err instanceof QueuedPiRouteSyncError ||
@@ -3147,10 +3167,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
     this.assertQueuedModelSelection(live, baseline.resolvedSelection);
+    const isRemoteAgent = !!live.agentDeviceId && !live.remoteHostId;
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =
       explicitModel ??
-      (baseline.model?.trim() ? baseline.model : undefined) ??
+      // A provider-only remote sync must retain a model chosen while queued.
+      (isRemoteAgent ? live.model : (baseline.model?.trim() ? baseline.model : undefined)) ??
       live.model;
     const explicitProviderId = schedule.providerId?.trim() ? schedule.providerId.trim() : null;
     const currentProviderId = getSessionProvider(live.id) ?? baseline.providerId;
@@ -3191,6 +3213,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     ) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
+    // Controller catalogs cannot adjudicate identities from another computer.
     if (
       !remoteAgent && crossesCodexAppliedCustomProviderIdentity({
         agentKind: live.agentKind,
@@ -3269,7 +3292,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return;
     }
     if (
-      !remoteAgent && live.agentKind !== 'pi' &&
+      (!remoteAgent || !resolvedSelection) && live.agentKind !== 'pi' &&
       (await live.requiresModelSwitchRebuild?.(targetModel, { providerId: nextProviderId })) ===
       true
     ) {
@@ -3284,11 +3307,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 真实运行值为基准判断是否需要覆盖(review P2)。effort 无 live getter,
     // 仍以 baseline 判断(setEffort 幂等,误判多调一次无害)。
     const modelChanged = explicitModel !== undefined && targetModel !== live.model;
-    // 与直发路径一致：Pi 的 provider 是原生进程态。schedule 显式 model/source
-    // 或停用轴改道时，需要把 provider-model 一起重申；只写 provider store 对
-    // Pi BYOM 无效，即使 model 字符串没变也不能跳过。
-    const mustSyncPiNativeRoute =
-      live.agentKind === 'pi' && (explicitModel !== undefined || applyProviderId !== null);
+    // Remote handles need the complete route even when only the provider changes.
+    // Updating this controller's provider store alone cannot affect their requests.
+    const mustSyncRemoteRoute =
+      isRemoteAgent && (explicitModel !== undefined || applyProviderId !== null);
     if (live.agentKind === 'pi') {
       // The full window transaction already ran before the send captured this
       // Session. A later route drift must fail before vendor dispatch.
@@ -3299,9 +3321,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     let modelApplied = true;
-    if (live.agentKind !== 'pi' && (modelChanged || mustSyncPiNativeRoute)) {
+    if (live.agentKind !== 'pi' && (modelChanged || mustSyncRemoteRoute)) {
       try {
-        if (mustSyncPiNativeRoute) {
+        if (mustSyncRemoteRoute) {
           await live.setModel(targetModel, { providerId: nextProviderId });
         } else {
           await live.setModel(targetModel);
@@ -3314,9 +3336,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             { cause: err },
           );
         }
-        if (mustSyncPiNativeRoute) {
-          throw new QueuedPiRouteSyncError(
-            `schedule Pi route sync failed before queued dispatch (model "${targetModel}", provider "${nextProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
+        if (mustSyncRemoteRoute) {
+          throw new QueuedRouteDisabledError(
+            'Scheduled remote route sync failed before queued dispatch',
             { cause: err },
           );
         }

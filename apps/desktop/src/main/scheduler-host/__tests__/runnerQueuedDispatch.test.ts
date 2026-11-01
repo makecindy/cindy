@@ -435,6 +435,7 @@ function createRunnerHarness(
     metaModel?: string;
     /** 停用轴裁决桩(缺省 = 不裁决,与生产未接线时一致)。 */
     checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
+    isAgentOnOtherDevice?: MakerScheduleRunnerDeps['isAgentOnOtherDevice'];
     acquirePendingAgentSwitch?: MakerScheduleRunnerDeps['acquirePendingAgentSwitch'];
     prepareModelPreferences?: MakerScheduleRunnerDeps['prepareModelPreferences'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
@@ -475,6 +476,7 @@ function createRunnerHarness(
     logger,
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
+    isAgentOnOtherDevice: opts.isAgentOnOtherDevice,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
     prepareModelPreferences: opts.prepareModelPreferences,
     applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, model, providerId) => {
@@ -1784,6 +1786,83 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.send).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
+
+  // #6709, unit: fire/queue acceptance must use the execution computer's route.
+  // Existing identity cases only model local threads. A remote native identity
+  // with no matching controller account must complete, not abort before dispatch.
+  it.each([
+    { identity: 'cindy_openai', model: 'remote-model', baseline: 'remote-model' },
+    { identity: 'remote-custom-provider', model: 'remote-model', baseline: 'remote-model' },
+    { identity: 'cindy_openai', model: undefined, baseline: 'previous-model' },
+  ])('dispatches remote Codex with $identity and model=$model without local credential arbitration', async ({ identity, model, baseline }) => {
+    mocks.getSessionProvider.mockReturnValue('remote-account');
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.defineProperties(h.session, {
+      agentKind: { value: 'codex' },
+      agentDeviceId: { value: 'execution-computer' },
+      model: { value: 'remote-model', writable: true },
+      codexProxyActive: { value: true },
+      codexThreadModelProviderId: { value: identity },
+    });
+    // A matching controller id may describe a different native provider route.
+    if (identity === 'remote-custom-provider') setCodexAppliedCustomProviderRoutes([
+      { ...queuedImageGenerationRoutes[0], providerId: 'remote-account', responseModels: ['remote-model'] },
+    ]);
+    const queue = createQueueHarness({ busy: true });
+    const checkModelRoute = vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-unavailable' as const }));
+    const { runner } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: baseline, checkModelRoute, isAgentOnOtherDevice: async () => true,
+    });
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'codex', model, providerId: 'remote-account',
+    }), createFireContext());
+    const completion = expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    await completion;
+    expect(h.session.abort).not.toHaveBeenCalled();
+    expect(checkModelRoute).not.toHaveBeenCalled();
+    expect(h.setModel).toHaveBeenCalledWith('remote-model', { providerId: 'remote-account' });
+  });
+
+  it.each(['rebuild', 'preflight-offline', 'sync-rejected'])(
+    'blocks queued remote dispatch when the execution computer reports %s', async (failure) => {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      const requiresModelSwitchRebuild = vi.fn(async () => {
+        if (failure === 'preflight-offline') throw new Error('execution computer offline');
+        return failure === 'rebuild';
+      });
+      Object.assign(h.session, {
+        agentKind: 'codex', agentDeviceId: 'execution-computer', model: 'remote-model',
+        codexProxyActive: true, codexThreadModelProviderId: 'cindy_openai',
+        requiresModelSwitchRebuild,
+      });
+      mocks.getSessionProvider.mockReturnValue('remote-account');
+      if (failure === 'sync-rejected') h.setModel.mockRejectedValue(new Error('provider unavailable'));
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(h.session, queue.deps, {
+        metaModel: 'remote-model', isAgentOnOtherDevice: async () => true,
+      });
+      const fire = runner.fire(heartbeatSchedule({
+        agentKind: 'codex', model: 'remote-model', providerId: 'remote-account',
+      }), createFireContext());
+      const rejected = expect(fire).rejects.toThrow(failure === 'rebuild'
+        ? 'requires rebuilding the session'
+        : failure === 'preflight-offline' ? 'remote route validation failed' : 'remote route sync failed');
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      await queue.accept();
+      await rejected;
+      expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('remote-model', { providerId: 'remote-account' });
+      expect(h.session.abort).toHaveBeenCalled();
+      expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      if (failure === 'sync-rejected') {
+        expect(h.setModel).toHaveBeenCalledWith('remote-model', { providerId: 'remote-account' });
+      } else {
+        expect(h.setModel).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('排队 Codex 的 thread/store 身份错配时在 vendor dispatch 前 fail-closed', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
