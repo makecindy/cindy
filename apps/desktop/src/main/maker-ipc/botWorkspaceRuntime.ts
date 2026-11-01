@@ -42,7 +42,13 @@ export async function resolveBotGuestLaneAccess(
       .map((project) => project.path),
     isDirectory: isExistingDirectory,
     sameDirectory: (left, right) => linkedProjectDirectoryKey(left) === linkedProjectDirectoryKey(right),
+    protectedDirs: () => guestProtectedDirs(ownerUserDataPath()),
   });
+}
+
+/** Cindy's whole data directory (every owner) plus the active owner's scope. */
+function guestProtectedDirs(ownerDataPath: string): string[] {
+  return [app.getPath('userData'), ownerDataPath];
 }
 
 export class BotPlanWorkDirUnavailableError extends Error {

@@ -106,7 +106,7 @@ import {
 } from '../botImConnectionRuntime';
 import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
 import * as connectionStore from '../botImConnectionStore';
-import { __testing as laneTesting } from '../botImLaneRuntime';
+import { configureBotImLaneRuntime, __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
 import {
@@ -479,8 +479,14 @@ describe('bot im connection runtime', () => {
       botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', ownerUserId: '42',
     });
     const id = added.connection.id;
-    const clientA = path.join(h.root, 'client-a');
-    h.linkedProjects = [{ path: clientA }, { path: h.root }, { path: path.join(h.root, 'remote'), deviceId: 'dev-2' }];
+    const projects = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-im-projects-'));
+    const clientA = path.join(projects, 'client-a');
+    fs.mkdirSync(clientA);
+    // A link that looks like a project but resolves into Cindy's own data.
+    const disguised = path.join(projects, 'client-b');
+    fs.mkdirSync(path.join(h.root, 'owner-data'), { recursive: true });
+    fs.symlinkSync(path.join(h.root, 'owner-data'), disguised, process.platform === 'win32' ? 'junction' : 'dir');
+    h.linkedProjects = [{ path: clientA }, { path: h.root }, { path: disguised }, { path: path.join(h.root, 'remote'), deviceId: 'dev-2' }];
 
     await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: path.join(h.root, 'unlinked') } }))
       .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_NOT_LINKED') });
@@ -489,10 +495,45 @@ describe('bot im connection runtime', () => {
     // h.root contains owner-data (Cindy's own data): never a guest project.
     await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: h.root } }))
       .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_CONTAINS_APP_DATA') });
+    await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: disguised } }))
+      .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_CONTAINS_APP_DATA') });
 
     const bound = await setBotImConnectionGuestAccessForSettings({ connectionId: id, unbound: 'refuse', binding: { guestId: '555', projectPath: clientA } });
     expect(bound.connections.find((view) => view.id === id)?.guestAccess).toEqual({ unbound: 'refuse', bindings: { '555': { projectPath: clientA } } });
     expect(__testing.instances.get(id)?.record.guestAccess?.bindings).toEqual({ '555': { projectPath: clientA } });
+    fs.rmSync(projects, { recursive: true, force: true });
+  });
+
+  // #8359 review: hiding a guest's row does not stop its session, and a guest
+  // moved to another project must not get the old conversation handed over.
+  // Unit: a hidden guest lane, then a real binding change through the settings entry.
+  it('restarts a hidden guest lane without handoff when its binding changes', async () => {
+    const added = await addBotImConnection({
+      botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', ownerUserId: '42',
+    });
+    const id = added.connection.id;
+    await connectionStore.updateBotImConnectionRecord(id, { botContextId: '777' });
+    laneTesting.setStore({
+      listLinks: async () => [
+        { sessionId: 'owner-session', role: 'canonical', routeKey: null },
+        { sessionId: 'guest-session', role: 'channel', routeKey: 'im:telegram:777:dm:555' },
+      ],
+      readActivity: vi.fn(),
+      readArchiveActivity: vi.fn(async () => ({ messageId: null, hasNewActivity: false })),
+    });
+    await connectionStore.archiveBotImTaskRow(connectionStore.readBotImConnection(id)!, 'guest-session');
+    const restartSession = vi.fn(async () => {});
+    configureBotImLaneRuntime({ isTurnRunning: () => false, restartSession });
+    const clientA = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-im-client-a-'));
+    h.linkedProjects = [{ path: clientA }];
+    try {
+      await setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: clientA } });
+    } finally {
+      configureBotImLaneRuntime(null);
+      fs.rmSync(clientA, { recursive: true, force: true });
+    }
+    expect(restartSession).toHaveBeenCalledTimes(1);
+    expect(restartSession).toHaveBeenCalledWith('guest-session', { isolated: true });
   });
 
   afterEach(async () => {

@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -136,6 +140,28 @@ describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
       const o = opts(id);
       await expect(prepareBotWorkspaceRuntime(o, deps)).rejects.toMatchObject({ code: 'BOT_GUEST_ACCESS_REFUSED', reason });
       expect(o.workingDir).toBe('/somewhere/else');
+    }
+  });
+
+  // #8359 review: the overlap with Cindy's data is re-checked on real paths at
+  // every start, so a project link retargeted after binding is refused.
+  it('refuses a bound project that resolves into Cindy data through a link', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guest-link-'));
+    try {
+      const appData = path.join(root, 'app-data');
+      fs.mkdirSync(path.join(appData, 'owners'), { recursive: true });
+      const project = path.join(root, 'client-a');
+      fs.symlinkSync(appData, project, process.platform === 'win32' ? 'junction' : 'dir');
+      const linked = { ...connection, guestAccess: { unbound: 'refuse' as const, bindings: { '42': { projectPath: project } } } };
+      const access = await resolveGuestLaneAccess('mimi', 'im:telegram:777:dm:42', {
+        listConnections: () => [linked],
+        readLinkedProjectPaths: async () => [project],
+        sameDirectory: (a, b) => a === b,
+        protectedDirs: () => [appData],
+      });
+      expect(access).toMatchObject({ kind: 'refused', reason: 'project-unavailable' });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

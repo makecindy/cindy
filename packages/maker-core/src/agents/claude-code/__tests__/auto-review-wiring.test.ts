@@ -177,6 +177,7 @@ async function startSession(
     extraDirs?: string[];
     writableDirs?: string[];
     interactionResolver?: (request: InteractionRequest) => Promise<InteractionDecision>;
+    workspaceConfinement?: 'project';
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -208,6 +209,7 @@ async function startSession(
     deviceHosted: options.deviceHosted,
     extraDirs: options.extraDirs,
     writableDirs: options.writableDirs,
+    ...(options.workspaceConfinement ? { workspaceConfinement: options.workspaceConfinement } : {}),
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | { canUseTool?: CanUseToolFn; permissionMode?: string; model?: string }
@@ -900,6 +902,38 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     expect(r.behavior).toBe('allow');
     expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
     expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  // #8359 review: a confined guest's shell command can read outside its project,
+  // so an Auto reviewer allow must not stand in for the owner's confirmation.
+  it('sends a confined guest shell command to the owner even when the reviewer would allow it', async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      reviewVerdict: 'allow',
+      workspaceConfinement: 'project',
+    });
+    const r = await canUseTool(
+      'Bash',
+      { command: 'cat ../other/notes.txt' },
+      { toolUseID: 't-guest', suggestions: SESSION_SUGGESTION },
+    );
+    expect(r.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    const asked = permissionRequests(seen);
+    expect(asked).toHaveLength(1);
+    expect(asked[0].suggestions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('denies a confined guest shell command in Auto when no owner can confirm', async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction } = await startSession('auto', {
+      reviewVerdict: 'allow',
+      workspaceConfinement: 'project',
+      attachResolver: false,
+    });
+    const r = await canUseTool('Bash', { command: 'ls /' }, { toolUseID: 't-guest-2' });
+    expect(r.behavior).toBe('deny');
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
     await handle.close();
   });
 

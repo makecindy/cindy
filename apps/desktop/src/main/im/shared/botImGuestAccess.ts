@@ -13,7 +13,8 @@
  * refuses the turn rather than falling back to the teammate's shared Home.
  */
 
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
 
 import { buildBotGuestMemoryScopeKey } from '@cindy/maker-core';
 
@@ -69,6 +70,48 @@ export interface GuestLaneAccessDeps {
   isDirectory?(dir: string): Promise<boolean>;
   /** Platform-aware path identity (case-insensitive on Windows / macOS). */
   sameDirectory(left: string, right: string): boolean;
+  /** Cindy's own data directories; a project overlapping one is refused. */
+  protectedDirs?(): readonly string[];
+}
+
+/** Resolve links and junctions of the longest existing prefix. */
+async function realPathOf(candidate: string): Promise<string> {
+  let current = candidate;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await realpath(current), ...rest);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return candidate;
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * A guest project must neither contain nor sit inside Cindy's own data (every
+ * Bot Home and every other guest's memory live there). Both the written paths
+ * and their real paths are compared, so a symlink or a Windows junction cannot
+ * hide the overlap.
+ */
+export async function overlapsProtectedDir(projectPath: string, protectedDirs: readonly string[]): Promise<boolean> {
+  const project = path.resolve(projectPath);
+  const realProject = await realPathOf(project);
+  for (const dir of protectedDirs) {
+    const written = path.resolve(dir);
+    const real = await realPathOf(written);
+    for (const [left, right] of [[project, written], [realProject, real]] as const) {
+      if (isWithin(left, right) || isWithin(right, left)) return true;
+    }
+  }
+  return false;
 }
 
 async function isExistingDirectory(dir: string): Promise<boolean> {
@@ -103,7 +146,9 @@ export async function resolveGuestLaneAccess(
   const linked = await deps.readLinkedProjectPaths(botId);
   const isDirectory = deps.isDirectory ?? isExistingDirectory;
   if (!linked.some((dir) => deps.sameDirectory(dir, binding.projectPath))
-    || !(await isDirectory(binding.projectPath))) {
+    || !(await isDirectory(binding.projectPath))
+    // Re-checked on every start: a link can be retargeted after binding.
+    || (deps.protectedDirs && await overlapsProtectedDir(binding.projectPath, deps.protectedDirs()))) {
     return { kind: 'refused', route, reason: 'project-unavailable' };
   }
   return {

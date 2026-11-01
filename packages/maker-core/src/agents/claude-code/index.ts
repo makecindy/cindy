@@ -2634,7 +2634,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       // Auto can resolve allow/block without a UI. Other modes retain the
       // existing fail-closed behavior when no interaction surface is attached.
-      const canReviewWithoutUi = mutablePermissionMode === 'auto';
+      const canReviewWithoutUi = mutablePermissionMode === 'auto'
+        && !(guestConfined && isConfinedShellTool(toolName));
       if (!interactionResolver && !canReviewWithoutUi) {
         if (isReadOnlyClaudeTool(toolName)) {
           return { behavior: 'allow', updatedInput: input };
@@ -2646,7 +2647,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
-      let forcePrompt = mutablePermissionMode !== 'auto' && turnPolicyForcePrompt;
+      // A confined guest's shell command can read anything, so only the owner may
+      // approve it: no Auto reviewer verdict, no MCP shortcut (#8359).
+      const ownerOnlyPrompt = guestConfined && isConfinedShellTool(toolName);
+      let forcePrompt = ownerOnlyPrompt || (mutablePermissionMode !== 'auto' && turnPolicyForcePrompt);
       let unavailableHandoff = false;
       let autoReviewAskReason: string | undefined;
       let reviewedWritePath: string | null | undefined;
@@ -2658,7 +2662,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
       const reviewPermissionMode = mutablePermissionMode;
-      if (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt)) {
+      if (!ownerOnlyPrompt
+        && (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt))) {
         // 设备托管：路径都在任务所在电脑上，以那台电脑的真实工作目录为准。
         const reviewWorkingDir = hosted?.workingDir ?? opts.workingDir;
         const workspaceRoots = [reviewWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
