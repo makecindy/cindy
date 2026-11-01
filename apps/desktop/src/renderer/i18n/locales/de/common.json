@@ -10309,6 +10309,8 @@
     },
     "directMessage": {
       "sentTo": "Nachricht an {{name}} gesendet",
+      "notDelivered": "Nicht zugestellt",
+      "queued": "In der Warteschlange",
       "receivedFrom": "Nachricht von {{name}}",
       "exchangeCount": "{{count}} Nachrichten mit {{name}}",
       "open": "Unterhaltung zwischen Teammitgliedern ansehen",

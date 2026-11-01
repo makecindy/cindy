@@ -10309,6 +10309,8 @@
     },
     "directMessage": {
       "sentTo": "Sent a message to {{name}}",
+      "notDelivered": "Not delivered",
+      "queued": "Queued",
       "receivedFrom": "Message from {{name}}",
       "exchangeCount": "{{count}} messages with {{name}}",
       "open": "View the conversation between teammates",

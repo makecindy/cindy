@@ -4426,6 +4426,13 @@ UNSUPPORTED_CAPABILITY；不得降级为普通消息或另建任务。旧 Host �
 Node 私有上传只接受 POST + uploadDir，短期 Bearer 不进入页面管道。旧 Host 无入口则不上传；不保存新凭据，不新增设置页授权协议。
 targets.get 按本插件 requestKey 查询原收据；settled 自然终态由原 inputClientId 的运行事件持久记录，取消另须确认原队列/执行结束。不开放伙伴历史。
 
+## 伙伴私聊未送达状态
+
+既有私聊线程结果中的每条消息与时间线卡片 metadata 可选追加 `deliveryStatus: 'queued' | 'delivered' | 'failed'`。
+新 Host 始终返回状态；`queued` 仅在接收队列仍持有消息时显示，`failed` 显示未送达；新查看端遇到旧 Host 缺少该字段时沿用原消息展示，旧查看端忽略新增字段。
+失败消息仅按原线程参与者权限投影；不新增 Device Link channel、allowlist、relay 帧或服务端接口，
+自建中转沿用既有通用 invoke 与消息投影，不需同步适配。
+
 ## 插件只读查看项目任务（未发布）
 
 agent.observe 为可选独立能力，不依赖 tasks/targets，只有 Host 确认的 observeCapabilityApproved 才授予；

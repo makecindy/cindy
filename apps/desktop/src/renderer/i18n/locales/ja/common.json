@@ -10264,6 +10264,8 @@
     },
     "directMessage": {
       "sentTo": "{{name}} にメッセージを送信",
+      "notDelivered": "未配信",
+      "queued": "キュー待ち",
       "receivedFrom": "{{name}} からのメッセージ",
       "exchangeCount": "{{name}} との {{count}} 件のやり取り",
       "open": "仲間同士の会話を見る",

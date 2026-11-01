@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   resolveDb: null as (() => ReturnType<typeof drizzle> | undefined) | null,
   createMessage: vi.fn(async (..._args: Parameters<typeof import('../../localDb/ipc/messages.js').createMessage>) => ({ id: 'anchor' })),
+  broadcastMessageRow: vi.fn(),
 }));
 
 vi.mock('../../localDb/client/current.js', () => ({
@@ -19,12 +20,13 @@ vi.mock('../../localDb/client/current.js', () => ({
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: h.createMessage,
+  broadcastMessageRow: h.broadcastMessageRow,
 }));
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
-import { botDirectMessages, botDirectMessageThreads } from '../../localDb/schema.js';
+import { botDirectMessages, botDirectMessageThreads, messages } from '../../localDb/schema.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
@@ -89,8 +91,14 @@ function createDatabase(): Database.Database {
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       client_id TEXT,
+      role TEXT,
       content TEXT,
-      rewind_at INTEGER
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER DEFAULT 1,
+      rewind_at INTEGER,
+      UNIQUE(session_id, client_id)
     );
     INSERT INTO bot_profiles (id, display_name, status, updated_at) VALUES
       ('bot-a', '总控', 'active', 3),
@@ -278,6 +286,9 @@ describe('botDirectMessageService', () => {
       expect(queued[HOST_ONLY_AGENT_PREFIX]).toBe(sent.message.slice(0, -'Bounded peer question'.length));
       release();
       dispatch.mockImplementationOnce(async params => {
+        if (params.targetSessionId && params.clientId) sqlite.prepare(`INSERT INTO messages
+          (id, session_id, client_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'user', '', 1, NULL)`)
+          .run(`receipt-${params.clientId}`, params.targetSessionId, params.clientId);
         await params.onAccepted?.();
         return { ok: true, targetSessionId: params.targetSessionId, wakeKind: 'resumed' };
       });
@@ -305,7 +316,8 @@ describe('botDirectMessageService', () => {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
     }).outputText;
     const enqueue = vi.fn(async (params: {
-      targetSessionId: string; clientId: string; onAccepted: () => Promise<void>; onAcceptedRollback: () => Promise<void>;
+      targetSessionId: string; clientId: string; durableDelivery?: true;
+      onAccepted: () => Promise<void>; onAcceptedRollback: () => Promise<void>;
     }) => ({ ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const }));
     const hostDispatch = new Function('dispatchBotSessionMessage', 'AcceptedCallbackDispatchCancelled', adapter)(enqueue, AcceptedCallbackDispatchCancelled);
     const service = createBotDirectMessageService({ dispatch: hostDispatch });
@@ -318,8 +330,12 @@ describe('botDirectMessageService', () => {
       expect(h.createMessage).not.toHaveBeenCalled();
       draining = true;
       const queued = enqueue.mock.calls[0][0];
+      expect(queued.durableDelivery).toBe(true);
       const drain = async () => {
         try {
+          if (condition === 'valid') sqlite.prepare(`INSERT INTO messages
+            (id, session_id, client_id, role, content, created_at, rewind_at) VALUES ('accepted-receipt', ?, ?, 'user', '', 1, NULL)`)
+            .run('b-main', enqueue.mock.calls[0][0].clientId);
           await runAcceptedCallback(queued.onAccepted, queued.targetSessionId, queued.clientId, log);
           await vendorDispatch();
         } catch (error) {
@@ -354,8 +370,8 @@ describe('botDirectMessageService', () => {
       if (identity === 'deleted-source') sqlite.exec("UPDATE bot_direct_messages SET sender_session_id=NULL; DELETE FROM bot_session_links WHERE session_id='a-group'");
       // Only the durable queue item survives, not its accepted/rollback closures.
       const item = JSON.parse(JSON.stringify({ clientId: enqueue.mock.calls[0][0].clientId }));
-      if (identity === 'group-receipt') sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)')
-        .run('unaccepted-group-receipt', 'b-main', item.clientId);
+      if (identity === 'group-receipt') sqlite.prepare('INSERT INTO messages (id, session_id, client_id, role) VALUES (?, ?, ?, ?)')
+        .run('unaccepted-group-receipt', 'b-main', item.clientId, 'assistant');
       const discard = vi.fn(async () => {});
       const after = createBotDirectMessageService({ dispatch, hasQueuedDelivery: async () => true, discardQueuedDelivery: discard });
       const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
@@ -372,15 +388,18 @@ describe('botDirectMessageService', () => {
       const vendor = vi.fn(async () => {});
       const drain = async () => { await acceptedHook('b-main', item, true); await vendor(); };
       if (identity === 'canonical') {
-        await after.restore(); await drain();
+        await after.restore();
+        sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+          VALUES ('canonical-receipt', 'b-main', ?, 'user', '', 1, NULL)`).run(item.clientId);
+        await drain();
         expect(vendor).toHaveBeenCalledOnce(); expect(discard).not.toHaveBeenCalled();
-        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('delivered');
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('pending');
       } else {
         // Fence works even if queue drain wins the startup race with DM restore.
         await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
         await after.restore(); await after.restore();
         await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
-        expect(vendor).not.toHaveBeenCalled(); expect(h.createMessage).not.toHaveBeenCalled();
+        expect(vendor).not.toHaveBeenCalled(); expect(h.createMessage).toHaveBeenCalledOnce();
         expect(discard).toHaveBeenCalledWith('b-main', item.clientId, expect.any(Function));
         expect(sqlite.prepare('SELECT id FROM messages WHERE client_id=?').get(item.clientId)).toBeUndefined();
         expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('failed');
@@ -473,7 +492,12 @@ describe('botDirectMessageService', () => {
     sqlite = createDatabase();
     h.db = drizzle(sqlite);
     h.createMessage.mockClear();
-    dispatch = vi.fn(async (params: { onAccepted?: () => void | Promise<void> }) => {
+    h.broadcastMessageRow.mockClear();
+    dispatch = vi.fn(async (params: { targetSessionId?: string; clientId?: string; onAccepted?: () => void | Promise<void> }) => {
+      if (params.targetSessionId && params.clientId) {
+        sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+          VALUES (?, ?, ?, 'user', '', 1, NULL)`).run(`receipt-${params.clientId}`, params.targetSessionId, params.clientId);
+      }
       await params.onAccepted?.();
       return {
         ok: true as const,
@@ -713,6 +737,280 @@ describe('botDirectMessageService', () => {
     );
   });
 
+  it('settles a discarded queued DM, releases its slot, and leaves a reachable sender status card', async () => {
+    dispatch.mockImplementationOnce(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const onChanged = vi.fn();
+    const service = createBotDirectMessageService({ dispatch, onChanged, createId: () => 'discarded-message' });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Please check this.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    const clientId = `bot-dm:${sent.threadId}:${sent.messageId}`;
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ durableDelivery: true }));
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+
+    await expect(service.settleDiscardedQueuedDelivery('b-main', clientId)).resolves.toBe(true);
+
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'failed' });
+    expect(sqlite.prepare('SELECT message_count, close_reason FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 0, close_reason: null });
+    expect(h.createMessage).toHaveBeenCalledOnce();
+    expect(h.createMessage).toHaveBeenCalledWith('a-main', expect.objectContaining({
+      clientId: `bot-dm-thread:${sent.threadId}:${sent.messageId}:a-main`,
+      agentMeta: expect.objectContaining({ botDirectMessage: expect.objectContaining({ direction: 'sent' }) }),
+    }), expect.anything());
+    await expect(service.getThread(sent.threadId, 'bot-a')).resolves.toMatchObject({
+      ok: true,
+      thread: { messageCount: 0, messages: [{ content: 'Please check this.', deliveryStatus: 'failed' }] },
+    });
+    await expect(service.getThread(sent.threadId, 'bot-b')).resolves.toMatchObject({
+      ok: true,
+      thread: { messages: [] },
+    });
+    expect(onChanged).toHaveBeenCalledOnce();
+    await expect(service.settleDiscardedQueuedDelivery('b-main', clientId)).resolves.toBe(false);
+    expect(h.createMessage).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a persisted recipient receipt delivered when the queued callback is later settled', async () => {
+    dispatch.mockImplementationOnce(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const service = createBotDirectMessageService({ dispatch, createId: () => 'persisted-receipt' });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Already persisted.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    const clientId = `bot-dm:${sent.threadId}:${sent.messageId}`;
+    sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+      VALUES (?, ?, ?, 'user', ?, 1, NULL)`)
+      .run('recipient-receipt', 'b-main', clientId, 'Already persisted.');
+
+    await expect(service.settleDiscardedQueuedDelivery('b-main', clientId)).resolves.toBe(true);
+
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'delivered' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 1 });
+    expect(h.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks a recipient receipt that commits while the discard tombstone is sealed', async () => {
+    dispatch.mockImplementationOnce(async () => ({ ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const }));
+    const service = createBotDirectMessageService({ dispatch, createId: () => 'late-receipt',
+      hasQueuedDelivery: async () => false,
+      sealDiscardedDelivery: async (sessionId, clientId) => {
+        sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+          VALUES ('late-receipt-row', ?, ?, 'user', '', 1, NULL)`).run(sessionId, clientId);
+        return false;
+      },
+    });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Receipt wins.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    await expect(service.settleDiscardedQueuedDelivery('b-main', `bot-dm:${sent.threadId}:${sent.messageId}`)).resolves.toBe(true);
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get()).toEqual({ delivery_status: 'delivered' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get()).toEqual({ message_count: 1 });
+  });
+
+  it('keeps a committed recipient receipt delivered when the accepted callback rolls back', async () => {
+    dispatch.mockImplementationOnce(async params => {
+      sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+        VALUES ('rollback-race-receipt', ?, ?, 'user', '', 1, NULL)`).run(params.targetSessionId, params.clientId);
+      await params.onAcceptedRollback?.();
+      return { ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const };
+    });
+    const service = createBotDirectMessageService({ dispatch, createId: () => 'rollback-receipt-race' });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Keep the accepted input.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get()).toEqual({ delivery_status: 'delivered' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get()).toEqual({ message_count: 1 });
+  });
+
+  it('changes existing queued timeline anchors to delivered after receipt acceptance', async () => {
+    dispatch.mockImplementationOnce(async () => ({ ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const }));
+    h.createMessage.mockImplementation(async (sessionId, body) => {
+      const id = `anchor-${body.clientId}`;
+      sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, agent_meta, created_at, rewind_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(session_id, client_id) DO NOTHING`)
+        .run(id, sessionId, body.clientId, body.role, body.content, JSON.stringify(body.agentMeta), body.createdAt ?? 1);
+      const row = sqlite.prepare('SELECT * FROM messages WHERE session_id = ? AND client_id = ?').get(sessionId, body.clientId) as {
+        id: string; session_id: string; client_id: string; role: string; content: string; agent_meta: string; created_at: number; rewind_at: number | null;
+      };
+      return { id: row.id, sessionId: row.session_id, clientId: row.client_id, role: row.role, content: row.content,
+        agentMeta: JSON.parse(row.agent_meta), createdAt: row.created_at, rewindAt: row.rewind_at } as never;
+    });
+    const service = createBotDirectMessageService({ dispatch, hasQueuedDelivery: async () => true });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Update the timeline card.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    await service.restore();
+    expect(sqlite.prepare(`SELECT count(*) AS count FROM messages
+      WHERE role='assistant' AND json_extract(agent_meta, '$.botDirectMessage.deliveryStatus')='queued'`).get()).toEqual({ count: 2 });
+    const params = dispatch.mock.calls[0]![0];
+    sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+      VALUES ('timeline-receipt', 'b-main', ?, 'user', '', 1, NULL)`).run(params.clientId);
+    await params.onAccepted?.();
+    expect(sqlite.prepare(`SELECT count(*) AS count FROM messages
+      WHERE role='assistant' AND json_extract(agent_meta, '$.botDirectMessage.deliveryStatus')='delivered'`).get()).toEqual({ count: 2 });
+    expect(h.broadcastMessageRow).toHaveBeenCalled();
+  });
+
+  it('keeps a pending reservation while the live queue or recovery still owns it', async () => {
+    dispatch.mockImplementationOnce(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const service = createBotDirectMessageService({
+      dispatch,
+      createId: () => 'still-queued',
+      hasQueuedDelivery: vi.fn(async () => true),
+    });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Still queued.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+
+    await expect(service.settleDiscardedQueuedDelivery('b-main', `bot-dm:${sent.threadId}:${sent.messageId}`))
+      .resolves.toBe(false);
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 1 });
+    expect(h.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('marks a restored queued DM undelivered if it is removed before the receiver persists it', async () => {
+    let queueOwnsDelivery = true;
+    const queuedDispatch = vi.fn(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const sender = createBotDirectMessageService({ dispatch: queuedDispatch, createId: () => 'restored-drop' });
+    const sent = await sender.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Do this after restart.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    const clientId = `bot-dm:${sent.threadId}:${sent.messageId}`;
+    const recovered = createBotDirectMessageService({
+      dispatch,
+      hasQueuedDelivery: async () => queueOwnsDelivery,
+    });
+
+    await recovered.restore();
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 1 });
+    await expect(recovered.getThread(sent.threadId, 'bot-a')).resolves.toMatchObject({
+      ok: true,
+      thread: { messageCount: 1, messages: [{ content: 'Do this after restart.', deliveryStatus: 'queued' }] },
+    });
+
+    queueOwnsDelivery = false;
+    const sealDiscardedDelivery = vi.fn(async () => true);
+    const restarted = createBotDirectMessageService({
+      dispatch,
+      hasQueuedDelivery: async () => queueOwnsDelivery,
+      sealDiscardedDelivery,
+    });
+    await restarted.restore();
+
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'failed' });
+    expect(sealDiscardedDelivery).toHaveBeenCalledWith('b-main', clientId);
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 0 });
+    await expect(restarted.getThread(sent.threadId, 'bot-a')).resolves.toMatchObject({
+      ok: true,
+      thread: { messages: [{ content: 'Do this after restart.', deliveryStatus: 'failed' }] },
+    });
+  });
+
+  it('leaves a discarded delivery pending if its durable replay fence cannot be written', async () => {
+    dispatch.mockImplementationOnce(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const service = createBotDirectMessageService({
+      dispatch,
+      createId: () => 'seal-failure',
+      hasQueuedDelivery: async () => false,
+      sealDiscardedDelivery: async () => { throw new Error('cancellation tombstone unavailable'); },
+    });
+    const sent = await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Keep this recoverable.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+
+    await expect(service.settleDiscardedQueuedDelivery('b-main', `bot-dm:${sent.threadId}:${sent.messageId}`))
+      .rejects.toThrow('cancellation tombstone unavailable');
+
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 1 });
+    expect(h.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pending DM when queue restoration cannot prove whether it still exists', async () => {
+    const queuedDispatch = vi.fn(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const sender = createBotDirectMessageService({ dispatch: queuedDispatch, createId: () => 'uncertain-restore' });
+    await sender.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Keep this reservation.' });
+    const recovered = createBotDirectMessageService({
+      dispatch,
+      hasQueuedDelivery: async () => { throw new Error('queue snapshot unavailable'); },
+    });
+
+    await expect(recovered.restore()).rejects.toThrow('queue snapshot unavailable');
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 1 });
+    expect(h.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('can finish a failed settlement after its failure card write fails mid-flight', async () => {
+    let queueOwnsDelivery = true;
+    const queuedDispatch = vi.fn(async () => ({
+      ok: true as const,
+      targetSessionId: 'b-main',
+      wakeKind: 'queued' as const,
+    }));
+    const sender = createBotDirectMessageService({ dispatch: queuedDispatch, createId: () => 'partial-settlement' });
+    const sent = await sender.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Recover this settlement.' });
+    if (!sent.ok) throw new Error(sent.errorCode);
+    const clientId = `bot-dm:${sent.threadId}:${sent.messageId}`;
+    const recovered = createBotDirectMessageService({
+      dispatch,
+      hasQueuedDelivery: async () => queueOwnsDelivery,
+    });
+
+    await recovered.restore();
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+    queueOwnsDelivery = false;
+    h.createMessage.mockRejectedValueOnce(new Error('failure card write failed'));
+
+    await expect(recovered.settleDiscardedQueuedDelivery('b-main', clientId))
+      .rejects.toThrow('failure card write failed');
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'pending' });
+
+    await recovered.restore();
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
+      .toEqual({ delivery_status: 'failed' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
+      .toEqual({ message_count: 0 });
+    await expect(recovered.getThread(sent.threadId, 'bot-a')).resolves.toMatchObject({
+      ok: true,
+      thread: { messages: [{ content: 'Recover this settlement.', deliveryStatus: 'failed' }] },
+    });
+  });
+
   it('keeps the trusted sender header on one bounded line', async () => {
     sqlite
       .prepare("UPDATE bot_profiles SET display_name = ? WHERE id = 'bot-a'")
@@ -870,7 +1168,9 @@ describe('botDirectMessageService', () => {
   it('keeps one private pair thread, exposes it only to a participant, and closes at six exchanges', async () => {
     let id = 0;
     const service = createBotDirectMessageService({
-      dispatch: vi.fn(async ({ targetSessionId, onAccepted }) => {
+      dispatch: vi.fn(async ({ targetSessionId, clientId, onAccepted }) => {
+        sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+          VALUES (?, ?, ?, 'user', '', 1, NULL)`).run(`receipt-${clientId}`, targetSessionId, clientId);
         await onAccepted?.();
         return {
           ok: true as const,
@@ -959,7 +1259,7 @@ describe('botDirectMessageService', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('cancels the delivery and restores its budget when either timeline trace cannot persist', async () => {
+  it('keeps a persisted recipient delivery when its timeline trace needs repair', async () => {
     h.createMessage.mockRejectedValueOnce(new Error('timeline write failed'));
     const service = createBotDirectMessageService({
       dispatch,
@@ -970,13 +1270,13 @@ describe('botDirectMessageService', () => {
     });
     await expect(
       service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'hello' }),
-    ).resolves.toMatchObject({ ok: false, errorCode: 'DELIVERY_NOT_ACCEPTED' });
+    ).resolves.toMatchObject({ ok: true, accepted: true, delivered: true });
     expect(
       sqlite.prepare("SELECT delivery_status FROM bot_direct_messages WHERE id = 'failure-2'").get(),
-    ).toEqual({ delivery_status: 'failed' });
+    ).toEqual({ delivery_status: 'delivered' });
     expect(
       sqlite.prepare("SELECT message_count FROM bot_direct_message_threads WHERE id = 'failure-1'").get(),
-    ).toEqual({ message_count: 0 });
+    ).toEqual({ message_count: 1 });
   });
 
   it('projects idle expiry when the read-only conversation is opened before another send', async () => {
@@ -1027,7 +1327,7 @@ describe('botDirectMessageService', () => {
       ]) });
   });
 
-  it('waits for a slow timeline write before rolling back its failed peer', async () => {
+  it('waits for the recipient receipt before repairing a slow timeline projection', async () => {
     let release!: () => void;
     const slowWrite = new Promise<void>((resolve) => { release = resolve; });
     let started!: () => void;
@@ -1046,8 +1346,9 @@ describe('botDirectMessageService', () => {
     // Let a fail-fast Promise.all reach its rollback while the second write waits.
     await new Promise((resolve) => setTimeout(resolve, 0));
     release();
-    await expect(sending).resolves.toMatchObject({ ok: false, errorCode: 'DELIVERY_NOT_ACCEPTED' });
-    expect(sqlite.prepare('SELECT * FROM messages').all()).toEqual([]);
+    await expect(sending).resolves.toMatchObject({ ok: true, accepted: true, delivered: true });
+    expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get()).toEqual({ delivery_status: 'delivered' });
+    expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get()).toEqual({ message_count: 1 });
   });
   it.each(['persisted', 'queued', 'unaccepted'] as const)(
     'reconciles a %s reservation after restart without dispatching work again',
@@ -1059,7 +1360,8 @@ describe('botDirectMessageService', () => {
       const before = createBotDirectMessageService({ dispatch: dispatchWithoutCallback, createId: () => `restart-${++id}` });
       await before.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'hello' });
       if (receiptKind === 'persisted') {
-        sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)')
+        sqlite.prepare(`INSERT INTO messages (id, session_id, client_id, role, content, created_at, rewind_at)
+          VALUES (?, ?, ?, 'user', '', 1, NULL)`)
           .run('receipt', 'b-main', 'bot-dm:restart-1:restart-2');
       }
       const hasQueuedDelivery = vi.fn(async () => receiptKind === 'queued');
@@ -1068,11 +1370,13 @@ describe('botDirectMessageService', () => {
       await after.restore();
       expect(dispatch).not.toHaveBeenCalled();
       const accepted = receiptKind !== 'unaccepted';
+      const deliveryStatus = receiptKind === 'persisted'
+        ? 'delivered'
+        : receiptKind === 'queued' ? 'pending' : 'failed';
       expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').get())
-        .toEqual({ delivery_status: accepted ? 'delivered' : 'failed' });
+        .toEqual({ delivery_status: deliveryStatus });
       expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').get())
         .toEqual({ message_count: accepted ? 1 : 0 });
-      expect(h.createMessage).toHaveBeenCalledTimes(accepted ? 2 : 0);
       if (receiptKind === 'queued') expect(hasQueuedDelivery).toHaveBeenCalledWith('b-main', 'bot-dm:restart-1:restart-2');
     },
   );
@@ -1102,7 +1406,12 @@ describe('cross-device teammate messages', () => {
     h.createMessage.mockReset().mockResolvedValue({ id: 'anchor' });
     failResponse = false;
     beforeLeftSend = undefined;
-    const dispatch = () => vi.fn(async (params: { targetSessionId: string; onAccepted?: () => Promise<void> }) => {
+    const dispatch = () => vi.fn(async (params: { targetSessionId: string; clientId: string; onAccepted?: () => Promise<void> }) => {
+      const db = scope.getStore();
+      if (db) await db.insert(messages).values({
+        id: `receipt-${params.clientId}`, sessionId: params.targetSessionId, clientId: params.clientId,
+        role: 'user', content: '', createdAt: 1,
+      });
       await params.onAccepted?.();
       return { ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const };
     });

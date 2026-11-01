@@ -6811,6 +6811,18 @@ export class AgentInputCoordinator {
     dispatchAccepted = false,
   ): boolean {
     if (this.isActiveTurnCurrent(sessionId, active)) return false;
+    const discardedBotDm = active.item?.clientId.startsWith('bot-dm:') ? active.item : null;
+    const state = discardedBotDm ? this.getState(sessionId) : null;
+    const stillOwned = discardedBotDm && state
+      ? this.hasQueuedItemWhere(sessionId, (item) => item.clientId === discardedBotDm.clientId, { includeRecovery: true })
+        || state.steeringQueueClientIds.includes(discardedBotDm.clientId)
+        || state.directSteeringItems.some((item) => item.clientId === discardedBotDm.clientId)
+      : false;
+    if (!dispatchAccepted && discardedBotDm && !stillOwned) {
+      // This item has left the queue but never crossed the vendor acceptance
+      // boundary. Settle the DM reservation and its queued callbacks as a discard.
+      this.deps.onDiscardedQueuedMessage?.(sessionId, discardedBotDm);
+    }
     if (active.item?.autoResume) {
       if (dispatchAccepted) {
         // Vendor 已 accept：即使 unexpected close 曾把同一项重新入队，也必须

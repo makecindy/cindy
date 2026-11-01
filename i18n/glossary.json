@@ -3412,6 +3412,46 @@
         "ko": "성능 기록"
       },
       "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。"
+    },
+    {
+      "id": "not-delivered",
+      "status": "proposed",
+      "en": "Not delivered",
+      "translations": {
+        "zh-CN": "未送达",
+        "zh-TW": "未送達",
+        "ja": "未配信",
+        "ko": "전달되지 않음",
+        "fr": "Non livré",
+        "es": "No entregado",
+        "de": "Nicht zugestellt",
+        "pt-PT": "Não entregue",
+        "pt-BR": "Não entregue",
+        "zh-Hant-x-lzh": "未送達",
+        "zh-Hans-x-lzh": "未送达"
+      },
+      "checkCase": false,
+      "note": "状态标签：伙伴私信未能派发给接收伙伴；它不表示某个具体失败原因，也不触发自动重试。"
+    },
+    {
+      "id": "bot-message-queued",
+      "status": "proposed",
+      "en": "Queued",
+      "translations": {
+        "zh-CN": "排队中",
+        "zh-TW": "排隊中",
+        "ja": "キュー待ち",
+        "ko": "대기열에 있음",
+        "fr": "En file d’attente",
+        "es": "En cola",
+        "de": "In der Warteschlange",
+        "pt-PT": "Na fila",
+        "pt-BR": "Na fila",
+        "zh-Hant-x-lzh": "排隊中",
+        "zh-Hans-x-lzh": "排队中"
+      },
+      "checkCase": false,
+      "note": "伙伴私信仍由接收方任务的持久队列持有，尚未写入接收方消息记录；队列丢弃后会更新为未送达。"
     }
   ]
 }

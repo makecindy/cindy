@@ -358,6 +358,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 预制伙伴目录与邀请入口，仅 Desktop。入口菜单项与弹窗标题同用 bots.market.heading，不再另设英文品牌名 Bot Market；英文句中小写 teammates（Discover teammates 作动作时），作功能名保持 Discover Teammates。
 
+### Queued
+
+伙伴私信仍由接收方任务的持久队列持有，尚未写入接收方消息记录；队列丢弃后会更新为未送达。
+
 ### reply (the bot's public post on X)
 
 Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
@@ -637,6 +641,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 ### Nightly learning
 
 伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
+
+### Not delivered
+
+状态标签：伙伴私信未能派发给接收伙伴；它不表示某个具体失败原因，也不触发自动重试。
 
 ### Not signed in
 
