@@ -355,3 +355,29 @@ export {
   type ProviderFileKind,
   type ProviderFileResult,
 } from './providersFile.js';
+export {
+  TASK_CLASSES,
+  parseRoutingFile,
+  resolveTaskRoute,
+  type RouteResolution,
+  type RouteTarget,
+  type RoutingFile,
+  type RoutingIssue,
+  type RoutingParseResult,
+} from './routingFile.js';
+export {
+  assessRoute,
+  type BlockReason,
+  type ProbeLike,
+  type RouteAlternative,
+  type RouteHealth,
+} from './routeHealth.js';
+export {
+  assessContext,
+  guardContext,
+  type ContextAssessment,
+  type ContextGuardInput,
+  type ContextGuardResult,
+  type ContextLevel,
+  type ContextThresholds,
+} from './contextGuard.js';

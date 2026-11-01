@@ -5531,6 +5531,10 @@ interface ElectronAPI {
     providers: {
       list: () => Promise<import('@cindy/maker-core/providers-file').ProviderFileResult>;
       discover: () => Promise<import('@cindy/maker-core/providers-discovery').EndpointProbe[]>;
+      getRouting: () => Promise<import('@cindy/maker-core/routing-file').RoutingParseResult>;
+      requestRoutedTaskText: (
+        args: import('@cindy/maker-core/routed-auxiliary').RoutedTaskTextRequest,
+      ) => Promise<import('@cindy/maker-core/routed-auxiliary').RoutedTaskTextResult>;
     };
     hermesConfig: {
       getDefaultRoute: () => Promise<{

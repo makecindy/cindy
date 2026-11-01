@@ -25,6 +25,10 @@ export const MAKER_INVOKE = {
   PROVIDERS_LIST: 'maker:providers:list',
   /** ROADMAP 2.2b: probe each providers.yaml endpoint for online/offline and models. */
   PROVIDERS_DISCOVER: 'maker:providers:discover',
+  /** ROADMAP 2.3a / 2.4b / 2.5b: routing.yaml routes, rules, and file issues (read-only). */
+  ROUTING_GET: 'maker:routing:get',
+  /** ROADMAP 2.5b: run an auxiliary task (e.g. summary) on its routed endpoint; never auto-substitutes. */
+  ROUTING_REQUEST_TASK_TEXT: 'maker:routing:request-task-text',
   BACKUP_CREATE: 'maker:backup:create',
   BACKUP_RESTORE: 'maker:backup:restore',
   START_REVIEW: 'maker:review:start',

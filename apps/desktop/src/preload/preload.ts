@@ -6277,6 +6277,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:providers:list'),
       discover: (): Promise<import('@cindy/maker-core/providers-discovery').EndpointProbe[]> =>
         ipcRenderer.invoke('maker:providers:discover'),
+      getRouting: (): Promise<import('@cindy/maker-core/routing-file').RoutingParseResult> =>
+        ipcRenderer.invoke('maker:routing:get'),
+      requestRoutedTaskText: (
+        args: import('@cindy/maker-core/routed-auxiliary').RoutedTaskTextRequest,
+      ): Promise<import('@cindy/maker-core/routed-auxiliary').RoutedTaskTextResult> =>
+        ipcRenderer.invoke('maker:routing:request-task-text', args),
     },
     hermesConfig: {
       getDefaultRoute: (): Promise<{ route: { model?: string; provider?: string; baseUrl?: string } }> =>

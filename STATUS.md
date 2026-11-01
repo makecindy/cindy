@@ -10,6 +10,22 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 2: ROADMAP 2.4b-1, no silent fallback session error and one-click "use X instead" UI (`unit-tested`)
+
+**Outcome:**
+1. `packages/model-providers/src/index.ts`, `apps/desktop/src/main/maker-ipc/channels.ts`, `apps/desktop/src/main/maker-ipc/providersHandlers.ts`, `apps/desktop/src/preload/preload.ts`, `apps/desktop/src/renderer/vite-env.d.ts`, and `apps/desktop/src/main/maker-ipc/__tests__/providersHandlers.test.ts` (+1 test, 5/5): re-exported `routingFile`, `routeHealth`, and `contextGuard` from `@cindy/model-providers` root barrel, and added trusted IPC channels `maker:routing:get` (`providers.getRouting()`) and `maker:routing:request-task-text` (`providers.requestRoutedTaskText()`).
+2. `apps/desktop/src/renderer/features/cc-agent/SessionRouteBlockedBanner.tsx` (new), `apps/desktop/src/renderer/features/cc-agent/SessionContentHeader.tsx` (+8 lines), and `apps/desktop/src/renderer/__tests__/sessionRouteBlockedBanner.test.tsx` (new, 3 tests): `assessSessionRouteHealth` resolves the session's active route (`chat.default` or matching `routing.yaml` route) and evaluates `assessRoute` against live probes; `SessionRouteBlockedBannerView` renders a blocked `ErrorNotice` with one-click `Use <routeName> (<provider>/<model>) (local|paid) instead` buttons (local alternatives first, paid explicitly labelled `(paid)`), and never auto-switches.
+
+**Mutation checks (2):**
+- In `apps/desktop/src/renderer/features/cc-agent/SessionRouteBlockedBanner.tsx`, replacing `alt.paid ? ' (paid)' : ' (local)'` with `' (local)'` failed 2 tests in `sessionRouteBlockedBanner.test.tsx` (`expected '... (local) instead' to contain 'Use cloud-flash (deepseek-api/deepseek-chat) (paid) instead'`); restored byte-identical.
+- In `apps/desktop/src/main/maker-ipc/providersHandlers.ts`, removing `deps.assertTrusted(event)` from `ROUTING_GET` failed `refuses an untrusted caller on both channels without reading the file` in `providersHandlers.test.ts`; restored byte-identical.
+
+**Not claimed:** not clicked in the running desktop app yet. `2.4b-live` stays open for the owner-clicked live proof that an offline local route blocks and presents the one-click switch in the app.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** parallel `pnpm test:unit:related` hit the known `apps/desktop unit` SIGSEGV flake; reran with `node scripts/test-workspaces.mjs --tier unit --related --workspace-concurrency=1` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Phase 2: ROADMAP 2.2b-1, local model discovery polling and picker online/offline display (`unit-tested`)
 
 **Outcome:**

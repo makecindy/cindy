@@ -87,5 +87,49 @@ describe('providers IPC', () => {
     });
     await expect(harness.invoke(MAKER_INVOKE.PROVIDERS_LIST)).rejects.toThrow('untrusted sender');
     await expect(harness.invoke(MAKER_INVOKE.PROVIDERS_DISCOVER)).rejects.toThrow('untrusted sender');
+    await expect(harness.invoke(MAKER_INVOKE.ROUTING_GET)).rejects.toThrow('untrusted sender');
+    await expect(
+      harness.invoke(MAKER_INVOKE.ROUTING_REQUEST_TASK_TEXT, { taskClass: 'summary', prompt: 'hi' }),
+    ).rejects.toThrow('untrusted sender');
+  });
+
+  it('loads routing.yaml validated against providers.yaml and dispatches routed task text after trust check', async () => {
+    fs.writeFileSync(
+      file,
+      'providers:\n  - id: local\n    kind: ollama\n    baseUrl: http://127.0.0.1:11434\n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'routing.yaml'),
+      'routes:\n  local-small:\n    provider: local\n    model: qwen3:8b\nrules:\n  chat.default: local-small\n',
+    );
+    const requestRoutedTask = vi.fn().mockResolvedValue({
+      kind: 'ok',
+      text: 'Summary output',
+      routeName: 'local-small',
+      provider: 'local',
+      model: 'qwen3:8b',
+    });
+    const assertTrusted = vi.fn();
+    const harness = new IpcHarness();
+    registerProvidersHandlers(harness, { file, assertTrusted, requestRoutedTask });
+
+    const routing = (await harness.invoke(MAKER_INVOKE.ROUTING_GET)) as {
+      routes: Record<string, { provider: string; model: string }>;
+      rules: Record<string, string>;
+      issues: unknown[];
+    };
+    expect(routing.routes['local-small']).toEqual({ provider: 'local', model: 'qwen3:8b' });
+    expect(routing.rules['chat.default']).toBe('local-small');
+    expect(routing.issues).toEqual([]);
+
+    const taskRes = await harness.invoke(MAKER_INVOKE.ROUTING_REQUEST_TASK_TEXT, {
+      taskClass: 'summary',
+      prompt: 'Summarise this.',
+    });
+    expect(taskRes).toMatchObject({ kind: 'ok', text: 'Summary output' });
+    expect(requestRoutedTask).toHaveBeenCalledWith(
+      { taskClass: 'summary', prompt: 'Summarise this.' },
+      expect.objectContaining({ harnessDir: dir }),
+    );
   });
 });
