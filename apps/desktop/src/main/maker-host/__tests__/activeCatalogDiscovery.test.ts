@@ -21,6 +21,7 @@ import {
   getCindyModelContextWindow,
   getCindyModelEffortBaseline,
   setActiveCatalog,
+  setCustomProviderConfigs,
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
   setXaiDiscoveredModels,
@@ -90,6 +91,35 @@ function legacyCatalog(): Catalog {
 }
 
 describe('active-catalog discovered augment', () => {
+  it('binds public xAI media to each account before account-specific discovery', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs(['grok-a', 'grok-b'].map(id => ({
+      id, name: id, auth: { method: 'oauth', native: 'xai' }, runtimes: {},
+    })));
+    const account = (id: string) => getActiveCatalog().providers.find(provider => provider.id === id)!;
+    try {
+      expect(account('grok-a').imageModels?.map(model => model.id)).toEqual([
+        'grok-a/grok-imagine-image', 'grok-a/grok-imagine-image-quality',
+      ]);
+      expect(account('grok-a').videoModels?.map(model => model.id)).toContain('grok-a/grok-imagine-video');
+      setDiscoveredProviderMediaModels('xai', { imageModels: [] });
+      expect(account('grok-a').imageModels).toHaveLength(2);
+      setDiscoveredProviderMediaModels('grok-a', { imageModels: [], videoModels: [
+        { id: 'grok-a/future-video', name: 'Future' },
+      ] });
+      expect(account('grok-a').imageModels).toEqual([]);
+      expect(account('grok-a').videoModels?.map(model => model.id)).toEqual(['grok-a/future-video']);
+      expect(account('grok-b').imageModels).toHaveLength(2);
+      const updated = structuredClone(BUNDLED_CATALOG);
+      updated.providers.find(provider => provider.id === 'xai')!.imageModels = [];
+      setActiveCatalog(updated);
+      expect(account('grok-b').imageModels).toEqual([]);
+    } finally {
+      setDiscoveredProviderMediaModels('grok-a', null);
+      setCustomProviderConfigs([]);
+    }
+  });
+
   it('keeps a future subscription model inherited window unverified', () => {
     setActiveCatalog(structuredClone(BUNDLED_CATALOG));
     setDiscoveredCodexModels([{ ...fake('gpt-7-sol'), discoveredMetadata: {}, contextWindowVerified: false }]);

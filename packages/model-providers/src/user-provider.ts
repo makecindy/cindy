@@ -685,7 +685,8 @@ export function buildUserProvider(
             : {}),
         },
       ])),
-      // Media remains explicitly bound to the original provider until it supports account selection.
+      // The active catalog binds current public xAI media definitions to each account.
+      // Retired independent Claude accounts remain without media.
       imageModels: undefined,
       imageDefaults: undefined,
       videoModels: undefined,

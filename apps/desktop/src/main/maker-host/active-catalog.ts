@@ -1225,30 +1225,31 @@ function computeMerged(): Catalog {
   // 自定义供应商先追加、再做通用发现 augment——顺序反了的话,自定义 OAuth 供应商
   // 的发现模型永远合不进目录(map 只扫过内置列表)。
   if (custom.length > 0) {
-    // Bind the public image definition before applying any account discovery or overrides.
-    // Copying the final builtin connection would leak its Platform-key membership/preferences.
-    const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
+    // Bind public media definitions before account discovery and preferences.
+    // Never copy the builtin connection's final, account-specific membership.
     const managedIds = new Set(managed.map((provider) => provider.id));
     const accounts = custom
       .filter((provider) => !managedIds.has(provider.id))
       .map((provider) => {
-        if (!isOpenAiSubscriptionProvider(provider)) return provider;
-        const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
-        const defaults = openaiDefinition?.imageDefaults;
-        return {
-          ...provider,
-          imageModels: openaiDefinition?.imageModels?.map((model) => ({
-            ...model,
-            id: bindId(model.id),
-          })),
-          imageDefaults: defaults
-            ? {
-                standard: bindId(defaults.standard),
-                ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
-                ...(defaults.best ? { best: bindId(defaults.best) } : {}),
-              }
-            : undefined,
-        };
+        const brand = isOpenAiSubscriptionProvider(provider) ? 'openai'
+          : provider.auth.native === 'xai' ? 'xai' : undefined;
+        if (!brand) return provider;
+        const definition = providerSources.find((candidate) => candidate.id === brand);
+        const bindId = (id: string): string => id.startsWith(`${brand}/`)
+          ? `${provider.id}/${id.slice(brand.length + 1)}` : id;
+        const next = { ...provider };
+        for (const kind of brand === 'xai' ? ['image', 'video'] as const : ['image'] as const) {
+          const models = kind === 'image' ? 'imageModels' : 'videoModels';
+          const defaults = kind === 'image' ? 'imageDefaults' : 'videoDefaults';
+          next[models] = definition?.[models]?.map((model) => ({ ...model, id: bindId(model.id) }));
+          const source = definition?.[defaults];
+          next[defaults] = source ? {
+            standard: bindId(source.standard),
+            ...(source.draft ? { draft: bindId(source.draft) } : {}),
+            ...(source.best ? { best: bindId(source.best) } : {}),
+          } : undefined;
+        }
+        return next;
       });
     providers = [...providers, ...accounts];
   }

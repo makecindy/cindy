@@ -361,17 +361,37 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
 }
 
 const log = createLogger('model-discovery:xai-media');
-const discovery = createXaiMediaDiscovery({
-  hasOAuthLogin: () => hasGrokOAuthLogin(),
-  getAccessToken: () => getGrokAccessToken(),
-  getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
-  getOwnerScopeKey: () => activeOwnerScopeKey(),
-  isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
-  fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-  applySnapshot: (snapshot) => setDiscoveredProviderMediaModels('xai', snapshot),
-  onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
-  log,
-});
+const discoveries = new Map<string, ReturnType<typeof createXaiMediaDiscovery>>();
+function discoveryFor(providerId: string) {
+  let discovery = discoveries.get(providerId);
+  if (discovery) return discovery;
+  const bindModels = (models: MediaModel[] | undefined) => models?.map(model => ({
+    ...model, id: model.id.replace(/^xai\//, `${providerId}/`),
+  }));
+  discovery = createXaiMediaDiscovery({
+    hasOAuthLogin: () => hasGrokOAuthLogin(providerId),
+    getAccessToken: () => getGrokAccessToken(providerId),
+    getCredentialGeneration: () => getGrokOAuthCredentialGeneration(providerId),
+    getOwnerScopeKey: () => activeOwnerScopeKey(),
+    isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+    fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+    applySnapshot: snapshot => setDiscoveredProviderMediaModels(providerId, snapshot ? {
+      ...(snapshot.imageModels ? { imageModels: bindModels(snapshot.imageModels) } : {}),
+      ...(snapshot.videoModels ? { videoModels: bindModels(snapshot.videoModels) } : {}),
+    } : null),
+    onAuthRejected: failure => invalidateXaiBridgeAuth(failure, providerId),
+    log,
+  });
+  discoveries.set(providerId, discovery);
+  return discovery;
+}
 
-export const refreshXaiMediaModels = (): Promise<boolean> => discovery.refresh();
-export const clearXaiMediaModels = (): void => discovery.clear();
+export const refreshXaiMediaModels = (providerId = 'xai'): Promise<boolean> => discoveryFor(providerId).refresh();
+export const clearXaiMediaModels = (providerId = 'xai'): void => {
+  discoveries.get(providerId)?.clear();
+};
+
+/** Owner/secret-store teardown clears every connection, unlike a single-account logout. */
+export const clearAllXaiMediaModels = (): void => {
+  for (const discovery of discoveries.values()) discovery.clear();
+};

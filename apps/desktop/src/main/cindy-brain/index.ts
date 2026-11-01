@@ -4481,29 +4481,26 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
 function getVideoProviderRegistry() {
   const registry = getCindyVideoProviderRegistry();
   if (!registry) return null;
-  const xaiCatalogProvider = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-  const xaiCatalogProviderId = xaiCatalogProvider?.id;
-  const xaiAliases = xaiCatalogProvider?.videoModels?.map((model) => model.id) ?? [];
-  const routableXaiAliases = xaiCatalogProviderId
-    ? xaiAliases.filter(
-        (alias) => !registry.hasAlias(alias) || registry.hasAlias(alias, xaiCatalogProviderId),
-      )
-    : [];
-  if (xaiCatalogProviderId && routableXaiAliases.some((alias) => !registry.hasAlias(alias))) {
-    registry.registerOrExtend(
-      createXaiVideoProvider({
-        modelAliases: routableXaiAliases,
-        hasOAuthLogin: () => hasGrokOAuthLogin(),
-        getAccessToken: () => getGrokAccessToken(),
-        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
-        getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
-        onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
-      }),
-      xaiCatalogProviderId,
+  for (const provider of getActiveCatalog().providers) {
+    if (isOrganizationManagedProvider(provider) ||
+        (provider.id !== 'xai' && provider.auth.native !== 'xai')) continue;
+    const providerId = provider.id;
+    const aliases = (provider.videoModels ?? []).map(model => model.id).filter(
+      alias => !registry.hasAlias(alias) || registry.hasAlias(alias, providerId),
     );
+    if (!aliases.some(alias => !registry.hasAlias(alias))) continue;
+    registry.registerOrExtend(createXaiVideoProvider({
+      providerId,
+      modelAliases: aliases,
+      hasOAuthLogin: () => hasGrokOAuthLogin(providerId),
+      getAccessToken: () => getGrokAccessToken(providerId),
+      getCredentialGeneration: () => getGrokOAuthCredentialGeneration(providerId),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: model => assertMediaModelStillEnabled('video', model, providerId),
+      onAuthRejected: failure => invalidateXaiBridgeAuth(failure, providerId),
+    }), providerId);
   }
   return registry;
 }
@@ -4511,8 +4508,10 @@ function getVideoProviderRegistry() {
 /** 视频目录的 provider 级就绪判据；未知来源绝不投影成可选型号。 */
 function isVideoCatalogProviderReady(providerId: string): boolean {
   if (providerId === 'xd') return isXdGatewayProviderReady(providerId);
-  if (providerId === 'xai') {
-    return !isAppSessionBoundaryPending() && hasGrokOAuthLogin();
+  if (providerId === 'xai' || getActiveCatalog().providers.some(
+    provider => provider.id === providerId && provider.auth.native === 'xai',
+  )) {
+    return !isAppSessionBoundaryPending() && hasGrokOAuthLogin(providerId);
   }
   return false;
 }
@@ -5145,6 +5144,7 @@ function getGhostImageCapabilities(
  * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
  */
 const registeredCodexImageAccounts = new Set<string>();
+const registeredXaiImageAccounts = new Set<string>();
 const registeredByokImageAccounts = new Set<string>();
 const registeredCustomImageAccounts = new Set<string>();
 let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
@@ -5286,6 +5286,14 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     imageChannelRegistrySingleton = registry;
   }
   const imageProviders = getActiveCatalog().providers;
+  const xaiAccounts = imageProviders.filter(provider =>
+    !isOrganizationManagedProvider(provider) && provider.auth.native === 'xai' && provider.id !== 'xai',
+  );
+  for (const providerId of registeredXaiImageAccounts) {
+    if (xaiAccounts.some(provider => provider.id === providerId)) continue;
+    imageChannelRegistrySingleton.unregister(providerId);
+    registeredXaiImageAccounts.delete(providerId);
+  }
   pruneDynamicImageChannels(
     imageChannelRegistrySingleton,
     imageProviders,
@@ -5315,6 +5323,22 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       }),
     );
     registeredCodexImageAccounts.add(providerId);
+  }
+  for (const provider of xaiAccounts) {
+    const providerId = provider.id;
+    if (registeredXaiImageAccounts.has(providerId)) continue;
+    imageChannelRegistrySingleton.register(providerId, createXaiImageChannel({
+      providerId,
+      hasOAuthLogin: () => hasGrokOAuthLogin(providerId),
+      getAccessToken: () => getGrokAccessToken(providerId),
+      getCredentialGeneration: () => getGrokOAuthCredentialGeneration(providerId),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isGhostBoundaryPending(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: model => assertMediaModelStillEnabled('image', model, providerId),
+      onAuthRejected: failure => invalidateXaiBridgeAuth(failure, providerId),
+    }));
+    registeredXaiImageAccounts.add(providerId);
   }
   // Organization BYOK image models get their own channel. Do not reuse xd /
   // openai / gemini / xai: those stay personal or gateway routes. Chat-only
