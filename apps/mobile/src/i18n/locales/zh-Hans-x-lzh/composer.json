@@ -119,6 +119,9 @@
     "unavailable": "暂不能收分享",
     "noCompanions": "尚无同僚",
     "noTasks": "尚无差事",
-    "retry": "部分内容未能读取，点此再试。"
+    "retry": "部分内容未能读取，点此再试。",
+    "noMatches": "无相合之去向",
+    "clearSearch": "清除寻文",
+    "loadingDevices": "方读机录…"
   }
 }

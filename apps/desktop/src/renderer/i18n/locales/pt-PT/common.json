@@ -8354,7 +8354,8 @@
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. As novas sessões podem utilizá-lo após guardar; as sessões em curso não são afetadas."
+        "desc": "Apenas MCP remoto http / sse. As novas sessões podem utilizá-lo após guardar; as sessões em curso não são afetadas.",
+        "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu colega adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
       },
       "fields": {
         "name": "Nome apresentado",
@@ -8655,10 +8656,10 @@
     "chooseMethod": "Escolher como iniciar sessão",
     "emailCode": "Iniciar sessão com um código por email",
     "orgDetected": "{{email}} pertence a \"{{org}}\"",
-    "enterpriseLogin": "Iniciar sessão com a sua identidade profissional",
-    "enterpriseVia": "Início de sessão único através de {{name}}",
-    "personalLogin": "Iniciar sessão com uma conta pessoal",
-    "personalDesc": "Enviar um código de verificação para o seu email",
+    "enterpriseLogin": "Com a identidade profissional",
+    "enterpriseVia": "SSO através de {{name}}",
+    "personalLogin": "Com uma conta pessoal",
+    "personalDesc": "Receber um código por email",
     "ssoRequired": "Esta organização exige início de sessão por SSO",
     "ssoEntry": "Iniciar sessão com SSO empresarial",
     "localModeEntry": "Ignorar início de sessão",
@@ -8708,9 +8709,9 @@
     },
     "sendCode": "Enviar código",
     "completeSignIn": "Concluir início de sessão",
-    "preparing": "A estabelecer ligação para iniciar sessão",
+    "preparing": "A preparar o início de sessão",
     "preparingSubtitle": "A carregar os métodos disponíveis para esta região",
-    "unavailable": "O início de sessão está temporariamente indisponível",
+    "unavailable": "Início de sessão indisponível agora",
     "retry": "Tentar novamente",
     "browserWaiting": "Concluir a verificação no navegador",
     "browserCallback": {
@@ -18997,5 +18998,32 @@
     "unavailable": "Esta compilação não tem um destino para carregar relatórios. Abra os ficheiros locais para os partilhar com o apoio técnico.",
     "consent": "Aceite a política de privacidade nas Definições antes de enviar. Os seus ficheiros locais são preservados.",
     "failed": "A operação não foi concluída. Tente novamente ou abra os ficheiros locais."
+  },
+  "attachmentPreview": {
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Ficheiro",
+    "close": "Fechar",
+    "reset": "Repor vista",
+    "open": "Abrir pré-visualização",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Guardar original",
+    "share": "Partilhar",
+    "previous": "Anexo anterior",
+    "next": "Anexo seguinte",
+    "password": "Introduzir palavra-passe do PDF",
+    "find": "Pesquisar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página seguinte",
+    "source": "Ver código-fonte",
+    "rendered": "Ver documento",
+    "wrap": "Moldar linhas",
+    "lineNumbers": "Números de linha"
   }
 }

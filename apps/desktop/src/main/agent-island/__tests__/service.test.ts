@@ -1466,7 +1466,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1486,7 +1486,7 @@ describe('AgentIslandService native publishing', () => {
       expect(sessions.sessions.has('s1')).toBe(true);
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
@@ -1512,7 +1512,7 @@ describe('AgentIslandService native publishing', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn((state: AgentIslandDisplayState) => {
         void state;
         return true;
@@ -1532,7 +1532,7 @@ describe('AgentIslandService native publishing', () => {
       });
       mocks.tapWindowBroadcast.mockClear();
 
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ totalCount: 0 });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
@@ -7111,7 +7111,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7120,7 +7120,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
@@ -7144,7 +7144,7 @@ describe('会话关闭原因决定条目去留', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     try {
       const { AgentIslandService } = await import('../service.js');
-      const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
+      const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
       const service = new AgentIslandService({
         getMainWindow: () => null,
@@ -7153,7 +7153,7 @@ describe('会话关闭原因决定条目去留', () => {
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
-      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 50);
+      await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       const islandState = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;

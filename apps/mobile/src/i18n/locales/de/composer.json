@@ -119,6 +119,9 @@
     "unavailable": "Geteilte Inhalte können noch nicht empfangen werden",
     "noCompanions": "Noch keine Teammitglieder",
     "noTasks": "Noch keine Aufgaben",
-    "retry": "Nicht alles konnte geladen werden. Tippe, um es erneut zu versuchen."
+    "retry": "Nicht alles konnte geladen werden. Tippe, um es erneut zu versuchen.",
+    "noMatches": "Keine passenden Ziele",
+    "clearSearch": "Suche löschen",
+    "loadingDevices": "Computer werden geladen…"
   }
 }

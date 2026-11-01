@@ -8287,7 +8287,8 @@
       "dialog": {
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
-        "desc": "Nur Remote-MCP über http / sse. Neue Sitzungen können ihn nach dem Speichern aufrufen; laufende Sitzungen bleiben unverändert."
+        "desc": "Nur Remote-MCP über http / sse. Neue Sitzungen können ihn nach dem Speichern aufrufen; laufende Sitzungen bleiben unverändert.",
+        "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Teammitglied ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
         "name": "Anzeigename",
@@ -8588,10 +8589,10 @@
     "chooseMethod": "Wähle deine Anmeldemethode",
     "emailCode": "Mit E-Mail-Code anmelden",
     "orgDetected": "{{email}} gehört zu „{{org}}“",
-    "enterpriseLogin": "Mit deinem Firmenkonto anmelden",
+    "enterpriseLogin": "Mit Firmenkonto",
     "enterpriseVia": "Single Sign-on über {{name}}",
-    "personalLogin": "Mit einem persönlichen Konto anmelden",
-    "personalDesc": "Bestätigungscode an deine E-Mail-Adresse senden",
+    "personalLogin": "Mit persönlichem Konto",
+    "personalDesc": "Code per E-Mail erhalten",
     "ssoRequired": "Diese Organisation erfordert eine SSO-Anmeldung",
     "ssoEntry": "Mit Unternehmens-SSO anmelden",
     "localModeEntry": "Anmeldung überspringen",
@@ -8641,9 +8642,9 @@
     },
     "sendCode": "Code senden",
     "completeSignIn": "Anmeldung abschließen",
-    "preparing": "Verbindung zur Anmeldung wird hergestellt",
+    "preparing": "Anmeldung wird vorbereitet",
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
-    "unavailable": "Anmeldung vorübergehend nicht verfügbar",
+    "unavailable": "Anmeldung derzeit nicht möglich",
     "retry": "Erneut versuchen",
     "browserWaiting": "Bestätigung im Browser abschließen",
     "browserCallback": {
@@ -18827,5 +18828,32 @@
     "unavailable": "Für diesen Build ist kein Upload-Ziel für Berichte festgelegt. Öffne die lokalen Dateien, um sie mit dem Support zu teilen.",
     "consent": "Akzeptiere vor dem Senden die Datenschutzerklärung in den Einstellungen. Deine lokalen Dateien bleiben erhalten.",
     "failed": "Der Vorgang wurde nicht abgeschlossen. Versuch es erneut oder öffne die lokalen Dateien."
+  },
+  "attachmentPreview": {
+    "more": "Weitere Aktionen",
+    "retry": "Erneut versuchen",
+    "image": "Bild",
+    "video": "Video",
+    "file": "Datei",
+    "close": "Schließen",
+    "reset": "Ansicht zurücksetzen",
+    "open": "Vorschau öffnen",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "fit": "An Fenster anpassen",
+    "actualSize": "Originalgröße (1:1)",
+    "save": "Original speichern",
+    "share": "Teilen",
+    "previous": "Vorheriger Anhang",
+    "next": "Nächster Anhang",
+    "password": "PDF-Passwort eingeben",
+    "find": "Im Dokument suchen",
+    "matches": "{{count}} passende Seiten",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "source": "Quelltext anzeigen",
+    "rendered": "Dokument anzeigen",
+    "wrap": "Zeilenumbruch",
+    "lineNumbers": "Zeilennummern"
   }
 }

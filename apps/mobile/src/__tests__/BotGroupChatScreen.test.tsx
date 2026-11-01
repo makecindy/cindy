@@ -240,7 +240,13 @@ vi.mock('@/session/ComposerAttachmentTray', () => ({
     { 'data-testid': testID, onClick: onPress }, String(attachments.length + pendingUploads.length)),
 }));
 vi.mock('@/session/ImageLightbox', () => ({
-  ImageLightbox: ({ images, initialUrl }: any) => el('div', { 'data-testid': 'lightbox', 'data-url': initialUrl, 'data-count': String(images.length) }),
+  ImageLightbox: ({ images, initialUrl, resolveOpaqueSource, onResolveRemoteMedia }: any) => {
+    const [url, setUrl] = useState(resolveOpaqueSource ? '' : initialUrl);
+    useEffect(() => {
+      if (resolveOpaqueSource) void onResolveRemoteMedia({ url: initialUrl }, {}).then((value: any) => setUrl(value.url));
+    }, []);
+    return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
+  },
 }));
 vi.mock('@/session/MessageRenderer', () => ({
   AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
@@ -253,7 +259,7 @@ vi.mock('@/session/MessageRenderer', () => ({
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
 }));
-vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async () => { throw new Error('offline'); } }));
+vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' }) }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
@@ -384,6 +390,11 @@ describe('group timeline', () => {
     await render(parseBotGroupChatData(deleted)!);
     expect(byId('botGroup.quote')!.textContent).toContain('groupChat.quote.deleted');
     expect(node.textContent).not.toContain('私密的原文');
+    // PR #8009: moving the quote into a bubble must preserve its locate action.
+    // A missing source with no older page must report unavailability, not silently do nothing.
+    await render({ ...deleted, hasMoreBefore: false, messages: [deleted.messages[1]] });
+    await click('botGroup.quote');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.quote.unavailable');
   });
 
   it('shows a task another owner\'s teammate started from the group as its posted title and state', async () => {
@@ -775,6 +786,11 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     expect(h.row.value).toBe('引用回复');
     expect(byId('botGroup.cancelReply')).not.toBeNull();
+    // PR #8009: replacing the cancel control must remove only the quote, not the draft.
+    await click('botGroup.cancelReply');
+    expect(byId('botGroup.quote')).toBeNull();
+    expect(h.row.value).toBe('引用回复');
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '引用回复', quote: { messageId: originalId }, clientId: 'uuid-1',
@@ -2110,3 +2126,13 @@ describe('mobile group threads', () => {
     await act(async () => { h.hardwareBack?.(); }); expect(h.leave).toHaveBeenCalledTimes(2);
   });
 });
+
+vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ visible, children }: any) => visible ? children : null }));
+
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));

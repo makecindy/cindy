@@ -3,7 +3,7 @@
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, VideoOff, Copy } from 'lucide-react';
+import { FolderOpen, VideoOff, Copy, Maximize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
+import { VideoLightbox } from './VideoLightbox';
+import { PreviewButton } from './PreviewChrome';
 
 export type ChatVideoVariant = 'tool-output';
 
@@ -50,6 +52,7 @@ const VARIANT_STYLES: Record<
 export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoViewProps) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   // 远程会话改写到 cindy-remote-media://(OSS range 流式);本地原样。下游统一用 displaySrc。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
@@ -169,7 +172,32 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
           className={cn(className, 'block', CHAT_FOCUS_CLASS)}
           onError={() => setFailedSrc(displaySrc)}
         />
+      <div className="absolute right-2 top-2 rounded-full bg-[var(--surface-elevated)]">
+          <PreviewButton
+            label={t('attachmentPreview.open')}
+            onClick={() => {
+              videoRef.current?.pause();
+              setPreviewTime(videoRef.current?.currentTime ?? 0);
+            }}
+          >
+            <Maximize2 className="h-4 w-4" />
+          </PreviewButton>
+        </div>
       </div>
+      {previewTime !== null ? (
+        <VideoLightbox
+          src={displaySrc}
+          filename={filename}
+          initialTime={previewTime}
+          onClose={(time) => {
+            setPreviewTime(null);
+            if (videoRef.current) {
+              if (time !== undefined) videoRef.current.currentTime = time;
+              videoRef.current.focus({ preventScroll: true });
+            }
+          }}
+        />
+      ) : null}
       {canRevealInFolder ? (
         <DropdownMenu
           modal={!portalContainer}

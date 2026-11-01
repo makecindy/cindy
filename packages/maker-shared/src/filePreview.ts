@@ -22,6 +22,8 @@ const SUPPORTED_OFFICE_EXTS = new Set(['.doc', '.docx', '.xls', '.xlsx', '.ppt',
 
 // Mirrors desktop shared/textFileExts.ts for remote read-only previews.
 const SUPPORTED_TEXT_EXTS = new Set([
+  ".mmd",
+  ".mermaid",
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
   '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee',

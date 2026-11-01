@@ -8244,7 +8244,8 @@
       "dialog": {
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
-        "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 差事即可呼叫，方行之 Agent 差事不受影響。"
+        "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 差事即可呼叫，方行之 Agent 差事不受影響。",
+        "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同僚自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
       },
       "fields": {
         "name": "顯名",
@@ -18755,5 +18756,32 @@
     "unavailable": "此版未設報告上傳之址。可啟此機之卷，交予支援人員。",
     "consent": "請先於規制中同意隱私權政策，再呈報告。此機之卷仍存。",
     "failed": "操作未畢，請再試或覽此機之卷。"
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重試",
+    "image": "圖",
+    "video": "影片",
+    "file": "檔案",
+    "close": "關閉",
+    "reset": "復原視角",
+    "open": "開啟預覽",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "fit": "適於視窗",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "存原件",
+    "share": "分享",
+    "previous": "上一附件",
+    "next": "下一附件",
+    "password": "請輸入 PDF 密鑰",
+    "find": "查此文",
+    "matches": "合者 {{count}} 頁",
+    "previousPage": "前頁",
+    "nextPage": "後頁",
+    "source": "觀原碼",
+    "rendered": "觀文",
+    "wrap": "折行",
+    "lineNumbers": "行數"
   }
 }

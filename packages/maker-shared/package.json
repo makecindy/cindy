@@ -35,6 +35,7 @@
     "./file-browser": "./src/fileBrowser.ts",
     "./file-browser-grid": "./src/fileBrowserGrid.ts",
     "./file-preview": "./src/filePreview.ts",
+    "./attachment-preview": "./src/attachmentPreview.ts",
     "./fixtures": "./src/fixtures.ts",
     "./ui-mock": "./src/uiMock.ts",
     "./ghost-command": "./src/ghostCommand.ts",

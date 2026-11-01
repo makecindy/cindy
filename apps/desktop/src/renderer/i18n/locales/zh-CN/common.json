@@ -8244,7 +8244,8 @@
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。"
+        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
         "name": "显示名称",
@@ -12650,7 +12651,40 @@
         "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用"
       }
     },
-    "teammateProcess": {"record":"处理记录","operations":"操作记录","elapsed":"已处理 {{duration}}","took":"用时 {{duration}}","processing":"正在处理","worked":"处理记录","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次调用失败","separator":"、","actions":{"running":{"read":"正在查看文件","edit":"正在编辑文件","search":"正在查找内容","web":"正在查阅网页","command":"正在运行命令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理计划"},"done":{"read":"查看了文件","edit":"编辑了文件","search":"查找了内容","web":"查阅了网页","command":"运行了命令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了计划"}}},
+    "teammateProcess": {
+      "record": "处理记录",
+      "operations": "操作记录",
+      "elapsed": "已处理 {{duration}}",
+      "took": "用时 {{duration}}",
+      "processing": "正在处理",
+      "worked": "处理记录",
+      "thinking": "正在思考",
+      "thought": "已思考",
+      "failed_other": "{{count}} 次调用失败",
+      "separator": "、",
+      "actions": {
+        "running": {
+          "read": "正在查看文件",
+          "edit": "正在编辑文件",
+          "search": "正在查找内容",
+          "web": "正在查阅网页",
+          "command": "正在运行命令",
+          "tools": "正在使用工具",
+          "delegate": "正在委派工作",
+          "plan": "正在整理计划"
+        },
+        "done": {
+          "read": "查看了文件",
+          "edit": "编辑了文件",
+          "search": "查找了内容",
+          "web": "查阅了网页",
+          "command": "运行了命令",
+          "tools": "使用了工具",
+          "delegate": "委派了工作",
+          "plan": "整理了计划"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "图片已交付",
       "failed": "图片交付失败，可重试传输已有图片。",
@@ -18722,5 +18756,32 @@
     "unavailable": "当前版本未配置报告上传地址。可打开本地文件，交给支持人员。",
     "consent": "请先在设置中同意隐私政策，再提交报告。本地文件已保留。",
     "failed": "操作未完成，请重试或查看本地文件。"
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重试",
+    "image": "图片",
+    "video": "视频",
+    "file": "文件",
+    "close": "关闭",
+    "reset": "重置视角",
+    "open": "打开预览",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适配窗口",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "保存原件",
+    "share": "分享",
+    "previous": "上一个附件",
+    "next": "下一个附件",
+    "password": "输入 PDF 密码",
+    "find": "在文档中查找",
+    "matches": "{{count}} 页匹配",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "source": "查看源码",
+    "rendered": "查看文稿",
+    "wrap": "自动换行",
+    "lineNumbers": "行号"
   }
 }

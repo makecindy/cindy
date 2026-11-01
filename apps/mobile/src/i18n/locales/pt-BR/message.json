@@ -451,5 +451,32 @@
       "provider": "Provedor de API",
       "unknown": "Canal não registrado"
     }
+  },
+  "attachmentPreview": {
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Arquivo",
+    "close": "Fechar",
+    "reset": "Redefinir visualização",
+    "open": "Abrir prévia",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Salvar original",
+    "share": "Compartilhar",
+    "previous": "Anexo anterior",
+    "next": "Próximo anexo",
+    "password": "Digite a senha do PDF",
+    "find": "Buscar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Próxima página",
+    "redo": "Refazer",
+    "wrap": "Quebra de linha",
+    "lineNumbers": "Números de linha",
+    "rendered": "Ver documento"
   }
 }

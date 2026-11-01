@@ -8464,10 +8464,13 @@ const registerIpcHandlers = () => {
 
     const lightboxMedia = createLightboxMediaHandlers({
       isPathAllowed,
+      realpath: (absPath) => fs.promises.realpath(absPath),
       resolveImageCacheUrl: (url) =>
         url.startsWith('cindy-media://')
           ? cindyMediaBlobStore.resolveSafe(url)
-          : imageCacheStore.resolveSafe(url),
+          : url.startsWith('xdt-video://')
+            ? videoCacheStore.resolveSafe(url)
+            : imageCacheStore.resolveSafe(url),
       // 规则 25:lightbox「发送到对话」的缓存写同样进媒体总仓(草稿语义,
       // 发送时统一由 register.ts 挂引用),与 IPC from-path/from-buffer 一致。
       cacheImageFromPath: (params) =>

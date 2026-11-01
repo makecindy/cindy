@@ -7,7 +7,7 @@
  * - 现有覆盖缺口：部署器测试只验证 SSH 步骤，没有经过运行时 IPC 与账号切换，故单独覆盖该模块。
  * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成。
  * - tier：unit；SSH、存储和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：1.32 秒（15 例，测试体 44ms，Windows）。
+ * - 单文件实测：0.80 秒（17 例，测试体 35ms，Linux）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';
@@ -18,6 +18,7 @@ import { RELAY_DEPLOY_STEPS } from '../../../shared/selfHostedRelay';
 const h = vi.hoisted(() => ({
   owner: 'account-a',
   generation: 0,
+  boundaryPending: false,
   config: new Map<string, RelayConfig>(),
   handlers: new Map<string, (event: unknown, raw: unknown) => Promise<SelfHostedRelayCommandResult>>(),
   invalidated: () => {},
@@ -38,7 +39,7 @@ vi.mock('node:fs', () => ({ default: { existsSync: () => true, rmSync: vi.fn() }
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `${h.owner}:${h.generation}`,
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: h.owner, generation: h.generation }),
-  isAppSessionBoundaryPending: () => false,
+  isAppSessionBoundaryPending: () => h.boundaryPending,
   onAppSessionInvalidated: (cb: () => void) => { h.invalidated = cb; },
 }));
 vi.mock('../../authManager.js', () => ({
@@ -115,6 +116,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   h.owner = 'account-a';
   h.generation += 1;
+  h.boundaryPending = false;
   h.config = new Map([['account-a', emptyConfig()], ['account-b', emptyConfig()]]);
   registerSelfHostedRelayIpc();
   await vi.runAllTimersAsync();
@@ -386,6 +388,54 @@ it('applies the configured public media address and restarts when it changes', a
     expect(h.startServer).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledTimes(1);
   } finally { await command({ type: 'disable-host' }); }
+});
+
+// Rui 2026-10-31：本机中转已开启，重开 Cindy 后中转没有起来（设备连 127.0.0.1 被拒），
+// 直到手动「保存并重启」。登录提交账号时会话边界还没结束，ensureHost 判定未登录直接返回，
+// 而 sync 已记下这个账号，边界结束后不会再试。最小输入：边界未结束时注册，再结束边界。tier: unit。
+it('starts the enabled local relay once the sign-in session boundary ends', async () => {
+  h.startServer.mockResolvedValue({ port: 47820, close: vi.fn(async () => {}) });
+  h.config.get('account-a')!.host = { ...emptyConfig().host, enabled: true, relayId: 'existing-relay' };
+  h.boundaryPending = true;
+  h.generation += 1;
+  registerSelfHostedRelayIpc();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.startServer).not.toHaveBeenCalled();
+  h.boundaryPending = false;
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(h.startServer).toHaveBeenCalledOnce();
+  expect(getState().host.running).toBe(true);
+  await command({ type: 'disable-host' });
+});
+
+// 同一修正的另一半：边界期间只推迟启动，换账号时上一个账号的本机中转仍要立即关掉（中转属于开启它的账号）。
+// 最小输入：A 的中转在运行且关闭较慢，边界未结束时换到 B，再结束边界。tier: unit。
+it('closes the previous account’s local relay at once when the switch lands inside a session boundary', async () => {
+  // A 的中转要等设备连接关掉才释放端口：关闭没完成前不能启动 B，否则端口冲突后就不再重试。
+  const closingA = deferred<void>();
+  const closeA = vi.fn(() => closingA.promise);
+  h.startServer.mockResolvedValueOnce({ port: 47820, close: closeA }).mockResolvedValueOnce({ port: 47820, close: vi.fn(async () => {}) });
+  for (const owner of ['account-a', 'account-b']) h.config.get(owner)!.host = { ...emptyConfig().host, enabled: true, relayId: `${owner}-relay` };
+  h.generation += 1;
+  registerSelfHostedRelayIpc();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(getState().host.running).toBe(true);
+  h.boundaryPending = true;
+  h.invalidated();
+  h.owner = 'account-b';
+  h.generation += 1;
+  h.authChanged();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(closeA).toHaveBeenCalledWith({ retire: false });
+  expect(h.startServer).toHaveBeenCalledOnce();
+  h.boundaryPending = false;
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(h.startServer).toHaveBeenCalledOnce();
+  closingA.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.startServer).toHaveBeenCalledTimes(2);
+  expect(getState().host.running).toBe(true);
+  await command({ type: 'disable-host' });
 });
 
 it('does not remove another account’s deployment after a delayed uninstall', async () => {

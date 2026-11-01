@@ -66,6 +66,16 @@ describe('parseOverloadError', () => {
     expect(parseOverloadError(msg)).toBeNull();
   });
 
+  it('把上游「engine is currently overloaded」认成 capacity', () => {
+    // Kimi 编码端点回的原文：`rate limit exceeded: The engine is currently
+    // overloaded, please try again later`。这句由上游 app-server 自己写出、它自己
+    // 不会重投,所以归 capacity —— 只归 overloaded 的话 codex translator 不会接管
+    // 退避重投,而且半句 `rate limit exceeded` 还会被当成账号用量上限。
+    expect(parseOverloadError('rate limit exceeded: The engine is currently overloaded')).toEqual({
+      kind: 'capacity',
+    });
+  });
+
   it('isOverloadErrorMessage 与 parseOverloadError 判定一致', () => {
     expect(isOverloadErrorMessage('Selected model is at capacity.')).toBe(true);
     expect(isOverloadErrorMessage('buffer capacity dropping')).toBe(false);

@@ -139,6 +139,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return messageLeaseMutate(db, txArgs);
     case 'message.rewindUserAfterClear':
       return messageRewindUserAfterClear(db, txArgs);
+    case 'message.purgeRewoundSchedulerPrompts':
+      return messagePurgeRewoundSchedulerPrompts(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -1948,23 +1950,76 @@ function messageRewindUserAfterClear(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   const transaction = db.transaction(() => {
     const changes = db
       .prepare(
-        `UPDATE messages
-            SET rewind_at = ?
-          WHERE session_id = ?
-            AND client_id = ?
-            AND role = 'user'
-            AND rewind_at IS NULL`,
+        "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
       )
       .run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      db.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      db.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       db.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);
     }
     return { changes };
+  });
+  return transaction();
+}
+
+/** 每次最多沿 idx_messages_rewind_at 扫这么多条隐藏行，扫描量与命中数无关。 */
+const PURGE_REWOUND_SCAN_WINDOW = 500;
+
+/**
+ * 只删能证明从未送达模型的调度提示：没有派发时写入的 executionModel，且同会话里
+ * 没有别的行共用同一个 rewind_at。用户手动回退会给提示和其后所有消息盖同一个时间戳，
+ * 所以那种墓碑不会落单。cursor 是上一窗口的末尾 rewind_at，null 表示扫完。
+ */
+function messagePurgeRewoundSchedulerPrompts(
+  db: Database.Database,
+  args: unknown,
+): { deleted: number; sessionIds: string[]; cursor: number | null } {
+  const payload = asRecord(args, 'message.purgeRewoundSchedulerPrompts args');
+  const limit = expectNumber(payload.limit, 'limit');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw invalidArgs('limit must be an integer from 1 to 200');
+  }
+  const cursor = payload.cursor === undefined ? 0 : expectNumber(payload.cursor, 'cursor');
+  const windowSql = 'SELECT rewind_at AS rewindAt FROM messages WHERE rewind_at > ? ORDER BY rewind_at LIMIT ?';
+  const selectSql = (
+    "SELECT m.id, m.session_id AS sessionId FROM messages m "
+    + "WHERE m.rewind_at > ? AND m.rewind_at <= ? AND m.role = 'user' AND json_valid(m.agent_meta) "
+    + "AND json_extract(m.agent_meta, '$.origin.kind') = 'scheduler' "
+    + "AND json_extract(m.agent_meta, '$.executionModel') IS NULL "
+    + 'AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.rewind_at = m.rewind_at AND o.session_id = m.session_id AND o.id <> m.id) '
+    + 'ORDER BY m.rewind_at LIMIT ?'
+  );
+  const transaction = db.transaction(() => {
+    const window = db.prepare(windowSql).all(cursor, PURGE_REWOUND_SCAN_WINDOW) as Array<{ rewindAt: number }>;
+    if (window.length === 0) return { deleted: 0, sessionIds: [] as string[], cursor: null };
+    const windowEnd = window[window.length - 1].rewindAt;
+    const exhausted = window.length < PURGE_REWOUND_SCAN_WINDOW;
+    const rows = db.prepare(selectSql).all(cursor, windowEnd, limit) as Array<{ id: string; sessionId: string }>;
+    // A full page may hide more matches in this window; rescan it before moving on.
+    const nextCursor = rows.length === limit ? cursor : exhausted ? null : windowEnd;
+    if (rows.length === 0) return { deleted: 0, sessionIds: [] as string[], cursor: nextCursor };
+    const remove = db.prepare(
+      "DELETE FROM messages WHERE id = ? AND role = 'user' AND rewind_at IS NOT NULL",
+    );
+    for (const row of rows) remove.run(row.id);
+    const sessionIds = [...new Set(rows.map((row) => row.sessionId))];
+    const clearPreview = db.prepare(
+      'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+    );
+    for (const sessionId of sessionIds) clearPreview.run(sessionId);
+    return { deleted: rows.length, sessionIds, cursor: nextCursor };
   });
   return transaction();
 }

@@ -38,6 +38,7 @@ export type DbTxName =
   | 'message.updateContent'
   | 'message.leaseMutate'
   | 'message.rewindUserAfterClear'
+  | 'message.purgeRewoundSchedulerPrompts'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -445,6 +446,20 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  discard?: boolean;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsArgs {
+  limit: number;
+  /** 上一批返回的 cursor（窗口末尾 rewind_at）；省略从头扫。 */
+  cursor?: number;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsResult {
+  deleted: number;
+  sessionIds: string[];
+  /** 下一批的起点；null 表示所有隐藏行已扫完。 */
+  cursor: number | null;
 }
 
 /**
@@ -1405,6 +1420,7 @@ export type DbTxArgsByName = {
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
   'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -1506,6 +1522,7 @@ export type DbTxResultByName = {
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
   'message.rewindUserAfterClear': { changes: number };
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsResult;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

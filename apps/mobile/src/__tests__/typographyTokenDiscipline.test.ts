@@ -30,6 +30,9 @@ const EXEMPT = [
   // 只许常量定义,消费端(组件)仍被本守护全量扫描——字面量只能进这里,不能进组件。
   /^src\/auth\/loginSkinLayout\.ts$/,
   /richContentAssets\.generated\.ts$/,
+  // Offline WebView engine source is a generated vendor JS string, not RN styles.
+  // Keep the app-owned document viewers and HTML generators in the scan.
+  /^src\/session\/documentPreviewAssets\.generated\.ts$/,
 ];
 /** AppText 是 RN Text / TextInput 的唯一合法包装点。 */
 const APP_TEXT_WRAPPER = /src\/components\/AppText\.tsx$/;

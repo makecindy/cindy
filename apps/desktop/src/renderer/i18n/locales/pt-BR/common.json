@@ -8354,7 +8354,8 @@
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas."
+        "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas.",
+        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu colega o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
       },
       "fields": {
         "name": "Nome de exibição",
@@ -8655,10 +8656,10 @@
     "chooseMethod": "Escolha como entrar",
     "emailCode": "Entrar com um código por e-mail",
     "orgDetected": "{{email}} pertence a \"{{org}}\"",
-    "enterpriseLogin": "Entrar com sua identidade profissional",
+    "enterpriseLogin": "Com sua identidade profissional",
     "enterpriseVia": "Login único via {{name}}",
     "personalLogin": "Entrar com uma conta pessoal",
-    "personalDesc": "Enviar um código de verificação para seu e-mail",
+    "personalDesc": "Receber um código por e-mail",
     "ssoRequired": "Esta organização exige login por SSO",
     "ssoEntry": "Entrar com SSO empresarial",
     "localModeEntry": "Pular login",
@@ -8710,7 +8711,7 @@
     "completeSignIn": "Concluir login",
     "preparing": "Conectando ao login",
     "preparingSubtitle": "Carregando os métodos disponíveis para esta região",
-    "unavailable": "O login está temporariamente indisponível",
+    "unavailable": "Login indisponível no momento",
     "retry": "Tentar novamente",
     "browserWaiting": "Conclua a verificação no navegador",
     "browserCallback": {
@@ -18997,5 +18998,32 @@
     "unavailable": "Esta compilação não tem um destino de envio de relatórios. Abra os arquivos locais para compartilhá-los com o suporte.",
     "consent": "Aceite a política de privacidade nas Configurações antes de enviar. Seus arquivos locais serão preservados.",
     "failed": "A operação não foi concluída. Tente novamente ou abra os arquivos locais."
+  },
+  "attachmentPreview": {
+    "more": "Mais ações",
+    "retry": "Tentar novamente",
+    "image": "Imagem",
+    "video": "Vídeo",
+    "file": "Arquivo",
+    "close": "Fechar",
+    "reset": "Redefinir visualização",
+    "open": "Abrir prévia",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "fit": "Ajustar à janela",
+    "actualSize": "Tamanho real (1:1)",
+    "save": "Salvar original",
+    "share": "Compartilhar",
+    "previous": "Anexo anterior",
+    "next": "Próximo anexo",
+    "password": "Digite a senha do PDF",
+    "find": "Buscar no documento",
+    "matches": "{{count}} páginas correspondentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Próxima página",
+    "source": "Ver código-fonte",
+    "rendered": "Ver documento",
+    "wrap": "Quebra de linha",
+    "lineNumbers": "Números de linha"
   }
 }

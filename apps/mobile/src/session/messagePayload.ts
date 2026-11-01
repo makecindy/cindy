@@ -40,6 +40,7 @@ import {
 } from '@cindy/maker-shared/payload-summary';
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import type { ResolveRemoteMediaFn } from './remoteMedia';
 
 export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, NormalizedToolMedia> & {
   /** Mobile 查看器内的附件身份，不参与跨端传输；地址变化时仍能定位同一页。 */
@@ -47,6 +48,21 @@ export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, Normalized
   /** 待发送图片条中的位置（含未就绪格），仅在打开前附件被替换、身份失效时兜底。 */
   galleryImageSlot?: number;
 };
+
+/** Direct media already has playable bytes; only host-owned references need fetching. */
+export async function resolveAttachmentPreviewSource(
+  payload: Extract<MessagePayload, { kind: 'file' | 'media' }>,
+  resolve: ResolveRemoteMediaFn,
+  signal: AbortSignal,
+) {
+  if (payload.kind === 'media' && payload.media.previewable && (isPayloadDirectPreviewableUrl(payload.media.url) || /^data:audio\//i.test(payload.media.url)))
+    return { url: payload.media.url, mimeType: payload.media.mimeType };
+  const source = payload.kind === 'file' ? payload.sourcePath! : payload.media.url;
+  const url = /^(?:[a-z][a-z0-9+.-]*):/i.test(source)
+    ? source
+    : `xdt-file://open?path=${encodeURIComponent(source)}`;
+  return resolve({ kind: 'file', url, previewable: false }, { front: true, signal });
+}
 
 export {
   buildPayloadToolDiff,

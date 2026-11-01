@@ -1,24 +1,37 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TextDocumentPreview } from "./TextDocumentPreview";
+import {
+  useCallback,
+  useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, X } from 'lucide-react-native';
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { ExternalLink } from 'lucide-react-native';
+import { ActivityIndicator,
+  Alert, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { openBrowserAsync } from 'expo-web-browser';
 import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import { extractRemoteFileExt, isHtmlFilePreviewCandidate, remoteFilePreviewKind } from '@cindy/maker-shared/file-preview';
 import { Text } from '@/components/AppText';
+import * as Sharing from "expo-sharing";
+import { File } from "expo-file-system";
+import type { ResolveRemoteMediaFn } from "./remoteMedia";
+import {
+  PreviewHeader,
+  PreviewFooter,
+  PreviewCollectionContext,
+} from "./PreviewChrome";
+import { DiagramDocumentPreview } from "./DiagramDocumentPreview";
+import { downloadRemoteMediaShareTemp } from "./remoteMediaDiskCacheExpo";
 import { HtmlFileReader } from '@/session/HtmlFileReader';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { withDownloadedRemoteMediaFile } from '@/session/remoteMediaDiskCacheExpo';
-import { fontWeight, iconSize, lineHeight, monoFont, radius, spacing, textStyles, typeScale, useTheme } from '@/theme';
+import { iconSize, radius, spacing, textStyles, useTheme } from '@/theme';
 
 const TEXT_ATTACHMENT_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
-const JSON_ATTACHMENT_PREVIEW_MAX_LINES = 10_000;
-const JSON_ATTACHMENT_PREVIEW_MAX_CHARACTERS = 100_000;
-const JSON_ATTACHMENT_PREVIEW_MAX_LINE_CHARACTERS = 4_096;
 const NO_EXTERNAL_IMAGES: ReadonlyMap<string, { uri: string }> = new Map();
 
-export type BotGroupTextAttachmentPreviewKind = 'html' | 'markdown' | 'json';
+export type BotGroupTextAttachmentPreviewKind = 'html' | 'markdown' | 'json' | "text" | "diagram";
 
 type PreviewState =
   | { status: 'loading' }
@@ -33,27 +46,56 @@ type ResolveServerMedia = (id: string, signal?: AbortSignal) => Promise<BotGroup
 type ReadResult = { kind: 'text'; text: string } | { kind: 'binary' };
 
 export function botGroupTextAttachmentPreviewKind(name: string): BotGroupTextAttachmentPreviewKind | null {
+  if (remoteFilePreviewKind(name) === "drawio" ||
+    /\.(mmd|mermaid)$/i.test(name)
+  )
+    return "diagram";
   if (remoteFilePreviewKind(name) !== 'text') return null;
   if (isHtmlFilePreviewCandidate(name)) return 'html';
   const extension = extractRemoteFileExt(name);
   if (extension === '.md' || extension === '.markdown') return 'markdown';
   if (extension === '.json') return 'json';
-  return null;
+  return "text";
 }
 
-export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, resolve, onClose }: {
+export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, resolve,
+  resolveDeviceMedia,
+  deviceSource, onClose }: {
   attachmentId: string;
   fileName: string;
   kind: BotGroupTextAttachmentPreviewKind;
-  resolve: ResolveServerMedia;
+  resolve?: ResolveServerMedia;
+  resolveDeviceMedia?: ResolveRemoteMediaFn;
+  deviceSource?: string;
   onClose(): void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const collection = useContext(PreviewCollectionContext);
+  const [source, setSource] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
   const controller = useRef<AbortController | null>(null);
   const resolveRef = useRef(resolve);
   resolveRef.current = resolve;
+
+  const deviceRef = useRef(resolveDeviceMedia);
+  deviceRef.current = resolveDeviceMedia;
+  const authorizedSource = async (signal?: AbortSignal) => {
+    if (deviceRef.current && deviceSource)
+      return deviceRef.current(
+        { kind: "file", url: deviceSource, previewable: false },
+        { front: true, signal },
+      );
+    if (!resolveRef.current) throw new Error("ATTACHMENT_RESOLVER_MISSING");
+    const attachment = await resolveRef.current(attachmentId, signal);
+      if (attachment.category !== 'file' || !attachment.url || !isCredentialFreeHttpsUrl(attachment.url))
+      throw new Error('ATTACHMENT_PREVIEW_URL_INVALID');
+    return { url: attachment.url, mimeType: attachment.mimeType };
+  };
+  const authorizedRef = useRef(authorizedSource);
+  authorizedRef.current = authorizedSource;
 
   const load = useCallback(async () => {
     controller.current?.abort();
@@ -62,16 +104,13 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
     setState({ status: 'loading' });
     let tooLarge = false;
     try {
-      const attachment = await resolveRef.current(attachmentId, request.signal);
+      const attachment = await authorizedRef.current(request.signal);
       if (request.signal.aborted) return;
-      if (attachment.category !== 'file' || !attachment.url || !isCredentialFreeHttpsUrl(attachment.url)) {
-        throw new Error('ATTACHMENT_PREVIEW_URL_INVALID');
-      }
       const result = await withDownloadedRemoteMediaFile<ReadResult>(
         attachment.url,
         attachment.mimeType || 'application/octet-stream',
         TEXT_ATTACHMENT_PREVIEW_MAX_BYTES,
-        async file => {
+        async (file) => {
           const text = await file.text();
           return isLikelyBinaryText(text) ? { kind: 'binary' } : { kind: 'text', text };
         },
@@ -97,10 +136,6 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
     return () => { controller.current?.abort(); };
   }, [load]);
 
-  const jsonPreview = useMemo(
-    () => state.status === 'ready' && kind === 'json' ? splitJsonPreviewLines(state.text) : null,
-    [kind, state],
-  );
   const message = state.status === 'too-large'
     ? t('groupChat.server.attachmentPreviewTooLarge')
     : state.status === 'binary'
@@ -114,11 +149,8 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
     controller.current = request;
     setState({ status: 'loading' });
     try {
-      const attachment = await resolveRef.current(attachmentId, request.signal);
+      const attachment = await authorizedRef.current(request.signal);
       if (request.signal.aborted) return;
-      if (attachment.category !== 'file' || !attachment.url || !isCredentialFreeHttpsUrl(attachment.url)) {
-        throw new Error('ATTACHMENT_PREVIEW_URL_INVALID');
-      }
       await openBrowserAsync(attachment.url);
       if (!request.signal.aborted) onClose();
     } catch {
@@ -126,22 +158,73 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
     }
   };
 
+  const share = async () => {
+    if (sharing) return;
+    setSharing(true);
+    let uri: string | null = null;
+    const request = controller.current;
+    try {
+      const attachment = await authorizedRef.current(request?.signal);
+      if (request?.signal.aborted) return;
+      uri = await downloadRemoteMediaShareTemp(
+        attachment.url,
+        attachment.mimeType ?? "application/octet-stream",
+        fileName,
+        request?.signal,
+      );
+      if (!uri) throw new Error("ATTACHMENT_DOWNLOAD_FAILED");
+      if (!request?.signal.aborted)
+        await Sharing.shareAsync(uri, { mimeType: attachment.mimeType });
+    } catch {
+      if (!request?.signal.aborted)
+        Alert.alert(t("groupChat.server.attachmentFailed"));
+    } finally {
+      if (uri) {
+        try {
+          const file = new File(uri);
+          if (file.exists) file.delete();
+        } catch {
+          /* cache reclaimed */
+        }
+      }
+      if (!request?.signal.aborted) setSharing(false);
+    }
+  };
+
   return (
     <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <SafeAreaProvider>
-        <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.fill, { backgroundColor: colors.surface }]}>
-          <View style={[styles.header, { borderBottomColor: colors.border }]}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('groupChat.server.attachmentPreviewClose')}
-              onPress={onClose}
-              style={styles.closeButton}
-              testID="groupChat.server.attachmentPreviewCloseButton"
-            >
-              <X color={colors.textSecondary} size={iconSize.action} />
-            </Pressable>
-            <Text numberOfLines={1} style={[textStyles.body, styles.title, { color: colors.textPrimary }]}>{fileName}</Text>
-          </View>
+        <SafeAreaView edges={['bottom', 'left', 'right']} style={[styles.fill, { backgroundColor: colors.surface,
+              paddingTop: insets.top + 64,
+              paddingBottom: (collection?.names.length ?? 0) > 1 ? 56 : 0,
+            }]}>
+          <PreviewHeader
+            name={fileName}
+            onClose={onClose}
+            actions={[
+              ...(kind === "markdown" || kind === "html" || kind === "diagram"
+                ? [
+                    {
+                      key: "source",
+                      label: t(
+                        source
+                          ? "files.preview.browserShowDocument"
+                          : "files.preview.browserShowSource",
+                      ),
+                      onPress: () => setSource((value) => !value),
+                    },
+                  ]
+                : []),
+              {
+                key: "share",
+                label: t("message.attachmentPreview.share"),
+                disabled: sharing,
+                onPress: () => {
+                  void share();
+                },
+              },
+            ]}
+          />
           {state.status === 'loading' ? (
             <View style={styles.messageState} testID="groupChat.server.attachmentPreviewLoading">
               <ActivityIndicator color={colors.textSecondary} />
@@ -156,7 +239,8 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
                   <Text style={[textStyles.body, { color: colors.textPrimary }]}>{t('groupChat.server.attachmentPreviewRetry')}</Text>
                 </Pressable>
               ) : null}
-              {kind !== 'html' && (state.status === 'too-large' || state.status === 'binary') ? (
+              {!resolveDeviceMedia &&
+              kind !== 'html' && (state.status === 'too-large' || state.status === 'binary') ? (
                 <Pressable accessibilityRole="button" onPress={() => { void openOutside(); }} style={[styles.action, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]} testID="groupChat.server.attachmentPreviewOpenOutside">
                   <ExternalLink color={colors.textPrimary} size={iconSize.md} />
                   <Text style={[textStyles.body, { color: colors.textPrimary }]}>{t('groupChat.server.attachmentPreviewOpenOutside')}</Text>
@@ -164,32 +248,20 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
               ) : null}
             </View>
           ) : null}
-          {state.status === 'ready' && kind === 'html' ? (
+          {state.status === 'ready' && !source && kind === "diagram" ? (
+            <DiagramDocumentPreview source={state.text} name={fileName} />
+          ) : null}
+          {state.status === "ready" && !source && kind === 'html' ? (
             <HtmlFileReader html={state.text} javaScriptEnabled={false} testID="groupChat.server.attachmentHtmlPreview" />
           ) : null}
-          {state.status === 'ready' && kind === 'markdown' ? (
+          {state.status === 'ready' && !source && kind === 'markdown' ? (
             <MarkdownFileReader markdown={state.text} imageSources={NO_EXTERNAL_IMAGES} testID="groupChat.server.attachmentMarkdownPreview" />
           ) : null}
-          {state.status === 'ready' && kind === 'json' ? (
-            <View style={styles.fill}>
-              {jsonPreview?.truncated ? (
-                <Text style={[textStyles.footnote, styles.truncated, { color: colors.textSecondary }]}>{t('groupChat.server.attachmentPreviewTruncated')}</Text>
+          {state.status === 'ready' &&
+          (source || kind === "json" || kind === "text") ? (
+            <TextDocumentPreview text={state.text} testID={kind === "json" ? "groupChat.server.attachmentJsonPreview" : undefined} />
               ) : null}
-              <FlatList
-                data={jsonPreview?.lines ?? []}
-                keyExtractor={(_, index) => String(index)}
-                renderItem={({ item, index }) => (
-                  <View style={styles.codeRow}>
-                    <Text selectable={false} style={[textStyles.caption, styles.lineNumber, { color: colors.textTertiary }]}>{index + 1}</Text>
-                    <Text selectable style={[styles.codeText, { color: colors.textPrimary }]}>{item || ' '}</Text>
-                  </View>
-                )}
-                style={styles.fill}
-                contentContainerStyle={styles.codeList}
-                testID="groupChat.server.attachmentJsonPreview"
-              />
-            </View>
-          ) : null}
+              <PreviewFooter />
         </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -209,35 +281,9 @@ function isLikelyBinaryText(value: string): boolean {
   return /[\x00-\x08\x0B\x0E-\x1F]/.test(value);
 }
 
-function splitJsonPreviewLines(text: string): { lines: string[]; truncated: boolean } {
-  const lines: string[] = [];
-  let start = 0;
-  let characters = 0;
-  while (lines.length < JSON_ATTACHMENT_PREVIEW_MAX_LINES && characters < JSON_ATTACHMENT_PREVIEW_MAX_CHARACTERS) {
-    const end = text.indexOf('\n', start);
-    const lineEnd = end < 0 ? text.length : end > start && text.charCodeAt(end - 1) === 13 ? end - 1 : end;
-    const line = text.slice(start, lineEnd);
-    const visible = line.slice(0, Math.min(JSON_ATTACHMENT_PREVIEW_MAX_LINE_CHARACTERS, JSON_ATTACHMENT_PREVIEW_MAX_CHARACTERS - characters));
-    lines.push(visible);
-    characters += visible.length;
-    start = end < 0 ? text.length : end + 1;
-    if (visible.length < line.length) return { lines, truncated: true };
-    if (end < 0) return { lines, truncated: false };
-  }
-  return { lines, truncated: start < text.length };
-}
-
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  header: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth },
-  closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  title: { flex: 1, minWidth: 0, fontWeight: fontWeight.semibold },
   messageState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
   stateCopy: { textAlign: 'center' },
-  truncated: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   action: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, paddingHorizontal: spacing.lg, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth },
-  codeList: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  codeRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  lineNumber: { width: 40, paddingRight: spacing.sm, textAlign: 'right' },
-  codeText: { flex: 1, minWidth: 0, fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
 });

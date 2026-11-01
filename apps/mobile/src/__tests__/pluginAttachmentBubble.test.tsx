@@ -375,3 +375,5 @@ describe('companion native read position', () => {
     }
   });
 });
+
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));

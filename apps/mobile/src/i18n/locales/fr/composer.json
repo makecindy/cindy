@@ -119,6 +119,9 @@
     "unavailable": "Impossible de recevoir des partages pour le moment",
     "noCompanions": "Aucun compagnon",
     "noTasks": "Aucune tâche",
-    "retry": "Impossible de tout charger. Touchez pour réessayer."
+    "retry": "Impossible de tout charger. Touchez pour réessayer.",
+    "noMatches": "Aucune destination correspondante",
+    "clearSearch": "Effacer la recherche",
+    "loadingDevices": "Chargement des ordinateurs…"
   }
 }
