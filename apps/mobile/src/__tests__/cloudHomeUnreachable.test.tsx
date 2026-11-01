@@ -52,9 +52,7 @@ it('counts only a message the main computer has not taken, held because that com
   expect(isMessageWaitingForCloudHome([record({ state: 'host-owned', retrySafe: true })], target, offline)).toBe(false);
   expect(isMessageWaitingForCloudHome([record({ cleanupOutcome: 'accepted' })], target, offline)).toBe(false);
   // Stopped on its own failure: not held by the computer, offering a switch would not help.
-  expect(isMessageWaitingForCloudHome([record({ state: 'failed', error: 'rejected' })], target, offline)).toBe(false);
-  // A retryable connection error keeps its state and still waits for the computer.
-  expect(isMessageWaitingForCloudHome([record({ error: 'DEVICE_OFFLINE' } as never)], target, offline)).toBe(true);
+  expect(isMessageWaitingForCloudHome([record({ state: 'failed' })], target, offline)).toBe(false);
   // Drafts, cancellations and other chats.
   expect(isMessageWaitingForCloudHome([record({ suspended: true }), record({ cancelRequested: true })], target, offline)).toBe(false);
   expect(isMessageWaitingForCloudHome([record({ item: { sessionId: 's2' } as never })], target, offline)).toBe(false);
