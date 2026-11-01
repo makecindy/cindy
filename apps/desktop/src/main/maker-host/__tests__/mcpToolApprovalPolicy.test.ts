@@ -61,7 +61,6 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy_docs__read_sheet',
       'mcp__cindy_docs__inspect_pdf',
       'mcp__cindy_memory__list_tools',
-      'mcp__cindy_contacts__list_tools',
       'mcp__cindy_slack__slack_status',
       'mcp__cindy_telegram_bot__get_chat',
       'mcp__cindy_feishu_bot__get_chat',
@@ -172,25 +171,31 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party', toolName: 'read_data' })).toBe('prompt');
   });
 
-  it('keeps known safe contacts calls trusted', () => {
-    expect(
+  // 内置智能通讯录迁为 cindy-contacts 插件后，查人仍免确认（原 cindy_contacts 的只读
+  // 体验）；写入、合并、删除、导入与分组写动作逐次审批，一次「本会话允许」不能覆盖它们。
+  it('auto-approves only read-only cindy-contacts plugin tools', () => {
+    const call = (tool: string, args: unknown = {}) =>
       getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_contacts',
-        toolParams: { name: 'contacts_search', args: { query: 'Carol' } },
-      }),
-    ).toBe('auto-approve');
-  });
-
-  it('prompts each time for destructive and malformed contacts calls', () => {
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_contacts',
-        toolParams: { name: 'contacts_merge', args: { target_id: 'a', source_id: 'b' } },
-      }),
-    ).toBe('prompt-each-time');
-    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_contacts' })).toBe(
-      'prompt-each-time',
-    );
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'cindy-contacts', tool, args },
+      });
+    for (const tool of ['find', 'get', 'list', 'stats', 'find_duplicates']) {
+      expect(call(tool, { query: 'Carol', id: 'c1' }), `${tool} should be auto-approved`).toBe('auto-approve');
+    }
+    expect(call('groups', { action: 'list' })).toBe('auto-approve');
+    expect(call('groups', JSON.stringify({ action: 'list' }))).toBe('auto-approve');
+    for (const action of ['create', 'rename', 'delete', undefined]) {
+      expect(call('groups', { action, name: 'x' })).toBe('prompt-each-time');
+    }
+    for (const tool of ['save', 'save_many', 'record', 'log_event', 'relate', 'organize', 'merge', 'delete', 'import_macos', 'maintenance']) {
+      expect(call(tool), `${tool} must not be auto-approved`).toBe('prompt-each-time');
+    }
+    // Codex elicitation 可能省略外层 toolName，仍按内层 ghost_id 判定。
+    expect(getDesktopMcpToolApprovalPolicy({
+      serverName: 'cindy',
+      toolParams: { ghost_id: 'cindy-contacts', tool: 'delete', args: { id: 'c1', confirm: true } },
+    })).toBe('prompt-each-time');
   });
 
   // cindy_docs 是渐进披露 server:对外只有 list_tools / call_tool。read_sheet 与

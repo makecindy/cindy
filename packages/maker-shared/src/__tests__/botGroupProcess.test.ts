@@ -1,8 +1,35 @@
 import { describe, expect, it } from 'vitest';
+import { projectWorkActivities, summarizeTeammateWork, teammateWorkSummaryText } from '../workActivityProjection.js';
 import { botGroupProcessCard, readBotGroupProcessCard, readBotGroupProcessNotes, type BotGroupProcessMessage } from '../botGroupChat.js';
 const ref = { groupId: 'group', executionId: 'execution', sessionId: 'lane', clientId: 'bot-group:group:execution:bot' };
 const row = (clientId: string, role: string, content: unknown, agentMeta?: BotGroupProcessMessage['agentMeta']): BotGroupProcessMessage => ({ clientId, role, content, agentMeta });
 const progress = (id: string, text: unknown) => row(id, 'assistant', text, { assistantPhase: 'commentary' });
+// Unit regression for the 2026-11-01 report: a failed attempt dominated the
+// collapsed summary even while useful work continued. Existing tests only
+// checked retained error counts, not the text users actually saw.
+it('shows the active action, then the latest action, without amplifying earlier failures', () => {
+  const tool = (clientId: string, file: string) => ({ clientId, content: '', toolName: 'Read', toolInput: { file_path: `/repo/${file}` } });
+  const children = [{ kind: 'tools', key: 'tools', toolCalls: [tool('failed', 'missing.md'), tool('active', 'skills.md'), tool('done', 'notes.md')],
+    resultMap: new Map([['failed', 'Error: file not found'], ['done', 'notes']]) }];
+  const activities = projectWorkActivities(children, true, true).activities;
+  const summary = summarizeTeammateWork(activities);
+  expect(summary.failedCount).toBe(1);
+  expect(teammateWorkSummaryText(summary, true, key => key)).toBe('读取 skills.md');
+  expect(teammateWorkSummaryText(summary, false, key => key)).toBe('读取 notes.md');
+  expect(activities[0]).toMatchObject({ toolResult: 'Error: file not found' });
+});
+
+it.each([
+  ['mcp__calendar__list_events', {}, 'Use calendar · list events'],
+  ['mcp__helper__call_tool', { name: 'list_skills' }, 'Use helper · list skills'],
+])('keeps the concrete MCP operation %s visible with localized wording', (toolName, toolInput, expected) => {
+  const summary = summarizeTeammateWork(projectWorkActivities([{ kind: 'tools', key: 'tools', toolCalls: [
+    { clientId: 'call', content: '', toolName, toolInput },
+  ] }], true).activities);
+  expect(teammateWorkSummaryText(summary, true, key => key, {
+    verb: () => 'Use', intentVerb: () => 'Run', updateFilesLabel: () => 'Update files',
+  })).toBe(expected);
+});
 // Unit: new optional locator contract and the same bounded history reader used by
 // Desktop and Mobile group/Thread disclosures. Verify observable content boundaries.
 describe('group process record', () => {

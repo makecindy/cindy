@@ -18,7 +18,7 @@ vi.mock('react-native', async () => {
   const { createElement, forwardRef, useImperativeHandle } = await import('react');
   const View = ({ children }: { children?: ReactNode }) => createElement('div', null, children);
   return {
-    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {},
+    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {}, Platform: { OS: 'ios' },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     FlatList: forwardRef((props: any, ref) => {

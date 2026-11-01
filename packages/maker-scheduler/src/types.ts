@@ -3,7 +3,7 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -101,6 +101,7 @@ export interface SchedulerInflightRunPolicy {
  * 都从这里枚举——host 侧新增能力时只改这一处,选择器自动出现新项。
  */
 export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
+  'github.read',
   'jira.read',
   'jira.comment',
   'sessions.dispatch',

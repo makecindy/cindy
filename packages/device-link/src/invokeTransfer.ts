@@ -38,6 +38,11 @@ export interface DeviceLinkTransferCodec {
    * 分配前抛错——压缩包只受传输大小限制，高压缩比结果可以展开成数百 MB。
    */
   gunzipBase64?(base64: string, maxChars: number): string;
+  /**
+   * 控制端可选：同 gunzipBase64，但允许离开调用线程解压。提供后 gzip 结果优先走它，
+   * 须遵守同样的 maxChars 约束；声明能力仍只看 gunzipBase64，wire 行为不变。
+   */
+  gunzipBase64Async?(base64: string, maxChars: number): Promise<string>;
   /** 被控端：压缩结果。 */
   gzipBase64?(text: string): string;
   /** 被控端：结果内容标签，须抗碰撞（如 SHA-256）。 */
@@ -133,18 +138,32 @@ interface CachedResult {
 /** 控制端发出一次 invoke 前固定的编码上下文；结果回来时只用这份快照解码。 */
 export interface PreparedInvokeTransfer {
   payload: InvokePayload;
-  decode(result: InvokeResultPayload): InvokeResultPayload;
+  /** 只有走 gunzipBase64Async 时才返回 Promise；调用方统一 await。 */
+  decode(
+    result: InvokeResultPayload,
+    observe?: InvokeDecodeObserver,
+  ): InvokeResultPayload | Promise<InvokeResultPayload>;
+}
+
+/** inflateMs 对异步解压是等待时长，不等于占用调用线程的时间；parseMs 总在调用线程。 */
+export type InvokeDecodeObserver = (timing: { inflateMs: number; parseMs: number }) => void;
+
+function decodeClock(): number {
+  return globalThis.performance?.now?.() ?? Date.now();
 }
 
 /** 控制端：按 peer + channel + args 保留最近的大结果，有界 LRU，只在内存。 */
 export class InvokeResultCache {
   private readonly entries = new Map<string, CachedResult>();
   private chars = 0;
+  /** Bumped by clear(): a decode that finishes after it must not put its result back. */
+  private epoch = 0;
 
   constructor(private readonly codec: DeviceLinkTransferCodec | undefined) {}
 
   prepare(dst: string, payload: InvokePayload): PreparedInvokeTransfer {
     const key = cacheKey(dst, payload);
+    const epoch = this.epoch;
     // 请求时固定快照：结果回来前即使被淘汰，notModified 仍能还原。
     const cached = key ? this.entries.get(key) : undefined;
     const transfer: InvokeTransferOptions = {};
@@ -153,47 +172,81 @@ export class InvokeResultCache {
     const prepared = transfer.gzip || transfer.ifNoneMatch ? { ...payload, transfer } : payload;
     return {
       payload: prepared,
-      decode: (result) => this.decode(key, cached, result),
+      decode: (result, observe) => this.decode(key, epoch, cached, result, observe),
     };
   }
 
   clear(): void {
     this.entries.clear();
     this.chars = 0;
+    this.epoch += 1;
   }
 
   private decode(
     key: string | null,
+    epoch: number,
     cached: CachedResult | undefined,
     result: InvokeResultPayload,
-  ): InvokeResultPayload {
+    observe?: InvokeDecodeObserver,
+  ): InvokeResultPayload | Promise<InvokeResultPayload> {
     if (!result.ok || !result.transfer) return result;
     const transfer = result.transfer;
-    let text: string;
-    let value: unknown;
-    try {
-      if (transfer.notModified) {
-        if (!cached || cached.tag !== transfer.tag) throw new Error('unexpected notModified');
-        text = cached.text;
+    const failed = (err: unknown): InvokeResultPayload => ({
+      ok: false,
+      error: {
+        code: 'IPC_ERROR',
+        message: `[INTERNAL] invalid invoke result transfer: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    });
+    const startedAt = decodeClock();
+    const parsed = (text: string): InvokeResultPayload => {
+      const inflatedAt = decodeClock();
+      let value: unknown;
+      try {
         value = JSON.parse(text);
-      } else if (typeof transfer.gzipBase64 === 'string') {
-        if (!this.codec?.gunzipBase64) throw new Error('unexpected gzip result');
-        text = this.codec.gunzipBase64(transfer.gzipBase64, INVOKE_TRANSFER_MAX_CHARS);
-        value = JSON.parse(text);
-      } else {
-        value = result.result;
-        text = JSON.stringify(value);
+      } catch (err) {
+        return failed(err);
       }
-    } catch (err) {
-      return {
-        ok: false,
-        error: {
-          code: 'IPC_ERROR',
-          message: `[INTERNAL] invalid invoke result transfer: ${err instanceof Error ? err.message : String(err)}`,
-        },
-      };
+      try {
+        observe?.({ inflateMs: inflatedAt - startedAt, parseMs: decodeClock() - inflatedAt });
+      } catch { /* Diagnostics must never affect delivery. */ }
+      return this.finishDecode(key, epoch, transfer, text, value);
+    };
+    if (transfer.notModified) {
+      if (!cached || cached.tag !== transfer.tag) return failed(new Error('unexpected notModified'));
+      return parsed(cached.text);
     }
-    if (key && typeof transfer.tag === 'string' && transfer.tag.length <= MAX_TAG_CHARS) {
+    if (typeof transfer.gzipBase64 === 'string') {
+      if (this.codec?.gunzipBase64Async) {
+        return this.codec.gunzipBase64Async(transfer.gzipBase64, INVOKE_TRANSFER_MAX_CHARS)
+          .then(parsed, failed);
+      }
+      if (!this.codec?.gunzipBase64) return failed(new Error('unexpected gzip result'));
+      let text: string;
+      try {
+        text = this.codec.gunzipBase64(transfer.gzipBase64, INVOKE_TRANSFER_MAX_CHARS);
+      } catch (err) {
+        return failed(err);
+      }
+      return parsed(text);
+    }
+    let text: string;
+    try {
+      text = JSON.stringify(result.result);
+    } catch (err) {
+      return failed(err);
+    }
+    return this.finishDecode(key, epoch, transfer, text, result.result);
+  }
+
+  private finishDecode(
+    key: string | null,
+    epoch: number,
+    transfer: InvokeResultTransfer,
+    text: string,
+    value: unknown,
+  ): InvokeResultPayload {
+    if (key && epoch === this.epoch && typeof transfer.tag === 'string' && transfer.tag.length <= MAX_TAG_CHARS) {
       this.remember(key, { tag: transfer.tag, text });
     }
     return { ok: true, result: value };

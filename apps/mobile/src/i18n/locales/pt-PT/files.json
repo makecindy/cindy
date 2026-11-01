@@ -102,6 +102,7 @@
     "fetchAvFailed": "Falha ao obter: {{detail}}",
     "fetchPdfFailed": "Falha ao obter o PDF: {{detail}}",
     "fetchingPdf": "A obter o PDF do seu computador…",
+    "androidPdfHint": "No Android, ainda não é possível pré-visualizar PDF no Cindy. Toque em \"Exportar / Partilhar\" abaixo e escolha um leitor de PDF.",
     "unsupportedType": "Ainda não é possível pré-visualizar este tipo no seu telemóvel",
     "oversize": "O ficheiro excede o limite de pré-visualização ({{size}}); transfira o original para o ver",
     "oversizeUnknown": "demasiado grande",

@@ -323,6 +323,7 @@ import { ComposerActivityPill, composerActivityPillOverlayColor, makeComposerAct
 import { PlanModeChip } from '@/session/PlanModeChip';
 import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
+import { unarchiveSessionAfterSend } from '@/session/unarchiveAfterSend';
 import {
   dismissNewSessionCreation,
   getNewSessionCreationTask,
@@ -7340,6 +7341,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 消息已由 A 路径落定；若等待期间切到 B，只停止旧 continuation，不能再用
       // A 的附件 id / plan 状态去清理 B 的 composer UI。
       messageAccepted = enqueueAccepted;
+      // 取消归档属于任务本身,不属于页面:电脑已接收就要做,即使用户已离开这个页面。
+      if (enqueueAccepted) void unarchiveSessionAfterSend(sessionId, deviceId, invoke);
       if (!sendScopeStillAlive()) return messageAccepted;
       if (enqueueAccepted) setFollowUpEngaged(followUpScope);
       if (sessionAtSend.permissionMode === 'plan') {
@@ -9505,7 +9508,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       onOpenPath: openChatPathTarget,
       onLongPressPath: (target) => {
         if (usesSystemActionMenu()) {
-          const rows = chatFileChipMenuRows(target);
+          const rows = chatFileChipMenuRows(target, Platform.OS);
           void showActionMenu({
             cancelLabel: t('session.common.cancel'),
             items: rows.map((row) => ({ key: row.key, label: row.label })),

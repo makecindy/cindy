@@ -1116,6 +1116,8 @@ export const sessionPrRefs = sqliteTable(
     pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
     priority: integer('priority').notNull().default(0),
     manuallyAdded: integer('manually_added', { mode: 'boolean' }).notNull().default(false),
+    associationSource: text('association_source').notNull().default('legacy'),
+    associationOrigin: text('association_origin'),
     removedAt: integer('removed_at'),
   },
   (t) => ({
@@ -2481,3 +2483,10 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
+
+/** Account-local observed facts and independent consumer cursors, never credentials. */
+export const githubObservations = sqliteTable('github_observations', {
+  key: text('key').primaryKey(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});

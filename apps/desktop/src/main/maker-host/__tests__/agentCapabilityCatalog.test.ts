@@ -50,7 +50,7 @@ describe('shared runtime capability discovery', () => {
       android: {} as never, browser: {} as never, computer: {} as never,
       feishuBot: {} as never, wechatBot: {} as never, slackHook: {} as never,
       scheduler: {} as never, ssh: {} as never, memory: {} as never,
-      contacts: {} as never, docs: {} as never, xdtHelper: {} as never,
+      docs: {} as never, xdtHelper: {} as never,
       orca: {} as never, lsp: {} as never,
     });
     const runtime = { ...context, agentKind };
@@ -59,7 +59,6 @@ describe('shared runtime capability discovery', () => {
     expect(result).toMatchObject({ capabilities: expect.arrayContaining([
       expect.objectContaining({ server: 'cindy_android' }),
       expect.objectContaining({ server: 'cindy_browser' }),
-      expect.objectContaining({ server: 'cindy_contacts' }),
     ]) });
     expect(await readAgentCapabilityCatalog(providers, runtime, { server: 'cindy_ios_simulator' }))
       .toMatchObject({ ok: false, errorCode: 'UNKNOWN_CAPABILITY' });

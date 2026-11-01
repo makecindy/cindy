@@ -4956,9 +4956,6 @@
         "title": "Participación grupal",
         "hint": "Los grupos que el bot ha visto aparecen aquí. \"Activo\" = lee cada mensaje y decide por sí solo si desea intervenir (cada mensaje cuesta tokens).",
         "empty": "Aún no hay grupos. Agrega el bot a un grupo y aparecerá aquí una vez que alguien hable.",
-        "contactsOn": "Las personas que hablan en grupos se agregan automáticamente a Contactos inteligentes (el interruptor principal está activado).",
-        "contactsOff": "Contactos inteligentes está desactivado: las personas que hablan en grupos no serán recordadas automáticamente.",
-        "contactsEnable": "encender",
         "error": {
           "load": "No se pudieron cargar los grupos Telegram. Verifique la conexión y vuelva a intentarlo.",
           "save": "El modo de grupo no se guardó. Se restableció el último modo confirmado.",
@@ -5817,10 +5814,6 @@
         "ssh": {
           "name": "Comandos SSH",
           "description": "Ejecuta comandos en computadoras remotas mediante conexiones SSH configuradas."
-        },
-        "contacts": {
-          "name": "Smart Contacts",
-          "description": "Busca y administra perfiles de contactos e historial de interacciones."
         }
       }
     },
@@ -6313,9 +6306,6 @@
             "title": "Participación grupal",
             "hint": "Aquí aparecen los grupos que detecta el bot oficial. El modo activo se aplica a todos los mensajes enviados solo desde tu cuenta vinculada; los demás miembros aportan contexto local, pero no pueden activar tareas.",
             "empty": "Aún no hay grupos. Agrega el bot a un grupo y envía un mensaje desde tu cuenta vinculada.",
-            "contactsOn": "Las demás personas que hablan en los grupos se agregan automáticamente a Contactos inteligentes.",
-            "contactsOff": "Contactos inteligentes está desactivado, por lo que no se recordará automáticamente a los demás miembros del grupo.",
-            "contactsEnable": "encender",
             "error": {
               "load": "No se pudieron cargar los grupos Telegram. Verifique la conexión y vuelva a intentarlo.",
               "save": "El modo de grupo no se guardó. Se restableció el último modo confirmado.",
@@ -8398,188 +8388,6 @@
         "title": "¿Eliminar \"{{name}}\"?",
         "message": "Las nuevas sesiones ya no cargarán este MCP.",
         "confirm": "Eliminar"
-      }
-    },
-    "contacts": {
-      "title": "Smart Contacts",
-      "description": "Un directorio de personas y organizaciones diseñado para Agents: resolución de identidades entre plataformas (correo electrónico / Feishu / Slack / GitHub id → quién es esta persona), contexto de relaciones y registros de eventos con fecha. Los Agents recopilan entradas mientras trabajan; las de baja confianza pasan a una cola pendiente para que las revises. Los datos permanecen en este dispositivo de forma predeterminada, con sincronización opcional entre dispositivos; las consultas y la organización se procesan con tu propio modelo.",
-      "enable": {
-        "label": "Activar Smart Contacts",
-        "description": "Al activarlo, los Agents pueden buscar y recopilar automáticamente información de contacto (las entradas dudosas quedan pendientes de revisión). Desactivarlo no afecta la consulta ni la administración de los datos existentes aquí.",
-        "toggleAria": "Activar o desactivar Smart Contacts"
-      },
-      "sync": {
-        "label": "Sincronizar entre mis dispositivos",
-        "description": "Actívalo una vez en cada equipo de escritorio que quieras incluir. Los dispositivos en línea se sincronizan automáticamente, conectándose directamente en la misma red local cuando es posible o mediante datos retransmitidos con cifrado de extremo a extremo. La comparación es programática, sin usar modelos ni tokens.",
-        "toggleAria": "Activar o desactivar la sincronización de contactos entre dispositivos",
-        "syncNow": "Sincronizar ahora",
-        "onlineDevices_one": "{{count}} dispositivo más en línea",
-        "onlineDevices_other": "{{count}} dispositivos más en línea",
-        "route": {
-          "lan": "Red local",
-          "relay": "Retransmisión cifrada"
-        },
-        "status": {
-          "loading": "Leyendo estado de sincronización…",
-          "signInRequired": "Inicia sesión en tu cuenta de Cindy para sincronizar entre dispositivos",
-          "off": "La sincronización está desactivada",
-          "waiting": "Esperando a que otro equipo de escritorio con sincronización activada se conecte",
-          "syncing": "Sincronizando de forma segura…",
-          "ready": "Todo listo: los dispositivos se sincronizarán cuando se conecten",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "El almacenamiento seguro del sistema no está disponible, por lo que no se puede proteger la clave del dispositivo",
-          "peer-identity-changed": "La identidad de un dispositivo cambió; la sincronización está pausada para proteger tus datos",
-          "sync-failed": "La sincronización falló y se reintentará cuando un dispositivo vuelva a estar en línea"
-        },
-        "toast": {
-          "enabled": "Sincronización entre dispositivos activada",
-          "disabled": "Sincronización entre dispositivos desactivada"
-        },
-        "onlineDevices_many": "{{count}} dispositivos más en línea"
-      },
-      "stats": "{{people}} personas / {{orgs}} organizaciones / {{groups}} grupos",
-      "kind": {
-        "person": "persona",
-        "org": "Organización"
-      },
-      "filters": {
-        "all": "Todo",
-        "person": "gente",
-        "org": "Organizaciones",
-        "pending": "Pendiente"
-      },
-      "list": {
-        "searchPlaceholder": "Buscar nombre / correo electrónico / palabra clave",
-        "newAria": "Nuevo contacto",
-        "newNamePlaceholder": "Nombre u organización",
-        "newKindAria": "Cambiar tipo (persona / organización)",
-        "newConfirm": "Crear",
-        "groupFilterAria": "Filtrar por grupo",
-        "groupFilterAll": "Todos los grupos",
-        "loadMore": "Cargar más",
-        "noResults": "No hay contactos que coincidan",
-        "empty": "No tienes contactos. Una vez activado, los Agents recopilarán entradas mientras trabajan; también puedes hacer clic en + para agregar una manualmente."
-      },
-      "detail": {
-        "empty": "Selecciona un contacto a la izquierda para ver su perfil",
-        "pendingBanner": "Un Agent recopiló esta entrada con baja confianza. Revísala.",
-        "pendingConfirm": "Confirmar",
-        "pendingDiscard": "Descartar",
-        "nameAria": "Nombre para mostrar",
-        "deleteAria": "Eliminar contacto",
-        "summaryPlaceholder": "Resumen en una línea",
-        "identities": "Identidades",
-        "identityRemoveAria": "Quitar identidad {{value}}",
-        "identityPlatformAria": "Plataforma",
-        "identityValuePlaceholder": "Correo electrónico / id de plataforma / nombre de usuario",
-        "identityAddAria": "Agregar identidad",
-        "narrative": "Relación y contexto",
-        "narrativePlaceholder": "Tu relación, historial de colaboración y contexto (Markdown)",
-        "agentNotes": "Instrucciones para Agents",
-        "agentNotesPlaceholder": "p. ej., Este es el correo personal del jefe: nunca le envíes correos masivos",
-        "events": "Cronología",
-        "eventsEmpty": "Aún no hay eventos",
-        "eventDeleteAria": "Eliminar evento",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "Qué ocurrió",
-        "eventAddAria": "Agregar evento",
-        "groups": "Grupos",
-        "groupRemoveAria": "Quitar del grupo {{name}}",
-        "groupAddAria": "Agregar a un grupo",
-        "groupAddPlaceholder": "Agregar a un grupo…",
-        "discardChanges": "Descartar cambios",
-        "save": "Guardar",
-        "identitiesEmpty": "Aún no hay identidades",
-        "relations": "Relaciones",
-        "relationsEmpty": "Aún no hay relaciones (organizaciones / personas relacionadas)",
-        "relationAddAria": "Agregar relación",
-        "relationRemoveAria": "Eliminar relación con {{name}}",
-        "relationVerbPlaceholder": "trabaja en / familiar…",
-        "relationTargetAria": "Elegir contacto relacionado",
-        "relationTargetPlaceholder": "Elegir una persona u organización…",
-        "relationNotePlaceholder": "Nota (cargo…)"
-      },
-      "deleteConfirm": {
-        "title": "¿Eliminar \"{{name}}\"?",
-        "description": "Se eliminarán todas las identidades, los eventos de la cronología y las membresías de grupos. Esta acción no se puede deshacer.",
-        "confirm": "Eliminar",
-        "cancel": "Cancelar"
-      },
-      "toast": {
-        "enabled": "Smart Contacts activado",
-        "disabled": "Smart Contacts desactivado",
-        "codexRefreshDeferred": "Configuración guardada, pero Codex está ocupado: se aplicará a las sesiones de Codex cuando se reinicie la aplicación",
-        "toggleFailed": "No se pudo cambiar el estado de Smart Contacts",
-        "created": "Se creó \"{{name}}\"",
-        "createFailed": "No se pudo crear el contacto",
-        "deleted": "Se eliminó \"{{name}}\"",
-        "deleteFailed": "No se pudo eliminar el contacto",
-        "saved": "Guardado",
-        "saveFailed": "No se pudo guardar",
-        "confirmFailed": "No se pudo confirmar la entrada",
-        "identityAddFailed": "No se pudo agregar la identidad",
-        "identityRemoveFailed": "No se pudo eliminar la identidad",
-        "eventAddFailed": "No se pudo agregar el evento",
-        "eventDeleteFailed": "No se pudo eliminar el evento",
-        "groupAddFailed": "No se pudo agregar al grupo",
-        "groupRemoveFailed": "No se pudo quitar del grupo",
-        "relationAddFailed": "No se pudo agregar la relación",
-        "relationRemoveFailed": "No se pudo eliminar la relación"
-      },
-      "manage": "Administrar",
-      "manager": {
-        "title": "Smart Contacts",
-        "closeAria": "Cerrar"
-      },
-      "merge": {
-        "button": "Fusionar duplicado",
-        "buttonAria": "Fusionar contacto duplicado",
-        "hint": "Elige un duplicado para fusionar sus identidades, eventos y relaciones en \"{{target}}\" y luego eliminarlo.",
-        "searchPlaceholder": "Buscar duplicados…",
-        "confirmTitle": "¿Fusionar \"{{source}}\" en \"{{target}}\"?",
-        "confirmDescription": "Se transferirán todas las identidades, los eventos, las relaciones y los grupos de \"{{source}}\", y se eliminará su perfil. Esta acción no se puede deshacer.",
-        "confirm": "Fusionar",
-        "success": "Se fusionó \"{{source}}\" en \"{{target}}\"",
-        "failed": "Error al fusionar"
-      },
-      "import": {
-        "title": "Importar contactos",
-        "button": "Importar",
-        "pickHint": "Importación masiva desde una fuente externa. Las entradas cuyo correo o teléfono coincida con un perfil existente se fusionan automáticamente (sin duplicados); los nombres similares pasan a una lista de revisión manual.",
-        "sourceSystem": "Contactos del sistema",
-        "sourceSystemDesc": "Solo lectura; requiere permiso del sistema la primera vez",
-        "sourceVcf": "Archivo vCard",
-        "sourceVcfDesc": ".vcf (formato estándar de exportación de contactos)",
-        "emptySource": "No hay contactos importables en esta fuente",
-        "permissionDenied": "Acceso a los contactos denegado: permítelo en Configuración del Sistema → Privacidad y seguridad → Automatización",
-        "systemReadFailed": "No se pudieron leer los contactos del sistema",
-        "vcfParseFailed": "No se pudo analizar el archivo vCard",
-        "selectedCount": "{{checked}} / {{total}} seleccionados",
-        "groupPlaceholder": "Agregar a un grupo después de importar (opcional; se creará si no existe)",
-        "run": "Importar {{count}}",
-        "running": "Importando…",
-        "failed": "Importación fallida",
-        "doneSummary": "Importación finalizada: {{created}} creados, {{enriched}} fusionados con perfiles existentes y {{orgs}} organizaciones creadas.",
-        "needsReview": "{{count}} entradas tienen nombres similares a perfiles existentes y no se importaron. Revísalas: {{names}}",
-        "identityConflicts": "{{count}} registros tenían identidades que ya pertenecían a otros contactos ({{names}}) y no se fusionaron. Revísalos en el administrador para decidir si quieres fusionarlos",
-        "relationErrors": "No se pudieron crear {{count}} relaciones laborales ({{names}})",
-        "skipped": "Se omitieron {{count}} entradas (no válidas o con errores)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "Esta identidad ya pertenece a otro contacto. Actualiza ese perfil o fusiónalos primero.",
-        "PERMISSION_DENIED": "Acceso a los contactos no autorizado. Permítelo en Configuración del Sistema > Privacidad y seguridad > Automatización.",
-        "UNSUPPORTED_CAPABILITY": "Esta acción no es compatible con esta plataforma.",
-        "NOT_FOUND": "El destino ya no existe.",
-        "ALREADY_EXISTS": "Ya existe un elemento con el mismo nombre o contenido.",
-        "INVALID_PARAMS": "Entrada no válida. Por favor verifique e intente nuevamente.",
-        "INTERNAL": "La operación falló. Inténtelo de nuevo más tarde."
-      },
-      "guide": {
-        "hint": "Deja que la IA te ayude a agregar perfiles de contactos, revisar entradas pendientes y eliminar duplicados.",
-        "cta": "Administrar contactos con IA",
-        "managementPrompt": "Ayúdame a administrar mis Smart Contacts. Primero revisa el estado actual y las herramientas disponibles, y luego guíame para agregar contactos útiles, revisar duplicados y gestionar entradas pendientes. Pídeme permiso antes de escribir, fusionar o eliminar cualquier dato."
       }
     },
     "remotePermission": {
@@ -14900,6 +14708,7 @@
           "hint": "Hasta 3 en el encabezado; los PR fijados aparecen primero",
           "empty": "Pega un enlace de PR de GitHub para agregarlo",
           "removed": "Enlaces quitados: {{count}}",
+          "legacy": "Referencias sin confirmar: {{count}}",
           "addLabel": "Agregar enlace de PR",
           "add": "Agregar PR",
           "loading": "Cargando…",
@@ -15232,6 +15041,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Automatizaciones del repositorio encontradas en {{projectName}}",
+        "review": "Revisar importación",
+        "title": "Importar automatizaciones del repositorio",
+        "description": "Origen: {{workingDir}}. Revisa las definiciones siguientes. La importación aplica estos cambios y activa las nuevas automatizaciones, que pueden ejecutar comandos e iniciar Agents con acceso completo. Importa solo contenido de confianza.",
+        "accept": "Confirmar importación",
+        "removed": "Se eliminarán: {{names}}"
+      },
       "toast": {
         "summary": "Agregados: {{inserted}} · actualizados: {{updated}} · eliminados: {{deleted}}",
         "installed": "Automatización del proyecto instalada para {{projectName}} ({{summary}})",
@@ -15406,6 +15223,7 @@
         "timeout": "Tiempo de espera (segundos, opcional)",
         "timeoutPlaceholder": "Sin tiempo de espera",
         "capabilities": {
+          "github_read": "Leer GitHub",
           "jira_read": "Leer Jira",
           "jira_comment": "Comentar en Jira",
           "sessions_dispatch": "Enviar sesiones",
@@ -15417,6 +15235,7 @@
         "capabilitiesSearch": "Buscar capacidades",
         "capabilitiesEmpty": "No hay capacidades que coincidan",
         "capabilityDescs": {
+          "github_read": "Leer PR, CI, revisiones y cambios observados sin vincular tareas",
           "jira_read": "Leer incidencias de Jira (obtener por clave / búsqueda JQL)",
           "jira_comment": "Agregar comentarios a incidencias de Jira",
           "sessions_dispatch": "Crear o reactivar sesiones de {{appName}} y entregar mensajes",

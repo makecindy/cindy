@@ -192,7 +192,9 @@ import type { InputProjection, PendingInteraction, RemoteMessage } from '@/sessi
 import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 import { meterDeviceLinkInvokes, recordDeviceLinkPush } from '@/debug/deviceLinkTraffic';
 import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
-import { jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPushHandled } from '@/debug/jankMetrics';
+import { gunzipBase64OffThread } from '@/utils/gunzipOffThread';
+import { createLowPriorityReadGate, isLowPriorityRead, type LowPriorityReadGate } from './lowPriorityReadGate';
+import { invokeMetricLabel, jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPushHandled } from '@/debug/jankMetrics';
 import { localNetworkStore, type NetworkState } from '@/device-link/localNetworkStatus';
 
 export interface DeviceLinkConnectionState {
@@ -257,6 +259,16 @@ export interface DeviceLinkContextValue {
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
 const recoveryDiagnostics = new WeakMap<DeviceLinkClient, ReturnType<typeof createRecoveryDiagnostics>>();
+/** Per client, so a queued read can never join across an account or transport change. */
+const lowPriorityReadGates = new WeakMap<DeviceLinkClient, LowPriorityReadGate>();
+function lowPriorityReadGateFor(client: DeviceLinkClient): LowPriorityReadGate {
+  let gate = lowPriorityReadGates.get(client);
+  if (!gate) {
+    gate = createLowPriorityReadGate();
+    lowPriorityReadGates.set(client, gate);
+  }
+  return gate;
+}
 
 /**
  * 本控制端声明的端到端可选能力(link-open 与 subscribe 两处共用同一份,漏一处会让
@@ -1052,8 +1064,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       createWebSocket: createRnWebSocket,
       logger: mobileDeviceLinkLogger,
       // 弱网减流量：声明可解 gzip，大结果压缩、内容未变的结果只回标记（被控端支持时）。
-      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded },
-      invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer },
+      // 大结果在后台 runtime 解压，不占 JS 线程；不可用时内部回落 pako。
+      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded, gunzipBase64Async: gunzipBase64OffThread },
+      invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer, label: invokeMetricLabel },
       // Mobile 具备按 deviceId 独立 openLink/订阅/快照恢复能力。可靠 ACK
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有
       // Desktop 版本都支持的 link-open，不增加 wire/capability 要求。
@@ -1737,7 +1750,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     };
     preSend();
     const client = requireClient(clientRef.current);
-    const result = await invokeWithHistoryViewCapability(
+    const send = () => invokeWithHistoryViewCapability(
       channel,
       async () => {
         // Reuse the existing peer-scoped handshake cache and its invalidation.
@@ -1762,6 +1775,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background });
       },
     );
+    const result = isLowPriorityRead(channel)
+      // A caller's own preSend can cancel only its own read, so it must not share one.
+      ? await lowPriorityReadGateFor(client).run(
+        opts?.preSend ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
+      )
+      : await send();
     // Existing list refreshes also reconcile optional project display names. This read
     // is single-flight and never changes task-list success or connection recovery.
     if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);

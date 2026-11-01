@@ -4860,9 +4860,6 @@
         "title": "群聊参与模式",
         "hint": "bot 进过的群会出现在这里。「全响应」= 每条消息都看，bot 自己判断要不要插话（每条都会消耗 token）。",
         "empty": "还没有群。把 bot 拉进群、有人说话后就会出现在这里。",
-        "contactsOn": "群里说话的人会自动记入智能通讯录（总开关已开启）。",
-        "contactsOff": "智能通讯录未开启，群里说话的人不会被自动记住。",
-        "contactsEnable": "开启",
         "error": {
           "load": "未能读取 Telegram 群列表，请检查连接后重试。",
           "save": "群参与模式未保存，已恢复上次确认的模式。",
@@ -5719,10 +5716,6 @@
         "ssh": {
           "name": "SSH 远程命令",
           "description": "通过本机配置的 SSH 连接在远程电脑上执行命令。"
-        },
-        "contacts": {
-          "name": "智能通讯录",
-          "description": "查询、整理联系人资料与交往记录。"
         }
       }
     },
@@ -6208,9 +6201,6 @@
             "title": "群聊参与模式",
             "hint": "官方 bot 见过的群会出现在这里。「全响应」仅对已绑定账号的每条发言生效；其他成员只进入本机群聊上下文，不会触发任务。",
             "empty": "还没有群。把 bot 拉进群，并用已绑定账号发一条消息后就会出现在这里。",
-            "contactsOn": "群里其他发言人会自动记入智能通讯录。",
-            "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
-            "contactsEnable": "开启",
             "error": {
               "load": "未能读取 Telegram 群列表，请检查连接后重试。",
               "save": "群参与模式未保存，已恢复上次确认的模式。",
@@ -8288,186 +8278,6 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
-      }
-    },
-    "contacts": {
-      "title": "智能通讯录",
-      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。数据默认只保存在本机，也可由你开启设备间同步；查询与整理会经由你自己的模型处理。",
-      "enable": {
-        "label": "启用智能通讯录",
-        "description": "开启后 Agent 可以查询并自动采集人物信息(不确定的条目会进入待确认)。关闭不影响在此浏览和管理已有数据。",
-        "toggleAria": "切换智能通讯录"
-      },
-      "sync": {
-        "label": "在我的设备之间同步",
-        "description": "在需要参与的每台桌面设备上开启一次。设备在线时自动同步；同一局域网优先直连，否则发送端到端加密的中转数据。纯程序比对，不调用模型，也不产生 token 消耗。",
-        "toggleAria": "切换通讯录设备同步",
-        "syncNow": "立即同步",
-        "onlineDevices_other": "{{count}} 台其他设备在线",
-        "route": {
-          "lan": "局域网直连",
-          "relay": "加密中转"
-        },
-        "status": {
-          "loading": "正在读取同步状态…",
-          "signInRequired": "登录 Cindy 账号后可在设备间同步",
-          "off": "同步已关闭",
-          "waiting": "等待其他已开启同步的桌面设备上线",
-          "syncing": "正在安全同步…",
-          "ready": "已准备好，设备上线后会自动同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "系统安全存储不可用，无法保护设备私钥",
-          "peer-identity-changed": "设备身份发生变化，已暂停同步以保护数据",
-          "sync-failed": "同步失败，将在设备下次在线时重试"
-        },
-        "toast": {
-          "enabled": "设备同步已开启",
-          "disabled": "设备同步已关闭"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 组织 / {{groups}} 分组",
-      "kind": {
-        "person": "人物",
-        "org": "组织"
-      },
-      "filters": {
-        "all": "全部",
-        "person": "人物",
-        "org": "组织",
-        "pending": "待确认"
-      },
-      "list": {
-        "searchPlaceholder": "搜索姓名 / 邮箱 / 关键词",
-        "newAria": "新建联系人",
-        "newNamePlaceholder": "姓名或组织名",
-        "newKindAria": "切换类型(人物 / 组织)",
-        "newConfirm": "创建",
-        "groupFilterAria": "按分组筛选",
-        "groupFilterAll": "全部分组",
-        "loadMore": "加载更多",
-        "noResults": "没有匹配的联系人",
-        "empty": "通讯录还是空的。开启后 Agent 会在工作中自动沉淀，也可以点右上角 + 手动添加。"
-      },
-      "detail": {
-        "empty": "在左侧选择一个联系人查看档案",
-        "pendingBanner": "这是 Agent 低置信采集的条目，请确认是否入册。",
-        "pendingConfirm": "确认入册",
-        "pendingDiscard": "丢弃",
-        "nameAria": "显示名",
-        "deleteAria": "删除档案",
-        "summaryPlaceholder": "一行简介",
-        "identities": "身份",
-        "identityRemoveAria": "移除身份 {{value}}",
-        "identityPlatformAria": "平台",
-        "identityValuePlaceholder": "邮箱 / 平台 id / handle",
-        "identityAddAria": "添加身份",
-        "narrative": "关系与背景",
-        "narrativePlaceholder": "与你的关系、协作历史、背景信息(Markdown)",
-        "agentNotes": "给 Agent 的指令",
-        "agentNotesPlaceholder": "例如：这是老板的私人邮箱，勿群发",
-        "events": "事件记录",
-        "eventsEmpty": "还没有事件记录",
-        "eventDeleteAria": "删除事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "发生了什么",
-        "eventAddAria": "添加事件",
-        "groups": "分组",
-        "groupRemoveAria": "从分组 {{name}} 移除",
-        "groupAddAria": "加入分组",
-        "groupAddPlaceholder": "加入分组…",
-        "discardChanges": "放弃修改",
-        "save": "保存",
-        "identitiesEmpty": "还没有身份记录",
-        "relations": "关联",
-        "relationsEmpty": "还没有关联(所属组织 / 相关人物)",
-        "relationAddAria": "添加关联",
-        "relationRemoveAria": "移除与 {{name}} 的关联",
-        "relationVerbPlaceholder": "任职 / 家人…",
-        "relationTargetAria": "选择关联对象",
-        "relationTargetPlaceholder": "选择人或组织…",
-        "relationNotePlaceholder": "备注(职位…)"
-      },
-      "deleteConfirm": {
-        "title": "删除「{{name}}」？",
-        "description": "将同时删除其全部身份、事件记录与分组关系，不可恢复。",
-        "confirm": "删除",
-        "cancel": "取消"
-      },
-      "toast": {
-        "enabled": "智能通讯录已启用",
-        "disabled": "智能通讯录已关闭",
-        "codexRefreshDeferred": "开关已保存，但 Codex 正忙：将在重启应用后对 Codex 任务生效",
-        "toggleFailed": "切换智能通讯录失败",
-        "created": "已创建「{{name}}」",
-        "createFailed": "创建失败",
-        "deleted": "已删除「{{name}}」",
-        "deleteFailed": "删除失败",
-        "saved": "已保存",
-        "saveFailed": "保存失败",
-        "confirmFailed": "确认入册失败",
-        "identityAddFailed": "添加身份失败",
-        "identityRemoveFailed": "移除身份失败",
-        "eventAddFailed": "添加事件失败",
-        "eventDeleteFailed": "删除事件失败",
-        "groupAddFailed": "加入分组失败",
-        "groupRemoveFailed": "移出分组失败",
-        "relationAddFailed": "添加关联失败",
-        "relationRemoveFailed": "移除关联失败"
-      },
-      "manage": "管理",
-      "manager": {
-        "title": "智能通讯录",
-        "closeAria": "关闭"
-      },
-      "merge": {
-        "button": "合并重复档案",
-        "buttonAria": "合并重复档案",
-        "hint": "选择一份重复档案，将其身份、事件、关联并入「{{target}}」后删除。",
-        "searchPlaceholder": "搜索重复档案…",
-        "confirmTitle": "把「{{source}}」并入「{{target}}」？",
-        "confirmDescription": "「{{source}}」的身份、事件、关联、分组将全部迁入，其档案随后删除，不可恢复。",
-        "confirm": "合并",
-        "success": "已把「{{source}}」并入「{{target}}」",
-        "failed": "合并失败"
-      },
-      "import": {
-        "title": "导入联系人",
-        "button": "导入",
-        "pickHint": "从外部来源批量导入。邮箱/电话与已有档案相同的会自动并入(不产生重复)；名字相似的会列入待人工确认清单。",
-        "sourceSystem": "系统通讯录",
-        "sourceSystemDesc": "只读拉取，首次需系统授权",
-        "sourceVcf": "vCard 文件",
-        "sourceVcfDesc": ".vcf(通讯录导出的通用格式)",
-        "emptySource": "来源里没有可导入的联系人",
-        "permissionDenied": "未获通讯录授权：请在 系统设置 → 隐私与安全性 → 自动化 中允许访问",
-        "systemReadFailed": "读取系统通讯录失败",
-        "vcfParseFailed": "解析 vCard 文件失败",
-        "selectedCount": "已选 {{checked}} / {{total}}",
-        "groupPlaceholder": "导入后归入分组(可选，不存在则创建)",
-        "run": "导入 {{count}} 条",
-        "running": "导入中…",
-        "failed": "导入失败",
-        "doneSummary": "导入完成：新建 {{created}} 人，并入已有档案 {{enriched}} 条，新建组织 {{orgs}} 个。",
-        "needsReview": "{{count}} 条与现有档案名字相似，未自动导入，请人工确认：{{names}}",
-        "identityConflicts": "{{count}} 条记录的部分身份已属于其他联系人（{{names}}），未并入——请在管理界面确认是否为同一人并合并",
-        "relationErrors": "{{count}} 条任职关系未能建立（{{names}}）",
-        "skipped": "{{count}} 条被跳过(无效或出错)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "该身份已属于另一个联系人，请改为更新既有档案或先合并",
-        "PERMISSION_DENIED": "系统通讯录访问未授权，请在 系统设置 > 隐私与安全性 > 自动化 中允许",
-        "UNSUPPORTED_CAPABILITY": "当前平台不支持此操作",
-        "NOT_FOUND": "目标不存在或已被删除",
-        "ALREADY_EXISTS": "已存在同名或相同内容的条目",
-        "INVALID_PARAMS": "输入无效，请检查后重试",
-        "INTERNAL": "操作失败，请稍后重试"
-      },
-      "guide": {
-        "hint": "让 AI 帮你补充联系人档案、处理待确认项并整理重复信息。",
-        "cta": "让 AI 帮你管理通讯录",
-        "managementPrompt": "帮我管理智能通讯录。先检查当前状态和已有工具，再带我补充联系人、整理重复项和待确认项；任何写入、合并或删除前先让我确认。"
       }
     },
     "remotePermission": {
@@ -14660,6 +14470,7 @@
           "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
           "empty": "粘贴 GitHub PR 链接即可添加",
           "removed": "已移除 {{count}} 个",
+          "legacy": "未确认的历史引用：{{count}}",
           "addLabel": "添加 PR 链接",
           "add": "添加 PR",
           "loading": "正在读取…",
@@ -14989,6 +14800,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "项目「{{projectName}}」中发现待导入的自动任务",
+        "review": "查看导入内容",
+        "title": "导入仓库自动任务",
+        "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增自动任务，它们可以执行命令、启动完全访问权限的 Agent。请仅导入你信任的内容。",
+        "accept": "确认导入",
+        "removed": "将删除：{{names}}"
+      },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 删除 {{deleted}}",
         "installed": "项目「{{projectName}}」自动化已安装（{{summary}}）",
@@ -15163,6 +14982,7 @@
         "timeout": "超时（秒，可选）",
         "timeoutPlaceholder": "不限制",
         "capabilities": {
+          "github_read": "读取 GitHub",
           "jira_read": "读取 Jira",
           "jira_comment": "评论 Jira",
           "sessions_dispatch": "派发任务",
@@ -15174,6 +14994,7 @@
         "capabilitiesSearch": "搜索能力",
         "capabilitiesEmpty": "没有匹配的能力",
         "capabilityDescs": {
+          "github_read": "读取 PR、CI、评审与观察到的变化；查询不会关联任务",
           "jira_read": "查询与读取 Jira 单（按 key 读取 / JQL 搜索）",
           "jira_comment": "向 Jira 单添加评论",
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",

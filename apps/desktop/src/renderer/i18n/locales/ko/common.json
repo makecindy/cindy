@@ -4860,9 +4860,6 @@
         "title": "그룹 참여 모드",
         "hint": "봇이 들어간 그룹이 여기에 표시됩니다. \"활성\" = 모든 메시지를 읽고 끼어들지 스스로 판단합니다(메시지마다 토큰 소모).",
         "empty": "아직 그룹이 없습니다. 봇을 그룹에 추가하고 누군가 말하면 표시됩니다.",
-        "contactsOn": "그룹에서 말한 사람은 스마트 연락처에 자동 등록됩니다(마스터 스위치 켜짐).",
-        "contactsOff": "스마트 연락처가 꺼져 있어 그룹에서 말한 사람이 자동으로 기억되지 않습니다.",
-        "contactsEnable": "켜기",
         "error": {
           "load": "Telegram 그룹을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
           "save": "그룹 참여 모드를 저장하지 못했습니다. 마지막으로 확인된 모드로 복원했습니다.",
@@ -5719,10 +5716,6 @@
         "ssh": {
           "name": "SSH 명령",
           "description": "설정된 SSH 연결로 원격 컴퓨터에서 명령을 실행합니다."
-        },
-        "contacts": {
-          "name": "스마트 연락처",
-          "description": "연락처 프로필과 교류 기록을 검색하고 관리합니다."
         }
       }
     },
@@ -6208,9 +6201,6 @@
             "title": "그룹 참여 모드",
             "hint": "공식 봇이 본 그룹이 표시됩니다. 활성 모드는 연결된 계정의 모든 발언에만 적용되며, 다른 멤버의 발언은 로컬 문맥에만 추가되고 작업을 시작할 수 없습니다.",
             "empty": "아직 그룹이 없습니다. 봇을 추가하고 연결된 계정으로 메시지를 보내세요.",
-            "contactsOn": "그룹의 다른 발언자는 스마트 연락처에 자동 등록됩니다.",
-            "contactsOff": "스마트 연락처가 꺼져 있어 다른 멤버가 자동 등록되지 않습니다.",
-            "contactsEnable": "켜기",
             "error": {
               "load": "Telegram 그룹을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
               "save": "그룹 참여 모드를 저장하지 못했습니다. 마지막으로 확인된 모드로 복원했습니다.",
@@ -8288,186 +8278,6 @@
         "title": "\"{{name}}\"을(를) 삭제할까요?",
         "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
         "confirm": "삭제"
-      }
-    },
-    "contacts": {
-      "title": "스마트 연락처",
-      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 기본적으로 이 기기에만 저장되며 필요할 때 기기 간 동기화를 켤 수 있습니다. 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
-      "enable": {
-        "label": "스마트 연락처 사용",
-        "description": "켜면 에이전트가 연락처 정보를 조회하고 자동으로 수집할 수 있습니다(불확실한 항목은 확인 대기로 이동). 꺼도 여기에서 기존 데이터를 보고 관리하는 데는 영향이 없습니다.",
-        "toggleAria": "스마트 연락처 전환"
-      },
-      "sync": {
-        "label": "내 기기 간 동기화",
-        "description": "참여할 각 데스크톱에서 한 번 켜세요. 온라인 기기는 자동으로 동기화하며, 같은 로컬 네트워크에서는 직접 연결을 우선합니다. 그 외에는 종단 간 암호화된 릴레이 데이터를 사용합니다. 비교는 프로그램으로만 처리되어 모델이나 token을 사용하지 않습니다.",
-        "toggleAria": "연락처 기기 동기화 전환",
-        "syncNow": "지금 동기화",
-        "onlineDevices_other": "다른 기기 {{count}}대 온라인",
-        "route": {
-          "lan": "로컬 네트워크",
-          "relay": "암호화 릴레이"
-        },
-        "status": {
-          "loading": "동기화 상태 확인 중…",
-          "signInRequired": "기기 간 동기화를 사용하려면 Cindy 계정에 로그인하세요",
-          "off": "동기화 꺼짐",
-          "waiting": "동기화를 켠 다른 데스크톱 기기가 온라인이 되기를 기다리는 중",
-          "syncing": "안전하게 동기화 중…",
-          "ready": "준비됨 — 기기가 온라인이 되면 자동으로 동기화합니다",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "시스템 보안 저장소를 사용할 수 없어 기기 비밀 키를 보호할 수 없습니다",
-          "peer-identity-changed": "기기 식별 정보가 변경되어 데이터 보호를 위해 동기화를 중지했습니다",
-          "sync-failed": "동기화에 실패했습니다. 다음에 기기가 온라인이 되면 다시 시도합니다"
-        },
-        "toast": {
-          "enabled": "기기 동기화를 켰습니다",
-          "disabled": "기기 동기화를 껐습니다"
-        }
-      },
-      "stats": "{{people}}명 / 조직 {{orgs}}개 / 그룹 {{groups}}개",
-      "kind": {
-        "person": "인물",
-        "org": "조직"
-      },
-      "filters": {
-        "all": "전체",
-        "person": "인물",
-        "org": "조직",
-        "pending": "확인 대기"
-      },
-      "list": {
-        "searchPlaceholder": "이름 / 이메일 / 키워드 검색",
-        "newAria": "새 연락처",
-        "newNamePlaceholder": "이름 또는 조직명",
-        "newKindAria": "유형 전환(인물 / 조직)",
-        "newConfirm": "만들기",
-        "groupFilterAria": "그룹별 필터",
-        "groupFilterAll": "모든 그룹",
-        "loadMore": "더 불러오기",
-        "noResults": "일치하는 연락처가 없습니다",
-        "empty": "연락처가 아직 비어 있습니다. 사용을 켜면 에이전트가 작업 중 자동으로 수집합니다. 오른쪽 위 + 로 직접 추가할 수도 있습니다."
-      },
-      "detail": {
-        "empty": "왼쪽에서 연락처를 선택하면 프로필이 표시됩니다",
-        "pendingBanner": "에이전트가 낮은 확신도로 수집한 항목입니다. 등록 여부를 확인해 주세요.",
-        "pendingConfirm": "등록",
-        "pendingDiscard": "버리기",
-        "nameAria": "표시 이름",
-        "deleteAria": "연락처 삭제",
-        "summaryPlaceholder": "한 줄 소개",
-        "identities": "계정",
-        "identityRemoveAria": "계정 {{value}} 제거",
-        "identityPlatformAria": "플랫폼",
-        "identityValuePlaceholder": "이메일 / 플랫폼 id / 핸들",
-        "identityAddAria": "계정 추가",
-        "narrative": "관계와 배경",
-        "narrativePlaceholder": "나와의 관계, 협업 이력, 배경 정보(Markdown)",
-        "agentNotes": "에이전트 지침",
-        "agentNotesPlaceholder": "예: 상사의 개인 이메일이므로 단체 발송 금지",
-        "events": "이벤트 기록",
-        "eventsEmpty": "아직 이벤트가 없습니다",
-        "eventDeleteAria": "이벤트 삭제",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "무슨 일이 있었나요",
-        "eventAddAria": "이벤트 추가",
-        "groups": "그룹",
-        "groupRemoveAria": "그룹 {{name}}에서 제거",
-        "groupAddAria": "그룹에 추가",
-        "groupAddPlaceholder": "그룹에 추가…",
-        "discardChanges": "변경 취소",
-        "save": "저장",
-        "identitiesEmpty": "아직 계정이 없습니다",
-        "relations": "연결",
-        "relationsEmpty": "아직 연결이 없습니다(소속 조직 / 관련 인물)",
-        "relationAddAria": "연결 추가",
-        "relationRemoveAria": "{{name}}와(과)의 연결 제거",
-        "relationVerbPlaceholder": "재직 / 가족…",
-        "relationTargetAria": "연결할 연락처 선택",
-        "relationTargetPlaceholder": "인물 또는 조직 선택…",
-        "relationNotePlaceholder": "메모(직책…)"
-      },
-      "deleteConfirm": {
-        "title": "\"{{name}}\"을(를) 삭제할까요?",
-        "description": "모든 계정, 이벤트 기록, 그룹 소속이 함께 삭제되며 되돌릴 수 없습니다.",
-        "confirm": "삭제",
-        "cancel": "취소"
-      },
-      "toast": {
-        "enabled": "스마트 연락처를 켰습니다",
-        "disabled": "스마트 연락처를 껐습니다",
-        "codexRefreshDeferred": "설정은 저장되었지만 Codex가 사용 중입니다. Codex 세션에는 앱 재시작 후 적용됩니다",
-        "toggleFailed": "스마트 연락처 전환에 실패했습니다",
-        "created": "\"{{name}}\"을(를) 만들었습니다",
-        "createFailed": "만들기에 실패했습니다",
-        "deleted": "\"{{name}}\"을(를) 삭제했습니다",
-        "deleteFailed": "삭제에 실패했습니다",
-        "saved": "저장했습니다",
-        "saveFailed": "저장에 실패했습니다",
-        "confirmFailed": "등록 확인에 실패했습니다",
-        "identityAddFailed": "계정 추가에 실패했습니다",
-        "identityRemoveFailed": "계정 제거에 실패했습니다",
-        "eventAddFailed": "이벤트 추가에 실패했습니다",
-        "eventDeleteFailed": "이벤트 삭제에 실패했습니다",
-        "groupAddFailed": "그룹 추가에 실패했습니다",
-        "groupRemoveFailed": "그룹 제거에 실패했습니다",
-        "relationAddFailed": "연결 추가에 실패했습니다",
-        "relationRemoveFailed": "연결 제거에 실패했습니다"
-      },
-      "manage": "관리",
-      "manager": {
-        "title": "스마트 연락처",
-        "closeAria": "닫기"
-      },
-      "merge": {
-        "button": "중복 병합",
-        "buttonAria": "중복 연락처 병합",
-        "hint": "중복 연락처를 선택하면 해당 계정·이벤트·연결을 \"{{target}}\"에 병합한 뒤 삭제합니다.",
-        "searchPlaceholder": "중복 검색…",
-        "confirmTitle": "\"{{source}}\"을(를) \"{{target}}\"에 병합할까요?",
-        "confirmDescription": "\"{{source}}\"의 계정, 이벤트, 연결, 그룹이 모두 이전되고 해당 프로필은 삭제되며 되돌릴 수 없습니다.",
-        "confirm": "병합",
-        "success": "\"{{source}}\"을(를) \"{{target}}\"에 병합했습니다",
-        "failed": "병합에 실패했습니다"
-      },
-      "import": {
-        "title": "연락처 가져오기",
-        "button": "가져오기",
-        "pickHint": "외부 소스에서 일괄 가져오기합니다. 이메일/전화가 기존 프로필과 일치하는 항목은 자동으로 병합되고(중복 없음), 이름이 비슷한 항목은 수동 확인 목록으로 이동합니다.",
-        "sourceSystem": "시스템 연락처",
-        "sourceSystemDesc": "읽기 전용. 처음 사용 시 시스템 권한 필요",
-        "sourceVcf": "vCard 파일",
-        "sourceVcfDesc": ".vcf(연락처 내보내기 표준 형식)",
-        "emptySource": "이 소스에 가져올 연락처가 없습니다",
-        "permissionDenied": "연락처 접근이 거부되었습니다 — 시스템 설정 → 개인정보 보호 및 보안 → 자동화에서 허용해 주세요",
-        "systemReadFailed": "시스템 연락처를 읽지 못했습니다",
-        "vcfParseFailed": "vCard 파일 분석에 실패했습니다",
-        "selectedCount": "{{checked}} / {{total}}개 선택됨",
-        "groupPlaceholder": "가져온 후 그룹에 추가(선택 사항, 없으면 생성)",
-        "run": "{{count}}개 가져오기",
-        "running": "가져오는 중…",
-        "failed": "가져오기에 실패했습니다",
-        "doneSummary": "가져오기 완료: 신규 {{created}}명, 기존 프로필에 병합 {{enriched}}건, 조직 {{orgs}}개 생성.",
-        "needsReview": "{{count}}건은 기존 프로필과 이름이 비슷하여 가져오지 않았습니다. 확인해 주세요: {{names}}",
-        "identityConflicts": "{{count}}개 레코드의 일부 ID가 이미 다른 연락처에 속해 있어 병합되지 않았습니다({{names}}). 관리 화면에서 동일인 여부를 확인해 병합하세요",
-        "relationErrors": "{{count}}개의 재직 관계를 만들지 못했습니다({{names}})",
-        "skipped": "{{count}}건을 건너뛰었습니다(무효 또는 오류)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "이 ID는 이미 다른 연락처에 등록되어 있습니다. 기존 프로필을 업데이트하거나 먼저 병합하세요.",
-        "PERMISSION_DENIED": "연락처 접근 권한이 없습니다. 시스템 설정 > 개인정보 보호 및 보안 > 자동화에서 허용하세요.",
-        "UNSUPPORTED_CAPABILITY": "현재 플랫폼에서는 지원되지 않는 작업입니다.",
-        "NOT_FOUND": "대상이 존재하지 않거나 이미 삭제되었습니다.",
-        "ALREADY_EXISTS": "같은 이름 또는 내용의 항목이 이미 존재합니다.",
-        "INVALID_PARAMS": "입력이 잘못되었습니다. 확인 후 다시 시도하세요.",
-        "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
-      },
-      "guide": {
-        "hint": "AI의 안내로 연락처 프로필을 추가하고, 보류 항목을 검토하며, 중복 정보를 정리하세요.",
-        "cta": "AI로 연락처 관리",
-        "managementPrompt": "스마트 연락처를 관리해 주세요. 먼저 현재 상태와 이미 사용할 수 있는 도구를 확인한 뒤 필요한 연락처 추가, 중복 항목 정리, 보류 항목 검토를 단계별로 안내해 주세요. 쓰기, 병합 또는 삭제 전에는 반드시 제 확인을 받아 주세요."
       }
     },
     "remotePermission": {
@@ -14660,6 +14470,7 @@
           "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
           "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
           "removed": "제거됨: {{count}}개",
+          "legacy": "미확인 참조: {{count}}",
           "addLabel": "PR 링크 추가",
           "add": "PR 추가",
           "loading": "불러오는 중…",
@@ -14989,6 +14800,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "{{projectName}}에서 가져올 자동화를 찾았습니다",
+        "review": "내용 검토",
+        "title": "저장소 자동화 가져오기",
+        "description": "출처: {{workingDir}}. 아래 설정을 확인하세요. 가져오면 변경 사항이 적용되고 새 자동화가 활성화됩니다. 명령을 실행하고 전체 액세스 권한으로 Agent를 시작할 수 있으므로 신뢰하는 내용만 가져오세요.",
+        "accept": "가져오기 확인",
+        "removed": "삭제 예정: {{names}}"
+      },
       "toast": {
         "summary": "추가 {{inserted}} · 업데이트 {{updated}} · 삭제 {{deleted}}",
         "installed": "{{projectName}} 프로젝트 자동화가 설치되었습니다 ({{summary}})",
@@ -15163,6 +14982,7 @@
         "timeout": "제한 시간(초, 선택 사항)",
         "timeoutPlaceholder": "제한 없음",
         "capabilities": {
+          "github_read": "GitHub 읽기",
           "jira_read": "Jira 읽기",
           "jira_comment": "Jira 댓글 작성",
           "sessions_dispatch": "세션 디스패치",
@@ -15174,6 +14994,7 @@
         "capabilitiesSearch": "기능 검색",
         "capabilitiesEmpty": "일치하는 기능이 없습니다",
         "capabilityDescs": {
+          "github_read": "PR, CI, 리뷰 및 관찰된 변경 사항 읽기. 작업에 연결하지 않습니다",
           "jira_read": "Jira 이슈 조회·읽기(키 조회 / JQL 검색)",
           "jira_comment": "Jira 이슈에 댓글 추가",
           "sessions_dispatch": "{{appName}} 세션 생성·재개 및 메시지 전달",

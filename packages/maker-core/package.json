@@ -9,7 +9,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./customization-scanner": "./src/agents/shared/customization-worker-api.ts",
-    "./contacts-sync-worker": "./src/contacts/sync/worker-api.ts",
     "./pi-extension-ui": "./src/agents/pi/extension-ui-capabilities.ts",
     "./pi-subagent-runs": "./src/agents/pi/pi-subagent-runs.ts",
     "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts"

@@ -58,6 +58,27 @@ const glanceTodo = {
 };
 
 export function teammateVisualFixture(channel: string, args: unknown[], now = FIXTURE_NOW): unknown {
+  if (channel === 'local-db:bots:get' && args[0] === 'visual-bot-b2b') return {
+    id: 'visual-bot-b2b', canonicalSessionId: 'visual-teammate-b2b',
+    sessions: [{ id: 'visual-teammate-b2b', role: 'canonical', status: 'active' }],
+  };
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL
+    && (args[0] as { ref?: { id?: string } })?.ref?.id === 'visual-bot-b2b') return {
+    ref: { collectionId: TEAMMATES, kind: 'bot', id: 'visual-bot-b2b' }, revision: 'b2b-1',
+    display: { title: 'Cindy · 内部通讯', avatar: teammates[0]!.avatar }, actions: [], blocks: [],
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'visual-teammate-b2b' } }],
+  };
+  if (channel === 'maker:bot-direct-message-thread:get' && args[0] === 'visual-b2b-thread') return {
+    ok: true, thread: {
+      id: 'visual-b2b-thread', botAId: 'visual-bot-b2b', botAName: 'Cindy', botBId: 'visual-bot-lizi', botBName: 'LiZi',
+      status: 'active', closeReason: null, messageCount: 2, maxMessages: 12,
+      createdAt: now - 90000, updatedAt: now - 70000, closedAt: null,
+      messages: [
+        { id: 'b2b-in', sequence: 1, senderBotId: 'visual-bot-lizi', senderBotName: 'LiZi', recipientBotId: 'visual-bot-b2b', recipientBotName: 'Cindy', content: '请核对版式。', createdAt: now - 90000 },
+        { id: 'b2b-out', sequence: 2, senderBotId: 'visual-bot-b2b', senderBotName: 'Cindy', recipientBotId: 'visual-bot-lizi', recipientBotName: 'LiZi', content: '已核对，入口左对齐。', createdAt: now - 70000 },
+      ],
+    },
+  };
   if (channel === 'git-context:pr-refs:list') return args[0] === `${UI_MOCK_ID_PREFIX}rich-answer`
     ? [{ id: 'visual-pr', sessionId: args[0], owner: 'example', repo: 'demo', prNumber: 7, lastSeenAt: now }] : [];
   if (channel === 'git-context:pr-status') return [{ owner: 'example', repo: 'demo', prNumber: 7, ok: true,

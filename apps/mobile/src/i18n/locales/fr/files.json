@@ -102,6 +102,7 @@
     "fetchAvFailed": "Échec de la récupération : {{detail}}",
     "fetchPdfFailed": "Échec de la récupération du PDF : {{detail}}",
     "fetchingPdf": "Récupération du PDF depuis votre ordinateur…",
+    "androidPdfHint": "Sur Android, les PDF ne peuvent pas encore être prévisualisés dans Cindy. Touchez « Exporter / Partager » ci-dessous et choisissez un lecteur PDF.",
     "unsupportedType": "Ce type ne peut pas encore être prévisualisé sur votre téléphone",
     "oversize": "Le fichier dépasse la limite d'aperçu ({{size}}) ; téléchargez l'original pour le consulter",
     "oversizeUnknown": "trop volumineux",

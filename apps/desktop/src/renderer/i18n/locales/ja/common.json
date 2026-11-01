@@ -4860,9 +4860,6 @@
         "title": "グループ参加モード",
         "hint": "ボットが参加したグループが表示されます。「アクティブ」= 全メッセージを読み、自分で発言するか判断します（各メッセージでトークンを消費）。",
         "empty": "まだグループがありません。ボットをグループに追加して誰かが話すと表示されます。",
-        "contactsOn": "グループで発言した人はスマート連絡先に自動登録されます（マスタースイッチはオン）。",
-        "contactsOff": "スマート連絡先がオフのため、グループで発言した人は自動的に記憶されません。",
-        "contactsEnable": "オンにする",
         "error": {
           "load": "Telegram のグループを読み込めませんでした。接続を確認して再試行してください。",
           "save": "グループ参加モードを保存できませんでした。最後に確認されたモードへ戻しました。",
@@ -5719,10 +5716,6 @@
         "ssh": {
           "name": "SSH コマンド",
           "description": "設定済みの SSH 接続でリモートコンピュータ上のコマンドを実行します。"
-        },
-        "contacts": {
-          "name": "スマート連絡先",
-          "description": "連絡先のプロフィールや交流履歴を検索・管理します。"
         }
       }
     },
@@ -6208,9 +6201,6 @@
             "title": "グループ参加モード",
             "hint": "公式 bot が確認したグループが表示されます。アクティブは連携済みアカウントの全発言だけに適用され、他のメンバーはローカル文脈に入りますがタスクを開始できません。",
             "empty": "まだグループがありません。bot を追加し、連携済みアカウントからメッセージを送ってください。",
-            "contactsOn": "グループの他の発言者はスマート連絡先に自動登録されます。",
-            "contactsOff": "スマート連絡先がオフのため、他のメンバーは自動登録されません。",
-            "contactsEnable": "オンにする",
             "error": {
               "load": "Telegram のグループを読み込めませんでした。接続を確認して再試行してください。",
               "save": "グループ参加モードを保存できませんでした。最後に確認されたモードへ戻しました。",
@@ -8288,186 +8278,6 @@
         "title": "「{{name}}」を削除しますか?",
         "message": "削除すると、新しいセッションではこの MCP が読み込まれなくなります。",
         "confirm": "削除"
-      }
-    },
-    "contacts": {
-      "title": "スマート連絡先",
-      "description": "エージェントのための人物・組織データベース。プラットフォーム横断の身元照合(メール / Feishu / Slack / GitHub id → この人は誰か)、関係性の背景、日付付きイベント記録を備えています。エージェントが作業中に自動で収集し、確度の低い項目は確認待ちキューに入ります。データは既定ではこの端末だけに保存され、必要に応じてデバイス間同期を有効にできます。検索や整理はお使いのモデルを通じて処理されます。",
-      "enable": {
-        "label": "スマート連絡先を有効にする",
-        "description": "オンにすると、エージェントが連絡先情報を検索・自動収集できます(不確かな項目は確認待ちへ)。オフにしても、ここでの閲覧や管理には影響しません。",
-        "toggleAria": "スマート連絡先を切り替え"
-      },
-      "sync": {
-        "label": "自分のデバイス間で同期",
-        "description": "参加させる各デスクトップで一度有効にします。オンラインのデバイスは自動同期し、同じローカルネットワークでは直接接続を優先します。それ以外はエンドツーエンド暗号化された中継データを使用します。比較はプログラム処理のみで、モデルや token は消費しません。",
-        "toggleAria": "連絡先のデバイス同期を切り替え",
-        "syncNow": "今すぐ同期",
-        "onlineDevices_other": "ほかのデバイス {{count}} 台がオンライン",
-        "route": {
-          "lan": "ローカルネットワーク",
-          "relay": "暗号化中継"
-        },
-        "status": {
-          "loading": "同期状態を確認中…",
-          "signInRequired": "デバイス間で同期するには Cindy アカウントにログインしてください",
-          "off": "同期はオフです",
-          "waiting": "同期を有効にしたほかのデスクトップがオンラインになるのを待っています",
-          "syncing": "安全に同期中…",
-          "ready": "準備完了。デバイスがオンラインになると自動同期します",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "システムの安全なストレージを利用できないため、デバイス秘密鍵を保護できません",
-          "peer-identity-changed": "デバイスの識別情報が変わったため、データ保護のため同期を停止しました",
-          "sync-failed": "同期に失敗しました。次にデバイスがオンラインになったとき再試行します"
-        },
-        "toast": {
-          "enabled": "デバイス同期を有効にしました",
-          "disabled": "デバイス同期を無効にしました"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 組織 / {{groups}} グループ",
-      "kind": {
-        "person": "人物",
-        "org": "組織"
-      },
-      "filters": {
-        "all": "すべて",
-        "person": "人物",
-        "org": "組織",
-        "pending": "確認待ち"
-      },
-      "list": {
-        "searchPlaceholder": "名前 / メール / キーワードで検索",
-        "newAria": "連絡先を新規作成",
-        "newNamePlaceholder": "名前または組織名",
-        "newKindAria": "種別を切り替え(人物 / 組織)",
-        "newConfirm": "作成",
-        "groupFilterAria": "グループで絞り込み",
-        "groupFilterAll": "すべてのグループ",
-        "loadMore": "さらに読み込む",
-        "noResults": "一致する連絡先がありません",
-        "empty": "連絡先はまだ空です。有効にするとエージェントが作業中に自動で収集します。右上の + から手動追加もできます。"
-      },
-      "detail": {
-        "empty": "左側で連絡先を選択するとプロフィールが表示されます",
-        "pendingBanner": "エージェントが低い確度で収集した項目です。登録するか確認してください。",
-        "pendingConfirm": "登録する",
-        "pendingDiscard": "破棄",
-        "nameAria": "表示名",
-        "deleteAria": "連絡先を削除",
-        "summaryPlaceholder": "一行の説明",
-        "identities": "アカウント",
-        "identityRemoveAria": "アカウント {{value}} を削除",
-        "identityPlatformAria": "プラットフォーム",
-        "identityValuePlaceholder": "メール / プラットフォーム id / ハンドル",
-        "identityAddAria": "アカウントを追加",
-        "narrative": "関係と背景",
-        "narrativePlaceholder": "あなたとの関係、協働の履歴、背景情報(Markdown)",
-        "agentNotes": "エージェントへの指示",
-        "agentNotesPlaceholder": "例:これは上司の個人メールアドレス。一斉送信しないこと",
-        "events": "イベント記録",
-        "eventsEmpty": "イベントはまだありません",
-        "eventDeleteAria": "イベントを削除",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "何があったか",
-        "eventAddAria": "イベントを追加",
-        "groups": "グループ",
-        "groupRemoveAria": "グループ {{name}} から削除",
-        "groupAddAria": "グループに追加",
-        "groupAddPlaceholder": "グループに追加…",
-        "discardChanges": "変更を破棄",
-        "save": "保存",
-        "identitiesEmpty": "アカウントはまだありません",
-        "relations": "つながり",
-        "relationsEmpty": "つながりはまだありません(所属組織 / 関係者)",
-        "relationAddAria": "つながりを追加",
-        "relationRemoveAria": "{{name}} とのつながりを削除",
-        "relationVerbPlaceholder": "在籍 / 家族…",
-        "relationTargetAria": "関連する連絡先を選択",
-        "relationTargetPlaceholder": "人物または組織を選択…",
-        "relationNotePlaceholder": "メモ(役職…)"
-      },
-      "deleteConfirm": {
-        "title": "「{{name}}」を削除しますか?",
-        "description": "すべてのアカウント、イベント記録、グループ所属も削除されます。元に戻せません。",
-        "confirm": "削除",
-        "cancel": "キャンセル"
-      },
-      "toast": {
-        "enabled": "スマート連絡先を有効にしました",
-        "disabled": "スマート連絡先を無効にしました",
-        "codexRefreshDeferred": "設定は保存されましたが、Codex が使用中のため、Codex セッションへの反映はアプリ再起動後になります",
-        "toggleFailed": "スマート連絡先の切り替えに失敗しました",
-        "created": "「{{name}}」を作成しました",
-        "createFailed": "作成に失敗しました",
-        "deleted": "「{{name}}」を削除しました",
-        "deleteFailed": "削除に失敗しました",
-        "saved": "保存しました",
-        "saveFailed": "保存に失敗しました",
-        "confirmFailed": "登録の確認に失敗しました",
-        "identityAddFailed": "アカウントの追加に失敗しました",
-        "identityRemoveFailed": "アカウントの削除に失敗しました",
-        "eventAddFailed": "イベントの追加に失敗しました",
-        "eventDeleteFailed": "イベントの削除に失敗しました",
-        "groupAddFailed": "グループへの追加に失敗しました",
-        "groupRemoveFailed": "グループからの削除に失敗しました",
-        "relationAddFailed": "つながりの追加に失敗しました",
-        "relationRemoveFailed": "つながりの削除に失敗しました"
-      },
-      "manage": "管理",
-      "manager": {
-        "title": "スマート連絡先",
-        "closeAria": "閉じる"
-      },
-      "merge": {
-        "button": "重複を統合",
-        "buttonAria": "重複した連絡先を統合",
-        "hint": "重複した連絡先を選ぶと、そのアカウント・イベント・つながりを「{{target}}」に統合し、元の連絡先を削除します。",
-        "searchPlaceholder": "重複を検索…",
-        "confirmTitle": "「{{source}}」を「{{target}}」に統合しますか?",
-        "confirmDescription": "「{{source}}」のアカウント、イベント、つながり、グループはすべて移行され、元のプロフィールは削除されます。元に戻せません。",
-        "confirm": "統合",
-        "success": "「{{source}}」を「{{target}}」に統合しました",
-        "failed": "統合に失敗しました"
-      },
-      "import": {
-        "title": "連絡先をインポート",
-        "button": "インポート",
-        "pickHint": "外部ソースから一括インポートします。メール/電話が既存プロフィールと一致する項目は自動的に統合され(重複なし)、名前が似ている項目は手動確認リストに入ります。",
-        "sourceSystem": "システム連絡先",
-        "sourceSystemDesc": "読み取り専用。初回はシステム許可が必要",
-        "sourceVcf": "vCard ファイル",
-        "sourceVcfDesc": ".vcf(連絡先エクスポートの標準形式)",
-        "emptySource": "このソースにインポート可能な連絡先がありません",
-        "permissionDenied": "連絡先へのアクセスが拒否されました — システム設定 → プライバシーとセキュリティ → オートメーション で許可してください",
-        "systemReadFailed": "システム連絡先の読み取りに失敗しました",
-        "vcfParseFailed": "vCard ファイルの解析に失敗しました",
-        "selectedCount": "{{checked}} / {{total}} 件選択中",
-        "groupPlaceholder": "インポート後にグループへ追加(任意。存在しなければ作成)",
-        "run": "{{count}} 件をインポート",
-        "running": "インポート中…",
-        "failed": "インポートに失敗しました",
-        "doneSummary": "インポート完了: 新規 {{created}} 件、既存プロフィールへ統合 {{enriched}} 件、組織を {{orgs}} 件作成。",
-        "needsReview": "{{count}} 件は既存プロフィールと名前が似ているためインポートされませんでした。確認してください: {{names}}",
-        "identityConflicts": "{{count}} 件のレコードに他の連絡先が所有する ID が含まれていたため統合されませんでした（{{names}}）。同一人物か管理画面で確認して統合してください",
-        "relationErrors": "{{count}} 件の在職関係を作成できませんでした（{{names}}）",
-        "skipped": "{{count}} 件をスキップしました(無効またはエラー)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "このIDは既に別の連絡先に登録されています。既存のプロフィールを更新するか、先に統合してください。",
-        "PERMISSION_DENIED": "連絡先へのアクセスが許可されていません。システム設定 > プライバシーとセキュリティ > オートメーション で許可してください。",
-        "UNSUPPORTED_CAPABILITY": "この操作は現在のプラットフォームではサポートされていません。",
-        "NOT_FOUND": "対象が存在しないか、既に削除されています。",
-        "ALREADY_EXISTS": "同名または同内容の項目が既に存在します。",
-        "INVALID_PARAMS": "入力が無効です。確認して再試行してください。",
-        "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。"
-      },
-      "guide": {
-        "hint": "AI の案内で連絡先プロフィールの追加、保留項目の確認、重複整理を進めます。",
-        "cta": "AI で連絡先を管理",
-        "managementPrompt": "スマート連絡先を管理してください。まず現在の状態と利用可能なツールを確認し、必要な連絡先の追加、重複項目の整理、保留項目の確認を順に案内してください。書き込み、統合、削除を行う前には必ず私に確認してください。"
       }
     },
     "remotePermission": {
@@ -14660,6 +14470,7 @@
           "hint": "上部に最大 3 件表示。固定した PR を優先します",
           "empty": "GitHub PR のリンクを貼り付けて追加",
           "removed": "削除済み：{{count}} 件",
+          "legacy": "未確認の参照：{{count}}",
           "addLabel": "PR リンクを追加",
           "add": "PR を追加",
           "loading": "読み込み中…",
@@ -14989,6 +14800,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "{{projectName}} にインポート待ちの自動化があります",
+        "review": "内容を確認",
+        "title": "リポジトリの自動化をインポート",
+        "description": "取得元：{{workingDir}}。以下の設定を確認してください。インポートすると変更が適用され、新しい自動化が有効になります。コマンドの実行やフルアクセス権限の Agent の起動が可能になるため、信頼できる内容のみインポートしてください。",
+        "accept": "インポートを確定",
+        "removed": "削除対象：{{names}}"
+      },
       "toast": {
         "summary": "追加 {{inserted}} · 更新 {{updated}} · 削除 {{deleted}}",
         "installed": "{{projectName}} のプロジェクト自動化をインストールしました（{{summary}}）",
@@ -15163,6 +14982,7 @@
         "timeout": "タイムアウト（秒、任意）",
         "timeoutPlaceholder": "制限なし",
         "capabilities": {
+          "github_read": "GitHub の読み取り",
           "jira_read": "Jira を読み取る",
           "jira_comment": "Jira にコメントする",
           "sessions_dispatch": "セッションをディスパッチする",
@@ -15174,6 +14994,7 @@
         "capabilitiesSearch": "機能を検索",
         "capabilitiesEmpty": "一致する機能がありません",
         "capabilityDescs": {
+          "github_read": "PR、CI、レビューと観測した変更を読み取ります。タスクには関連付けません",
           "jira_read": "Jira 課題の照会・読み取り（キー指定 / JQL 検索）",
           "jira_comment": "Jira 課題へのコメント追加",
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",

@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "PR-Links verwalten",
+    "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
+    "empty": "Füge zum Hinzufügen einen GitHub-PR-Link ein",
+    "removed": "Entfernt: {{count}}",
+    "legacy": "Unbestätigte Verweise: {{count}}",
+    "addLabel": "PR-Link hinzufügen",
+    "add": "PR hinzufügen",
+    "loading": "Wird geladen…",
+    "restore": "PR wiederherstellen",
+    "pin": "In der Kopfzeile anheften",
+    "unpin": "PR lösen",
+    "pinLimit": "Bis zu 3 PRs anheften",
+    "reorderHint": "Mit Alt+↑/↓ innerhalb der angehefteten oder nicht angehefteten Gruppe umsortieren.",
+    "dragHandle": "Ziehen, um {{repo}} #{{number}} umzusortieren",
+    "remove": "PR entfernen",
+    "errors": {
+      "duplicate": "Dieser PR ist bereits verknüpft; entfernte Links lassen sich aus der Liste wiederherstellen",
+      "notFound": "PR nicht gefunden oder Zugriff verweigert",
+      "invalidUrl": "Gib einen gültigen GitHub-PR-Link ein",
+      "reorderFailed": "Die Reihenfolge wurde nicht gespeichert. Versuche es erneut.",
+      "verifyFailed": "Der PR konnte nicht geprüft werden; prüfe deine GitHub-Anmeldung und Zugriffsrechte",
+      "unsupported": "Die Version dieses Computers unterstützt die Verwaltung von PR-Links nicht",
+      "failed": "PR-Links konnten nicht aktualisiert werden"
+    },
+    "moveUp": "Nach oben"
+  },
   "paneResize": {
     "label": "Spaltenbreite",
     "hint": "Ziehe nach links oder rechts, um die Spaltenbreiten anzupassen"
@@ -197,7 +224,7 @@
       },
       "actionCopy": {
         "pending": "Bearbeite zuerst die ausstehende Anfrage. Danach wird der Eingabebereich wiederhergestellt.",
-        "archived": "Diese Sitzung ist archiviert. Stelle sie wieder her, bevor du weitere Nachrichten sendest.",
+        "archived": "Diese Sitzung ist archiviert. Wenn du eine Nachricht sendest, wird sie automatisch aus dem Archiv wiederhergestellt.",
         "deleted": "Diese Sitzung wurde gelöscht und kann nicht geändert werden.",
         "queuePaused": "Die Warteschlange ist pausiert. Setze sie im Warteschlangenbereich fort."
       }
@@ -440,7 +467,7 @@
     "copyLinkAction": "Sitzungslink kopieren",
     "unpin": "Lösen",
     "pin": "Anheften",
-    "restore": "Wiederherstellen",
+    "restore": "Aus Archiv wiederherstellen",
     "archive": "Archivieren",
     "deleteAction": "Sitzung löschen",
     "deleteConversation": "Sitzung löschen",
