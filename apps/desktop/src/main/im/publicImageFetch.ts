@@ -30,6 +30,8 @@ export type GuardedImageFetch = (params: {
  * whose URL is server-supplied (companion avatars); the default (IM path, which
  * fetches untrusted Agent Markdown URLs) keeps 198.18/15 blocked so a
  * crafted URL cannot reach private HTTPS endpoints through the proxy mapping.
+ * The renderer-driven avatar cache (`resolveCompanionAvatar` takes any https URL) stays blocked too;
+ * only the takeover restore, whose avatar comes from the cloud profile snapshot, opts in.
  * fc00::/7 stays blocked in every case: it hosts real internal services and is
  * indistinguishable from an IPv6 fake-IP (browser-managed-config.ts).
  */
