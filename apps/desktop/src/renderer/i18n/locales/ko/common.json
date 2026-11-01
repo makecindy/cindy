@@ -2618,6 +2618,13 @@
       "storage": {
         "dialogueDirectoryTitle": "대화 작업 공간",
         "dialogueDirectoryDescription": "새 세션에만 적용됩니다. 기존 파일은 원래 위치에 유지됩니다.",
+        "projectsRootTitle": "새 프로젝트 저장 위치",
+        "projectsRootInferred": "추천",
+        "projectsRootDefault": "기본",
+        "projectsRootChoose": "폴더 변경",
+        "projectsRootReset": "추천 위치로 복원",
+        "projectsRootDescription": "세션에서 프로젝트를 만들 때 프로젝트 폴더가 이곳에 생성됩니다. 설정하지 않으면 기존 프로젝트 위치를 바탕으로 추천합니다.",
+        "projectsRootFailed": "새 프로젝트 저장 위치를 업데이트하지 못했습니다",
         "dialogueDirectoryOpen": "폴더 열기",
         "dialogueDirectoryChoose": "폴더 변경",
         "dialogueDirectoryReset": "기본 위치로 복원",
@@ -14415,6 +14422,26 @@
           "cancel": "취소"
         }
       },
+      "newProjectDialog": {
+        "title": "새 프로젝트",
+        "description": "프로젝트 폴더를 만들고 이 세션을 새 프로젝트로 옮깁니다.",
+        "descriptionMoveFiles": "프로젝트 폴더를 만들어 이 세션의 파일을 옮기고, 세션을 새 프로젝트로 옮깁니다.",
+        "nameLabel": "프로젝트 이름",
+        "namePlaceholder": "예: my-app",
+        "targetPath": "{{path}} 폴더를 만듭니다",
+        "location": "위치",
+        "locationInferred": "기존 프로젝트를 바탕으로 추천한 위치입니다",
+        "locationWillCreate": "아직 없는 폴더라 새로 만듭니다",
+        "changeLocation": "변경…",
+        "remember": "앞으로 새 프로젝트를 이 위치에 만들기",
+        "cancel": "취소",
+        "create": "프로젝트 만들기",
+        "nameTaken": "같은 이름의 폴더가 이미 있습니다",
+        "nameInvalid": "이름에 \\ / : * ? \" < > |를 쓸 수 없으며, 마침표나 공백으로 끝날 수 없습니다",
+        "loadFailed": "프로젝트 위치를 불러오지 못했습니다",
+        "failed": "프로젝트를 만들지 못했습니다",
+        "done": "프로젝트를 만들고 세션을 옮겼습니다"
+      },
       "sessionMenu": {
         "moreActions": "더 보기",
         "rename": "이름 변경",
@@ -14428,6 +14455,7 @@
         "moveToProject": "작업 이동",
         "moveToProjectHeading": "현재 컴퓨터의 프로젝트",
         "browseProjectFolder": "프로젝트 폴더 선택",
+        "newProject": "새 프로젝트…",
         "moveToDialogue": "대화로 이동",
         "noProjects": "최근 프로젝트 없음",
         "moveToProjectDone": "프로젝트로 이동했습니다",

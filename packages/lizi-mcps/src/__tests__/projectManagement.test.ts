@@ -26,6 +26,7 @@ describe("project management MCP", () => {
         ],
         total: 1,
         nextOffset: null,
+        projectsRoot: { path: "/home/me/Projects", source: "inferred" as const, exists: true },
       }));
       const rename = vi.fn(async () => ({
         ok: true as const,
@@ -92,6 +93,7 @@ describe("project management MCP", () => {
           ok: true,
           total: 1,
           next_offset: null,
+          projects_root: { path: "/home/me/Projects", source: "inferred", exists: true },
           projects: [
             {
               working_dir: "/repo",

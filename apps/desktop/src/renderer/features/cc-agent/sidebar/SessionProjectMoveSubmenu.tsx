@@ -1,4 +1,4 @@
-import { Folder, FolderPlus, MessageCircle } from 'lucide-react';
+import { Folder, FolderPlus, MessageCircle, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import type { Session } from '@/lib/ccAgent.types';
@@ -13,6 +13,8 @@ export interface SessionProjectMoveSubmenuProps {
   isDialogue: boolean;
   onSelectProject: (workingDir: string) => void;
   onBrowseProject?: () => void;
+  /** Create a folder under the projects root and move this task (and its dialogue files) there. */
+  onNewProject?: () => void;
   onMoveToDialogue?: () => void;
 }
 
@@ -28,6 +30,7 @@ export function SessionProjectMoveSubmenu({
   isDialogue,
   onSelectProject,
   onBrowseProject,
+  onNewProject,
   onMoveToDialogue,
 }: SessionProjectMoveSubmenuProps) {
   const { t } = useTranslation();
@@ -70,11 +73,17 @@ export function SessionProjectMoveSubmenu({
           </div>
         )}
       </div>
-      {(onBrowseProject || onMoveToDialogue) && <DropdownMenuSeparator />}
+      {(onBrowseProject || onNewProject || onMoveToDialogue) && <DropdownMenuSeparator />}
       {onBrowseProject && (
         <DropdownMenuItem onSelect={onBrowseProject} className="h-8 px-3">
           <FolderPlus size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
           {t('ccAgent.sidebar.sessionMenu.browseProjectFolder')}
+        </DropdownMenuItem>
+      )}
+      {onNewProject && (
+        <DropdownMenuItem onSelect={onNewProject} className="h-8 px-3">
+          <Plus size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
+          {t('ccAgent.sidebar.sessionMenu.newProject')}
         </DropdownMenuItem>
       )}
       {onMoveToDialogue && <DropdownMenuSeparator />}

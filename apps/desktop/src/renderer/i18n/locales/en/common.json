@@ -2648,6 +2648,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat workspace",
         "dialogueDirectoryDescription": "For new sessions only. Existing files stay where they are.",
+        "projectsRootTitle": "New project location",
+        "projectsRootInferred": "Suggested",
+        "projectsRootDefault": "Default",
+        "projectsRootChoose": "Change directory",
+        "projectsRootReset": "Restore suggested location",
+        "projectsRootDescription": "Where project folders go when you create a project from a session. If not set, a location is suggested from where your existing projects are.",
+        "projectsRootFailed": "Couldn't update the new project location",
         "dialogueDirectoryOpen": "Open directory",
         "dialogueDirectoryChoose": "Change directory",
         "dialogueDirectoryReset": "Restore default location",
@@ -14481,6 +14488,26 @@
           "cancel": "Cancel"
         }
       },
+      "newProjectDialog": {
+        "title": "New project",
+        "description": "Creates a project folder and moves this session to the new project.",
+        "descriptionMoveFiles": "Creates a project folder, moves this session's files into it, and moves the session to the new project.",
+        "nameLabel": "Project name",
+        "namePlaceholder": "e.g. my-app",
+        "targetPath": "Will create {{path}}",
+        "location": "Location",
+        "locationInferred": "Suggested from your existing projects",
+        "locationWillCreate": "This folder doesn't exist yet and will be created",
+        "changeLocation": "Change…",
+        "remember": "Use this location for new projects",
+        "cancel": "Cancel",
+        "create": "Create Project",
+        "nameTaken": "A folder with this name already exists",
+        "nameInvalid": "Names can't contain \\ / : * ? \" < > | or end with a period or space",
+        "loadFailed": "Couldn't load the project location",
+        "failed": "Failed to create project",
+        "done": "Project created and session moved"
+      },
       "sessionMenu": {
         "moreActions": "More actions",
         "rename": "Rename",
@@ -14494,6 +14521,7 @@
         "moveToProject": "Move task",
         "moveToProjectHeading": "Projects on this computer",
         "browseProjectFolder": "Choose project folder",
+        "newProject": "New project…",
         "moveToDialogue": "Move to Chat",
         "noProjects": "No recent projects",
         "moveToProjectDone": "Moved to project",

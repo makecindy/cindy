@@ -22,6 +22,11 @@ export interface ProjectManagementCallbacks {
         }>;
         total: number;
         nextOffset: number | null;
+        projectsRoot: {
+          path: string;
+          source: "setting" | "inferred" | "default";
+          exists: boolean;
+        };
       },
       string
     >
@@ -76,7 +81,7 @@ export function registerProjectManagementTools(
     name: "list_projects",
     category: "control",
     description:
-      "List registered projects on the local Cindy host, including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
+      "List registered projects on the local Cindy host, including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Also returns projects_root: where new project folders go on this computer (source=setting is the user's choice; inferred/default are suggestions, so confirm the location with the user before creating a folder there; exists=false means it has not been created yet). Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
     inputShape: {
       include_hidden: z.boolean().default(true),
       offset: z.number().int().min(0).default(0),
@@ -103,6 +108,7 @@ export function registerProjectManagementTools(
           })),
           total: data.total,
           next_offset: data.nextOffset,
+          projects_root: data.projectsRoot,
         }),
       ),
   });

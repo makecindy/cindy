@@ -2618,6 +2618,13 @@
       "storage": {
         "dialogueDirectoryTitle": "チャットワークスペース",
         "dialogueDirectoryDescription": "新しいセッションにのみ適用されます。既存のファイルの場所は変わりません。",
+        "projectsRootTitle": "新規プロジェクトの保存先",
+        "projectsRootInferred": "提案",
+        "projectsRootDefault": "既定",
+        "projectsRootChoose": "フォルダーを変更",
+        "projectsRootReset": "提案の保存先に戻す",
+        "projectsRootDescription": "セッションからプロジェクトを作成するとき、プロジェクトフォルダーはここに作成されます。未設定の場合は、既存のプロジェクトの場所から提案します。",
+        "projectsRootFailed": "新規プロジェクトの保存先を更新できませんでした",
         "dialogueDirectoryOpen": "フォルダーを開く",
         "dialogueDirectoryChoose": "フォルダーを変更",
         "dialogueDirectoryReset": "既定の保存先に戻す",
@@ -14415,6 +14422,26 @@
           "cancel": "キャンセル"
         }
       },
+      "newProjectDialog": {
+        "title": "新規プロジェクト",
+        "description": "プロジェクトフォルダーを作成し、このセッションを新しいプロジェクトへ移動します。",
+        "descriptionMoveFiles": "プロジェクトフォルダーを作成してこのセッションのファイルを移し、セッションを新しいプロジェクトへ移動します。",
+        "nameLabel": "プロジェクト名",
+        "namePlaceholder": "例: my-app",
+        "targetPath": "{{path}} を作成します",
+        "location": "場所",
+        "locationInferred": "既存のプロジェクトをもとに提案しています",
+        "locationWillCreate": "このフォルダーはまだないため、作成されます",
+        "changeLocation": "変更…",
+        "remember": "今後の新規プロジェクトもここに作成する",
+        "cancel": "キャンセル",
+        "create": "プロジェクトを作成",
+        "nameTaken": "同じ名前のフォルダーがすでにあります",
+        "nameInvalid": "名前に \\ / : * ? \" < > | は使えません。末尾をピリオドや空白にすることもできません",
+        "loadFailed": "プロジェクトの場所を読み込めませんでした",
+        "failed": "プロジェクトを作成できませんでした",
+        "done": "プロジェクトを作成し、セッションを移動しました"
+      },
       "sessionMenu": {
         "moreActions": "その他のアクション",
         "rename": "名前変更",
@@ -14428,6 +14455,7 @@
         "moveToProject": "タスクを移動",
         "moveToProjectHeading": "現在のコンピューターのプロジェクト",
         "browseProjectFolder": "プロジェクトフォルダーを選択",
+        "newProject": "新規プロジェクト…",
         "moveToDialogue": "対話へ移動",
         "noProjects": "最近使ったプロジェクトはありません",
         "moveToProjectDone": "プロジェクトへ移動しました",

@@ -82,6 +82,19 @@
       "note": "用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。"
     },
     {
+      "id": "new-project-location",
+      "status": "proposed",
+      "en": "New project location",
+      "translations": {
+        "zh-CN": "新项目存放位置",
+        "zh-TW": "新專案存放位置",
+        "ja": "新規プロジェクトの保存先",
+        "ko": "새 프로젝트 저장 위치"
+      },
+      "checkCase": false,
+      "note": "存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。"
+    },
+    {
       "id": "cindy-make-history",
       "status": "proposed",
       "en": "Make history",

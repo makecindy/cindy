@@ -1,4 +1,6 @@
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { app } from 'electron';
 import { eq } from 'drizzle-orm';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -8,6 +10,9 @@ import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAl
 import { recentWorkdirs, sessions } from '../localDb/schema.js';
 import { loadSidebarSettingsSnapshot, setLocalProjectHidden } from '../sidebarSettingsStore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
+import type { ProjectsRootState } from '../../shared/projectsRoot.js';
+import { readProjectsRootDirectory } from '../projects-root-settings.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   validateLocalProjectDirectory,
@@ -93,6 +98,54 @@ export async function resolveSessionProject(params: {
   });
 }
 
+/** Most recently used parent shared by at least two projects; ties keep the newer one. */
+export function inferProjectsRoot(directories: readonly string[], platform = process.platform): string | null {
+  const counts = new Map<string, { parent: string; count: number }>();
+  for (const directory of directories) {
+    const parent = path.dirname(directory);
+    if (parent === directory) continue;
+    const key = platform === 'win32' ? parent.toLowerCase() : parent;
+    const entry = counts.get(key) ?? { parent, count: 0 };
+    entry.count++;
+    counts.set(key, entry);
+  }
+  let best: { parent: string; count: number } | null = null;
+  for (const entry of counts.values()) {
+    if (entry.count >= 2 && (!best || entry.count > best.count)) best = entry;
+  }
+  return best?.parent ?? null;
+}
+
+/**
+ * Explicit choice first, then visible existing projects, then ~/Projects. Never writes.
+ * Callers that already listed the catalog pass it to avoid a second scan.
+ */
+export async function resolveProjectsRoot(
+  client: DbClient,
+  catalog?: ReadonlyArray<{ path: string; exists: boolean }>,
+): Promise<ProjectsRootState> {
+  const setting = readProjectsRootDirectory();
+  let root: Omit<ProjectsRootState, 'exists'>;
+  if (setting) {
+    root = { path: setting, source: 'setting' };
+  } else {
+    const hidden = new Set(
+      loadSidebarSettingsSnapshot().hiddenProjectKeys.map((key) =>
+        projectKeyComparisonKey(key, process.platform),
+      ),
+    );
+    const visible = (catalog ?? (await listRecentWorkdirs(client)))
+      .filter((row) => row.exists && !hidden.has(identity(row.path)))
+      .map((row) => row.path);
+    const inferred = inferProjectsRoot(visible);
+    root = inferred
+      ? { path: inferred, source: 'inferred' }
+      : { path: path.join(app.getPath('home'), 'Projects'), source: 'default' };
+  }
+  const exists = await stat(root.path).then((info) => info.isDirectory(), () => false);
+  return { ...root, exists };
+}
+
 export async function listProjects(params: {
   callerSessionId: string;
   includeHidden: boolean;
@@ -131,11 +184,14 @@ export async function listProjects(params: {
       })
       .filter((row) => params.includeHidden || !row.hidden);
     const end = params.offset + params.limit;
+    const projectsRoot = await resolveProjectsRoot(context.client, directories);
+    context.assertCurrent();
     return {
       ok: true as const,
       projects: projects.slice(params.offset, end),
       total: projects.length,
       nextOffset: end < projects.length ? end : null,
+      projectsRoot,
     };
   });
 }

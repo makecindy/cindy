@@ -36,6 +36,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -282,6 +283,8 @@ export function StorageManagementCard() {
       </div>
 
       <DialogueDirectorySection />
+
+      <ProjectsRootSection />
 
       {/* 占用总览 */}
       <div

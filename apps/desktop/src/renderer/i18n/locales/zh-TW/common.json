@@ -2618,6 +2618,13 @@
       "storage": {
         "dialogueDirectoryTitle": "對話工作區",
         "dialogueDirectoryDescription": "僅用於新建任務，現有檔案保留原位置。",
+        "projectsRootTitle": "新專案存放位置",
+        "projectsRootInferred": "推薦",
+        "projectsRootDefault": "預設",
+        "projectsRootChoose": "變更目錄",
+        "projectsRootReset": "恢復推薦位置",
+        "projectsRootDescription": "在任務裡新建專案時，專案資料夾會放在這裡。未設定時，依你現有專案所在的資料夾推薦。",
+        "projectsRootFailed": "無法更新新專案存放位置",
         "dialogueDirectoryOpen": "開啟目錄",
         "dialogueDirectoryChoose": "變更目錄",
         "dialogueDirectoryReset": "恢復預設位置",
@@ -14415,6 +14422,26 @@
           "cancel": "取消"
         }
       },
+      "newProjectDialog": {
+        "title": "新建專案",
+        "description": "新建一個專案資料夾，並把這個任務移到新專案。",
+        "descriptionMoveFiles": "新建一個專案資料夾，把這個任務裡的檔案搬進去，並把任務移到新專案。",
+        "nameLabel": "專案名稱",
+        "namePlaceholder": "例如 my-app",
+        "targetPath": "將建立 {{path}}",
+        "location": "位置",
+        "locationInferred": "依你現有的專案推薦",
+        "locationWillCreate": "這個資料夾還不存在，確認後會自動建立",
+        "changeLocation": "變更…",
+        "remember": "以後新建專案都放這裡",
+        "cancel": "取消",
+        "create": "新建專案",
+        "nameTaken": "已有同名資料夾，換一個名稱",
+        "nameInvalid": "名稱不能包含 \\ / : * ? \" < > |，也不能以句點或空格結尾",
+        "loadFailed": "無法讀取專案位置",
+        "failed": "新建專案失敗",
+        "done": "已新建專案並移入任務"
+      },
       "sessionMenu": {
         "moreActions": "更多",
         "rename": "重新命名",
@@ -14428,6 +14455,7 @@
         "moveToProject": "移動任務",
         "moveToProjectHeading": "目前電腦的專案",
         "browseProjectFolder": "選擇專案資料夾",
+        "newProject": "新建專案…",
         "moveToDialogue": "移到對話",
         "noProjects": "暫無最近專案",
         "moveToProjectDone": "已移動到專案",
