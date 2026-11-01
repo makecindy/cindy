@@ -337,7 +337,7 @@ describe('Chat Server result delivery and refresh', () => {
   it.each(['Nickname A', 'Account B', '   ', null] as const)('uses the current room owner name %s with safe account fallback', async name => {
     const ownerId = '30000000-0000-4000-8000-000000000002';
     const bot = { id: botId, kind: 'bot', name: 'Companion X', state: 'joined', role: 'member', ownerActorId: ownerId, ownerName: 'Account B' };
-    const members = [bot, ...(name === null ? [] : [{ id: ownerId, kind: 'human', name, state: 'joined', role: 'member', ownerActorId: ownerId }])];
+    const members = [bot, { id: selfId, kind: 'human', name: 'Viewer', state: 'joined', role: 'member', ownerActorId: selfId }, ...(name === null ? [] : [{ id: ownerId, kind: 'human', name, state: 'joined', role: 'member', ownerActorId: ownerId }])];
     const messages = [{ id: execution.source_message_id, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Companion X' },
       content: [{ type: 'text', text: 'Example reply' }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null }];
     if (name !== null) messages.push({ ...messages[0], id: '50000000-0000-4000-8000-000000000002', seq: '2', authorId: ownerId,

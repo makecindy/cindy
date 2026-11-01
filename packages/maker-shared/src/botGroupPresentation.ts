@@ -30,10 +30,18 @@ export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readon
   return owner?.name.trim() || member.ownerName?.trim() || '';
 }
 
-/** Group-scoped labels shared by Desktop and the direct phone client; raw member records stay unchanged. */
+/**
+ * Group-scoped labels shared by Desktop and the direct phone client; raw member records stay unchanged.
+ * The 「 (主人昵称)」 suffix only disambiguates companions brought by different people, so it is dropped
+ * when the bot's owner is the only joined human in the room (a self-built group). Direct rooms pass no
+ * members and keep the account owner label.
+ */
 export function chatGroupMemberName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
   const owner = chatGroupOwnerName(member, members);
-  return member.kind === 'bot' && owner ? `${member.name} (${owner})` : member.name;
+  if (member.kind !== 'bot' || !owner) return member.name;
+  const humans = members.filter(candidate => candidate.kind === 'human' && candidate.state === 'joined');
+  if (member.ownerActorId && humans.length === 1 && humans[0]!.id === member.ownerActorId) return member.name;
+  return `${member.name} (${owner})`;
 }
 
 /** Only active members can be mentioned, speak, or keep a group sendable. */

@@ -14,6 +14,7 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  chatGroupMemberName,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
 
@@ -323,5 +324,21 @@ describe('group body component display', () => {
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
       { kind: 'text', content: 'Diagram' },
     ]);
+  });
+});
+
+describe('chatGroupMemberName owner suffix (#8061)', () => {
+  const human = (id: string, name: string, state = 'joined') => ({ id, kind: 'human', state, name, ownerActorId: id });
+  const bot = (id: string, ownerActorId: string) => ({ id, kind: 'bot', state: 'joined', name: 'Dash', ownerActorId, ownerName: 'Account' });
+
+  it('drops the suffix when the owner is the only human in the room', () => {
+    expect(chatGroupMemberName(bot('b1', 'h1'), [human('h1', 'Xing'), bot('b1', 'h1')])).toBe('Dash');
+  });
+
+  it('keeps the suffix when another human is in the room or the owner is not a joined member', () => {
+    const members = [human('h1', 'Xing'), human('h2', 'Chris'), bot('b1', 'h1')];
+    expect(chatGroupMemberName(bot('b1', 'h1'), members)).toBe('Dash (Xing)');
+    expect(chatGroupMemberName(bot('b1', 'h1'), [human('h1', 'Xing', 'left'), human('h2', 'Chris')])).toBe('Dash (Account)');
+    expect(chatGroupMemberName(bot('b1', 'h1'), [])).toBe('Dash (Account)');
   });
 });
