@@ -10,6 +10,82 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Owner live check after disabling `superpowers` (`live-proven`)
+
+Owner disabled the Hermes `superpowers` plugin via the `hermes-cindy` launcher, then ran a new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, 262,144 loaded) with three turns. Screenshot evidence:
+- Header kept `google/gemma-4-26b-a4b-qat` across all three turns. This proves the 2.2b-3 label fix past turn 2.
+- No false context banner at 87.3k tokens; the ring reads 21%. This proves the 2.2b-5 banner fix in the running app.
+- Replies are direct, with no `skill_view` calls and no "Using superpowers:..." preamble. This is consistent with the 2.2b-4 diagnosis.
+
+Qwen 8B was not re-run with the plugin off, so 2.2b-4 is not yet proven fixed for Qwen.
+
+---
+
+## 2026-11-01 — Diagnosis: qwen3-8b `skill_view` loop (ROADMAP 2.2b-4) (`unverified` fix, diagnosis only)
+
+**Evidence:** the owner pasted one `skill_view` call's input and output from the looping Qwen turn. Call: `{"name": "superpowers:using-superpowers"}`. Skill path: `~/.hermes-cindy/plugins/superpowers/skills/using-superpowers`. The skill body requires invoking skills "BEFORE any response including clarifying questions" when there is "even a 1% chance" one applies, and lists 14 sibling skills.
+
+**Reading:** a small model treats that as an unconditional loop: view the skill, be told to view skills first, view again. Cindy's 12-call loop guard then stops the turn. Gemma 26B follows the same instruction once and then answers (the owner's screenshot shows "Using `superpowers:systematic-debugging`..."). The plugin's skill list and instructions also add to the large per-turn prompt (35k tokens after one short Gemma turn).
+
+**Not done:** no code or config change. Disabling or scoping the plugin is an owner decision. Per AGENTS.md it must go through Hermes's own plugin commands or daemon RPCs, never a hand edit of `~/.hermes-cindy/config.yaml`.
+
+---
+
+## 2026-11-01 — Defect Fix: Hermes context banner uses the serving endpoint's limit (`unit-tested`)
+
+**Owner repro:** new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, loaded at 262,144). After one turn (35.4k tokens) the banner said "Context is 108% full". The footer ring said 17%. `~/.cindy-harness/providers.yaml` already had `lmstudio-local.capabilities.contextLength: 262144`, and `routing.yaml` had `chat.default: ollama-offline`.
+
+**Root cause:** `resolveSessionContextLength` (`apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx`) only knew models hand-listed in `routing.yaml`. Hermes sessions have no providerId, and discovered models are not routes, so it fell through to `chat.default`'s provider (Ollama, 32,768).
+
+**Outcome:**
+1. `SessionContextGuardBanner.tsx`: after the routing lookup, use the `contextLength` of the **online** probed endpoint whose model list contains the session model. The banner already fetched `probes`; they are now passed in. Offline endpoints are ignored.
+2. `apps/desktop/src/renderer/__tests__/sessionContextGuardBanner.test.tsx`: +1 test (discovered model on an online LM Studio endpoint → that endpoint's limit; offline endpoint → no match, falls through). 5/5.
+
+**Mutation check (1):** the new test ran first against the unchanged code and failed (`expected 32768 to be 65536`), then passed with the change.
+
+**Owner workaround already applied (keep or remove):** a `gemma-local` route (`provider: lmstudio-local`, `model: google/gemma-4-26b-a4b-qat`) in `~/.cindy-harness/routing.yaml`, backed up to `routing.yaml.bak-20261101`. With this fix it is no longer needed.
+
+**Gates (Node 22.23.4):** serial `pnpm -r typecheck` → `EXIT=0`; `pnpm test:runner` → `EXIT=0` (607/0); `test-workspaces --tier unit --related --workspace-concurrency=1` → `EXIT=0`; `pnpm check:test-hygiene` → PASS.
+
+**Still open:** live check (new Gemma chat → banner percentage should roughly match the ring). The ring still assumes a fixed 200k Hermes window. Not changed here.
+
+---
+
+## 2026-11-01 — Defect Fix: Hermes model label reverts to `hermes-default` after first send (`unit-tested`)
+
+**Root cause (found by reading, proved by a failing test):**
+The send path was never the problem. Every lazy-create / prewarm path re-reads `sessions.model` from the DB (`reconcileCreateOptsAgainstDb`), so the turn running on Qwen proves the row held `qwen3-8b` at send. The rewrite happens *after* the session view mounts:
+- `apps/desktop/src/renderer/features/cc-agent/CCAgentSessionView.tsx` "M35 vendor fallback" effect calls `shouldFallbackVendorModel(providers, session.model, agent)`.
+- Hermes sessions always have `providerId: null`, and no Cindy catalog provider lists models under the `hermes` agent. So if any provider lists the same id for Pi / Codex / Claude Code (e.g. an LM Studio provider exposing `qwen3-8b` to Pi), the check returned `true`.
+- The effect then wrote `getDefaultModelForVendor('cc')` (a `claude-*` id) into `sessions.model`. The earlier foreign-model sanitizers (`HermesSessionModelLabel`, `ModelSelector.isForeignHermesModelId`) display any `claude-*` id as `hermes-default` / "Hermes home default (deepseek-flash)". That is the visible "revert".
+- This is also the likely origin of the legacy `xai/grok-4.6` row repaired last session, and it means the *second* turn would have been launched with a Claude model id.
+
+**Outcome:**
+1. `apps/desktop/src/renderer/features/cc-agent/lib/vendorModelFallback.ts`: `shouldFallbackVendorModel` returns `false` for `agent === 'hermes'` (Hermes owns its model routing via Hermes home + `providers.yaml`).
+2. `apps/desktop/src/renderer/__tests__/vendorModelFallback.test.ts`: +1 test (`never repairs a Hermes session model, even when another engine offers that id`), 11/11 passing.
+
+**Mutation check (1):** the new test was run against the unfixed `vendorModelFallback.ts` first and failed (`expected true to be false` on `shouldFallbackVendorModel(withLocalPi, 'qwen3-8b', 'hermes')`); adding the guard turned it green.
+
+**Gates (Node 22.23.4, cloud Linux container, deps installed with `pnpm install --frozen-lockfile --ignore-scripts` + `node scripts/ensure-deps.mjs --electron-binary`):**
+- `pnpm typecheck`: parallel run OOM-killed in `apps/mobile` (container memory, not a type error); serial re-run `NODE_OPTIONS=--max-old-space-size=6144 pnpm -r --if-present --workspace-concurrency=1 run typecheck` → `EXIT=0`.
+- `pnpm test:runner` → `EXIT=0` (607 pass, 0 fail).
+- `node scripts/test-workspaces.mjs --tier unit --related --workspace-concurrency=1` → `EXIT=0`.
+- `pnpm check:test-hygiene` → `EXIT=0`.
+
+**No user state touched.** No DB, `config.yaml`, or `.env` edits this session (the container has no access to the owner's Mac).
+
+**Still open:**
+- `live-proven` needs the owner: new task → Hermes → pick `qwen3-8b (lmstudio-local)` → send "hi" → header and composer pill should still read `qwen3-8b` after the reply and after a second turn.
+- The session from the owner's failing repro likely still has a `claude-*` id in `sessions.model`. Re-selecting `qwen3-8b` in that session's picker rewrites it through `handleSetModel`; no manual DB edit needed.
+- Found, not fixed (separate task): the Hermes `AgentSessionHandle.model` in `packages/maker-core/src/agents/hermes/agent.ts` is a fixed property set at start and never updated by `setModel`, while `Session.model` assumes the handle getter tracks switches. Runtime profiles that read `live.model` (`readSessionRuntimeProfiles` in `register.ts`) can therefore report the start model after a mid-session switch.
+
+**Owner live check (same day, after `pnpm restart:desktop:remote --region=global` on this branch):** new task → Hermes → `qwen3-8b (lmstudio-local)` → "hi". The header and composer pill both still read `qwen3-8b` after the turn ended, so the revert is fixed for turn 1. Turn 2 has not been run yet.
+New, separate issue seen in the same run: the turn produced no reply. `qwen3-8b` called Hermes `skill_view` 5+ times and ran for 3m 22s, then Cindy's loop guard stopped it ("kept cycling between tool calls ... 12 calls"). Open as ROADMAP 2.2b-4. Not yet diagnosed: check which skill it opened (expand the `skill_view` rows) and whether a plain no-tool chat works on this model.
+
+**Surprising:** the earlier "foreign model sanitization" hid this bug instead of exposing it: a `claude-*` id written into a Hermes row rendered as the Hermes default rather than as an obviously wrong model.
+
+---
+
 ## 2026-11-01 — Defect Fix: Hermes UI model synchronization, multi-segment route resolution, and foreign model sanitization (`unit-tested`)
 
 **Outcome:**

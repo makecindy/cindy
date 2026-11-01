@@ -96,6 +96,30 @@ describe('SessionContextGuardBanner (ROADMAP 2.5b)', () => {
     expect(explicitContext).toBe(200_000);
   });
 
+  it('takes the limit from the online endpoint serving a discovered model, not chat.default', () => {
+    // Owner repro 2026-11-01: Gemma discovered on LM Studio (262k) was measured against
+    // chat.default's Ollama route (32k), so 35k tokens showed as "108% full".
+    const discoveredModel = 'google/gemma-4-26b-a4b-qat';
+    const probes: ProbeLike[] = [
+      { id: 'ollama-local', status: 'online', models: ['qwen3:8b'] },
+      { id: 'lmstudio-local', status: 'online', models: ['qwen3-8b', discoveredModel] },
+    ];
+    const ollamaDefault: RoutingFile = { ...routing, rules: { ...routing.rules, 'chat.default': 'local-small' } };
+    expect(resolveSessionContextLength({
+      sessionModel: discoveredModel,
+      routing: ollamaDefault,
+      providers,
+      probes,
+    })).toBe(65_536);
+    // An offline endpoint's stale list is not evidence of where the model runs.
+    expect(resolveSessionContextLength({
+      sessionModel: discoveredModel,
+      routing: ollamaDefault,
+      providers,
+      probes: [{ id: 'lmstudio-local', status: 'offline', models: [discoveredModel] }],
+    })).toBe(32_768);
+  });
+
   it('renders warning banner with "Summarise and continue" button when context is >= 80% and summary route is healthy', () => {
     const probes: ProbeLike[] = [
       { id: 'ollama-local', status: 'online', models: ['qwen3:8b'] },

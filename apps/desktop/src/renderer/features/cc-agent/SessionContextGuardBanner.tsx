@@ -53,8 +53,9 @@ export function resolveSessionUsedTokens(
 
 /**
  * Resolve the active model's configured context length from `providers.yaml`
- * (`capabilities.contextLength`) via the session's provider or `routing.yaml`,
- * falling back to `session.contextWindow` when positive.
+ * (`capabilities.contextLength`) via the session's provider, `routing.yaml`, or the
+ * online endpoint whose discovered model list includes the session model, falling
+ * back to `session.contextWindow` when positive.
  */
 export function resolveSessionContextLength(params: {
   sessionModel?: string | null;
@@ -62,8 +63,10 @@ export function resolveSessionContextLength(params: {
   sessionContextWindow?: number | null;
   routing: RoutingFile;
   providers: readonly ProviderFileEntry[];
+  /** Live endpoint probes; an online endpoint listing the model is where it runs. */
+  probes?: readonly ProbeLike[];
 }): number | undefined {
-  const { sessionModel, sessionProviderId, sessionContextWindow, routing, providers } = params;
+  const { sessionModel, sessionProviderId, sessionContextWindow, routing, providers, probes } = params;
   const byId = new Map(providers.map((p) => [p.id, p]));
 
   if (sessionProviderId && byId.has(sessionProviderId)) {
@@ -80,6 +83,13 @@ export function resolveSessionContextLength(params: {
       const cap = byId.get(matched.provider)?.capabilities.contextLength;
       if (typeof cap === 'number' && cap > 0) return cap;
     }
+    // Models discovered on an endpoint (not hand-listed in routing.yaml) run on that
+    // endpoint, so its limit applies, not chat.default's.
+    const serving = probes?.find(
+      (probe) => probe.status === 'online' && probe.models.includes(trimmedModel),
+    );
+    const servingCap = serving ? byId.get(serving.id)?.capabilities.contextLength : undefined;
+    if (typeof servingCap === 'number' && servingCap > 0) return servingCap;
   }
 
   if (typeof sessionContextWindow === 'number' && sessionContextWindow > 0) {
@@ -291,6 +301,7 @@ export function SessionContextGuardBanner({
       sessionContextWindow: session.contextWindow,
       routing,
       providers,
+      probes,
     });
     return guardContext({
       usedTokens,

@@ -45,6 +45,11 @@ export function shouldFallbackVendorModel(
   // Pending intent and persisted model are different generations (and may use
   // different wire IDs); never compare one generation's model to the other's agent.
   if (context.providerId || context.hasSwitchIntent || context.isRemote) return false;
+  // Hermes routes its own models (Hermes home + providers.yaml); the Cindy catalog has no
+  // Hermes rows, so "not offered here, offered by another engine" is not a mismatch signal.
+  // Without this, a local id such as qwen3-8b that a Pi provider also lists was rewritten
+  // to the Claude Code default right after the first send.
+  if (agent === 'hermes') return false;
   // 本端任一供应商 offer 该模型 → 合法(含自定义供应商、gpt-5.x 等),绝不回退。
   if (providers.some((p) => providerOffersModel(p, sessionModel, agent))) return false;
   // 本端不 offer:仅当对端 agent 明确 offer 它(确定的跨 vendor 错配)才回退;

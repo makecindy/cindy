@@ -134,4 +134,16 @@ describe('shouldFallbackVendorModel', () => {
     // Shared ids stay valid when Pi itself offers them.
     expect(shouldFallbackVendorModel(PROVIDERS, 'gpt-5.4', 'pi')).toBe(false);
   });
+
+  it('never repairs a Hermes session model, even when another engine offers that id', () => {
+    // Hermes routes its own models (Hermes home + providers.yaml); the Cindy catalog has no
+    // Hermes rows. A local id such as qwen3-8b that a Pi provider also lists used to be read
+    // as a cross-engine mismatch, and the session view rewrote the Hermes session to the
+    // Claude Code default right after the first send (owner report 2026-11-01).
+    const withLocalPi = [...PROVIDERS, provider('lmstudio', 'user', { pi: ['qwen3-8b'] })];
+    expect(shouldFallbackVendorModel(withLocalPi, 'qwen3-8b', 'pi')).toBe(false);
+    expect(shouldFallbackVendorModel(withLocalPi, 'qwen3-8b', 'hermes')).toBe(false);
+    expect(shouldFallbackVendorModel(withLocalPi, 'claude-opus-4-8', 'hermes')).toBe(false);
+    expect(shouldFallbackVendorModel(withLocalPi, 'hermes-default', 'hermes')).toBe(false);
+  });
 });
