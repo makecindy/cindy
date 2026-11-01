@@ -56,7 +56,7 @@ export function buildSessionNotifyPayload(opts: {
     title: safeTitle,
     body: detail || opts.fallbackBody.slice(0, NOTIFY_BODY_MAX_LENGTH),
     deepLink: sessionDeepLink(opts.sessionId, opts.selfDeviceId, opts.teammateBotId),
-    ...(opts.kind === 'done' && opts.teammateBotId ? {
+    ...(opts.teammateBotId ? {
       sender: {
         id: createHash('sha256').update(`${opts.selfDeviceId}:bot:${opts.teammateBotId}`).digest('hex'),
         ...(opts.teammateAvatar ? { avatar: opts.teammateAvatar } : {}),

@@ -1,4 +1,4 @@
-import { readCindyBuildVersion } from '../scripts/build-version.mjs';
+import { readCindyBuildVersion, readCindyBuildRegion } from '../scripts/build-version.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +20,11 @@ export function terminalNodeExecutable(): string {
 }
 
 declare const __CINDY_APP_VERSION__: string;
+declare const __CINDY_APP_REGION__: 'global' | 'cn';
+
+export const REGION: 'global' | 'cn' = typeof __CINDY_APP_REGION__ === 'string'
+  ? __CINDY_APP_REGION__
+  : readCindyBuildRegion();
 
 // Packaged servers keep their build identity even when the launch environment
 // changes; development runs resolve the same identity directly from the source.

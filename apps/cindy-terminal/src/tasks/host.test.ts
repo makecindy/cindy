@@ -2293,7 +2293,7 @@ describe('terminal task host', () => {
       expect(await local.host.invoke('terminal:tasks:wait', [task.id, 'remote-input'])).toMatchObject({ status: 'completed' });
       expect(remote.native.sent).toHaveLength(1);
       expect(JSON.stringify(remote.native.sent[0])).toContain('work stays on this computer');
-      expect((await local.host.storage.get(task.id))?.workDir).toBe(local.root);
+      expect(path.normalize((await local.host.storage.get(task.id))!.workDir)).toBe(path.normalize(local.root));
       expect(remote.native.starts[0].deviceHosted?.workingDir).toBeTruthy();
       await local.host.invoke('maker:switch-session-agent', [task.id, 'claude-code', 'test-model', 'fixture', undefined, undefined, { agentDeviceId: null }]);
       await local.host.invoke('maker:send', [task.id, { text: 'back on this computer', clientId: 'back-input' }]);
@@ -2316,7 +2316,13 @@ describe('terminal task host', () => {
         expect(remote.native.sent).toHaveLength(2);
         expect(remote.native.starts.at(-1)?.botProfilePrompt).toContain('Remote companion');
         expect(remote.native.starts.at(-1)?.deviceHosted?.mcpServers).toContain('cindy_memory');
-        expect(await companion.storage.get(profile.sessionId)).toMatchObject({agentDeviceId:'execution-computer',providerId:'remote-fixture',workDir:path.join(companion.profiles.home(profile.id),'workspace')});
+        // The canonical session is created by the first send, after create()
+        // returned its profile snapshot. Read the persisted session reference.
+        const currentProfile = await companion.profiles.get(profile.id);
+        expect(currentProfile?.sessionId).toBeTruthy();
+        const storedCompanion = await companion.storage.get(currentProfile!.sessionId);
+        expect(storedCompanion).toMatchObject({agentDeviceId:'execution-computer',providerId:'remote-fixture'});
+        expect(path.normalize(storedCompanion!.workDir)).toBe(path.join(companion.profiles.home(profile.id),'workspace'));
         await companion.stop(profile.id);
         await agents.setEnabled('remote-fixture',false,()=>{});
         await expect(companion.send(profile.id,'must not run locally','revoked-remote').then(receipt=>receipt.completion)).rejects.toThrow();
@@ -4464,6 +4470,9 @@ createInterface({input:process.stdin}).on('line', line => {
 
   it('mounts project MCP tools with vaulted credentials and managed skills in the actual task runtime', async () => {
     const {host,root,native}=await setup();const peers:McpServer[]=[];let authenticated=false;
+    // Custom models start hidden; explicitly enable the route whose selection
+    // this test exercises through the companion's real MCP controls.
+    await host.models.setVisibility('claude-code', 'fixture', ['test-model'], true);
     const upstream=createServer(async(req,res)=>{
       authenticated=req.headers.authorization==='Bearer fixture-mcp-secret';
       if(!authenticated){res.writeHead(401).end();return;}
@@ -4501,12 +4510,17 @@ createInterface({input:process.stdin}).on('line', line => {
       try {
         await companion.modelSettings.saveDefaults([{...(await host.models.select()).selection,fastMode:false}]);
         const profile = await companion.create({ name: 'MCP companion' });
-        await (await companion.send(profile.id, 'hello', 'first')).completion;
+        // Native MCP calls happen during a turn. Keep that turn alive so a
+        // next-turn profile edit cannot retire an already-idle MCP transport.
+        const firstTurn = await companion.send(profile.id, 'wait-for-steer', 'first');
+        const currentProfile = await companion.profiles.get(profile.id);
+        expect(currentProfile?.sessionId).toBeTruthy();
+        await native.waitForHeld(currentProfile!.sessionId);
         const runtime = native.inputs.at(-1)!, start = native.starts.at(-1)!;
         expect(runtime.memory?.isEnabled()).toBe(false);
-        expect(start.botRuntimeProfile?.mcpPolicy.catalog).toContainEqual({ name: 'fixture_mcp', source: 'custom', available: true });
-        const ctx = { sessionId: profile.sessionId, workingDir: start.workingDir, agentKind: 'claude-code' as const,
-          getSessionContext: () => ({ sessionId: profile.sessionId, workingDir: start.workingDir, agentKind: 'claude-code' as const }) };
+        expect(start.botRuntimeProfile?.mcpPolicy.catalog).toContainEqual(expect.objectContaining({ name: 'fixture_mcp', source: 'custom', available: true }));
+        const ctx = { sessionId: currentProfile!.sessionId, workingDir: start.workingDir, agentKind: 'claude-code' as const,
+          getSessionContext: () => ({ sessionId: currentProfile!.sessionId, workingDir: start.workingDir, agentKind: 'claude-code' as const }) };
         const connect = async (name: string, client: McpClient) => {
           const server = runtime.tools!.providers.find(provider => provider.name === name)!.toClaudeSdkConfig!(ctx) as { instance: McpServer };
           const [left, right] = InMemoryTransport.createLinkedPair(); await server.instance.connect(left); await client.connect(right);
@@ -4521,7 +4535,9 @@ createInterface({input:process.stdin}).on('line', line => {
         };
         expect((await control('get_capabilities',{scope:'runtime'})).payload).toMatchObject({ok:true,capabilities:expect.arrayContaining([{server:'fixture_mcp',title:'Fixture MCP',description:'',source:'custom',status:'registered'}])});
         const before=await control('get_teammate_state');
-        expect(before.payload.state).toMatchObject({profile:{id:profile.id,name:'MCP companion',version:1},memory:{enabled:false,scope:'self'}});
+        // This reports the companion's preference; the global memory switch
+        // is independently enforced by runtime.memory.isEnabled() above.
+        expect(before.payload.state).toMatchObject({profile:{id:profile.id,name:'MCP companion',version:1},memory:{enabled:true,scope:'self'}});
         const available=await control('get_app_default_model');
         const model=available.payload.available.find((choice:any)=>choice.route.providerId==='fixture'&&choice.route.harness==='claude');
         expect(model).toBeDefined();
@@ -4529,11 +4545,13 @@ createInterface({input:process.stdin}).on('line', line => {
         expect((await control('update_teammate_profile',edit)).payload).toMatchObject({ok:true,effective:'next-turn'});
         expect(await companion.profiles.read(profile.id,'SOUL.md')).toBe('Independent personality');
         expect((await control('update_teammate_profile',edit)).response.isError).toBe(true);
-        expect((await control('set_app_default_model',{id:model.id})).payload).toMatchObject({ok:true,effective:'new-tasks'});
+        expect((await control('set_app_default_model',{id:model.id})).payload).toMatchObject({ok:true,effective:'new-tasks-and-following-bots'});
         expect((await companion.modelSettings.defaults())[0].providerId).toBe('fixture');
         const selected = await helper.callTool({ name: 'call_tool', arguments: { name: 'set_teammate_capability', args: { kind: 'mcp', id: 'fixture_mcp', joined: false } } });
         expect(selected.isError).not.toBe(true);
         expect((await companion.profiles.get(profile.id))?.capabilities).toMatchObject({ mcpMode: 'allowlist', mcpServers: [] });
+        native.finishHeld(currentProfile!.sessionId);
+        await firstTurn.completion;
         await (await companion.send(profile.id, 'next turn', 'second')).completion;
         expect(native.inputs.at(-1)!.tools!.providers.map(provider => provider.name)).not.toContain('fixture_mcp');
         expect(native.starts.at(-1)?.botProfilePrompt).toContain('Independent personality');
@@ -4541,7 +4559,7 @@ createInterface({input:process.stdin}).on('line', line => {
         await knowledge.configure({ memory: true });
         await (await companion.send(profile.id, 'memory enabled', 'third')).completion;
         expect(native.inputs.at(-1)!.memory?.isEnabled()).toBe(true);
-        expect(native.starts.at(-1)?.resumeSessionId).toBe(start.resumeSessionId ?? `native-${profile.sessionId}`);
+        expect(native.starts.at(-1)?.resumeSessionId).toBe(start.resumeSessionId ?? `native-${currentProfile!.sessionId}`);
       } finally { await helper.close(); await peer.close(); await companion.close(); await knowledge.close(); }
       await host.invoke('terminal:mcp:set-enabled',['fixture_mcp',false]);
       await expect(client.listTools()).rejects.toThrow();

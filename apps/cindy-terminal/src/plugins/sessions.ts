@@ -757,6 +757,12 @@ export class TerminalPluginSessions implements TerminalPluginSessionHooks {
     await assertCurrent();
     return { ...(owner ? { permissionMode: 'auto' as const } : {}), assertCurrent };
   }
+  isWorkerLabelLockedByPlan = async ({ leadSessionId, labels }: { leadSessionId: string; labels: string[] }) => {
+    await this.ready;
+    const receipt = await (await this.store.get()).get(leadSessionId);
+    const plan = receipt ? readPluginTaskPlanReceipt(receipt.payload).teamPlan : undefined;
+    return plan?.items.some(item => labels.includes(item.label)) ?? false;
+  };
   validateWorkerPlan: OrcaWorkerCreationPlanValidator = async (params, resolvedDirectory, resolvedRoute, current) => {
     await this.ready;
     const store = await this.store.get(), receipt = await store.get(params.leadSessionId);

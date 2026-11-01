@@ -5,7 +5,14 @@ import type { Logger } from '@cindy/maker-core';
 export * from '../models/config.js';
 const databases = new Map<string, Promise<NodeDatabase>>();
 const logger: Logger = {trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger};
-afterEach(async () => {const active = [...databases.values()]; databases.clear(); await Promise.all(active.map(async db => (await db).close()));});
+// File-local teardown hooks run before this imported hook. Call this explicitly
+// after stopping consumers and before removing their directories on Windows.
+export async function closeModelFixtureDatabases() {
+  const active = [...databases.values()];
+  databases.clear();
+  await Promise.all(active.map(async db => (await db).close()));
+}
+afterEach(closeModelFixtureDatabases);
 export function modelFixtureDatabase(root: string): Promise<NodeDatabase> {
   let db = databases.get(root);
   if (!db) {db = openStandaloneNodeDatabase(root, logger); databases.set(root, db);}

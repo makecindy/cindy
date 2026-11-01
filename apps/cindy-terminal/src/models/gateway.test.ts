@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { TerminalSecretStore } from '../secrets.js';
-import { TerminalModelConfig } from '../testing/model-config.js';
+import { TerminalModelConfig, closeModelFixtureDatabases } from '../testing/model-config.js';
 import { TerminalGateway } from './gateway.js';
 import { createTerminalPricing } from './pricing.js';
 import { createProviderProxy } from './proxy.js';
@@ -13,19 +13,22 @@ import {connectedModels} from '../client-operations.js';
 import type {TerminalClient} from '../contracts.js';
 
 const cleanup: Array<() => Promise<unknown>> = [];
+const roots: string[] = [];
 const pricingFor = (root: string, models: TerminalModelConfig, assertCurrent: () => void) => createTerminalPricing({
   profileDir: root, models, region: 'global', getOwnerId: () => 'database-owner-hash', assertCurrent,
   logger: { debug() {}, info() {}, warn() {}, error() {} }, emit() {},
 });
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
+  await closeModelFixtureDatabases();
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
 // Integration: terminal login previously never loaded account model grants.
 // Exercise the real catalog, encrypted vault and outbound proxy; only HTTP is a fixture.
 it('loads an account catalog, uses its credentials and keeps payment denial across a failed refresh', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-gateway-'));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const secrets = new TerminalSecretStore(root);
   await secrets.initialize('machine');
   let base = '',
@@ -269,7 +272,7 @@ it('loads an account catalog, uses its credentials and keeps payment denial acro
 // establish a key for that owner's replacement or write the old key to disk.
 it('discards a late credential response after the owner lease is revoked', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-gateway-owner-'));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const secrets = new TerminalSecretStore(root); await secrets.initialize('machine');
   const models = new TerminalModelConfig(root, secrets, async () => ({ authenticated: false })); await models.open();
   let active = true, release!: (response: Response) => void, started!: () => void;
@@ -298,7 +301,7 @@ it('discards a late credential response after the owner lease is revoked', async
 // and after the owner explicitly loads its models. Only native I/O is replaced.
 it('keeps remote provider snapshots read-only while owner reads discover native models', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-provider-snapshot-'));
-  cleanup.push(() => rm(root, {recursive:true, force:true}));
+  roots.push(root);
   const secrets = new TerminalSecretStore(root); await secrets.initialize('machine');
   const nativeStatus = vi.fn(async () => ({authenticated:true}));
   const discover = vi.fn(async () => [{id:'snapshot-fixture',name:'Snapshot fixture',contextWindow:200000,efforts:[],defaultEffort:null}]);
@@ -323,7 +326,7 @@ it('keeps remote provider snapshots read-only while owner reads discover native 
 // is replaced. A hidden model remains executable when explicitly selected.
 it('persists original model visibility without a renderer and scopes remote snapshots to the owner', async () => {
   const root=await mkdtemp(path.join(os.tmpdir(),'cindy-model-visibility-'));
-  cleanup.push(()=>rm(root,{recursive:true,force:true}));
+  roots.push(root);
   const secrets=new TerminalSecretStore(root);await secrets.initialize('machine');
   const native=async()=>({authenticated:true});
   const discover=async()=>[{id:'visibility-fixture',name:'Visibility fixture',contextWindow:200000,efforts:[],defaultEffort:null}];

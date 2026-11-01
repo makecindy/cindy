@@ -12,6 +12,7 @@ import type { AutoReviewHistoryMessage } from "@cindy/maker-shared/auto-review-i
 import type { Submission } from "../tasks/storage.js";
 
 export interface TerminalPluginSessionHooks {
+  isWorkerLabelLockedByPlan?(input: { leadSessionId: string; labels: string[] }): Promise<boolean>;
   captureOrcaAuthority?(taskId: string, acceptedInputId?: string): Promise<{ permissionMode?: 'auto'; assertCurrent(): Promise<void> }>;
   validateWorkerPlan?: import('@cindy/orca-workflow/host/orcaWorkerCreationService').OrcaWorkerCreationPlanValidator;
   assertDispatch(pluginId: string, taskId: string): Promise<void>;

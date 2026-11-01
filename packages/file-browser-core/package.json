@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./textFileExts": "./src/textFileExts.ts",
+    "./ignoreNames": "./src/ignoreNames.ts",
     "./filePathPolicy": "./src/filePathPolicy.ts"
   },
   "scripts": {

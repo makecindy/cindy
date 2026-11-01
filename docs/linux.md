@@ -1,5 +1,9 @@
 # Linux installation and updates
 
+For a server without a desktop session, see the development-stage
+[Cindy Terminal Linux / VPS guide](../apps/cindy-terminal/README.md#headless-linux--vps-deployment).
+The installation routes below are for the desktop application.
+
 ## Supported installation routes
 
 | Environment | Installation | How updates are applied |

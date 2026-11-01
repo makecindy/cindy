@@ -75,6 +75,18 @@ function recordScopes(content: string): string[] {
 }
 
 describe('main 日志的记录边界（写侧）', () => {
+  // PR #7138: extracted runtimes require Logger.child(). Exercise the real
+  // writer: a nested scope must preserve its parent and continuation escaping.
+  it('writes runtime child logs under the parent scope without creating forged records', async () => {
+    const marker = 'runtime-child-CASE';
+    createLogger('runtime-fixture').child('worker').info(
+      `${marker}\n[2026-08-04T10:00:00.000+08:00] [INFO ] [forged-child] message`,
+    );
+    const content = await readMainLogContaining(marker);
+    expect(recordScopes(content)).toContain('runtime-fixture/worker');
+    expect(recordScopes(content)).not.toContain('forged-child');
+  });
+
   it('打开当天文件时写下格式哨兵，且哨兵本身是一条合法记录', async () => {
     const content = await readMainLogContaining(RECORD_FORMAT_SENTINEL_MSG);
 

@@ -18,7 +18,8 @@ import { READ_SHEET_RUNTIME_PACKAGES } from '../../../packages/lizi-mcps/src/cin
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(app, 'package.json'));
-const { version } = JSON.parse(await readFile(path.join(app, 'dist/build-info.json'), 'utf8'));
+const { version, region } = JSON.parse(await readFile(path.join(app, 'dist/build-info.json'), 'utf8'));
+if (!['global', 'cn'].includes(region)) throw new Error('Invalid build region; rebuild the terminal bundle.');
 if (typeof version !== 'string' || require('semver').valid(version) !== version) throw new Error('Invalid build version; rebuild the terminal bundle.');
 const args = process.argv.slice(2);
 const value = name => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
@@ -158,7 +159,7 @@ try {
     if (check.status !== 0) throw new Error(`Runtime smoke failed: ${check.error?.message || check.stderr || check.stdout}`);
     if (command[1] === '--version' && check.stdout.trim() !== version) throw new Error('Packaged CLI version does not match its build manifest');
   }
-  await writeFile(path.join(output, 'runtime-manifest.json'), JSON.stringify({ version, target, node: { version: nodeVersion, sha256: digest }, packages: included }, null, 2));
+  await writeFile(path.join(output, 'runtime-manifest.json'), JSON.stringify({ version, region, target, node: { version: nodeVersion, sha256: digest }, packages: included }, null, 2));
   await tar.c({ file: `${output}.tar.gz`, gzip: true, cwd: path.dirname(output), portable: true }, [path.basename(output)]);
   const checksum = createHash('sha256');
   for await (const chunk of createReadStream(`${output}.tar.gz`)) checksum.update(chunk);

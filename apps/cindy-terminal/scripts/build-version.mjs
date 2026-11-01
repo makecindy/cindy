@@ -4,6 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 const { valid } = createRequire(import.meta.url)('semver');
 
+/** Terminal distributions have one immutable account region, like Desktop. */
+export function readCindyBuildRegion(value = process.env.CINDY_AUTH_REGION) {
+  if (value === undefined || value === '') return 'global';
+  if (value === 'global' || value === 'cn') return value;
+  throw new Error('CINDY_BUILD_REGION_INVALID: use global or cn');
+}
+
 /** Release builds use the same APP_VERSION as Desktop. Source runs use the
  * nearest release in their own ancestry, never an unrelated newer tag. */
 export function readCindyBuildVersion() {
@@ -17,7 +24,9 @@ export function readCindyBuildVersion() {
     } catch {
       // Pull request checkouts intentionally omit tags. Release packaging always
       // supplies APP_VERSION; source tests only need a valid development identity.
-      version = '0.0.0-dev';
+      // Device Link uses 0.0.0 for development builds and then negotiates
+      // capabilities. A prerelease suffix would make this host look too old.
+      version = '0.0.0';
     }
   }
   if (valid(version) !== version) throw new Error('CINDY_BUILD_VERSION_INVALID: set APP_VERSION to the Cindy release version');

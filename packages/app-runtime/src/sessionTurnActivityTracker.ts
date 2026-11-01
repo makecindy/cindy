@@ -60,6 +60,14 @@ export class SessionTurnActivityTracker {
     return false;
   }
 
+  listSessionsInTurn(): readonly string[] {
+    const ids: string[] = [];
+    for (const [sessionId, isRunning] of this.sessionInTurn) {
+      if (isRunning) ids.push(sessionId);
+    }
+    return ids;
+  }
+
   setSessionInTurn(sessionId: string, isRunning: boolean): void {
     if (isRunning) this.clearScheduledSessionTurnKeepalive(sessionId);
     this.setInTurn(sessionId, isRunning);
@@ -128,6 +136,17 @@ export class SessionTurnActivityTracker {
 
 export interface TurnRunningSessionSnapshot {
   isTurnRunning?: () => boolean;
+}
+
+export function collectInTurnSessionIds(
+  tracker: { listSessionsInTurn(): readonly string[] },
+  activeSessions: Iterable<{ id: string; isTurnRunning?: () => boolean }>,
+): string[] {
+  const ids = new Set(tracker.listSessionsInTurn());
+  for (const session of activeSessions) {
+    if (session.isTurnRunning?.()) ids.add(session.id);
+  }
+  return [...ids];
 }
 
 export function hasAnySessionInTurn(

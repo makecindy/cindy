@@ -12,7 +12,7 @@ import {
 } from "@cindy/device-link";
 import { MANAGED_OLLAMA_PROVIDER_ID } from "@cindy/model-providers/localModelRuntime";
 import { streamOllamaPull } from "@cindy/model-providers/local-runtime/ollamaClient";
-import { TerminalModelConfig } from "../testing/model-config.js";
+import { TerminalModelConfig, closeModelFixtureDatabases } from "../testing/model-config.js";
 import type { TerminalClient, TerminalSecrets } from "../contracts.js";
 import { runResourceCommand } from "../resource-commands.js";
 import { TerminalLocalModels, type LocalModelJob } from "./service.js";
@@ -23,9 +23,7 @@ import { MANAGED_LLAMACPP_PROVIDER_ID } from "@cindy/model-providers/llamaCpp";
 // download and deletion fences, then persist one catalog for all three engines.
 it("manages GGUF discovery, paused transfers and provider deletion on the selected host", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "cindy-gguf-host-"));
-  cleanup.push(() =>
-    rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
-  );
+  roots.push(root);
   const bytes = Buffer.alloc(8192, 3),
     sha256 = createHash("sha256").update(bytes).digest("hex");
   let ranges: string[] = [],
@@ -207,8 +205,11 @@ it("manages GGUF discovery, paused transfers and provider deletion on the select
 });
 
 const cleanup: Array<() => Promise<unknown>> = [];
+const roots: string[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
+  await closeModelFixtureDatabases();
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 const deferred = () => {
   let resolve!: () => void;
@@ -222,7 +223,7 @@ const deferred = () => {
 // resource registry, model persistence and streaming HTTP (no runtime mocks).
 it("manages remote downloads, resumes durable progress and fences the owner", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "cindy-local-models-"));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const installed = new Set<string>();
   const downloads = new Map<string, ServerResponse>();
   let downloadStarted = deferred();
@@ -433,7 +434,7 @@ it("manages remote downloads, resumes durable progress and fences the owner", as
 // Node alone, preserving internal library links while rejecting traversal.
 it("extracts zstd runtime archives without a system decompressor and rejects escaping links", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "cindy-local-archive-"));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const archive = path.join(root, "runtime.tar.zst");
   const entry = (name: string, type: string, data = "", linkpath = "") => {
     const header = new tar.Header({

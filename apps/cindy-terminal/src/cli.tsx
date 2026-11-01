@@ -15,6 +15,7 @@ import { setDefaultModel, waitForTurn, unwrap, enqueueMessage, connectedModels }
 import { EngineManager, runNativeLogin, nativeLoginStatus, type EngineKind } from './engines/index.js';
 import { listEngines, operateEngine } from './engines/client.js';
 import { profilePath, privateDirectory, VERSION } from './platform.js';
+import { REGION } from './version.js';
 import { connectTerminal, reconnectingClient } from './transport.js';
 import { TerminalService } from './service.js';
 import { TerminalServiceManager } from './service-manager.js';
@@ -220,7 +221,7 @@ async function main() {
       finally{process.off('SIGINT',stop);process.off('SIGTERM',stop);}
       return;
     }
-    const service=new TerminalService(directory);
+    const service=new TerminalService(directory, REGION);
     try { await service.start(); } catch(error) { if(error instanceof Error&&error.message==='SERVICE_ALREADY_RUNNING')return;throw error; }
     const stop=()=>{void service.close().catch(()=>{process.exitCode=1;});};
     process.once('SIGINT',stop);process.once('SIGTERM',stop);

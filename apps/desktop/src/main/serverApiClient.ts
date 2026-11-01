@@ -5,4 +5,4 @@ import {createLogger} from './logger';
 import {requestErrorMessage} from './requestErrorMessage';
 import {createServerApiClient} from '@cindy/app-runtime/serverApiClient';
 export {ServerApiError,type ApiFetchOptions} from '@cindy/app-runtime/serverApiClient';
-export const {serverApiFetch}=createServerApiClient({authManager,getResolvedMainLocale,requestErrorMessage,logger:createLogger('serverApiClient'),fetch:(url,init)=>net.fetch(url,init)});
+export const {serverApiFetch}=createServerApiClient({authManager,getResolvedMainLocale,requestErrorMessage,logger:createLogger('serverApiClient'),fetch:(url,init)=>net.fetch(url instanceof URL ? url.toString() : url,init)});

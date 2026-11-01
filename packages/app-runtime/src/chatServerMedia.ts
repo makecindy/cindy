@@ -17,7 +17,7 @@ const { fetch, getDbClient, ownerScopedUserDataPath, ingestMedia, blobStore: {re
 function createChatMedia(api:ChatApi,current:()=>boolean,log?:{warn(message:string,meta?:Record<string,unknown>):void},options:{allowLoopback?:boolean}={}) {
  return createSharedChatMedia(api,current,{
   fetch:(...args)=>fetch(...args),retryAfterDeadline,diagnostic:chatErrorDiagnostic,
-  read:async(attachment,maxSize,check)=>{if(attachment.path){const stat=await fs.stat(attachment.path);check();if(!stat.isFile()||stat.size>maxSize)throw new Error('ATTACHMENT_TOO_LARGE');}return attachment.url?.startsWith('cindy-media://')?(await readMedia(attachment.url)).buffer:attachment.path?await fs.readFile(attachment.path):null;},
+  read:async(attachment,maxSize,check)=>{if(attachment.path){const stat=await fs.stat(attachment.path);await check();if(!stat.isFile()||stat.size>maxSize)throw new Error('ATTACHMENT_TOO_LARGE');}return attachment.url?.startsWith('cindy-media://')?(await readMedia(attachment.url)).buffer:attachment.path?await fs.readFile(attachment.path):null;},
   cache:async({roomId,mediaId,name,mimeType,size,buffer},check)=>{const root=ownerScopedUserDataPath();const db=getDbClient().drizzle;const base={id:mediaId,name,mimeType,size};if(mimeType.startsWith('image/')&&supportedMime(mimeType)){const stored=await ingestMedia({buffer,mimeType,isCache:true,refs:[],assertStillValid:check},db);return {...base,category:'image',url:stored.url,path:null};}const dir=path.join(botGroupAttachmentsPath(root,roomId),mediaId);await fs.mkdir(dir,{recursive:true});check();const file=path.join(dir,safeAttachmentFileName(name));await fs.writeFile(file,buffer);check();return {...base,category:'file',url:null,path:file};}
  },log,options);
 }

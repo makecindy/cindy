@@ -175,7 +175,7 @@ import { createTerminalWorktreeIpc, WORKTREE_CHANNELS } from '../worktrees/ipc.j
 import type { WorktreeRuntimeLease } from '@cindy/worktree-core/runtimeLeases';
 import { preparePersistedOrcaSessionStart } from '@cindy/orca-workflow/host/orcaSessionStartOptions';
 import { createOrcaRemoteWorkers } from '@cindy/orca-workflow/host/orcaRemoteWorkers';
-import { createOrcaTeamService, type OrcaTeamService, type OrcaManualInterruptSnapshot } from '@cindy/orca-workflow/host/orcaTeamService';
+import { createOrcaTeamService, captureOrcaDeliveryBaselines, evaluateOrcaDeliveryScope, type OrcaTeamService, type OrcaManualInterruptSnapshot } from '@cindy/orca-workflow/host/orcaTeamService';
 import { createOrcaInterAgentDispatcher } from '@cindy/orca-workflow/host/orcaInterAgentDispatcher';
 import { toDesktopSessionDispatchOutcome } from '@cindy/im-runtime/sendOutcome';
 import { createQueueReorderAdapter, type ControlSteerOutcome, type QueuedSteerOutcome } from '@cindy/im-runtime/sessionQueueControl';
@@ -1962,6 +1962,7 @@ export class TerminalTaskHost {
       return session ? session.closeIfIdle() : true;
     };
     return createOrcaTeamService(this.orcaRemoteController.wrapTeamDeps({
+      isWorkerLabelLockedByPlan: async input => this.pluginSessions?.isWorkerLabelLockedByPlan?.(input) ?? false,
       onLeadWorkerReportsSettled: id => {
         if (this.eventRuntime && !isSessionTurnDispatchBoundaryBusy(this.eventRuntime.activity, id, this.live.get(id)?.session))
           this.sessionActivity?.service.notifyQueueEmptied(id);
@@ -1983,6 +1984,29 @@ export class TerminalTaskHost {
           if (current?.id !== team?.id || !row || row.deleted || row.archived || worker && link?.workerId !== worker.workerId) throw new Error('ORCA_ASSIGNMENT_REVOKED');
         };
       },
+      captureDeliveryAuthority: async leadId => {
+        const owner = this.options.currentOwnerSession?.();
+        const readRow = async () => {
+          const row = await this.storage.get(leadId);
+          return row ? {
+            status: row.deleted ? 'deleted' : row.archived ? 'archived' : 'active',
+            clearedAt: row.clearedAt ?? null,
+            permissionMode: row.permissionMode ?? 'default',
+            planModeEnabled: row.planMode ?? false,
+          } : null;
+        };
+        const live = () => this.live.get(leadId)?.maker.getSession(leadId) ?? null;
+        const baselines = captureOrcaDeliveryBaselines({ row: await readRow(), live: live() });
+        return async () => {
+          this.guard({ source: 'local' });
+          const row = await readRow(), currentOwner = this.options.currentOwnerSession?.();
+          this.guard({ source: 'local' });
+          if (owner?.dataOwnerId !== currentOwner?.dataOwnerId || owner?.generation !== currentOwner?.generation
+            || evaluateOrcaDeliveryScope({ ...baselines, row, live: live() }) !== 'ok') {
+            throw new Error('ORCA_ASSIGNMENT_REVOKED');
+          }
+        };
+      },
       getWorkerLinkBySessionId: workerSessionId => this.orcaStore.getWorkerLink({ workerSessionId }),
       getWorkerLinkByWorkerId: workerId => this.orcaStore.getWorkerLink({ workerId }),
       listWorkersByLead: id => this.orcaStore.listWorkersByLead(id),
@@ -1993,6 +2017,7 @@ export class TerminalTaskHost {
         await this.ensureLive(worker.sessionId);
       }),
       updateWorkerStatus: (id, status) => this.orcaStore.updateWorkerStatus(id, status),
+      updateWorkerIdentity: input => this.orcaStore.updateWorkerIdentity(input),
       markWorkerIdle: id => this.orcaStore.markWorkerIdle(id),
       markWorkerIdleIfStatus: (id, status) => this.orcaStore.markWorkerIdleIfStatus(id, status),
       restoreWorkerDoneIfIdle: id => this.orcaStore.restoreWorkerDoneIfIdle(id),
@@ -2799,6 +2824,7 @@ export class TerminalTaskHost {
       resolveModelSelection: this.scheduledModels.resolve, applyPiModelSelectionUnderLock: this.scheduledModels.applyPi,
       onSessionCreated: id => this.emit('local-db:sessions:created', { sessionId: id }),
       schedulerQueue: { ...queue, isAutoResumePending: this.schedulerRecovery.isSchedulerAutoResumePending,
+        getLastUserActionAt: id => this.inputCoordinator.getLastUserActionAt(id),
         onAutoResumeFailed: this.schedulerRecovery.onSchedulerAutoResumeFailed, cancelAutoResume: this.schedulerRecovery.cancelSchedulerAutoResume },
       isAgentOnOtherDevice: async id => { const row = await this.storage.get(id); guard(); return !!row?.agentDeviceId && !row.remoteHostId; },
       checkModelRoute: (kind, model, provider) => this.models.verdict(kind, model, provider),

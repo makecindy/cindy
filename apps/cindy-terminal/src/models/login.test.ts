@@ -7,7 +7,7 @@ import os from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RemoteResourceRegistry } from '@cindy/device-link';
 import { TerminalSecretStore } from '../secrets.js';
-import { TerminalModelConfig, modelFixtureDatabase } from '../testing/model-config.js';
+import { TerminalModelConfig, modelFixtureDatabase, closeModelFixtureDatabases } from '../testing/model-config.js';
 import { TerminalProviderLogin, type ProviderLoginState } from './login.js';
 import { TerminalConfiguration } from '../configuration.js';
 import { TerminalCapabilities } from '../tasks/capabilities.js';
@@ -28,9 +28,12 @@ import { TerminalGrokLogin } from './grok-login.js';
 import { createChatgptProxy, createGrokProxy } from './subscription-proxy.js';
 
 const cleanup: Array<() => Promise<unknown>> = [];
+const roots: string[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   for (const close of cleanup.splice(0).reverse()) await close();
+  await closeModelFixtureDatabases();
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
 // Integration: headless provider login must survive another computer's browser
@@ -38,7 +41,7 @@ afterEach(async () => {
 // actual controller cryptography, PKCE, encrypted vault and request proxy.
 async function fixture(grokFetch?: typeof fetch, claudeSetup?: { run: typeof runNative; spawn: PtySpawnFn }, independent = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-provider-login-'));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const secrets = new TerminalSecretStore(root);
   await secrets.initialize('machine');
   const requests: Array<{
@@ -394,7 +397,7 @@ const nativeToken = (expires: number, signature = 'synthetic-signature') => `hea
 
 async function nativeFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-native-login-'));
-  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  roots.push(root);
   const vault = new TerminalSecretStore(root); await vault.initialize('machine');
   const grant = deferred(), visible = deferred(), changed = deferred();
   const expires = Math.floor(Date.now() / 1000) + 3600;

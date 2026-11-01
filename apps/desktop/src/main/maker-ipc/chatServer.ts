@@ -17,7 +17,7 @@ import { createChatServerRuntime } from '@cindy/app-runtime/chatServer';
 export { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageText } from '@cindy/app-runtime/chatServer';
 export const { withChatServer } = createChatServerRuntime({
  userDataPath:()=>app.getPath('userData'),isPackaged:()=>app.isPackaged,getClientEndpoint,t,
- fetch:(...args)=>net.fetch(...args),getAccessToken,refresh,getDbClient,readMedia,
+ fetch:(url,init)=>net.fetch(url instanceof URL ? url.toString() : url,init),getAccessToken,refresh,getDbClient,readMedia,
  createChatMedia,prepareChatReplyImages,chatServerWorkspaces,chatMigrationReceipts,prepareBotGroupTaskPost,
  readPersistedReplyText,registerGroupToolAuthority,GroupToolAuthorizationError,uploadPublicAsset,
  validateAvatar:avatar=>validateAvatarUpload(avatar,({buffer})=>{

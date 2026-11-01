@@ -581,6 +581,7 @@ import {
   setSessionOrcaRole,
   setWorkerFocus,
   updateWorkerStatus,
+  updateWorkerIdentity,
 } from '../localDb/orcaTeamStore.js';
 import {
   botLifecycleEvents,
@@ -1017,6 +1018,8 @@ import {
 import { orcaModelDiscoveryFailure, throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import {
   createOrcaTeamService,
+  captureOrcaDeliveryBaselines,
+  evaluateOrcaDeliveryScope,
   findFocusTargetWorker,
   type InterruptWorkerResult,
   type ListWorkerQueuedMessagesResult,
@@ -1365,6 +1368,7 @@ import {
 } from './deferredRestartQueueWiring.js';
 import {
   hasAnySessionInTurn,
+  collectInTurnSessionIds,
   isSessionTurnDispatchBoundaryBusy,
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
@@ -4168,6 +4172,10 @@ export function isSessionInTurn(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionInTurn(sessionId);
 }
 
+export function getSessionLastUserActionAt(sessionId: string): number | null {
+  return agentInputCoordinatorHolder?.getLastUserActionAt(sessionId) ?? null;
+}
+
 /** Runtime-only attribution; queued or rejected steering cannot take ownership. */
 export function getSessionActiveInputClientIds(sessionId: string): string[] {
   return agentInputCoordinatorHolder?.getActiveInputClientIds(sessionId) ?? [];
@@ -4531,6 +4539,10 @@ function isGatewayProxyTokenRecoveryErrorEvent(sessionId: string, event: AgentEv
  */
 export function anySessionInTurn(maker?: Pick<Maker, 'listActiveSessions'> | null): boolean {
   return hasAnySessionInTurn(sessionTurnActivityTracker, maker?.listActiveSessions() ?? []);
+}
+
+export function listInTurnSessionIds(maker?: Pick<Maker, 'listActiveSessions'> | null): string[] {
+  return collectInTurnSessionIds(sessionTurnActivityTracker, maker?.listActiveSessions() ?? []);
 }
 
 /**
@@ -13294,7 +13306,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }));
 
   const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
+    isWorkerLabelLockedByPlan: async ({ leadSessionId, labels }) => {
+      const receipt = await createPluginTaskStore(getDbClient()).get(leadSessionId);
+      const plan = receipt ? readPluginTaskPlanReceipt(receipt.payload).teamPlan : undefined;
+      return plan?.items.some(item => labels.includes(item.label)) ?? false;
+    },
     captureControlAuthority: async (leadSessionId) => (await captureOrcaPluginAuthority(leadSessionId)).assertCurrent,
+    captureDeliveryAuthority: async (leadSessionId) => {
+      const epoch = getCurrentDbClientSnapshot();
+      if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
+      const readSessionRow = async () => {
+        const [row] = await epoch.client.drizzle.select({
+          status: sessions.status, clearedAt: sessions.clearedAt,
+          permissionMode: sessions.permissionMode, planModeEnabled: sessions.planModeEnabled,
+        }).from(sessions).where(eq(sessions.id, leadSessionId)).limit(1);
+        return row ?? null;
+      };
+      const row = await readSessionRow();
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+      const baselines = captureOrcaDeliveryBaselines({ row, live: maker.getSession(leadSessionId) ?? null });
+      return async () => {
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        if (isAppSessionBoundaryPending()) throw new PluginTaskError('HOST_NOT_READY', 'Account is switching');
+        const current = await readSessionRow();
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        const verdict = evaluateOrcaDeliveryScope({
+          ...baselines, row: current, live: maker.getSession(leadSessionId) ?? null,
+        });
+        if (verdict !== 'ok') throw new PluginTaskError('PERMISSION_DENIED', `Orca delivery revoked: ${verdict}`);
+      };
+    },
     withSessionSendLock: withSendToSessionLock,
     getWorkerLinkBySessionId: (workerSessionId) => getWorkerLink({ workerSessionId }),
     getWorkerLinkByWorkerId: (workerId) => getWorkerLink({ workerId }),
@@ -13307,6 +13348,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 归档 / 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
     cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),
     updateWorkerStatus,
+    updateWorkerIdentity,
     markWorkerIdle: (...args) => markWorkerIdle(...args),
     markWorkerIdleIfStatus,
     restoreWorkerDoneIfIdle,

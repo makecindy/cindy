@@ -4,10 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, copyFile, cp, readFile, writeFile } from 'node:fs/promises';
 import { runtimePackages, imRuntimePackages } from './runtime-externals.mjs';
-import { readCindyBuildVersion } from './build-version.mjs';
+import { readCindyBuildVersion, readCindyBuildRegion } from './build-version.mjs';
 
 const appDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const version = readCindyBuildVersion();
+const region = readCindyBuildRegion();
 await mkdir(path.join(appDir,'dist'),{recursive:true});
 // Ship the same remote daemons and compatibility proxy as Desktop.
 for(const [name,bundle] of [['maker-pi-manager','pi-manager.mjs'],['maker-cc-manager','cc-mgr.mjs'],['anthropic-compat-proxy','proxy.mjs']]) {
@@ -29,7 +30,7 @@ await build({
 await build({
   entryPoints:[path.join(appDir,'src/cli.tsx')],outfile:path.join(appDir,'dist/cli.js'),
   platform:'node',target:'node22',format:'esm',bundle:true,sourcemap:true,
-  define: { __CINDY_APP_VERSION__: JSON.stringify(version) },
+  define: { __CINDY_APP_VERSION__: JSON.stringify(version), __CINDY_APP_REGION__: JSON.stringify(region) },
   loader:{'.md':'text'},external:[...runtimePackages,...imRuntimePackages,'react/jsx-runtime'],
   banner:{js:'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'},
 });
@@ -66,7 +67,7 @@ const guide=await readFile(guideSource,'utf8');
 const references=[...guide.matchAll(/import \w+ from '([^']+\.md)\?raw';/g)].map(match=>path.resolve(path.dirname(guideSource),match[1]));
 if(!references.length)throw new Error('PLUGIN_AUTHORING_GUIDE_MISSING');
 await writeFile(path.join(appDir,'dist/plugin-forge-guide.md'),(await Promise.all(references.map(file=>readFile(file,'utf8')))).join('\n\n'));
-await writeFile(path.join(appDir, 'dist/build-info.json'), JSON.stringify({ version }) + '\n');
+await writeFile(path.join(appDir, 'dist/build-info.json'), JSON.stringify({ version, region }) + '\n');
 
 await mkdir(path.join(appDir,'dist/resources'),{recursive:true});
 await copyFile(path.join(appDir,'../desktop/resources/teammate-portrait-gallery.png'),path.join(appDir,'dist/resources/teammate-portrait-gallery.png'));

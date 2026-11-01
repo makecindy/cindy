@@ -18,7 +18,7 @@ import {
   type StartSessionOptions,
 } from "@cindy/maker-core";
 import { TerminalCompanionHost } from "./host.js";
-import { TerminalModelConfig, modelFixtureDatabase } from "../../testing/model-config.js";
+import { TerminalModelConfig, modelFixtureDatabase, closeModelFixtureDatabases } from "../../testing/model-config.js";
 import type { RuntimeInput } from "../../models/runtime.js";
 import { RemoteResourceRegistry } from "@cindy/device-link";
 import { registerCompanionResources } from "./resources.js";
@@ -53,6 +53,7 @@ afterEach(async () => {
   for(const tasks of taskHosts.splice(0))await tasks.close();
   for(const knowledge of knowledgeHosts.splice(0))await knowledge.close();
   await closeTaskStorageFixtures();
+  await closeModelFixtureDatabases();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });

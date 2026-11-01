@@ -745,6 +745,7 @@ function emit(level: LogLevel, scope: string, args: unknown[]): void {
 }
 
 export interface Logger {
+  child(scope: string): Logger;
   trace(...args: unknown[]): void;
   debug(...args: unknown[]): void;
   info(...args: unknown[]): void;
@@ -755,6 +756,7 @@ export interface Logger {
 
 export function createLogger(scope: string): Logger {
   return {
+    child: (childScope) => createLogger(`${scope}/${childScope}`),
     trace: (...args) => emit('trace', scope, args),
     debug: (...args) => emit('debug', scope, args),
     info: (...args) => emit('info', scope, args),

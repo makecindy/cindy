@@ -149,6 +149,8 @@ export interface MakerScheduleRunnerHost
  * 降级)时回退直发 + 顺延的旧行为。
  */
 export interface SchedulerQueueDeps {
+  /** Host-local human activity, including retries that preserve send-time sorting. */
+  getLastUserActionAt?(sessionId: string): number | null;
   /** 目标会话当前是否忙(turn 运行中 / 队列有积压 / 凭证切换等待中)。 */
   isSessionBusy(sessionId: string): boolean;
   /**
@@ -1171,8 +1173,14 @@ class MakerScheduleRunner implements ScheduleRunner {
         // 命中可能来自上一次自动 fire 而非真人。这只会让 B1 更保守——但唯一效果是"正在
         // 跑 turn 时顺延",而正在跑 turn 的 send 本就会被 B2(SESSION_RUNNING)顺延,两者
         // 落点一致,无功能回退,仅 telemetry reason 偏"user-active"。
+        // Retry/Continue preserve userSendAt for list ordering. The coordinator
+        // records human takeover separately; retain the DB fallback for direct sends.
+        const lastUserActionAt = Math.max(
+          row?.userSendAt ?? 0,
+          this.deps.schedulerQueue?.getLastUserActionAt?.(sessionId) ?? 0,
+        );
         const recentlyUserDriven =
-          row?.userSendAt != null && Date.now() - row.userSendAt < ACTIVE_YIELD_WINDOW_MS;
+          lastUserActionAt > 0 && Date.now() - lastUserActionAt < ACTIVE_YIELD_WINDOW_MS;
         if (recentlyUserDriven && isSessionInTurn(sessionId) && this.canDefer(schedule, ctx)) {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;

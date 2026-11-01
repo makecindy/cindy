@@ -21,6 +21,141 @@ it. Pass selected entries as `{"items":[{"source":"codex","id":"<native-id>"}]}`
 to `cindy tasks import --stdin`; `source` also accepts `claude`. These commands use
 the GUI's existing history scanner and importer on the host computer.
 
+## Headless Linux / VPS deployment
+
+Use a normal Unix user on a glibc Linux host. The core host and TUI do not need
+Electron, a desktop session or a display server. The following source-build
+route is for testing this development package, not a published stable release.
+Build on the target OS and architecture; Windows builds cannot be packaged for
+Linux. Use Node 22.12+ from the Node 22 line and the repository's pnpm version.
+
+From the repository root on the Linux server:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --filter cindy-terminal build
+node apps/cindy-terminal/scripts/package-runtime.mjs \
+  --out "$HOME/.local/lib/cindy-terminal" --target linux-x64
+export PATH="$HOME/.local/lib/cindy-terminal:$PATH"
+cindy --version
+```
+
+Use `linux-arm64` on an ARM64 host. The output directory must not already exist.
+The package includes its Node runtime and native dependencies. Keep it at a
+stable path: service registration records absolute executable paths. Add the
+PATH entry to your shell configuration if desired.
+
+Builds default to Global. For Mainland China, build with
+`CINDY_AUTH_REGION=cn pnpm --filter cindy-terminal build` before packaging and use
+a separate profile such as `vps-cn`. The region is embedded in the executable;
+changing the service's environment does not change its account endpoints.
+
+### First login and device access
+
+Connect over SSH with a TTY and use the same profile for every command:
+
+```sh
+cindy --profile vps vault setup --machine-key
+cindy --profile vps login
+cindy --profile vps models
+cindy --profile vps config set deviceName my-vps
+cindy --profile vps config set remoteEnabled true
+cindy --profile vps devices list
+cindy --profile vps doctor
+```
+
+Machine-key mode allows unattended restarts without a desktop Secret Service.
+The key is stored locally and protected by filesystem permissions; protect the
+Unix account and its profile directory. Passphrase mode instead requires vault
+unlocking after a restart. Login and Models are interactive TUI screens; finish
+account login and configure a provider and default model before running tasks.
+For provider authorization from another computer, see the next section.
+
+Remote access is disabled by default. Sign into the same Cindy account on the
+controller and use Device Link to find the enabled host. Client compatibility
+and the network path still need to be verified with your actual controller.
+
+### Keep the host running after SSH logout and reboot
+
+On a systemd Linux host, run these commands as the same ordinary user:
+
+```sh
+cindy --profile vps service install
+cindy --profile vps service activate
+cindy --profile vps service boot
+cindy --profile vps service status --json
+```
+
+`install` registers a user service. `activate` transfers a manually started host
+to the service manager; it refuses to interrupt active tasks unless you explicitly
+request `--stop-tasks`. Finish those tasks before activating or enabling boot.
+`boot` enables user lingering and starts the service so it can survive logout and
+start without an interactive login. If the machine's policy prevents this, ask
+its administrator to enable lingering for your Unix user with
+`sudo loginctl enable-linger <username>` and make its systemd user manager available,
+then retry. A minimal container without systemd cannot use this service route;
+`cindy --profile vps serve` runs the host in the foreground.
+
+Verify that service status reports both registration and a running process.
+Repeat the check from a new SSH session after logout, and after a reboot when
+practical. For systemd logs, use the installation ID returned by service status:
+
+```sh
+journalctl --user -u <installation.id> -f
+```
+
+Systemd captures stdout/stderr in the journal; `cindy service logs` reads the
+separate host log file and is not a replacement for the service journal.
+Use `service stop`, `service restart` and `service uninstall` with the same
+profile to manage it. Uninstalling the service preserves profile data and does
+not disable lingering for other services owned by that user.
+
+Profile data defaults to `~/.local/state/CindyTerminal/profiles/vps`, or
+`$XDG_STATE_HOME/CindyTerminal/profiles/vps` when set. User units are installed
+under `~/.config/systemd/user`, or `$XDG_CONFIG_HOME/systemd/user`. Keep these
+environment values consistent between setup and service management. Plugins
+that use a browser need the additional checks under [Headless plugin browser](#headless-plugin-browser).
+
+### Restricted outbound networks
+
+Account region and model-provider connectivity are separate. A Mainland China
+build still needs access to the selected provider and to engine download sites.
+Check `cindy --profile vps engines list --json` before installing: an installed
+engine does not need another Install operation to sign in or configure a model.
+`cindy --profile vps resources list engines --json` also reports pending install
+jobs. A TUI showing Loading after Install may be waiting for a download; closing
+the TUI does not cancel that host-owned job.
+
+If the workstation has an HTTP proxy listening on localhost port 7897, run this
+on the workstation and keep the SSH connection open:
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 -R 127.0.0.1:17897:127.0.0.1:7897 user@server
+```
+
+The server-side proxy listens only on loopback. For a systemd-managed host,
+use `systemctl --user edit <installation.id>` as the Cindy Unix user and add:
+
+```ini
+[Service]
+Environment="HTTP_PROXY=http://127.0.0.1:17897" "HTTPS_PROXY=http://127.0.0.1:17897"
+Environment="http_proxy=http://127.0.0.1:17897" "https_proxy=http://127.0.0.1:17897"
+Environment="NO_PROXY=localhost,127.0.0.1" "NODE_USE_ENV_PROXY=1"
+```
+
+This Node fetch proxy option requires a supporting runtime, such as Node 22.22.0
+used for Linux deployment validation. Reload the user manager with
+`systemctl --user daemon-reload`, then run `cindy --profile vps service restart`.
+The restart refuses to interrupt active tasks. Setting proxy variables only in
+an SSH shell does not update an already running systemd service.
+
+The workstation, proxy and SSH tunnel must remain available while this route is
+in use. This is not an unattended egress solution. A reachable HTTPS endpoint
+returning 403 establishes connectivity, not successful provider authorization.
+When retiring the tunnel, remove its proxy drop-in and restart the host after
+active tasks finish, or configure another working outbound route.
+
 ## Provider authorization
 
 In the TUI, choose Models → Add provider, choose a preset and select OAuth
@@ -46,6 +181,45 @@ Claude credentials stay exclusively in the CLI's default credential store.
 `cindy providers logout claude-code` revokes Cindy's permission to use that login;
 it does not log out the CLI. A different Cindy account must explicitly connect.
 The native Pi CLI's own `/login` remains available through the engine menu.
+
+### Custom API-key provider
+
+Cindy account login does not supply a third-party provider's API key. For a
+Codex connection whose endpoint supports Responses, choose `openai-responses`
+explicitly. Use the provider's exact model ID and API base URL, including `/v1`
+when required. In the TUI, blank optional request headers are valid.
+
+For example, in Bash on the target host (replace the URL and model ID):
+
+```bash
+set +x
+read -r -s -p 'Provider API key: ' provider_key
+printf '\n'
+if [ -n "$provider_key" ]; then
+  printf '%s' "$provider_key" | cindy --profile vps providers add \
+    --provider custom-codex --name 'Custom Codex' --engine codex \
+    --url 'https://provider.example/v1' --protocol openai-responses \
+    --model '<model-id>' --key-stdin
+fi
+unset provider_key
+```
+
+Run this with shell tracing disabled (`set +x`); the key is read without echo
+and passed through stdin, not a command-line argument. After saving succeeds:
+
+```sh
+cindy --profile vps models use '<model-id>' --provider custom-codex --engine codex
+cindy --profile vps chat 'Reply only OK. Do not use tools.' --once \
+  --provider custom-codex --engine codex --model '<model-id>' --json
+```
+
+The second command sends a real inference request and may incur a charge.
+A saved/connected provider means credentials are configured; a completed reply
+verifies the actual model route. To replace an existing key, use
+`providers edit custom-codex --engine codex --key-stdin` instead of adding the
+same ID again.
+
+### Engine management
 
 Engine installation, updates and repairs can target another terminal host with
 `cindy engines list|install|update|repair [engine] --device <id>`. The Models
