@@ -1,0 +1,320 @@
+[
+  {
+    "mode": "idle-reclaim",
+    "node": "v22.22.0",
+    "platform": "linux",
+    "realEngine": true,
+    "modelEndpoint": "loopback-fixture",
+    "calls": 2,
+    "reclaimMs": 42.657907000000705,
+    "resumeMs": 1028.267009999996,
+    "before": {
+      "at": 34595.825045,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1185,
+          "pssKiB": 1151536
+        },
+        {
+          "pid": 1912,
+          "ppid": 1440,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "4478",
+          "cpuTicks": 37,
+          "pssKiB": 161732
+        }
+      ],
+      "pssKiB": 1313268
+    },
+    "reclaimed": {
+      "at": 34665.884871,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1190,
+          "pssKiB": 1151992
+        }
+      ],
+      "pssKiB": 1151992
+    },
+    "resumed": {
+      "at": 36775.8966,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1314,
+          "pssKiB": 1155896
+        },
+        {
+          "pid": 2056,
+          "ppid": 1440,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "4828",
+          "cpuTicks": 30,
+          "pssKiB": 166120
+        }
+      ],
+      "pssKiB": 1322016
+    },
+    "idleBefore": {
+      "start": {
+        "at": 33568.907672,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1180,
+            "pssKiB": 1151516
+          },
+          {
+            "pid": 1912,
+            "ppid": 1440,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "4478",
+            "cpuTicks": 37,
+            "pssKiB": 161732
+          }
+        ],
+        "pssKiB": 1313248
+      },
+      "end": {
+        "at": 34595.825045,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1185,
+            "pssKiB": 1151536
+          },
+          {
+            "pid": 1912,
+            "ppid": 1440,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "4478",
+            "cpuTicks": 37,
+            "pssKiB": 161732
+          }
+        ],
+        "pssKiB": 1313268
+      },
+      "survivingCpuTicks": 5,
+      "durationMs": 1026.9173729999966
+    },
+    "idleAfter": {
+      "start": {
+        "at": 34693.118172,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1193,
+            "pssKiB": 1152176
+          }
+        ],
+        "pssKiB": 1152176
+      },
+      "end": {
+        "at": 35719.890779,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1196,
+            "pssKiB": 1152356
+          }
+        ],
+        "pssKiB": 1152356
+      },
+      "survivingCpuTicks": 3,
+      "durationMs": 1026.772606999999
+    }
+  },
+  {
+    "mode": "explicit-close",
+    "node": "v22.22.0",
+    "platform": "linux",
+    "realEngine": true,
+    "modelEndpoint": "loopback-fixture",
+    "calls": 2,
+    "reclaimMs": 35.47782400000142,
+    "resumeMs": 961.7238649999999,
+    "before": {
+      "at": 39362.290048,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1485,
+          "pssKiB": 1155028
+        },
+        {
+          "pid": 2176,
+          "ppid": 1440,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "4973",
+          "cpuTicks": 34,
+          "pssKiB": 163804
+        }
+      ],
+      "pssKiB": 1318832
+    },
+    "reclaimed": {
+      "at": 39425.316595,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1490,
+          "pssKiB": 1155064
+        }
+      ],
+      "pssKiB": 1155064
+    },
+    "resumed": {
+      "at": 41467.701996,
+      "processes": [
+        {
+          "pid": 1440,
+          "ppid": 1270,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "1206",
+          "cpuTicks": 1607,
+          "pssKiB": 1156932
+        },
+        {
+          "pid": 2296,
+          "ppid": 1440,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "5297",
+          "cpuTicks": 32,
+          "pssKiB": 167116
+        }
+      ],
+      "pssKiB": 1324048
+    },
+    "idleBefore": {
+      "start": {
+        "at": 38334.760919,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1481,
+            "pssKiB": 1155024
+          },
+          {
+            "pid": 2176,
+            "ppid": 1440,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "4973",
+            "cpuTicks": 34,
+            "pssKiB": 163800
+          }
+        ],
+        "pssKiB": 1318824
+      },
+      "end": {
+        "at": 39362.290048,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1485,
+            "pssKiB": 1155028
+          },
+          {
+            "pid": 2176,
+            "ppid": 1440,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "4973",
+            "cpuTicks": 34,
+            "pssKiB": 163804
+          }
+        ],
+        "pssKiB": 1318832
+      },
+      "survivingCpuTicks": 4,
+      "durationMs": 1027.5291290000023
+    },
+    "idleAfter": {
+      "start": {
+        "at": 39452.574129,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1493,
+            "pssKiB": 1155064
+          }
+        ],
+        "pssKiB": 1155064
+      },
+      "end": {
+        "at": 40478.950735,
+        "processes": [
+          {
+            "pid": 1440,
+            "ppid": 1270,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "1206",
+            "cpuTicks": 1495,
+            "pssKiB": 1155076
+          }
+        ],
+        "pssKiB": 1155076
+      },
+      "survivingCpuTicks": 2,
+      "durationMs": 1026.376605999998
+    }
+  }
+]

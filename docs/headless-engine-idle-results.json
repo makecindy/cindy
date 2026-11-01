@@ -1,0 +1,1108 @@
+[
+  {
+    "node": "v22.22.0",
+    "platform": "linux",
+    "realEngine": true,
+    "modelEndpoint": "loopback-fixture",
+    "calls": 2,
+    "reclaimMs": 41.42234500000632,
+    "resumeMs": 921.5792280000023,
+    "before": {
+      "at": 36480.37752,
+      "processes": [
+        {
+          "pid": 1471,
+          "ppid": 1315,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "30207",
+          "cpuTicks": 1221,
+          "pssKiB": 1147216
+        },
+        {
+          "pid": 1968,
+          "ppid": 1471,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "33669",
+          "cpuTicks": 41,
+          "pssKiB": 166224
+        },
+        {
+          "pid": 2093,
+          "ppid": 1968,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 2782
+        },
+        {
+          "pid": 2094,
+          "ppid": 2093,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 1762
+        },
+        {
+          "pid": 2095,
+          "ppid": 2094,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "33803",
+          "cpuTicks": 3,
+          "pssKiB": 13035
+        }
+      ],
+      "pssKiB": 1331019
+    },
+    "reclaimed": {
+      "at": 36549.074452,
+      "processes": [
+        {
+          "pid": 1471,
+          "ppid": 1315,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "30207",
+          "cpuTicks": 1227,
+          "pssKiB": 1147904
+        },
+        {
+          "pid": 2093,
+          "ppid": 1314,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 2782
+        },
+        {
+          "pid": 2094,
+          "ppid": 2093,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 1762
+        },
+        {
+          "pid": 2095,
+          "ppid": 2094,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "33803",
+          "cpuTicks": 3,
+          "pssKiB": 13035
+        }
+      ],
+      "pssKiB": 1165483
+    },
+    "resumed": {
+      "at": 38554.465935,
+      "processes": [
+        {
+          "pid": 1471,
+          "ppid": 1315,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "30207",
+          "cpuTicks": 1340,
+          "pssKiB": 1151706
+        },
+        {
+          "pid": 2093,
+          "ppid": 1314,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 1964
+        },
+        {
+          "pid": 2094,
+          "ppid": 2093,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33803",
+          "cpuTicks": 0,
+          "pssKiB": 846
+        },
+        {
+          "pid": 2095,
+          "ppid": 2094,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "33803",
+          "cpuTicks": 5,
+          "pssKiB": 10932
+        },
+        {
+          "pid": 2098,
+          "ppid": 2093,
+          "state": "S",
+          "name": "git",
+          "startTicks": "33903",
+          "cpuTicks": 2,
+          "pssKiB": 2309
+        },
+        {
+          "pid": 2099,
+          "ppid": 1471,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "34009",
+          "cpuTicks": 33,
+          "pssKiB": 170032
+        },
+        {
+          "pid": 2158,
+          "ppid": 2099,
+          "state": "S",
+          "name": "git",
+          "startTicks": "34021",
+          "cpuTicks": 0,
+          "pssKiB": 1444
+        },
+        {
+          "pid": 2164,
+          "ppid": 2158,
+          "state": "S",
+          "name": "git",
+          "startTicks": "34021",
+          "cpuTicks": 0,
+          "pssKiB": 992
+        },
+        {
+          "pid": 2165,
+          "ppid": 2164,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "34021",
+          "cpuTicks": 3,
+          "pssKiB": 10891
+        }
+      ],
+      "pssKiB": 1351116
+    },
+    "idleBefore": {
+      "start": {
+        "at": 35453.002964,
+        "processes": [
+          {
+            "pid": 1471,
+            "ppid": 1315,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "30207",
+            "cpuTicks": 1217,
+            "pssKiB": 1147168
+          },
+          {
+            "pid": 1968,
+            "ppid": 1471,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "33669",
+            "cpuTicks": 40,
+            "pssKiB": 165848
+          },
+          {
+            "pid": 2026,
+            "ppid": 1968,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33691",
+            "cpuTicks": 0,
+            "pssKiB": 2477
+          },
+          {
+            "pid": 2033,
+            "ppid": 2026,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33692",
+            "cpuTicks": 0,
+            "pssKiB": 1789
+          },
+          {
+            "pid": 2041,
+            "ppid": 2033,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "33693",
+            "cpuTicks": 5,
+            "pssKiB": 13073
+          }
+        ],
+        "pssKiB": 1330355
+      },
+      "end": {
+        "at": 36480.37752,
+        "processes": [
+          {
+            "pid": 1471,
+            "ppid": 1315,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "30207",
+            "cpuTicks": 1221,
+            "pssKiB": 1147216
+          },
+          {
+            "pid": 1968,
+            "ppid": 1471,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "33669",
+            "cpuTicks": 41,
+            "pssKiB": 166224
+          },
+          {
+            "pid": 2093,
+            "ppid": 1968,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 2782
+          },
+          {
+            "pid": 2094,
+            "ppid": 2093,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 1762
+          },
+          {
+            "pid": 2095,
+            "ppid": 2094,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "33803",
+            "cpuTicks": 3,
+            "pssKiB": 13035
+          }
+        ],
+        "pssKiB": 1331019
+      },
+      "survivingCpuTicks": 5,
+      "durationMs": 1027.3745560000025
+    },
+    "idleAfter": {
+      "start": {
+        "at": 36576.323128,
+        "processes": [
+          {
+            "pid": 1471,
+            "ppid": 1315,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "30207",
+            "cpuTicks": 1231,
+            "pssKiB": 1148156
+          },
+          {
+            "pid": 2093,
+            "ppid": 1314,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 2782
+          },
+          {
+            "pid": 2094,
+            "ppid": 2093,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 1762
+          },
+          {
+            "pid": 2095,
+            "ppid": 2094,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "33803",
+            "cpuTicks": 3,
+            "pssKiB": 13035
+          }
+        ],
+        "pssKiB": 1165735
+      },
+      "end": {
+        "at": 37604.171872,
+        "processes": [
+          {
+            "pid": 1471,
+            "ppid": 1315,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "30207",
+            "cpuTicks": 1234,
+            "pssKiB": 1148418
+          },
+          {
+            "pid": 2093,
+            "ppid": 1314,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 2987
+          },
+          {
+            "pid": 2094,
+            "ppid": 2093,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33803",
+            "cpuTicks": 0,
+            "pssKiB": 1091
+          },
+          {
+            "pid": 2095,
+            "ppid": 2094,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "33803",
+            "cpuTicks": 4,
+            "pssKiB": 13030
+          },
+          {
+            "pid": 2098,
+            "ppid": 2093,
+            "state": "S",
+            "name": "git",
+            "startTicks": "33903",
+            "cpuTicks": 0,
+            "pssKiB": 1869
+          }
+        ],
+        "pssKiB": 1167395
+      },
+      "survivingCpuTicks": 4,
+      "durationMs": 1027.8487439999953
+    }
+  },
+  {
+    "mode": "idle-reclaim",
+    "node": "v22.22.0",
+    "platform": "linux",
+    "realEngine": true,
+    "modelEndpoint": "loopback-fixture",
+    "calls": 2,
+    "reclaimMs": 40.09599600000365,
+    "resumeMs": 904.7511920000034,
+    "before": {
+      "at": 36335.56051,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1211,
+          "pssKiB": 1153486
+        },
+        {
+          "pid": 1981,
+          "ppid": 1488,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "46099",
+          "cpuTicks": 42,
+          "pssKiB": 166836
+        },
+        {
+          "pid": 2038,
+          "ppid": 1981,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46121",
+          "cpuTicks": 0,
+          "pssKiB": 2574
+        },
+        {
+          "pid": 2045,
+          "ppid": 2038,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46122",
+          "cpuTicks": 0,
+          "pssKiB": 1650
+        },
+        {
+          "pid": 2054,
+          "ppid": 2045,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46123",
+          "cpuTicks": 6,
+          "pssKiB": 13016
+        }
+      ],
+      "pssKiB": 1337562
+    },
+    "reclaimed": {
+      "at": 36405.065836,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1217,
+          "pssKiB": 1153986
+        },
+        {
+          "pid": 2038,
+          "ppid": 1356,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46121",
+          "cpuTicks": 0,
+          "pssKiB": 2574
+        },
+        {
+          "pid": 2045,
+          "ppid": 2038,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46122",
+          "cpuTicks": 0,
+          "pssKiB": 1650
+        },
+        {
+          "pid": 2054,
+          "ppid": 2045,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46123",
+          "cpuTicks": 6,
+          "pssKiB": 13016
+        }
+      ],
+      "pssKiB": 1171226
+    },
+    "resumed": {
+      "at": 38392.881195,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1329,
+          "pssKiB": 1157778
+        },
+        {
+          "pid": 2106,
+          "ppid": 1488,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "46442",
+          "cpuTicks": 32,
+          "pssKiB": 170232
+        },
+        {
+          "pid": 2170,
+          "ppid": 2106,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46453",
+          "cpuTicks": 0,
+          "pssKiB": 2491
+        },
+        {
+          "pid": 2171,
+          "ppid": 2170,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46454",
+          "cpuTicks": 0,
+          "pssKiB": 1748
+        },
+        {
+          "pid": 2172,
+          "ppid": 2171,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46454",
+          "cpuTicks": 3,
+          "pssKiB": 12970
+        }
+      ],
+      "pssKiB": 1345219
+    },
+    "idleBefore": {
+      "start": {
+        "at": 35307.647727,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1207,
+            "pssKiB": 1153478
+          },
+          {
+            "pid": 1981,
+            "ppid": 1488,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "46099",
+            "cpuTicks": 41,
+            "pssKiB": 166528
+          },
+          {
+            "pid": 2038,
+            "ppid": 1981,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46121",
+            "cpuTicks": 0,
+            "pssKiB": 2570
+          },
+          {
+            "pid": 2045,
+            "ppid": 2038,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46122",
+            "cpuTicks": 0,
+            "pssKiB": 1650
+          },
+          {
+            "pid": 2054,
+            "ppid": 2045,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46123",
+            "cpuTicks": 6,
+            "pssKiB": 12842
+          }
+        ],
+        "pssKiB": 1337068
+      },
+      "end": {
+        "at": 36335.56051,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1211,
+            "pssKiB": 1153486
+          },
+          {
+            "pid": 1981,
+            "ppid": 1488,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "46099",
+            "cpuTicks": 42,
+            "pssKiB": 166836
+          },
+          {
+            "pid": 2038,
+            "ppid": 1981,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46121",
+            "cpuTicks": 0,
+            "pssKiB": 2574
+          },
+          {
+            "pid": 2045,
+            "ppid": 2038,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46122",
+            "cpuTicks": 0,
+            "pssKiB": 1650
+          },
+          {
+            "pid": 2054,
+            "ppid": 2045,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46123",
+            "cpuTicks": 6,
+            "pssKiB": 13016
+          }
+        ],
+        "pssKiB": 1337562
+      },
+      "survivingCpuTicks": 5,
+      "durationMs": 1027.9127829999998
+    },
+    "idleAfter": {
+      "start": {
+        "at": 36433.950331,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1221,
+            "pssKiB": 1154210
+          },
+          {
+            "pid": 2038,
+            "ppid": 1356,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46121",
+            "cpuTicks": 0,
+            "pssKiB": 2574
+          },
+          {
+            "pid": 2045,
+            "ppid": 2038,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46122",
+            "cpuTicks": 0,
+            "pssKiB": 1650
+          },
+          {
+            "pid": 2054,
+            "ppid": 2045,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46123",
+            "cpuTicks": 6,
+            "pssKiB": 13016
+          }
+        ],
+        "pssKiB": 1171450
+      },
+      "end": {
+        "at": 37459.888163,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1224,
+            "pssKiB": 1154421
+          }
+        ],
+        "pssKiB": 1154421
+      },
+      "survivingCpuTicks": 3,
+      "durationMs": 1025.9378320000033
+    }
+  },
+  {
+    "mode": "explicit-close",
+    "node": "v22.22.0",
+    "platform": "linux",
+    "realEngine": true,
+    "modelEndpoint": "loopback-fixture",
+    "calls": 2,
+    "reclaimMs": 35.533319999995,
+    "resumeMs": 965.8534129999971,
+    "before": {
+      "at": 41029.082466,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1498,
+          "pssKiB": 1157003
+        },
+        {
+          "pid": 2233,
+          "ppid": 1488,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "46589",
+          "cpuTicks": 40,
+          "pssKiB": 165444
+        },
+        {
+          "pid": 2358,
+          "ppid": 2233,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46720",
+          "cpuTicks": 0,
+          "pssKiB": 2586
+        },
+        {
+          "pid": 2359,
+          "ppid": 2358,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46721",
+          "cpuTicks": 0,
+          "pssKiB": 1751
+        },
+        {
+          "pid": 2360,
+          "ppid": 2359,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46721",
+          "cpuTicks": 3,
+          "pssKiB": 12976
+        }
+      ],
+      "pssKiB": 1339760
+    },
+    "reclaimed": {
+      "at": 41093.259024,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1503,
+          "pssKiB": 1157031
+        },
+        {
+          "pid": 2358,
+          "ppid": 1356,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46720",
+          "cpuTicks": 0,
+          "pssKiB": 2586
+        },
+        {
+          "pid": 2359,
+          "ppid": 2358,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46721",
+          "cpuTicks": 0,
+          "pssKiB": 1751
+        },
+        {
+          "pid": 2360,
+          "ppid": 2359,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46721",
+          "cpuTicks": 3,
+          "pssKiB": 12976
+        }
+      ],
+      "pssKiB": 1174344
+    },
+    "resumed": {
+      "at": 43147.448466,
+      "processes": [
+        {
+          "pid": 1488,
+          "ppid": 1357,
+          "state": "R",
+          "name": "node (vitest 1)",
+          "startTicks": "42655",
+          "cpuTicks": 1622,
+          "pssKiB": 1158284
+        },
+        {
+          "pid": 2358,
+          "ppid": 1356,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46720",
+          "cpuTicks": 1,
+          "pssKiB": 1814
+        },
+        {
+          "pid": 2359,
+          "ppid": 2358,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46721",
+          "cpuTicks": 0,
+          "pssKiB": 816
+        },
+        {
+          "pid": 2360,
+          "ppid": 2359,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46721",
+          "cpuTicks": 5,
+          "pssKiB": 10914
+        },
+        {
+          "pid": 2363,
+          "ppid": 2358,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46813",
+          "cpuTicks": 2,
+          "pssKiB": 2732
+        },
+        {
+          "pid": 2364,
+          "ppid": 1488,
+          "state": "S",
+          "name": "codex",
+          "startTicks": "46914",
+          "cpuTicks": 35,
+          "pssKiB": 169776
+        },
+        {
+          "pid": 2422,
+          "ppid": 2364,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46927",
+          "cpuTicks": 0,
+          "pssKiB": 1549
+        },
+        {
+          "pid": 2427,
+          "ppid": 2422,
+          "state": "S",
+          "name": "git",
+          "startTicks": "46927",
+          "cpuTicks": 0,
+          "pssKiB": 847
+        },
+        {
+          "pid": 2430,
+          "ppid": 2427,
+          "state": "S",
+          "name": "git-remote-http",
+          "startTicks": "46927",
+          "cpuTicks": 4,
+          "pssKiB": 10870
+        }
+      ],
+      "pssKiB": 1357602
+    },
+    "idleBefore": {
+      "start": {
+        "at": 39999.701653,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1494,
+            "pssKiB": 1156997
+          },
+          {
+            "pid": 2233,
+            "ppid": 1488,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "46589",
+            "cpuTicks": 38,
+            "pssKiB": 165396
+          },
+          {
+            "pid": 2297,
+            "ppid": 2233,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46609",
+            "cpuTicks": 0,
+            "pssKiB": 2454
+          },
+          {
+            "pid": 2298,
+            "ppid": 2297,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46609",
+            "cpuTicks": 0,
+            "pssKiB": 1734
+          },
+          {
+            "pid": 2299,
+            "ppid": 2298,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46609",
+            "cpuTicks": 3,
+            "pssKiB": 13080
+          }
+        ],
+        "pssKiB": 1339661
+      },
+      "end": {
+        "at": 41029.082466,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1498,
+            "pssKiB": 1157003
+          },
+          {
+            "pid": 2233,
+            "ppid": 1488,
+            "state": "S",
+            "name": "codex",
+            "startTicks": "46589",
+            "cpuTicks": 40,
+            "pssKiB": 165444
+          },
+          {
+            "pid": 2358,
+            "ppid": 2233,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46720",
+            "cpuTicks": 0,
+            "pssKiB": 2586
+          },
+          {
+            "pid": 2359,
+            "ppid": 2358,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46721",
+            "cpuTicks": 0,
+            "pssKiB": 1751
+          },
+          {
+            "pid": 2360,
+            "ppid": 2359,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46721",
+            "cpuTicks": 3,
+            "pssKiB": 12976
+          }
+        ],
+        "pssKiB": 1339760
+      },
+      "survivingCpuTicks": 6,
+      "durationMs": 1029.3808130000034
+    },
+    "idleAfter": {
+      "start": {
+        "at": 41120.6168,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1507,
+            "pssKiB": 1157031
+          },
+          {
+            "pid": 2358,
+            "ppid": 1356,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46720",
+            "cpuTicks": 0,
+            "pssKiB": 2586
+          },
+          {
+            "pid": 2359,
+            "ppid": 2358,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46721",
+            "cpuTicks": 0,
+            "pssKiB": 1751
+          },
+          {
+            "pid": 2360,
+            "ppid": 2359,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46721",
+            "cpuTicks": 3,
+            "pssKiB": 12976
+          }
+        ],
+        "pssKiB": 1174344
+      },
+      "end": {
+        "at": 42151.985002,
+        "processes": [
+          {
+            "pid": 1488,
+            "ppid": 1357,
+            "state": "R",
+            "name": "node (vitest 1)",
+            "startTicks": "42655",
+            "cpuTicks": 1510,
+            "pssKiB": 1157069
+          },
+          {
+            "pid": 2358,
+            "ppid": 1356,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46720",
+            "cpuTicks": 0,
+            "pssKiB": 2809
+          },
+          {
+            "pid": 2359,
+            "ppid": 2358,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46721",
+            "cpuTicks": 0,
+            "pssKiB": 1081
+          },
+          {
+            "pid": 2360,
+            "ppid": 2359,
+            "state": "S",
+            "name": "git-remote-http",
+            "startTicks": "46721",
+            "cpuTicks": 4,
+            "pssKiB": 12976
+          },
+          {
+            "pid": 2363,
+            "ppid": 2358,
+            "state": "S",
+            "name": "git",
+            "startTicks": "46813",
+            "cpuTicks": 1,
+            "pssKiB": 1947
+          }
+        ],
+        "pssKiB": 1175882
+      },
+      "survivingCpuTicks": 4,
+      "durationMs": 1031.3682019999978
+    }
+  }
+]

@@ -247,6 +247,8 @@ export async function createTerminalAgent(input: RuntimeInput): Promise<BaseAgen
     if (sshCodex && (!input.ssh || !input.sshRuntime)) throw new Error('SSH_RUNTIME_UNAVAILABLE');
     const agent = new CodexAgent({
     ...deps,
+    // Match Desktop: Cindy supplies its own plugins through the host MCP bridge.
+    disableCodexPluginRuntime: true,
     ...input.codexHistory,
     resolveCodexThreadContextWindow: (provider, model) => models.nativeContextLimit('codex', provider ?? selection.providerId, model, true),
     resolveVerifiedContextWindow: (provider, model) => resolveVerifiedContextWindow(models.activeCatalog(), 'codex', models.contextProvider('codex', provider ?? selection.providerId, model), model),
@@ -321,7 +323,7 @@ export async function discoverNativeModels(kind: AgentKind, binaryPath: string, 
   };
   const result: import('@cindy/model-providers').CatalogModel[] = [];
   const deps = { auth, binaryPath, logger, runtimeConfig: { userDataPath: profileDir } };
-  const agent = kind === 'codex' ? new CodexAgent({ ...deps, onCodexLocalModelsListed: models => {
+  const agent = kind === 'codex' ? new CodexAgent({ ...deps, disableCodexPluginRuntime: true, onCodexLocalModelsListed: models => {
     for (const [index, model] of models.entries()) {
       if (model.hidden || !model.model) continue;
       const efforts = (model.supportedReasoningEfforts?.map(item => item.reasoningEffort) ?? []).filter((effort): effort is import('@cindy/model-providers').Effort => ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort));

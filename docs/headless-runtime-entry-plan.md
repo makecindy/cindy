@@ -66,3 +66,5 @@
 ## 后续阶段
 
 本阶段不回收 Codex app-server，也不关闭伙伴、IM 或插件。引擎空闲回收需另行定义活跃任务、等待授权、会话恢复和超时规则；业务能力裁剪待用户选定保留项后实施。
+
+第二阶段补充（2026-11-01，用户已选择）：headless 本地 Codex 采用 Desktop 的 `disableCodexPluginRuntime` 策略，停用 Codex 原生 `plugins` / `remote_plugin`，不修改 Cindy `.cindy` 插件系统。这消除了本次实测的原生插件下载 Git 残留；本地已接入普通 Codex 的 5 分钟空闲回收，保留授权、排队与恢复保护，验证范围见 `headless-engine-idle-assessment.md` 末节。在线 VPS 未部署此改动。

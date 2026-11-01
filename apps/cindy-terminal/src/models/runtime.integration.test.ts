@@ -6,7 +6,7 @@ import { readNativeCodexCatalog } from '@cindy/app-runtime/codexCustomContextCat
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import net from 'node:net';
-import { mkdtemp, mkdir, readFile, readdir, realpath, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, readlink, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
@@ -129,6 +129,119 @@ ${notes.join('\n')}`,{cause:error});}
   },90_000);
 });
 describe.skipIf(!binary)('terminal real Codex guest runtime',()=>{
+  // Native integration: the synthetic host fixture cannot prove process exit or
+  // thread continuity in Codex. Minimal input: complete, reclaim, send again.
+  // Linux /proc measurements are observational, never a timing/memory threshold.
+  it.skipIf(process.platform !== 'linux').each(['idle-reclaim','explicit-close'] as const)('reclaims a real idle Codex process via %s and resumes its persisted thread', async mode => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-native-idle-'));
+    const tracked=new Map<number,string>();
+    const snapshot = async () => {
+      const entries = await Promise.all((await readdir('/proc')).filter(name => /^\d+$/.test(name)).map(async name => {
+        try {
+          const stat = await readFile(`/proc/${name}/stat`, 'utf8');
+          const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+          return {pid:Number(name),ppid:Number(fields[1]),state:fields[0],name:stat.slice(stat.indexOf('(')+1,stat.lastIndexOf(')')),
+            startTicks:fields[19],cpuTicks:Number(fields[11])+Number(fields[12])};
+        } catch { return null; }
+      }));
+      const owned = new Set([process.pid]);
+      for(const entry of entries)if(entry&&tracked.get(entry.pid)===entry.startTicks)owned.add(entry.pid);
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const entry of entries) if (entry && owned.has(entry.ppid) && !owned.has(entry.pid)) {owned.add(entry.pid);changed=true;}
+      }
+      const processes = await Promise.all(entries.filter(entry => entry && owned.has(entry.pid)).map(async entry => {
+        tracked.set(entry!.pid,entry!.startTicks);
+        const memory = await readFile(`/proc/${entry!.pid}/smaps_rollup`, 'utf8').catch(() => '');
+        const args=entry!.name.startsWith('git')?(await readFile(`/proc/${entry!.pid}/cmdline`,'utf8').catch(()=>'' )).split('\0'):[];
+        const cwd=await readlink(`/proc/${entry!.pid}/cwd`).catch(()=>null);
+        return {...entry!,pssKiB:Number(memory.match(/^Pss:\s+(\d+)/m)?.[1] ?? 0),
+          ...(args.length?{gitAction:args.find(arg=>['clone','fetch','remote-http','remote-https','index-pack'].includes(arg)),
+            fixturePaths:args.filter(arg=>arg.startsWith(root+path.sep)).map(arg=>arg.slice(root.length)),
+            fixtureCwd:cwd?.startsWith(root+path.sep)?cwd.slice(root.length):null}:{} )};
+      }));
+      return {at:performance.now(),processes,pssKiB:processes.reduce((sum,item)=>sum+item.pssKiB,0)};
+    };
+    const idleWindow = async () => {
+      const start=await snapshot();
+      // Native performance integration: a real 1s interval measures CPU ticks;
+      // fake timers cannot measure Linux scheduling or process resource usage.
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const end=await snapshot();
+      const survivingCpuTicks=end.processes.reduce((sum,item)=>{
+        const old=start.processes.find(previous=>previous.pid===item.pid&&previous.startTicks===item.startTicks);
+        return sum+(old?item.cpuTicks-old.cpuTicks:0);
+      },0);
+      return {start,end,survivingCpuTicks,durationMs:end.at-start.at};
+    };
+    let calls = 0;
+    const requests: string[] = [];
+    const api = createServer(async (req,res) => {
+      let raw='';for await(const chunk of req)raw+=chunk;
+      if (!req.url?.endsWith('/responses')) {res.writeHead(404).end('{}');return;}
+      calls++;requests.push(raw);
+      const item={type:'message',id:`msg-${calls}`,role:'assistant',status:'completed',content:[{type:'output_text',text:'IDLE_OK',annotations:[]}]};
+      const events=[{type:'response.created',response:{id:`r-${calls}`,status:'in_progress',output:[]}},
+        {type:'response.output_item.done',output_index:0,item},
+        {type:'response.completed',response:{id:`r-${calls}`,status:'completed',output:[item],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}}];
+      res.writeHead(200,{'content-type':'text/event-stream',connection:'close'}).end(events.map(event=>`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+    });
+    await new Promise<void>(resolve=>api.listen(0,'127.0.0.1',resolve));
+    const secrets=new Map<string,string>();
+    const host=new TerminalTaskHost({profileDir:path.join(root,'profile'),logger,emit(){},binaryPaths:{codex:binary},
+      nativeStatus:async()=>({authenticated:false}),secretStore:{get:async key=>secrets.get(key)??null,set:async(key,value)=>{secrets.set(key,value);},delete:async key=>{secrets.delete(key);}}});
+    try {
+      await host.ready;
+      await host.invoke('maker:provider:custom:create',[{id:'idle-fixture',name:'Idle fixture',auth:{method:'apiKey'},
+        runtimes:{codex:{baseUrl:`http://127.0.0.1:${(api.address() as net.AddressInfo).port}/v1`,models:[{id:'fixture-model',name:'Fixture'}]}}},{codex:'invalid-idle-fixture-key'}]);
+      const task=await host.invoke('maker:create-session',[{agentKind:'codex',providerId:'idle-fixture',model:'fixture-model',workingDir:root}]) as {id:string};
+      const send=async(clientId:string,text:string)=>{
+        await host.invoke('maker:send',[task.id,{text,clientId}]);
+        expect(await host.invoke('terminal:tasks:wait',[task.id,clientId])).toMatchObject({status:'completed',finalText:'IDLE_OK'});
+      };
+      await send('idle-first','First idle probe. Reply IDLE_OK. Do not call tools.');
+      const original=(await host.storage.get(task.id))!;
+      const idleBefore=await idleWindow(),before=idleBefore.end;
+      const engines=before.processes.filter(item=>item.name==='codex');
+      expect(engines.length).toBeGreaterThan(0);
+      const started=performance.now();
+      if(mode==='idle-reclaim')expect(await host.reclaimIdleCodexTask(task.id)).toBe(true);
+      else expect(await host.invoke('maker:close-session',[task.id])).toMatchObject({success:true});
+      const reclaimMs=performance.now()-started;
+      const reclaimed=await snapshot();
+      expect(reclaimed.processes.filter(item=>item.name==='codex')).toHaveLength(0);
+      expect(host.channelRuntime().getSession(task.id)).toBeUndefined();
+      const idleAfter=await idleWindow();
+      const resumeStarted=performance.now();
+      await send('idle-second','Second idle probe. Reply IDLE_OK. Do not call tools.');
+      const resumeMs=performance.now()-resumeStarted;
+      const resumed=await snapshot();
+      expect(resumed.processes.some(item=>item.name==='codex')).toBe(true);
+      expect((await host.storage.get(task.id))).toMatchObject({sdkSessionId:original.sdkSessionId,workDir:original.workDir});
+      expect(calls).toBe(2);
+      expect(requests[1]).toContain('First idle probe');
+      expect(requests[1]).toContain('Second idle probe');
+      const report={mode,node:process.version,platform:process.platform,realEngine:true,modelEndpoint:'loopback-fixture',calls,reclaimMs,resumeMs,before,reclaimed,resumed,idleBefore,idleAfter};
+      if(process.env.CINDY_IDLE_REPORT)await writeFile(`${process.env.CINDY_IDLE_REPORT}.${mode}.json`,JSON.stringify(report,null,2));
+      console.log('IDLE_RECLAIM_RESULT',JSON.stringify(report));
+      // Keep tracking former descendants after reparenting; report any residual
+      // process before failing, so the measurement never silently drops it.
+      expect(idleAfter.end.processes.filter(item=>item.pid!==process.pid)).toHaveLength(0);
+    } finally {
+      await host.close();
+      // Clean up only descendants observed by this test, even if the production
+      // close failed to reap them. This does not change the earlier assertion.
+      const remaining=await snapshot();
+      for(const item of remaining.processes.filter(item=>item.pid!==process.pid).reverse()) {
+        const stat=await readFile(`/proc/${item.pid}/stat`,'utf8').catch(()=>null);
+        if(stat?.slice(stat.lastIndexOf(')')+2).trim().split(/\s+/)[19]===item.startTicks) {
+          try {process.kill(item.pid,'SIGTERM');} catch(error) {if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}
+        }
+      }
+      api.closeAllConnections();await new Promise<void>(resolve=>api.close(()=>resolve()));
+      await rm(root,{recursive:true,force:true});
+    }
+  },60_000);
   // Native integration: GUI lifecycle writes previously left Codex storage
   // unchanged. Exercise public task APIs, a real CLI and private native history;
   // only the model HTTP endpoint is synthetic. Restart must resume the same ID.

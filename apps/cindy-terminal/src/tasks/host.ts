@@ -624,6 +624,9 @@ export class TerminalTaskHost {
   private inputCoordinator!: AgentInputCoordinator<TaskInvocationContext>;
   private sessionBindings!: ReturnType<typeof createSessionBindingLifecycle<Session, {closeReason: unknown; preserveAutoResumeIntent: boolean}>>;
   private readonly closingTasks = new WeakMap<LiveTask, Promise<void>>();
+  private readonly idleReclaims = new Map<string, Promise<boolean>>();
+  private readonly idleReclaimTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly idleReclaimAttempts = new Set<Promise<void>>();
   private trustedDesktopSteerText = new AsyncLocalStorage<string>();
   private attachmentLifecycle!: ReturnType<typeof createQueuedAttachmentLifecycle>;
   private autoTitle!: ReturnType<typeof createSessionAutoTitle>;
@@ -3696,6 +3699,7 @@ export class TerminalTaskHost {
     });
   }
   private async sendNative(id: string, input: unknown, context: TaskInvocationContext, sendOpts?: AgentInputSendOpts, createOpts?: AgentInputCreateOpts) {
+        this.cancelIdleReclaim(id);
         if (this.persistenceFaults.has(id)) throw new Error('TASK_HISTORY_WRITE_FAILED');
         if (this.sending.has(id) || this.turnLifecycle.running(id) || this.live.get(id)?.maker.getSession(id)?.isTurnRunning()) throw new Error('SESSION_RUNNING');
         const message: UserMessage = typeof input === 'string' ? { type: 'user', content: input }
@@ -4056,13 +4060,15 @@ export class TerminalTaskHost {
     });
   }
   private ensureLive(id: string, resolved?: { selection: ModelSelection; route: ResolvedRoute; modelRevision?: number }): Promise<LiveTask> {
+    const reclaim = this.idleReclaims.get(id);
+    if (reclaim) return reclaim.then(() => this.ensureLive(id, resolved));
     const existing = this.live.get(id);
     if (existing && existing.session.getStatus() === 'active' && (existing.session.isTurnRunning() || existing.capabilityRevision===this.capabilities.revision() && existing.modelRevision===this.models.revision())) return Promise.resolve(existing);
     const starting = this.starts.get(id);
     if (starting) return starting;
     const result = this.start(id, resolved);
     this.starts.set(id, result);
-    void result.finally(() => this.starts.delete(id)).catch(() => undefined);
+    void result.finally(() => { this.starts.delete(id); this.scheduleIdleReclaim(id); }).catch(() => undefined);
     return result;
   }
   private async withRehydrateCloseSuppressed<T>(id: string, run: () => Promise<T>): Promise<T> {
@@ -4229,6 +4235,7 @@ export class TerminalTaskHost {
       this.submissionText.delete(id);
     }
     setImmediate(()=>this.drain(id));
+    this.scheduleIdleReclaim(id);
   }
   private installTaskInteractionObserver(session:Session,plugin?:Parameters<typeof installInteractionLifecycleObserver>[1]){
     installInteractionLifecycleObserver(session,{
@@ -4361,7 +4368,74 @@ export class TerminalTaskHost {
     }
     return { success: pending.decide(decision) };
   }
+  private cancelIdleReclaim(id: string) {
+    const timer = this.idleReclaimTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.idleReclaimTimers.delete(id);
+  }
+  private scheduleIdleReclaim(id: string) {
+    this.cancelIdleReclaim(id);
+    const task = this.live.get(id), row = this.storage.peek(id);
+    if (this.closed || !task || task.session.agentKind !== 'codex' || task.session.getStatus() !== 'active' || this.isTurnRunning(id)
+      || !row?.userSendAt || row.remoteHostId || row.agentDeviceId || row.groupBinding || row.orcaRole
+      || row.orcaRemoteLead || row.reviewMode || row.parentSessionId || task.plugin
+      || (row.source && row.source !== 'desktop')) return;
+    const current = () => !this.closed && this.idleReclaimTimers.get(id) === timer && this.live.get(id) === task;
+    const timer = setTimeout(() => {
+      const attempt = this.reclaimIdleCodexTask(id, current).then(reclaimed => {
+        if (!reclaimed && current()) this.scheduleIdleReclaim(id);
+      }).catch(() => {
+        this.options.logger.warn('Idle Codex runtime reclamation failed', { sessionId: id });
+      }).finally(() => {
+        if (this.idleReclaimTimers.get(id) === timer) this.idleReclaimTimers.delete(id);
+        this.idleReclaimAttempts.delete(attempt);
+      });
+      this.idleReclaimAttempts.add(attempt);
+    }, 5 * 60_000);
+    timer.unref();
+    this.idleReclaimTimers.set(id, timer);
+  }
+  /** The optional idle-period guard fences a timer invalidated by new input. */
+  async reclaimIdleCodexTask(id: string, stillIdle: () => boolean = () => true): Promise<boolean> {
+    await this.ready;
+    // Reclamation is opportunistic: never queue behind a send waiting for a
+    // human decision, or make that decision depend on the reclaim returning.
+    if (this.closed || !stillIdle() || this.routes.isLocked(id) || this.isTurnRunning(id)) return false;
+    return this.routes.withLock(id, async () => {
+      const task = this.live.get(id);
+      if (!task || task.session.agentKind !== 'codex') return false;
+      await this.inputCoordinator.ensureQueueRestored(id);
+      await this.conversationRuntime.persistence.drainPersistQueue();
+      const row = await this.storage.get(id);
+      const goal = await this.goals.controller.getStatus(id);
+      // Keep the first experiment away from runtimes owned by another lifecycle.
+      if (!row?.sdkSessionId || !row.userSendAt || row.agentKind !== 'codex' || row.remoteHostId || row.agentDeviceId
+        || row.groupBinding || (row.source && row.source !== 'desktop') || row.orcaRole || row.orcaRemoteLead || row.reviewMode
+        || row.parentSessionId || row.pendingHandoff || row.goalContinuation || goal
+        || row.archived || row.deleted || task.plugin) return false;
+      const busy = () => this.closed || !stillIdle() || !this.pendingDispatchReady || this.live.get(id) !== task
+        || this.closingTasks.has(task) || this.isTurnRunning(id) || this.stoppingTasks.has(id)
+        || this.queueMutations.has(id) || this.persistenceFaults.has(id) || !!this.routes.pending.get(id)
+        || this.routes.credentials.has(id) || this.options.isSessionShared?.(id) === true
+        || !this.inputCoordinator.isQueueRestored(id) || this.inputCoordinator.isQueuePaused(id)
+        || this.inputCoordinator.hasPendingQueuedWork(id) || this.inputCoordinator.hasUsageLimitRecovery(id)
+        || this.inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+        || this.companionPendingInteractions(id).length > 0 || task.session.listBackgroundTasks().length > 0;
+      if (busy()) return false;
+      // Install the bootstrap fence before reserving Session.close. The route
+      // lock serializes sends; other ensureLive callers also await full teardown.
+      const work = Promise.resolve().then(() => this.withRehydrateCloseSuppressed(id, async () => {
+        if (busy() || !await task.session.closeIfIdle()) return false;
+        await this.closeTask(id);
+        return true;
+      }));
+      this.idleReclaims.set(id, work);
+      try { return await work; }
+      finally { if (this.idleReclaims.get(id) === work) this.idleReclaims.delete(id); }
+    });
+  }
   private closeTask(id: string): Promise<void> {
+    this.cancelIdleReclaim(id);
     const task=this.live.get(id);
     if(!task)return Promise.resolve();
     const pending=this.closingTasks.get(task);if(pending)return pending;
@@ -4981,6 +5055,8 @@ export class TerminalTaskHost {
   }
   private async shutdown() {
     this.closed = true;
+    for (const id of this.idleReclaimTimers.keys()) this.cancelIdleReclaim(id);
+    await Promise.allSettled([...this.idleReclaimAttempts]);
     this.unregisterPathAuthorization();
     this.botWelcomeReceipts.close();
     this.utilityAbort.abort();

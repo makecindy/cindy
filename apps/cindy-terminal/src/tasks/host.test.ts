@@ -95,6 +95,7 @@ afterEach(async () => {
 function engine(beforeStart?: (input: RuntimeInput, options: StartSessionOptions) => Promise<void>, beforeSend?: (input: RuntimeInput, options: StartSessionOptions) => Promise<void>) {
   const starts: StartSessionOptions[] = [];
   const teardowns: Array<{id: string; reason?: string}> = [];
+  const teardown = { before: async () => {} };
   const crashTransport = new Map<string, () => void>();
   const inputs: RuntimeInput[] = [];
   const decisions: InteractionDecision[] = [];
@@ -196,7 +197,7 @@ function engine(beforeStart?: (input: RuntimeInput, options: StartSessionOptions
         },
         async steer(message) { steered.push(message); await steer.reply(); },
         async abort() { running = false; emit({ type: 'done', data: {} }); },
-        async close(opts) { teardowns.push({id: options.sessionId!, reason: opts?.reason}); ended = true; running = false; awaken?.(); },
+        async close(opts) { teardowns.push({id: options.sessionId!, reason: opts?.reason}); await teardown.before(); ended = true; running = false; awaken?.(); },
         async *events() {
           while (!ended || events.length) {
             const next = events.shift();
@@ -222,7 +223,7 @@ function engine(beforeStart?: (input: RuntimeInput, options: StartSessionOptions
     };
     return agent;
   };
-  return { teardowns, crashTransport, responses, create, starts, decisions, inputs, sent, sends, modelChanges, permissionModes, title, titleRequests, resumeFailures, usageByModel,
+  return { teardowns, teardown, crashTransport, responses, create, starts, decisions, inputs, sent, sends, modelChanges, permissionModes, title, titleRequests, resumeFailures, usageByModel,
     steered, steer, sentFor: (id: string) => sent.filter((_message, index) => sentTaskIds[index] === id), finishHeld: (id: string) => held.get(id)?.(),
     waitForHeld: (id: string) => held.has(id) ? Promise.resolve() : new Promise<void>(resolve => heldListeners.set(id, resolve)),
   };
@@ -3063,6 +3064,9 @@ describe('terminal task host', () => {
       await first;
       expect(await host.invoke('maker:session:turn-active', [task.id])).toEqual({ inTurn: true });
       expect((await host.storage.submission(task.id, 'silent-receipt'))?.status).not.toBe('completed');
+      // A vendor silent stop is still an owned turn while continuation is pending.
+      expect(await host.channelRuntime().getSession(task.id)!.closeIfIdle()).toBe(false);
+      expect(native.teardowns).toHaveLength(0);
       if (outcome === 'stop') {
         await host.invoke('maker:abort-session', [task.id]);
         await vi.advanceTimersByTimeAsync(3_000);
@@ -3299,6 +3303,128 @@ describe('terminal task host', () => {
     await host.close();
     await expect(host.channelFiles.stageInboundFile({ integration: 'discord', buffer: Buffer.from('old owner'), fileName: 'closed.txt' })).rejects.toThrow('TASK_HOST_CLOSED');
   });
+  // Integration: foundation for terminal-owned Codex idle reclamation. Existing
+  // worker tests exercise Claude, not a Codex thread waiting for approval then
+  // closing and cold-resuming through the ordinary task input path. Real host,
+  // SQLite and Session.closeIfIdle; synthetic vendor transport, no inference.
+  it('preserves a Codex thread across idle close and cold resume without reclaiming approval waits', async () => {
+    const {host,root,native,nextPush}=await setup();
+    await host.models.saveProvider({id:'idle-codex',name:'Idle Codex',auth:{method:'apiKey'},runtimes:{codex:{
+      baseUrl:'http://127.0.0.1:1',models:[{id:'idle-model',name:'Idle model'}],
+    }}},{codex:'invalid-test-key-only'},true);
+    const task=await host.invoke('maker:create-session',[{workingDir:root,agentKind:'codex',providerId:'idle-codex',model:'idle-model'}]) as {id:string};
+    const approval=nextPush('maker:interaction-request');
+    await host.invoke('maker:send',[task.id,{text:'permission',clientId:'idle-approval'}]);
+    const request=await approval as {request:import('@cindy/maker-core').InteractionRequest};
+    expect(await host.reclaimIdleCodexTask(task.id)).toBe(false);
+    expect(native.teardowns).toHaveLength(0);
+    await host.invoke('maker:resolve-interaction',[request.request.requestId,{kind:'permission',behavior:'allow'}]);
+    expect(await host.invoke('terminal:tasks:wait',[task.id,'idle-approval'])).toMatchObject({status:'completed'});
+    const sdkId=(await host.storage.get(task.id))!.sdkSessionId;
+    expect(sdkId).toBeTruthy();
+    // Host queue occupancy must be checked separately from native turn activity.
+    const client={invoke:(channel:string,args:unknown[]=[])=>host.invoke(channel,args)} as TerminalClient;
+    await host.invoke('maker:input:set-interaction-lock',[task.id,'composer-edit',true]);
+    await enqueueMessage(client,task.id,'Queued follow-up','idle-queued');
+    expect(host.isTurnRunning(task.id)).toBe(false);
+    expect(host.notificationHasActiveWork(task.id)).toBe(true);
+    expect(await host.reclaimIdleCodexTask(task.id)).toBe(false);
+    expect(await host.invoke('maker:input:get-projection',[task.id])).toMatchObject({pendingQueue:[{clientId:'idle-queued'}]});
+    expect(native.sentFor(task.id)).toHaveLength(1);
+    await host.invoke('maker:input:remove',[task.id,'idle-queued',{durableDelivery:true}]);
+    await host.invoke('maker:input:set-interaction-lock',[task.id,'composer-edit',false]);
+    expect(host.notificationHasActiveWork(task.id)).toBe(false);
+    let entered!:()=>void,release!:()=>void;
+    const closing=new Promise<void>(resolve=>{entered=resolve;});
+    const exit=new Promise<void>(resolve=>{release=resolve;});
+    native.teardown.before=async()=>{entered();await exit;};
+    const reclaim=host.reclaimIdleCodexTask(task.id);
+    let usage!:Promise<unknown>,sending!:Promise<unknown>;
+    try {
+      await Promise.race([closing,reclaim.then(result=>{expect(result).toBe(true);})]);
+      // Usage reads bootstrap outside the send lock and must join the same fence.
+      usage=host.invoke('maker:get-context-usage',[task.id]).then(()=>null,error=>error);
+      // New input after the close reservation must resume once on the old thread.
+      sending=host.invoke('maker:send',[task.id,{text:'Continue the same task',clientId:'idle-resume'}]);
+      await vi.waitFor(()=>expect(host.isTurnRunning(task.id)).toBe(true),{interval:5});
+      expect(native.starts).toHaveLength(1);
+      expect(native.sentFor(task.id)).toHaveLength(1);
+    } finally { release(); }
+    expect(await reclaim).toBe(true);
+    await sending;
+    // The synthetic transport has no context API. Its ordinary capability error,
+    // rather than "is closing", proves this read reached the replacement session.
+    expect(await usage).toMatchObject({message:expect.stringContaining("Capability 'contextUsage' not supported")});
+    expect(native.teardowns).toHaveLength(1);
+    expect((await host.storage.get(task.id))!.sdkSessionId).toBe(sdkId);
+    expect(await host.invoke('terminal:tasks:wait',[task.id,'idle-resume'])).toMatchObject({status:'completed'});
+    expect(native.starts).toHaveLength(2);
+    expect(native.starts[1]).toMatchObject({sessionId:task.id,resumeSessionId:sdkId});
+    expect(path.resolve(native.starts[1]!.workingDir!)).toBe(path.resolve(root));
+    expect(native.sentFor(task.id)).toHaveLength(2);
+    expect((await host.storage.get(task.id))!.sdkSessionId).toBe(sdkId);
+    // An unconfirmed native exit must fail reclamation, not claim success or
+    // discard the persisted thread. A later input may retry normal recovery.
+    native.teardown.before=async()=>{throw new Error('fixture exit unconfirmed');};
+    try { await expect(host.reclaimIdleCodexTask(task.id)).rejects.toThrow('fixture exit unconfirmed'); }
+    finally { native.teardown.before=async()=>{}; }
+    expect((await host.storage.get(task.id))!.sdkSessionId).toBe(sdkId);
+    await host.invoke('maker:send',[task.id,{text:'After failed reclaim',clientId:'idle-retry'}]);
+    expect(await host.invoke('terminal:tasks:wait',[task.id,'idle-retry'])).toMatchObject({status:'completed'});
+    expect(native.starts.at(-1)).toMatchObject({sessionId:task.id,resumeSessionId:sdkId});
+    expect(native.sentFor(task.id)).toHaveLength(3);
+  });
+
+  // Integration: the one-shot test cannot detect an old deadline closing a new
+  // turn, loss of paused input at timer expiry, or a timer surviving host shutdown.
+  // Real host/SQLite/native boundary with virtual time; no wall-clock idle wait.
+  it('reclaims Codex after a fresh idle period and preserves queued work at timer expiry', async () => {
+    const {host,root,native}=await setup();
+    await host.models.saveProvider({id:'timer-codex',name:'Timer Codex',auth:{method:'apiKey'},runtimes:{codex:{
+      baseUrl:'http://127.0.0.1:1',models:[{id:'idle-model',name:'Idle model'}],
+    }}},{codex:'invalid-test-key-only'},true);
+    const task=await host.invoke('maker:create-session',[{workingDir:root,agentKind:'codex',providerId:'timer-codex',model:'idle-model'}]) as {id:string};
+    const client={invoke:(channel:string,args:unknown[]=[])=>host.invoke(channel,args)} as TerminalClient;
+    const reclaim=vi.spyOn(host,'reclaimIdleCodexTask');
+    const send=async(id:string)=>{
+      await host.invoke('maker:send',[task.id,{text:id,clientId:id}]);
+      await vi.waitFor(async()=>expect(await host.invoke('terminal:tasks:turn-status',[task.id,id]),id).toMatchObject({status:'completed'}),{interval:5});
+    };
+    // Advance idle deadlines only: jumping wall time expires unrelated file
+    // leases whose heartbeat still runs on real intervals in this integration.
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+    try {
+      await send('timer-first');
+      const sdk=(await host.storage.get(task.id))!.sdkSessionId;
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(native.teardowns).toHaveLength(0);
+      await send('timer-second');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reclaim).not.toHaveBeenCalled();
+      await host.invoke('maker:input:set-interaction-lock',[task.id,'composer-edit',true]);
+      await enqueueMessage(client,task.id,'Keep this queued','timer-queued');
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(reclaim).toHaveBeenCalledTimes(1);
+      expect(await reclaim.mock.results[0]!.value).toBe(false);
+      expect(native.teardowns).toHaveLength(0);
+      expect(await host.invoke('maker:input:get-projection',[task.id])).toMatchObject({pendingQueue:[{clientId:'timer-queued'}]});
+      await host.invoke('maker:input:remove',[task.id,'timer-queued',{durableDelivery:true}]);
+      await host.invoke('maker:input:set-interaction-lock',[task.id,'composer-edit',false]);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(reclaim).toHaveBeenCalledTimes(2);
+      expect(await reclaim.mock.results[1]!.value).toBe(true);
+      expect(host.channelRuntime().getSession(task.id)).toBeUndefined();
+      expect(native.teardowns).toHaveLength(1);
+      await send('timer-resumed');
+      expect(native.starts).toHaveLength(2);
+      expect(native.starts[1]).toMatchObject({resumeSessionId:sdk});
+      expect(native.sentFor(task.id)).toHaveLength(3);
+      await host.close();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(reclaim).toHaveBeenCalledTimes(2);
+    } finally {vi.useRealTimers();}
+  });
+
   // Integration: channel takeover must reuse the GUI/TUI task runtime, expose
   // the same approval, and restore its saved route after that runtime closes.
   it('shares live tasks, approvals and cold channel startup with the GUI task host', async () => {
