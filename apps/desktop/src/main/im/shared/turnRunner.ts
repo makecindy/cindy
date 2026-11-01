@@ -2158,6 +2158,20 @@ export function createTurnRunner(
     }
   }
 
+  function projectMalformedChunkedToolCall(text: string): string {
+    if (output.kind !== 'chunked-text') return text;
+    const trimmed = text.trimStart();
+    if (
+      !/^<tool_call\s*>/i.test(trimmed) ||
+      /<\/tool_call\s*>/i.test(trimmed) ||
+      !/<function(?:\s|=|>)/i.test(trimmed) ||
+      !/<parameter(?:\s|=|>)/i.test(trimmed)
+    ) {
+      return text;
+    }
+    return ui.agent.runtimeError('模型输出了未完成的工具调用内容，工具未执行。请检查工具参数后重试。');
+  }
+
   async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
     const handle = turn.streamingHandle;
     if (!handle) return;
@@ -3768,7 +3782,7 @@ export function createTurnRunner(
     if (!turn.streamingHandle && turn.mediaAbsPaths.length > 0) {
       await ensureStreamingHandle(turn);
     }
-    const finalView = composeStreamingView(turn);
+    const finalView = projectMalformedChunkedToolCall(composeStreamingView(turn));
     if (turn.streamingHandle) {
       await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
@@ -3796,7 +3810,7 @@ export function createTurnRunner(
       // (turn.done 已置,composeStreamingView 只含干净正文;长度限制由渠道发送
       // 实现兑现)。发送失败只记脱敏日志,不阻塞 settle / 队列放行。
       try {
-        const fallbackText = composeStreamingView(turn);
+        const fallbackText = finalView;
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
@@ -3888,7 +3902,7 @@ export function createTurnRunner(
       } : undefined,
     );
     if (turn?.streamingHandle) {
-      const view = composeStreamingView(turn, true);
+      const view = projectMalformedChunkedToolCall(composeStreamingView(turn, true));
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
     } else {
