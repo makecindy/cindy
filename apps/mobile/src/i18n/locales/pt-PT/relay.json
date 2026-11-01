@@ -9,10 +9,16 @@
     "removedHint": "Este telemóvel foi removido da retransmissão ou a retransmissão foi desativada. Volte à retransmissão oficial ou adira novamente a partir do computador.",
     "credentialMissingHint": "A credencial de retransmissão já não está neste telemóvel. Adira novamente a partir do computador ou volte à retransmissão oficial.",
     "confirmTitle": "Voltar à retransmissão oficial?",
-    "confirmBody": "Este telemóvel vai sair de “{{name}}” e usar o relay oficial de {{appName}}. Para voltar a usar esse relay, adira novamente a partir do computador.",
-    "confirmAction": "Voltar ao oficial",
+    "confirmBody": "Este telemóvel usará o relay oficial do {{appName}} e guardará o acesso a «{{name}}», para poder voltar sem aderir novamente.",
+    "confirmAction": "Mudar para o relay oficial",
     "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente dentro de momentos.",
-    "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel."
+    "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
+    "useSaved": "Usar «{{name}}»",
+    "forget": "Sair e esquecer o relay",
+    "forgetTitle": "Sair do relay?",
+    "forgetBody": "Este telemóvel sairá de «{{name}}» e apagará os dados de acesso guardados. Para voltar a usá-lo, terá de pedir para aderir novamente.",
+    "resumeFailed": "Não foi possível mudar para o relay guardado.",
+    "forgetFailed": "Não foi possível sair do relay."
   },
   "issue": {
     "removedTitle": "Removido do relay",

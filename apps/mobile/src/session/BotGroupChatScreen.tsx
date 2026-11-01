@@ -75,7 +75,7 @@ import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
-import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
@@ -300,7 +300,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     return () => { cancelAnimationFrame(frame); subscription.remove(); };
   }, [acknowledge]);
   // The list row seeds the header while the first read is in flight (display only).
-  const cachedRow = group ? null : readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, BOT_GROUP_REMOTE_COLLECTION_ID)
+  const cachedRow = group ? null : readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), BOT_GROUP_REMOTE_COLLECTION_ID)
     .find((row) => row.host.deviceId === deviceId && row.item.ref.id === groupId) ?? null;
 
   const identityFor = useCallback<BotGroupIdentityLookup>((botId, fallbackName = '') => {

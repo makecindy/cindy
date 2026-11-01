@@ -14,7 +14,7 @@ import { NativeSwitch } from '@/platform/chrome';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
-import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { CompanionSettingsRow as ContextSheetRow } from './CompanionSettingsRow';
 import { CompanionChoice } from './CompanionChoice';
 import { CompanionSheet } from './CompanionSheet';
@@ -493,7 +493,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   // Desktop BotRosterView: names must be distinguishable before submitting (NFKC, trimmed, case-insensitive).
   // The host still rejects collisions with teammates this list does not show.
   const { user, accountGeneration } = useAuth();
-  const takenNames = useMemo(() => new Set(readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, collectionId)
+  const takenNames = useMemo(() => new Set(readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), collectionId)
     .filter(row => row.host.deviceId === deviceId && row.item.ref.kind === 'bot')
     .map(row => normalizeTeammateName(resolveRemoteText(row.item.display.title, i18n.language)))),
   // Re-read whenever the sheet opens; the roster cache is not reactive.

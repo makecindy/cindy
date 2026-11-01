@@ -9,10 +9,16 @@
     "removedHint": "Este celular foi removido do retransmissor, ou o retransmissor foi desativado. Volte ao retransmissor oficial ou conecte-se novamente pelo computador.",
     "credentialMissingHint": "A credencial do retransmissor não está mais neste celular. Conecte-se novamente pelo computador ou volte ao retransmissor oficial.",
     "confirmTitle": "Voltar ao retransmissor oficial?",
-    "confirmBody": "Este celular sairá de “{{name}}” e usará o relay oficial do {{appName}}. Para usar esse relay novamente, entre nele pelo computador.",
-    "confirmAction": "Voltar ao oficial",
+    "confirmBody": "Este celular usará o relay oficial do {{appName}} e manterá o acesso a “{{name}}”, para você poder voltar sem entrar novamente.",
+    "confirmAction": "Mudar para o relay oficial",
     "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente em instantes.",
-    "pushUnavailable": "Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular."
+    "pushUnavailable": "Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular.",
+    "useSaved": "Usar “{{name}}”",
+    "forget": "Sair e esquecer o relay",
+    "forgetTitle": "Sair do relay?",
+    "forgetBody": "Este celular sairá de “{{name}}” e apagará os dados de acesso salvos. Para usá-lo novamente, solicite a entrada de novo.",
+    "resumeFailed": "Não foi possível mudar para o relay salvo.",
+    "forgetFailed": "Não foi possível sair do relay."
   },
   "issue": {
     "removedTitle": "Removido do relay",

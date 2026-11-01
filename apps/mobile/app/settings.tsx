@@ -59,7 +59,12 @@ import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
-import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import {
+  clearSelfHostedRelay, forgetSelfHostedRelay, resumeSelfHostedRelay,
+  useSavedSelfHostedRelay, useSelfHostedRelay,
+} from '@/device-link/selfHostedRelay';
+import { getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -156,6 +161,7 @@ export default function SettingsScreen() {
   const { status, connectionIssue } = useDeviceLink();
   // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
   const selfHostedRelay = useSelfHostedRelay();
+  const savedRelay = useSavedSelfHostedRelay();
   const [relaySwitching, setRelaySwitching] = useState(false);
   const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -437,8 +443,7 @@ export default function SettingsScreen() {
     router.push('/account-deletion');
   }, [router]);
 
-  // 切回官方中转:先确认(之后要再用这个中转得在电脑上重新加入);删掉本机设置与凭证,
-  // 连接随路由变化重建。不会自动切回,只在用户确认后执行。
+  // 切换线路保留成员资格；只有下面的明确退出才删除凭证。
   const switchToOfficialRelay = useCallback(async () => {
     if (relaySwitching) return;
     setRelaySwitching(true);
@@ -454,15 +459,70 @@ export default function SettingsScreen() {
 
   const requestSwitchToOfficialRelay = useCallback(() => {
     if (!selfHostedRelay || relaySwitching) return;
+    const owner = getMobileAuthOwner();
     Alert.alert(
       t('relay.settings.confirmTitle'),
       t('relay.settings.confirmBody', { name: selfHostedRelay.name }),
       [
         { text: t('devices.common.cancel'), style: 'cancel' },
-        { text: t('relay.settings.confirmAction'), style: 'destructive', onPress: () => void switchToOfficialRelay() },
+        { text: t('relay.settings.confirmAction'), onPress: () => {
+          if (isMobileAuthOwnerCurrent(owner)) void switchToOfficialRelay();
+        } },
       ],
     );
   }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
+
+  const useSavedRelay = useCallback(async () => {
+    if (relaySwitching) return;
+    setRelaySwitching(true);
+    setRelayMessage(null);
+    try {
+      await resumeSelfHostedRelay();
+    } catch (error) {
+      setRelayMessage(t(error instanceof Error && error.message === 'RELAY_CREDENTIAL_MISSING'
+        ? 'relay.errors.credentialUnavailable' : 'relay.settings.resumeFailed'));
+    } finally {
+      setRelaySwitching(false);
+    }
+  }, [relaySwitching, t]);
+
+  const requestUseSavedRelay = useCallback(() => {
+    if (!savedRelay || relaySwitching) return;
+    const owner = getMobileAuthOwner();
+    const action = t('relay.settings.useSaved', { name: savedRelay.name });
+    Alert.alert(action, t('relay.settings.selfHostedHint', { address: savedRelay.baseUrl }), [
+      { text: t('devices.common.cancel'), style: 'cancel' },
+      { text: action, onPress: () => {
+        if (isMobileAuthOwnerCurrent(owner)) void useSavedRelay();
+      } },
+    ]);
+  }, [relaySwitching, savedRelay, t, useSavedRelay]);
+
+  const forgetRelay = useCallback(async () => {
+    if (relaySwitching) return;
+    setRelaySwitching(true);
+    setRelayMessage(null);
+    try {
+      await forgetSelfHostedRelay();
+    } catch {
+      setRelayMessage(t('relay.settings.forgetFailed'));
+    } finally {
+      setRelaySwitching(false);
+    }
+  }, [relaySwitching, t]);
+
+  const requestForgetRelay = useCallback(() => {
+    if (!selfHostedRelay || !savedRelay || relaySwitching) return;
+    const owner = getMobileAuthOwner();
+    const routeGeneration = getSelfHostedRelayRouteGeneration();
+    Alert.alert(t('relay.settings.forgetTitle'), t('relay.settings.forgetBody', { name: savedRelay.name }), [
+      { text: t('devices.common.cancel'), style: 'cancel' },
+      { text: t('relay.settings.forget'), style: 'destructive', onPress: () => {
+        if (isMobileAuthOwnerCurrent(owner)
+          && getSelfHostedRelayRouteGeneration() === routeGeneration) void forgetRelay();
+      } },
+    ]);
+  }, [forgetRelay, relaySwitching, savedRelay, selfHostedRelay, t]);
 
   // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
   // 都要在这里给出原因,并配「切回官方中转」。
@@ -695,7 +755,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
+        {/* 切换线路保留已加入中转；退出是独立且需确认的操作。
             加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
         <SettingsGroup
           footer={selfHostedRelay
@@ -723,6 +783,27 @@ export default function SettingsScreen() {
               label={t('relay.settings.switchToOfficial')}
               onPress={requestSwitchToOfficialRelay}
               testID="settings.relay.switchToOfficial"
+            />
+          ) : null}
+          {!selfHostedRelay && savedRelay ? (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.useSaved', { name: savedRelay.name })}
+              chevron={false}
+              disabled={relaySwitching}
+              label={t('relay.settings.useSaved', { name: savedRelay.name })}
+              onPress={requestUseSavedRelay}
+              testID="settings.relay.useSaved"
+            />
+          ) : null}
+          {selfHostedRelay && savedRelay ? (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.forget')}
+              chevron={false}
+              destructive
+              disabled={relaySwitching}
+              label={t('relay.settings.forget')}
+              onPress={requestForgetRelay}
+              testID="settings.relay.forget"
             />
           ) : null}
         </SettingsGroup>

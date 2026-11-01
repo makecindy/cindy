@@ -41,7 +41,7 @@ vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => ({ act
 vi.mock('@/session/remoteSessionStore', () => ({ useRemoteHomeSessions: () => h.sessions,
   remoteSessionStore: { getHomeSessions: () => h.sessions, subscribeHomeStatus: () => () => undefined, getSessionLiveActivity: (id: string) => h.activity.get(id) } }));
 vi.mock('@/session/HomeSessionInfoMeta', () => ({ useHomeSessionPr: (_device: string, id: string) => h.prs.get(id) ?? null }));
-vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [], remoteResourceConnectionState: () => 'online' }));
+vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({ ...await original<typeof import('@/device-link/remoteResourceAvailability')>(), readRemoteCollectionCache: () => [], remoteResourceConnectionState: () => 'online' }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u' }, accountGeneration: 1 }) }));

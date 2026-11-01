@@ -3,7 +3,8 @@
  *
  * 按 Cindy 账号保存:
  * - 非秘密设置在 AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号 key>`:没有这条 = 官方中转;
- *   有 = `{ mode: 'self-hosted', relayId, name, baseUrl, role, deviceId, ownerPublicKey }`。
+ *   有 = `{ mode: 'official' | 'self-hosted', relayId, name, baseUrl, role, deviceId, ownerPublicKey }`。
+ *   mode 只选择线路；切回官方仍保留成员资格，明确退出时才删除。
  * - 中转设备凭证与本机签名密钥种子(§16)作为一个 JSON `{ credential, seed }` 存在安全存储
  *   `cindy.selfHostedRelay.credential.v2.<账号 key 的 SHA-256 前 32 位>`,`WHEN_UNLOCKED_THIS_DEVICE_ONLY`:
  *   不随备份迁到别的手机,也不进日志与诊断。
@@ -32,6 +33,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   getActiveSelfHostedRelay,
   getSelfHostedRelayRouteGeneration,
+  rememberSelfHostedRelayBase,
   setActiveSelfHostedRelay,
   setSelfHostedRelayLoading,
   subscribeSelfHostedRelayRoute,
@@ -48,7 +50,7 @@ const LEAVE_TIMEOUT_MS = 5_000;
 
 interface StoredRelayConfig {
   version: 2;
-  mode: 'self-hosted';
+  mode: 'official' | 'self-hosted';
   relayId: string;
   name: string;
   baseUrl: string;
@@ -85,7 +87,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
     const baseUrl = typeof value.baseUrl === 'string' ? normalizeRelayBaseUrl(value.baseUrl) : null;
     if (
       value.version !== 2 ||
-      value.mode !== 'self-hosted' ||
+      (value.mode !== 'self-hosted' && value.mode !== 'official') ||
       typeof value.relayId !== 'string' ||
       typeof value.name !== 'string' ||
       typeof value.deviceId !== 'string' ||
@@ -96,7 +98,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
     }
     return {
       version: 2,
-      mode: 'self-hosted',
+      mode: value.mode,
       relayId: value.relayId,
       name: value.name,
       baseUrl,
@@ -141,13 +143,27 @@ async function discardLegacyRelay(accountKey: string): Promise<void> {
 let currentConfig: StoredRelayConfig | null = null;
 let loadedAccountKey = '';
 let loadSequence = 0;
+const configListeners = new Set<() => void>();
+
+function setCurrentConfig(config: StoredRelayConfig | null): void {
+  if (config) rememberSelfHostedRelayBase(config.baseUrl);
+  currentConfig = config;
+  for (const listener of configListeners) listener();
+}
+
+function subscribeSavedRelay(listener: () => void): () => void {
+  configListeners.add(listener);
+  return () => { configListeners.delete(listener); };
+}
+
+function getSavedRelay(): StoredRelayConfig | null { return currentConfig; }
 
 function syncOwner(): void {
   const owner = getMobileAuthOwner();
   if (owner.switching || !owner.accountKey) {
     loadSequence += 1;
     loadedAccountKey = '';
-    currentConfig = null;
+    setCurrentConfig(null);
     setActiveSelfHostedRelay(null);
     setSelfHostedRelayLoading(false);
     return;
@@ -156,7 +172,7 @@ function syncOwner(): void {
   loadedAccountKey = owner.accountKey;
   const sequence = ++loadSequence;
   // 上一个账号的中转不能被新账号沿用,哪怕只是读设置的这一小段时间。
-  currentConfig = null;
+  setCurrentConfig(null);
   setActiveSelfHostedRelay(null);
   setSelfHostedRelayLoading(true);
   void discardLegacyRelay(owner.accountKey);
@@ -172,8 +188,8 @@ function syncOwner(): void {
         error instanceof Error ? error.name : 'unknown');
     }
     if (sequence !== loadSequence) return;
-    currentConfig = config;
-    setActiveSelfHostedRelay(config ? routeFromConfig(config, secrets) : null);
+    setCurrentConfig(config);
+    setActiveSelfHostedRelay(config?.mode === 'self-hosted' ? routeFromConfig(config, secrets) : null);
     setSelfHostedRelayLoading(false);
   })();
 }
@@ -221,7 +237,8 @@ export async function saveSelfHostedRelay(input: {
   }
   const accountKey = input.owner.accountKey;
   const previousConfig = currentConfig;
-  const previousRoute = getActiveSelfHostedRelay();
+  // 官方线路上也保留凭证；保存新加入结果失败时仍能恢复旧成员资格。
+  const previousSecrets = parseStoredSecrets(await getSecureItem(secretsKey(accountKey)));
   const config: StoredRelayConfig = {
     version: 2,
     mode: 'self-hosted',
@@ -237,9 +254,6 @@ export async function saveSelfHostedRelay(input: {
   try {
     await AsyncStorage.setItem(configKey(accountKey), JSON.stringify(config));
   } catch (error) {
-    const previousSecrets: StoredRelaySecrets | null = previousRoute?.credential && previousRoute.signing
-      ? { credential: previousRoute.credential, seed: previousRoute.signing.seed }
-      : null;
     const restore = previousSecrets
       ? setSecureItem(secretsKey(accountKey), JSON.stringify(previousSecrets), { thisDeviceOnly: true })
       : deleteSecureItem(secretsKey(accountKey));
@@ -248,20 +262,54 @@ export async function saveSelfHostedRelay(input: {
   }
   // 保存属于发起加入的账号;账号已经切走就不切换当前路由(切回该账号时会读到它)。
   if (!isMobileAuthOwnerCurrent(input.owner)) return;
-  currentConfig = config;
+  loadSequence += 1;
+  setCurrentConfig(config);
   setActiveSelfHostedRelay(routeFromConfig(config, secrets));
+  setSelfHostedRelayLoading(false);
   // 从另一个自建中转换过来:顺手退出旧中转(尽力而为,失败只是在旧中转上留一条设备记录)。
-  if (previousConfig && previousRoute?.credential && previousConfig.baseUrl !== baseUrl) {
-    void leaveRelayBestEffort(previousConfig, previousRoute.credential);
+  if (previousConfig && previousSecrets && previousConfig.baseUrl !== baseUrl) {
+    void leaveRelayBestEffort(previousConfig, previousSecrets.credential);
   }
 }
 
-/** 切回官方中转:删掉设置与凭证,立即恢复官方路由;再尽力让中转删掉这台手机。 */
+/** 只切回官方线路，保留已加入的中转、凭证及服务器上的成员资格。 */
 export async function clearSelfHostedRelay(): Promise<void> {
+  await selectSavedRelay('official');
+}
+
+/** 不重新申请加入，使用当前账号已保存的中转。 */
+export async function resumeSelfHostedRelay(): Promise<void> {
+  await selectSavedRelay('self-hosted');
+}
+
+async function selectSavedRelay(mode: StoredRelayConfig['mode']): Promise<void> {
+  const owner = getMobileAuthOwner();
+  assertOwnerCurrent(owner);
+  const saved = currentConfig;
+  if (!saved) {
+    if (mode === 'self-hosted') throw new Error('RELAY_NOT_SAVED');
+    return;
+  }
+  const secrets = mode === 'self-hosted'
+    ? parseStoredSecrets(await getSecureItem(secretsKey(owner.accountKey))) : null;
+  assertOwnerCurrent(owner);
+  if (mode === 'self-hosted' && !secrets) throw new Error('RELAY_CREDENTIAL_MISSING');
+  const config = { ...saved, mode };
+  await AsyncStorage.setItem(configKey(owner.accountKey), JSON.stringify(config));
+  if (!isMobileAuthOwnerCurrent(owner)) return;
+  loadSequence += 1;
+  setCurrentConfig(config);
+  setActiveSelfHostedRelay(mode === 'self-hosted' ? routeFromConfig(config, secrets) : null);
+  setSelfHostedRelayLoading(false);
+}
+
+/** 明确退出才删除配置、凭证，并尽力撤销服务器上的手机成员资格。 */
+export async function forgetSelfHostedRelay(): Promise<void> {
   const owner = getMobileAuthOwner();
   assertOwnerCurrent(owner);
   const leavingConfig = currentConfig;
-  const leavingCredential = getActiveSelfHostedRelay()?.credential ?? null;
+  const leavingSecrets = parseStoredSecrets(await getSecureItem(secretsKey(owner.accountKey)));
+  assertOwnerCurrent(owner);
   // 设置删不掉就不切:否则下次启动又回到这个中转,和用户看到的不一致。
   await AsyncStorage.removeItem(configKey(owner.accountKey));
   await deleteSecureItem(secretsKey(owner.accountKey)).catch((error: unknown) => {
@@ -269,10 +317,12 @@ export async function clearSelfHostedRelay(): Promise<void> {
       error instanceof Error ? error.name : 'unknown');
   });
   if (isMobileAuthOwnerCurrent(owner)) {
-    currentConfig = null;
+    loadSequence += 1;
+    setCurrentConfig(null);
     setActiveSelfHostedRelay(null);
+    setSelfHostedRelayLoading(false);
   }
-  if (leavingConfig && leavingCredential) void leaveRelayBestEffort(leavingConfig, leavingCredential);
+  if (leavingConfig && leavingSecrets) void leaveRelayBestEffort(leavingConfig, leavingSecrets.credential);
 }
 
 /** 成员可以让自己退出中转(DELETE /devices/<自己>);这里拿的是刚移除的凭证,不经 apiFetch。 */
@@ -320,6 +370,11 @@ export function createRelayJoinFetch(timeoutMs: number): RelayFetch {
 /** 界面用:当前账号的中转(null = 官方中转)。credential 为 null 表示本机凭证缺失。 */
 export function useSelfHostedRelay(): SelfHostedRelayRoute | null {
   return useSyncExternalStore(subscribeSelfHostedRelayRoute, getActiveSelfHostedRelay, getActiveSelfHostedRelay);
+}
+
+/** 已加入的中转元数据，不含凭证；官方线路下也显示恢复和明确退出的入口。 */
+export function useSavedSelfHostedRelay(): StoredRelayConfig | null {
+  return useSyncExternalStore(subscribeSavedRelay, getSavedRelay, getSavedRelay);
 }
 
 /** DeviceLinkProvider 用:路由代次变化时按账号切换同一条路径重建连接。 */

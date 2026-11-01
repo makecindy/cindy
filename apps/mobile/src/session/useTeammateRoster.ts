@@ -4,12 +4,13 @@ import { REMOTE_RESOURCE_MANIFEST_CHANNEL, type RemoteResourceManifestResponse }
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { toDeviceListItems } from '@/device-link/devices';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
-import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { discoverRemoteHomeCollections, remoteResourceDiscoveryTargets,
   type RemoteHomeCollection, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
@@ -24,11 +25,14 @@ export const TEAMMATE_COLLECTION_ID = 'teammates';
 
 /** Discover real host capabilities; no provisioning, bot creation, or name-based identity guessing. */
 export function useTeammateRoster(enabled = true) {
-  const { user, accountGeneration } = useAuth();
+  const { user, accountGeneration: authGeneration } = useAuth();
+  const accountGeneration = useRelayDataGeneration(authGeneration);
+  const cacheUserId = user?.id ?? '';
   const { t, i18n } = useTranslation();
   const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion } = useDeviceLink();
   const revoked = useRevokedDevices();
-  const binding = `${user?.id ?? ''}:${accountGeneration}`;
+  const owner = remoteCollectionCacheOwner(user?.id ?? '', authGeneration);
+  const binding = JSON.stringify([owner, accountGeneration]);
   const ownerRef = useRef(binding); ownerRef.current = binding;
   const generation = useRef(0);
   const active = useRef(false);
@@ -49,12 +53,12 @@ export function useTeammateRoster(enabled = true) {
     const current = () => !run.isStale() && !signal.aborted && active.current && AppState.currentState === 'active'
       && ownerRef.current === binding && generation.current === expected;
     setDiscovery((old) => ({ ...old, loading: true }));
-    const { value: snapshot } = await startBoundedStartupRead(readRemoteResourceSnapshot(user?.id ?? ''), { home: [], items: {}, read: {} }).initial;
+    const { value: snapshot } = await startBoundedStartupRead(readRemoteResourceSnapshot(cacheUserId), { home: [], items: {}, read: {} }).initial;
     if (!current()) return;
     let collections: RemoteHomeCollection[] = lastCollections.current.binding === binding ? lastCollections.current.home : snapshot.home;
     if (lastCollections.current.binding !== binding) {
       const cachedItems = snapshot.items[TEAMMATE_COLLECTION_ID]?.length ? snapshot.items[TEAMMATE_COLLECTION_ID]
-        : readRemoteCollectionCache(binding, TEAMMATE_COLLECTION_ID);
+        : readRemoteCollectionCache(owner, TEAMMATE_COLLECTION_ID);
       const previous = collections.find(collection => collection.id === TEAMMATE_COLLECTION_ID && collection.resourceKind === 'bot');
       // Home capabilities and roster rows are saved independently. Until the
       // directory/manifest answers, both caches are navigation hints.
@@ -144,7 +148,7 @@ export function useTeammateRoster(enabled = true) {
       // A host that did not answer this time keeps its groups until it answers again.
       groupTargets = targets.filter((target) => advertisingGroups.has(target.deviceId)
         || (!answered.has(target.deviceId) && previousGroupTargets.some((host) => host.deviceId === target.deviceId)));
-      void cacheRemoteResourceHome(user?.id ?? '', collections);
+      void cacheRemoteResourceHome(cacheUserId, collections);
     } catch (cause) {
       mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-directory' });
       error = formatRemoteError(cause); failures.push(cause);
@@ -161,7 +165,7 @@ export function useTeammateRoster(enabled = true) {
     setDiscovery(old => ({ binding, ready: true, loading: false, settled: true, createTargets,
       targets: old.binding === binding && JSON.stringify(old.targets) === JSON.stringify(filtered) ? old.targets : filtered,
       groupTargets, error: error ?? (failures.length ? formatRemoteError(failures[0]) : null) }));
-  }, [binding, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
+  }, [binding, owner, cacheUserId, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
   useEffect(() => {
     if (!enabled || discovery.binding !== binding || !discovery.ready || discovery.settled
       || (status !== 'stopped' && status !== 'connecting')) return;

@@ -1,4 +1,9 @@
 import type { HostedRemoteCollectionItem } from './remoteResources';
+import { getSelfHostedRelayDataKey } from './selfHostedRelayRouting';
+
+/** Shared by every roster reader/writer, regardless of when its page mounted. */
+export const remoteCollectionCacheOwner = (userId: string, accountGeneration: number) =>
+  JSON.stringify([userId, accountGeneration, getSelfHostedRelayDataKey()]);
 
 /** Give a cold relay a bounded window before falling back to cached remote rows. */
 export const REMOTE_RESOURCE_STARTUP_TIMEOUT_MS = 10_000;

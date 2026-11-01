@@ -8,6 +8,7 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -30,10 +31,11 @@ const DeviceInformationList = Platform.OS === 'ios' ? SwiftUIList : List;
 
 export default function DeviceInformationScreen() {
   const { accountGeneration } = useAuth();
+  const generation = useRelayDataGeneration(accountGeneration);
   const { deviceId } = useLocalSearchParams<{ deviceId: string }>();
   return (
     <DeviceInformationContent
-      key={`${accountGeneration}:${deviceId}`}
+      key={`${generation}:${deviceId}`}
       deviceId={deviceId}
     />
   );

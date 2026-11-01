@@ -9,7 +9,7 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useHomeMode } from './useHomeMode';
 import { homeDismissCount, staleCompanionChatCount, teammateIdentity, teammateResourceRoute, teammateSessionPreview } from './teammateNavigation';
 import { remoteSessionStore } from './remoteSessionStore';
-import { readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 
 /** Push keeps the current chat/composer mounted; known teammates validate in the destination. */
 export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPush>) {
@@ -52,6 +52,7 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
    */
   const openTeammate = useCallback(async (hosted: HostedRemoteCollectionItem,
     options?: { replace?: boolean; leaving?: { botId: string; deviceId: string }; settings?: 'capabilities' }) => {
+    const owner = remoteCollectionCacheOwner(user?.id ?? '', accountGeneration);
     const identity = teammateIdentity(hosted);
     if (!identity || pendingAccount.current === accountGeneration) return;
     // Fence rapid taps before the async preference write, not only at router.push.
@@ -59,8 +60,8 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
     Keyboard.dismiss();
     try {
       await preferences.selectTeammate(identity);
-      if (mounted.current && current.current === accountGeneration) {
-        const owner = `${user?.id ?? ''}:${accountGeneration}`;
+      if (mounted.current && current.current === accountGeneration
+        && remoteCollectionCacheOwner(user?.id ?? '', accountGeneration) === owner) {
         const cached = readRemoteCollectionCache(owner, identity.collectionId);
         // Seed presentation from the clicked row, never an authorization result.
         writeRemoteCollectionCache(owner, identity.collectionId, [hosted, ...cached.filter(row => row.key !== hosted.key)].slice(0, 200));

@@ -4,6 +4,11 @@ import type { RemoteSession } from '@/session/types';
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem,贴近真实 RN API(与 mobileSessionMessageCache.test 同套路)。
 const store = vi.hoisted(() => new Map<string, string>());
 const USER_ID = 'user-1';
+const relayScope = vi.hoisted(() => ({ key: 'official', generation: 0 }));
+vi.mock('@/device-link/selfHostedRelayRouting', () => ({
+  getSelfHostedRelayDataKey: () => relayScope.key,
+  getSelfHostedRelayRouteGeneration: () => relayScope.generation,
+}));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -55,10 +60,38 @@ function makeSession(
 describe('mobileHomeListCache', () => {
   beforeEach(() => {
     store.clear();
+    relayScope.key = 'official';
+    relayScope.generation = 0;
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // Unit regression: switching relay used to replay another relay's Home rows.
+  // Existing account-isolation tests never changed the route for the same account.
+  it('keeps the same account Home snapshots separate across relay switches', async () => {
+    const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    await cacheHomeListSnapshot(USER_ID, [makeSession('official-task', 'official-desktop')]);
+    relayScope.key = 'self-hosted-test';
+    relayScope.generation++;
+    expect(await getCachedHomeListSnapshot(USER_ID)).toEqual([]);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('relay-task', 'relay-desktop')]);
+    relayScope.key = 'official';
+    relayScope.generation++;
+    expect((await getCachedHomeListSnapshot(USER_ID))[0].sessions.map(s => s.id)).toEqual(['official-task']);
+  });
+
+  it('does not persist a queued old-route collector after the route changes', async () => {
+    vi.useFakeTimers();
+    const { scheduleHomeListSnapshotPersist, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
+    const collect = vi.fn(() => [makeSession('old-task', 'old-desktop')]);
+    scheduleHomeListSnapshotPersist(USER_ID, collect, 50);
+    relayScope.key = 'self-hosted-test';
+    relayScope.generation++;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(collect).not.toHaveBeenCalled();
+    expect(await getCachedHomeListSnapshot(USER_ID)).toEqual([]);
   });
 
   it('retains lane ownership and creator avatars across cold starts', async () => {

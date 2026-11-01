@@ -1,4 +1,5 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
@@ -56,10 +57,12 @@ export function useSettingsDeviceDirectory(): {
   selfDeviceName: string | null;
 } {
   const auth = useAuth();
+  const directoryGeneration = useRelayDataGeneration(auth.accountGeneration);
   const { lastPresenceSnapshot } = useDeviceLink();
   const [desktopDevices, setDesktopDevices] = useState<readonly MobileVoiceDictionaryHost[]>([]);
   const selfKey = auth.isAuthenticated && auth.deviceId ? selfDeviceNameKey(auth.accountGeneration, auth.deviceId) : null;
   const publishedName = usePublishedSelfDeviceName(selfKey);
+  useLayoutEffect(() => { setDesktopDevices([]); }, [directoryGeneration]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) {
@@ -96,7 +99,7 @@ export function useSettingsDeviceDirectory(): {
     return () => {
       cancelled = true;
     };
-  }, [auth]);
+  }, [auth, directoryGeneration]);
 
   useEffect(() => {
     if (!lastPresenceSnapshot) return;
