@@ -2799,6 +2799,32 @@
       "note": "伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
     },
     {
+      "id": "teammate-core-skill",
+      "status": "proposed",
+      "en": "Core skill",
+      "translations": {
+        "zh-CN": "核心技能",
+        "zh-TW": "核心技能",
+        "ja": "コアスキル",
+        "ko": "핵심 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。"
+    },
+    {
+      "id": "teammate-system-skills",
+      "status": "proposed",
+      "en": "System skills",
+      "translations": {
+        "zh-CN": "系统技能",
+        "zh-TW": "系統技能",
+        "ja": "システムスキル",
+        "ko": "시스템 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。"
+    },
+    {
       "id": "group-chat",
       "status": "proposed",
       "en": "Group chat",

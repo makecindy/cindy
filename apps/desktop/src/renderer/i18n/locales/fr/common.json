@@ -11046,22 +11046,112 @@
       "skill": "Skills",
       "mcp": "MCP",
       "toolset": "Outils intégrés",
-      "unavailable": "Indisponible",
       "empty": "Aucune capacité correspondante",
-      "accessHint": "Choisissez les outils intégrés, les serveurs MCP et les skills que ce compagnon peut utiliser. Les modifications s'appliquent à sa prochaine requête, y compris les requêtes de groupe autorisées.",
-      "inheritedHint": "Suit actuellement les outils activés sur cet ordinateur. Désactiver un élément fait passer cette liste en sélection explicite.",
-      "selectedHint": "Seuls les éléments sélectionnés dans cette liste sont autorisés pour ce compagnon.",
-      "personalHint": "Une skill apprise par ce compagnon, chargée avec son profil.",
       "unavailableHint": "Indisponible sur cet ordinateur ou cette cible d'exécution. Configurez d'abord sa connexion ou son accès système.",
       "notOnThisComputer": "Non disponible sur cet ordinateur",
-      "configure": "Ouvrir la configuration",
       "empty_toolset": "Aucun outil intégré n'est disponible sur cette cible d'exécution.",
       "empty_mcp": "Aucun serveur MCP personnalisé n'a été ajouté.",
       "empty_skill": "Aucune skill n'est disponible à la sélection.",
       "inputHandoff": {
         "title": "Saisie déléguée",
         "description": "Lorsque ce coéquipier rencontre une connexion, un mot de passe ou un code qu'il ne peut pas saisir lui-même, il peut vous demander de le saisir sur l'un de vos appareils. Les valeurs saisies ne lui sont jamais communiquées."
-      }
+      },
+      "intro": "Choisissez les skills, outils et serveurs MCP que ce coéquipier peut utiliser. Les changements s’appliquent dès le prochain message.",
+      "alwaysOn": "Toujours actif",
+      "core": {
+        "group": "Skill de base",
+        "name": "Socle du coéquipier",
+        "hint": "Tâches, autres coéquipiers, modèles, outils et plugins, mémoire. Mis à jour avec Cindy.",
+        "meta": "Commun à tous les coéquipiers · Toujours actif · Mis à jour avec Cindy",
+        "note": "L’orchestration dont dispose chaque coéquipier. Elle ne peut pas être désactivée ni modifiée. Pour changer sa façon de faire, dites-le-lui dans le chat : il le gardera comme skill.",
+        "covers": "Comprend",
+        "raw": "Voir le texte original",
+        "items": {
+          "tasks": {
+            "title": "Tâches",
+            "body": "Décide quand lancer une tâche en arrière-plan, pilote celles qu’il a lancées et rapporte le résultat dans le chat, y compris sur vos autres ordinateurs."
+          },
+          "teammates": {
+            "title": "Autres coéquipiers",
+            "body": "Écrit à d’autres coéquipiers ou en crée un pour vous."
+          },
+          "models": {
+            "title": "Modèles et outils",
+            "body": "Change de modèle à votre demande et utilise outils et plugins au besoin."
+          },
+          "memory": {
+            "title": "Mémoire",
+            "body": "Retient vos préférences et votre contexte, vérifie avant d’agir et met à jour quand cela change."
+          },
+          "self": {
+            "title": "Se connaître",
+            "body": "Sait ce qu’il peut faire et active ou désactive des fonctions pour vous ; pour Telegram, MCP ou les plugins, il consulte d’abord l’aide de Cindy."
+          }
+        }
+      },
+      "system": {
+        "group": "Skills système",
+        "meta": "{{on}} sur {{total}} actifs",
+        "pageMeta": "Skill système · Mis à jour avec Cindy",
+        "use": "Activer pour ce coéquipier",
+        "whenOff": "Une fois désactivé",
+        "items": {
+          "todo": {
+            "name": "À faire",
+            "hint": "Note ce que vous demandez et ce qu’il remarque, et vous le rappelle à l’échéance.",
+            "off": "Il cesse de noter, classer et rappeler les tâches à faire. Celles qui existent sont conservées et reprennent quand vous réactivez."
+          },
+          "routine": {
+            "name": "Routines",
+            "hint": "Crée et entretient des routines qui s’exécutent régulièrement.",
+            "off": "Il ne crée ni ne modifie plus de routines. Les routines existantes continuent et restent gérables depuis la page Routines."
+          },
+          "follow": {
+            "name": "Tableau de bord et suivi",
+            "hint": "Garde un œil sur toutes vos tâches et suit celles que vous lui confiez.",
+            "off": "Il ne consulte ni ne suit plus vos tâches de lui-même. Vous pouvez toujours lui demander dans le chat."
+          }
+        }
+      },
+      "learned": {
+        "group": "Skills appris",
+        "empty": "Aucun skill appris pour l’instant. L’apprentissage nocturne transforme les façons de faire récurrentes en skills, ou demandez-lui d’en retenir une dans le chat.",
+        "meta": "Appris · Mis à jour le {{date}}",
+        "metaUndated": "Appris",
+        "missing": "Ce skill n’existe plus.",
+        "use": "Utiliser ce skill",
+        "useHint": "Désactivé, le skill est conservé mais pas utilisé.",
+        "edit": "Modifier",
+        "delete": "Supprimer",
+        "cancel": "Annuler",
+        "save": "Enregistrer",
+        "saveFailed": "Échec de l’enregistrement. Réessayez plus tard.",
+        "deleteFailed": "Échec de la suppression. Réessayez plus tard.",
+        "deleteTitle": "Supprimer « {{name}} » ?",
+        "deleteBody": "Le coéquipier n’utilisera plus ce skill et son contenu ne pourra pas être restauré. Si vous en avez besoin plus tard, demandez-lui de retenir à nouveau la méthode.",
+        "unsavedTitle": "Modifications non enregistrées",
+        "unsavedDescription": "Si vous quittez, ces modifications du skill seront perdues.",
+        "discard": "Abandonner",
+        "continueEditing": "Continuer l'édition",
+        "descriptionLabel": "Quand l’utiliser",
+        "bodyLabel": "Comment faire"
+      },
+      "local": {
+        "group": "Skills de cet ordinateur"
+      },
+      "followMeta": "Suit cet ordinateur · {{count}}",
+      "selectedMeta": "{{count}} sur {{total}} sélectionnés",
+      "showRest": "Afficher {{count}} de plus",
+      "showLess": "Afficher moins",
+      "manage": "Gérer",
+      "toolSettings": "Réglages des outils",
+      "notTurnedOn": "Pas encore activé sur cet ordinateur",
+      "turnOn": "Activer",
+      "permissions": "Autorisations"
+    },
+    "systemSkills": {
+      "followOffHint": "Le skill système « Tableau de bord et suivi » de {{name}} est désactivé. Réactivez-le dans Capacités pour utiliser ceci.",
+      "offHint": "Le skill système « {{skill}} » est désactivé. Il reprendra une fois réactivé dans Capacités."
     },
     "guided": {
       "title": "Créer un coéquipier",

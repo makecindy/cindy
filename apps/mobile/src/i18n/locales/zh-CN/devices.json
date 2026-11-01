@@ -742,7 +742,7 @@
     "search": "搜索消息",
     "models": "模型候选链",
     "permissions": "操作权限",
-    "personalSkills": "个人学会的技能",
+    "personalSkills": "技能",
     "connections": "引用的技能与连接",
     "save": "保存更改",
     "offline": "请重新连接 {{deviceName}} 后继续，未保存的编辑已保留。",

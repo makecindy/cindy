@@ -10908,22 +10908,112 @@
       "skill": "技能",
       "mcp": "MCP",
       "toolset": "内置工具",
-      "unavailable": "不可用",
       "empty": "没有匹配的能力",
-      "accessHint": "逐项选择伙伴可使用的内置工具、MCP 与技能。更改从下一次请求生效，也适用于已授权的群内请求。",
-      "inheritedHint": "当前跟随本机已开启的工具。关闭任意一项后，此列表只使用你选择的项目。",
-      "selectedHint": "此列表中，伙伴只使用已选中的项目。",
-      "personalHint": "伙伴自己学到的技能，随伙伴自动加载。",
       "unavailableHint": "本机或当前执行环境暂不可用，请先配置连接或系统授权。",
       "notOnThisComputer": "这台电脑不可用",
-      "configure": "前往配置",
       "empty_toolset": "当前执行环境没有可用的内置工具。",
       "empty_mcp": "尚未添加自定义 MCP 服务。",
       "empty_skill": "暂无可选的技能。",
       "inputHandoff": {
         "title": "代输入",
         "description": "遇到需要你本人输入的登录信息、密码或验证码时，允许这位伙伴请你在任意设备上填写。你填写的内容不会交给它。"
-      }
+      },
+      "intro": "选择这位伙伴能用的技能、工具和 MCP，从下一条消息开始生效。",
+      "alwaysOn": "始终开启",
+      "core": {
+        "group": "核心技能",
+        "name": "伙伴核心技能",
+        "hint": "开任务、联系伙伴、换模型、用工具和插件、记忆。随 Cindy 更新。",
+        "meta": "所有伙伴共用 · 始终开启 · 随 Cindy 更新",
+        "note": "每位伙伴都有的编排能力，不能关闭或修改。想让它换种做法，在对话里告诉它，它会记成自己的技能。",
+        "covers": "包括",
+        "raw": "查看原文",
+        "items": {
+          "tasks": {
+            "title": "任务",
+            "body": "判断什么时候开后台任务，控制自己开的任务，把结果带回对话；也能到你的其他电脑上干活。"
+          },
+          "teammates": {
+            "title": "联系伙伴",
+            "body": "给其他伙伴发消息，或帮你创建新伙伴。"
+          },
+          "models": {
+            "title": "模型与工具",
+            "body": "按你的要求切换模型，按需找到并使用工具和插件。"
+          },
+          "memory": {
+            "title": "记忆",
+            "body": "记住你的偏好和背景，用前先查、有变化就更新。"
+          },
+          "self": {
+            "title": "了解自己",
+            "body": "知道自己有哪些功能并帮你开关；Cindy 的用法（加 Telegram、配 MCP、装插件）先查帮助再动手。"
+          }
+        }
+      },
+      "system": {
+        "group": "系统技能",
+        "meta": "已开 {{on}} / 共 {{total}}",
+        "pageMeta": "系统技能 · 随 Cindy 更新",
+        "use": "为这位伙伴开启",
+        "whenOff": "关闭后",
+        "items": {
+          "todo": {
+            "name": "待办",
+            "hint": "记下你交代的事和它发现的事，到期提醒你。",
+            "off": "不再记录、整理和提醒待办；已有待办保留，重新开启后继续。"
+          },
+          "routine": {
+            "name": "例行任务",
+            "hint": "帮你建立和维护定期执行的例行任务。",
+            "off": "不再新建或修改例行任务；已有例行任务照常运行，你仍可在「例行任务」页管理。"
+          },
+          "follow": {
+            "name": "工作台与跟进",
+            "hint": "关注你所有任务的近况，跟进你交给它的任务。",
+            "off": "不再主动查看和跟进你的任务；你仍可以在对话里直接问它。"
+          }
+        }
+      },
+      "learned": {
+        "group": "学会的技能",
+        "empty": "还没有学会的技能。夜间学习会把反复用到的做法整理成技能，你也可以在对话里让它记下来。",
+        "meta": "自己学会的 · 更新于 {{date}}",
+        "metaUndated": "自己学会的",
+        "missing": "这个技能已不存在。",
+        "use": "使用这个技能",
+        "useHint": "关闭后保留内容，伙伴暂时不用它。",
+        "edit": "修改",
+        "delete": "删除",
+        "cancel": "取消",
+        "save": "保存",
+        "saveFailed": "没能保存，请稍后再试。",
+        "deleteFailed": "没能删除，请稍后再试。",
+        "deleteTitle": "删除「{{name}}」？",
+        "deleteBody": "删除后伙伴不再使用这个技能，内容无法恢复。以后需要时，可以在对话里让它重新记下。",
+        "unsavedTitle": "尚有未保存的修改",
+        "unsavedDescription": "离开后会丢弃这次对技能的修改。",
+        "discard": "放弃修改",
+        "continueEditing": "继续编辑",
+        "descriptionLabel": "什么时候用",
+        "bodyLabel": "做法"
+      },
+      "local": {
+        "group": "本机技能"
+      },
+      "followMeta": "跟随本机 · {{count}} 项",
+      "selectedMeta": "已选 {{count}} / 共 {{total}}",
+      "showRest": "显示其余 {{count}} 项",
+      "showLess": "收起",
+      "manage": "管理",
+      "toolSettings": "工具设置",
+      "notTurnedOn": "这台电脑还没开启",
+      "turnOn": "去开启",
+      "permissions": "权限"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
+      "offHint": "系统技能「{{skill}}」已关闭，在能力页重新开启后才会运行。"
     },
     "guided": {
       "title": "创建伙伴",

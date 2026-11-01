@@ -9,7 +9,7 @@ import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type pre
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface } from './helperSurface.js';
+import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
@@ -953,6 +953,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const surface = await resolveHelperSurface(dbClient, sessionId);
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
+      },
+      resolveSystemSkillsOff: async ({ sessionId }) => {
+        const dbClient = tryGetDbClient();
+        if (!dbClient || isAppSessionBoundaryPending()) return [];
+        return resolveHelperSystemSkillsOff(dbClient, sessionId);
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),

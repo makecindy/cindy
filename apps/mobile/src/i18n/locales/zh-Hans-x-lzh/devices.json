@@ -742,7 +742,7 @@
     "search": "寻讯",
     "models": "模型次第",
     "permissions": "所为之权柄",
-    "personalSkills": "自习之技艺",
+    "personalSkills": "技艺",
     "connections": "所引技艺与连接",
     "save": "存所改",
     "offline": "请重连 {{deviceName}} 后续之，未存之修改仍在。",

@@ -5097,6 +5097,13 @@ interface ElectronAPI {
         resetSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
       };
       listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
+      skills: {
+        core: () => Promise<import('../shared/botSkill').BotCoreSkill>;
+        read: (botId: string, slug: string) => Promise<import('../shared/botSkill').BotSkillDetail | null>;
+        save: (botId: string, skill: import('../shared/botSkill').BotSkillSaveInput) => Promise<void>;
+        setEnabled: (botId: string, slug: string, enabled: boolean) => Promise<void>;
+        delete: (botId: string, slug: string) => Promise<void>;
+      };
       memory: {
         list: (
           botId: string,

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   scope: 'owner-a',
   followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
+  skillsOff: [] as string[],
   boundaryPending: false,
   schedulerReady: true,
   dbReady: true,
@@ -33,7 +34,7 @@ const mock = vi.hoisted(() => ({
 vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botId: string, input: RoutineRun['events']) => {
   const events = mock.followUpEvents(botId, input);
   return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
-} }));
+}, botSystemSkillsOff: async () => mock.skillsOff }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -83,6 +84,7 @@ afterEach(async () => {
   await stopRoutines();
   vi.clearAllMocks();
   mock.followUpEvents.mockImplementation((_id, events) => events);
+  mock.skillsOff = [];
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
   mock.schedulerReady = true;
@@ -314,6 +316,27 @@ it('asks the routine\'s chosen plugin before any lane or model dispatch', async 
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   expect(screenControlPoint).toHaveBeenCalledTimes(2);
   expect(plain.preRunPlugin).toBeUndefined();
+});
+
+// cindy-bots-runtime.md §6「伙伴技能分层」: turning off a system Skill stops its background work with its prompt and tools.
+// Before this, a manual or scheduled run of the built-in follow-up / daily todo check still reached the model.
+// The owner's own routines keep running, and the check can still be turned off but not on.
+it('skips follow-up and daily todo check runs while their system Skill is off, and refuses turning the check on', async () => {
+  const engine = await getRoutineEngine();
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  const [todoCheck] = await routineTools.list('bot');
+  const followUp = await engine.ensureBuiltin('bot', 'follow-up', { name: 'Follow up', prompt: 'Follow', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-follow-up-bot');
+  const custom = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  if (!todoCheck || !followUp) throw new Error('Routines were not created');
+  mock.skillsOff = ['follow', 'todo'];
+  await expect(routineTools.setTodoCheck('bot', true)).rejects.toMatchObject({ code: 'SYSTEM_SKILL_OFF' });
+  for (const id of [todoCheck.id, followUp.id, custom.id]) await routineTools.runNow('bot', id);
+  await vi.waitFor(async () => expect(await Promise.all([todoCheck.id, followUp.id, custom.id]
+    .map(async id => (await routineTools.history('bot', id))[0]?.status))).toEqual(['skipped', 'skipped', 'success']));
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+  expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
 });
 
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {

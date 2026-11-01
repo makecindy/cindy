@@ -1,4 +1,5 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
+import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
 
 /** Companion tasks add their profile tools to the ordinary transport's helper surface.
  * Classification is a business-object distinction, not a separate permission tier.
@@ -38,4 +39,30 @@ export async function resolveHelperSurface(
     status: row.status,
     remoteHostId: row.remoteHostId,
   });
+}
+
+/**
+ * System Skills the teammate owning this task turned off (shared/botSystemSkills.ts). Read live from
+ * the teammate's current profile so a change in settings denies the tools on the next call; an
+ * ordinary task or a missing profile turns nothing off.
+ */
+export async function resolveHelperSystemSkillsOff(
+  db: Pick<DbClient, 'queryOne'>,
+  sessionId: string,
+): Promise<BotSystemSkillId[]> {
+  const row = await db.queryOne<{ config: string | null }>(
+    `SELECT v.capabilities_json AS config
+       FROM bot_session_links b
+       JOIN bot_profiles p ON p.id = b.bot_id
+       JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+      WHERE b.session_id = ? AND b.archived_at IS NULL
+      LIMIT 1`,
+    [sessionId],
+  );
+  if (!row?.config) return [];
+  try {
+    return readBotSystemSkillsOff((JSON.parse(row.config) as { systemSkillsOff?: unknown }).systemSkillsOff);
+  } catch {
+    return [];
+  }
 }

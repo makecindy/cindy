@@ -10908,22 +10908,112 @@
       "skill": "技能",
       "mcp": "MCP",
       "toolset": "內建工具",
-      "unavailable": "無法使用",
       "empty": "沒有符合的能力",
-      "accessHint": "逐項選擇夥伴可使用的內建工具、MCP 與技能。變更從下一次請求生效，也適用於已授權的群內請求。",
-      "inheritedHint": "目前跟隨本機已開啟的工具。關閉任意一項後，此清單只使用你選擇的項目。",
-      "selectedHint": "此清單中，夥伴只使用已選取的項目。",
-      "personalHint": "夥伴自己學到的技能，隨夥伴自動載入。",
       "unavailableHint": "本機或目前執行環境暫不可用，請先設定連線或系統授權。",
       "notOnThisComputer": "這台電腦不可用",
-      "configure": "前往設定",
       "empty_toolset": "目前執行環境沒有可用的內建工具。",
       "empty_mcp": "尚未新增自訂 MCP 服務。",
       "empty_skill": "暫無可選的技能。",
       "inputHandoff": {
         "title": "代輸入",
         "description": "遇到需要你本人輸入的登入資訊、密碼或驗證碼時，允許這位夥伴請你在任意裝置上填寫。你填寫的內容不會交給它。"
-      }
+      },
+      "intro": "選擇這位夥伴能用的技能、工具和 MCP，從下一則訊息開始生效。",
+      "alwaysOn": "始終開啟",
+      "core": {
+        "group": "核心技能",
+        "name": "夥伴核心技能",
+        "hint": "開任務、聯絡夥伴、換模型、用工具和插件、記憶。隨 Cindy 更新。",
+        "meta": "所有夥伴共用 · 始終開啟 · 隨 Cindy 更新",
+        "note": "每位夥伴都有的編排能力，無法關閉或修改。想讓它換種做法，在對話裡告訴它，它會記成自己的技能。",
+        "covers": "包括",
+        "raw": "查看原文",
+        "items": {
+          "tasks": {
+            "title": "任務",
+            "body": "判斷何時開背景任務，控制自己開的任務，把結果帶回對話；也能到你的其他電腦上工作。"
+          },
+          "teammates": {
+            "title": "聯絡夥伴",
+            "body": "傳訊息給其他夥伴，或幫你建立新夥伴。"
+          },
+          "models": {
+            "title": "模型與工具",
+            "body": "依你的要求切換模型，按需找到並使用工具和插件。"
+          },
+          "memory": {
+            "title": "記憶",
+            "body": "記住你的偏好和背景，使用前先查、有變化就更新。"
+          },
+          "self": {
+            "title": "了解自己",
+            "body": "知道自己有哪些功能並幫你開關；Cindy 的用法（加 Telegram、設定 MCP、裝插件）先查說明再動手。"
+          }
+        }
+      },
+      "system": {
+        "group": "系統技能",
+        "meta": "已開 {{on}} / 共 {{total}}",
+        "pageMeta": "系統技能 · 隨 Cindy 更新",
+        "use": "為這位夥伴開啟",
+        "whenOff": "關閉後",
+        "items": {
+          "todo": {
+            "name": "待辦",
+            "hint": "記下你交代的事和它發現的事，到期提醒你。",
+            "off": "不再記錄、整理和提醒待辦；已有待辦保留，重新開啟後繼續。"
+          },
+          "routine": {
+            "name": "例行任務",
+            "hint": "幫你建立和維護定期執行的例行任務。",
+            "off": "不再新建或修改例行任務；已有例行任務照常執行，你仍可在「例行任務」頁管理。"
+          },
+          "follow": {
+            "name": "工作台與追蹤",
+            "hint": "關注你所有任務的近況，追蹤你交給它的任務。",
+            "off": "不再主動查看和追蹤你的任務；你仍可以在對話裡直接問它。"
+          }
+        }
+      },
+      "learned": {
+        "group": "學會的技能",
+        "empty": "還沒有學會的技能。夜間學習會把反覆用到的做法整理成技能，你也可以在對話裡請它記下來。",
+        "meta": "自己學會的 · 更新於 {{date}}",
+        "metaUndated": "自己學會的",
+        "missing": "這個技能已不存在。",
+        "use": "使用這個技能",
+        "useHint": "關閉後保留內容，夥伴暫時不用它。",
+        "edit": "修改",
+        "delete": "刪除",
+        "cancel": "取消",
+        "save": "儲存",
+        "saveFailed": "沒能儲存，請稍後再試。",
+        "deleteFailed": "沒能刪除，請稍後再試。",
+        "deleteTitle": "刪除「{{name}}」？",
+        "deleteBody": "刪除後夥伴不再使用這個技能，內容無法復原。之後需要時，可以在對話裡請它重新記下。",
+        "unsavedTitle": "尚有未儲存的修改",
+        "unsavedDescription": "離開後會捨棄這次對技能的修改。",
+        "discard": "放棄修改",
+        "continueEditing": "繼續編輯",
+        "descriptionLabel": "什麼時候用",
+        "bodyLabel": "做法"
+      },
+      "local": {
+        "group": "本機技能"
+      },
+      "followMeta": "跟隨本機 · {{count}} 項",
+      "selectedMeta": "已選 {{count}} / 共 {{total}}",
+      "showRest": "顯示其餘 {{count}} 項",
+      "showLess": "收合",
+      "manage": "管理",
+      "toolSettings": "工具設定",
+      "notTurnedOn": "這台電腦尚未開啟",
+      "turnOn": "去開啟",
+      "permissions": "權限"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 的系統技能「工作台與追蹤」已關閉，在能力頁重新開啟後才能使用。",
+      "offHint": "系統技能「{{skill}}」已關閉，在能力頁重新開啟後才會執行。"
     },
     "guided": {
       "title": "建立夥伴",

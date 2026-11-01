@@ -528,6 +528,23 @@ provide a compact restore action after an explicit selection. Desktop separates 
 the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
 Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
 
+### Teammate capability page (owner-approved r2, 2026-11-01)
+
+The teammate's Capabilities page follows the Memory page's grouped list: a quiet 12px/500 group
+heading with a tabular count or summary (`1 of 3 on`, `Following this computer · 11`), then one
+12px-radius card per group with 13px/500 names, one-line 12px descriptions (full text on hover)
+and inset dividers. Groups in order: Core skill (always on, opens a read-only page with a
+plain-language summary and the original text folded), System skills (switch per item; the page
+explains what turning it off stops), Learned skills (switch; the page shows the content with Edit
+and Delete), Skills on this computer, Built-in tools, MCP, Permissions (Input Handoff). A group
+shows at most four rows, enabled first and unavailable last; the rest unfold under "Show N more"
+with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading link per group
+(Manage / Tool settings) instead of a button on every row; an unavailable tool says so in its
+note line with a "Turn on" link. Rows that open a page carry a trailing chevron and keep the switch
+as a separate control. Light and Dark use the existing tokens; prototype and screenshots live in
+the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules: cindy-bots-runtime.md §6
+「伙伴技能分层」.
+
 ### Inputs & Forms
 
 ```

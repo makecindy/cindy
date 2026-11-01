@@ -11046,22 +11046,112 @@
       "skill": "Habilidades",
       "mcp": "MCP",
       "toolset": "Herramientas integradas",
-      "unavailable": "No disponible",
       "empty": "No hay capacidades que coincidan",
-      "accessHint": "Elige las herramientas integradas, los servidores MCP y las habilidades que puede usar este compañero. Los cambios se aplican a su próxima solicitud, incluidas las solicitudes autorizadas del grupo.",
-      "inheritedHint": "Actualmente usa las herramientas habilitadas en esta computadora. Al desactivar un elemento, esta lista pasa a ser una selección explícita.",
-      "selectedHint": "Este compañero solo puede usar los elementos seleccionados en esta lista.",
-      "personalHint": "Una habilidad aprendida por este compañero, que se carga con su perfil.",
       "unavailableHint": "No disponible en esta computadora o destino de ejecución. Primero configura su conexión o acceso al sistema.",
       "notOnThisComputer": "No disponible en esta computadora",
-      "configure": "Abrir configuración",
       "empty_toolset": "No hay herramientas integradas disponibles en este destino de ejecución.",
       "empty_mcp": "No se han agregado servidores MCP personalizados.",
       "empty_skill": "No hay habilidades disponibles para seleccionar.",
       "inputHandoff": {
         "title": "Transferencia de entrada",
         "description": "Cuando este compañero llegue a un inicio de sesión, una contraseña o un código que no pueda ingresar por sí mismo, puede pedirte que lo ingreses en cualquiera de tus dispositivos. Los datos que ingreses nunca se comparten con él."
-      }
+      },
+      "intro": "Elige qué habilidades, herramientas y servidores MCP puede usar este compañero. Los cambios se aplican desde el siguiente mensaje.",
+      "alwaysOn": "Siempre activa",
+      "core": {
+        "group": "Habilidad principal",
+        "name": "Núcleo del compañero",
+        "hint": "Tareas, otros compañeros, modelos, herramientas y plugins, memoria. Se actualiza con Cindy.",
+        "meta": "Común a todos los compañeros · Siempre activa · Se actualiza con Cindy",
+        "note": "La coordinación que tiene cada compañero. No se puede desactivar ni editar. Para que trabaje de otra forma, díselo en el chat y lo guardará como su propia habilidad.",
+        "covers": "Incluye",
+        "raw": "Ver texto original",
+        "items": {
+          "tasks": {
+            "title": "Tareas",
+            "body": "Decide cuándo iniciar una tarea en segundo plano, controla las que inició y trae el resultado al chat, también en tus otras computadoras."
+          },
+          "teammates": {
+            "title": "Otros compañeros",
+            "body": "Escribe a otros compañeros o crea uno nuevo para ti."
+          },
+          "models": {
+            "title": "Modelos y herramientas",
+            "body": "Cambia de modelo cuando se lo pides y usa herramientas y plugins según haga falta."
+          },
+          "memory": {
+            "title": "Memoria",
+            "body": "Recuerda tus preferencias y contexto, comprueba antes de usarlos y los actualiza cuando cambian."
+          },
+          "self": {
+            "title": "Conocerse",
+            "body": "Sabe lo que puede hacer y activa o desactiva funciones por ti; para Telegram, MCP o plugins consulta primero la ayuda de Cindy."
+          }
+        }
+      },
+      "system": {
+        "group": "Habilidades del sistema",
+        "meta": "{{on}} de {{total}} activas",
+        "pageMeta": "Habilidad del sistema · Se actualiza con Cindy",
+        "use": "Activar para este compañero",
+        "whenOff": "Al desactivarla",
+        "items": {
+          "todo": {
+            "name": "Pendientes",
+            "hint": "Anota lo que pides y lo que detecta, y te avisa a tiempo.",
+            "off": "Deja de anotar, ordenar y recordar pendientes. Los existentes se conservan y continúan al volver a activarla."
+          },
+          "routine": {
+            "name": "Rutinas",
+            "hint": "Crea y mantiene rutinas que se ejecutan de forma periódica.",
+            "off": "Deja de crear o modificar rutinas. Las existentes siguen funcionando y puedes gestionarlas en la página Rutinas."
+          },
+          "follow": {
+            "name": "Panel y seguimiento",
+            "hint": "Sigue cómo van todas tus tareas y da seguimiento a las que le encargas.",
+            "off": "Deja de revisar y dar seguimiento a tus tareas por su cuenta. Aún puedes preguntarle en el chat."
+          }
+        }
+      },
+      "learned": {
+        "group": "Habilidades aprendidas",
+        "empty": "Aún no hay habilidades aprendidas. El aprendizaje nocturno convierte en habilidades los métodos que se repiten, o puedes pedirle en el chat que recuerde uno.",
+        "meta": "Aprendida · Actualizada el {{date}}",
+        "metaUndated": "Aprendida",
+        "missing": "Esta habilidad ya no existe.",
+        "use": "Usar esta habilidad",
+        "useHint": "Desactivada, la habilidad se conserva pero no se usa.",
+        "edit": "Editar",
+        "delete": "Eliminar",
+        "cancel": "Cancelar",
+        "save": "Guardar",
+        "saveFailed": "No se pudo guardar. Inténtalo más tarde.",
+        "deleteFailed": "No se pudo eliminar. Inténtalo más tarde.",
+        "deleteTitle": "¿Eliminar «{{name}}»?",
+        "deleteBody": "El compañero dejará de usar esta habilidad y su contenido no se podrá recuperar. Si la necesitas más adelante, pídele que vuelva a recordar el método.",
+        "unsavedTitle": "Cambios sin guardar",
+        "unsavedDescription": "Si sales, se descartarán estos cambios en la habilidad.",
+        "discard": "Descartar cambios",
+        "continueEditing": "Seguir editando",
+        "descriptionLabel": "Cuándo usarla",
+        "bodyLabel": "Cómo hacerlo"
+      },
+      "local": {
+        "group": "Habilidades de esta computadora"
+      },
+      "followMeta": "Sigue esta computadora · {{count}}",
+      "selectedMeta": "{{count}} de {{total}} seleccionadas",
+      "showRest": "Mostrar {{count}} más",
+      "showLess": "Mostrar menos",
+      "manage": "Gestionar",
+      "toolSettings": "Ajustes de herramientas",
+      "notTurnedOn": "Aún no está activada en esta computadora",
+      "turnOn": "Activar",
+      "permissions": "Permisos"
+    },
+    "systemSkills": {
+      "followOffHint": "La habilidad del sistema «Panel y seguimiento» de {{name}} está desactivada. Vuelve a activarla en Capacidades para usar esto.",
+      "offHint": "La habilidad del sistema «{{skill}}» está desactivada. Volverá a ejecutarse cuando la actives en Capacidades."
     },
     "guided": {
       "title": "Crear un compañero",

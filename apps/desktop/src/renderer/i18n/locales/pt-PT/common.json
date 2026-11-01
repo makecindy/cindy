@@ -11046,22 +11046,112 @@
       "skill": "Skills",
       "mcp": "MCP",
       "toolset": "Ferramentas integradas",
-      "unavailable": "Indisponível",
       "empty": "Nenhuma capacidade correspondente",
-      "accessHint": "Escolhe as ferramentas integradas, os servidores MCP e as Skills que este companheiro pode utilizar. As alterações aplicam-se ao próximo pedido, incluindo pedidos de grupo autorizados.",
-      "inheritedHint": "Atualmente, segue as ferramentas ativadas neste computador. Desativar um item muda esta lista para uma seleção explícita.",
-      "selectedHint": "Só os itens selecionados nesta lista são permitidos para este companheiro.",
-      "personalHint": "Uma Skill aprendida por este companheiro, carregada com o respetivo perfil.",
       "unavailableHint": "Indisponível neste computador ou destino de execução. Configura primeiro a ligação ou o acesso ao sistema.",
       "notOnThisComputer": "Indisponível neste computador",
-      "configure": "Abrir configuração",
       "empty_toolset": "Não há ferramentas integradas disponíveis neste destino de execução.",
       "empty_mcp": "Não foram adicionados servidores MCP personalizados.",
       "empty_skill": "Não há Skills disponíveis para selecionar.",
       "inputHandoff": {
         "title": "Transferência do controlo da introdução",
         "description": "Quando este colega chegar a um início de sessão, palavra-passe ou código que não consiga introduzir, pode pedir-te que o introduzas num dos teus dispositivos. Os teus dados nunca são partilhados com ele."
-      }
+      },
+      "intro": "Escolhe que Skills, ferramentas e servidores MCP este colega pode usar. As alterações aplicam-se a partir da próxima mensagem.",
+      "alwaysOn": "Sempre ativa",
+      "core": {
+        "group": "Skill principal",
+        "name": "Núcleo do colega",
+        "hint": "Tarefas, outros colegas, modelos, ferramentas e plugins, memória. Atualizado com o Cindy.",
+        "meta": "Comum a todos os colegas · Sempre ativo · Atualizado com o Cindy",
+        "note": "A coordenação que todos os colegas têm. Não pode ser desativada nem editada. Para mudar a forma como ele trabalha, diz-lho no chat e ele guarda isso como Skill própria.",
+        "covers": "Inclui",
+        "raw": "Ver texto original",
+        "items": {
+          "tasks": {
+            "title": "Tarefas",
+            "body": "Decide quando iniciar uma tarefa em segundo plano, controla as que iniciou e traz o resultado para o chat, incluindo nos teus outros computadores."
+          },
+          "teammates": {
+            "title": "Outros colegas",
+            "body": "Envia mensagens a outros colegas ou cria um novo para ti."
+          },
+          "models": {
+            "title": "Modelos e ferramentas",
+            "body": "Muda de modelo quando pedes e usa ferramentas e plugins conforme necessário."
+          },
+          "memory": {
+            "title": "Memória",
+            "body": "Lembra-se das tuas preferências e do teu contexto, confirma antes de usar e atualiza quando algo muda."
+          },
+          "self": {
+            "title": "Conhecer-se",
+            "body": "Sabe o que consegue fazer e ativa ou desativa funcionalidades por ti; para Telegram, MCP ou plugins, consulta primeiro a ajuda do Cindy."
+          }
+        }
+      },
+      "system": {
+        "group": "Skills do sistema",
+        "meta": "{{on}} de {{total}} ativas",
+        "pageMeta": "Skill do sistema · Atualizada com o Cindy",
+        "use": "Ativar para este colega",
+        "whenOff": "Ao desativar",
+        "items": {
+          "todo": {
+            "name": "Pendentes",
+            "hint": "Regista o que pedes e o que ele repara, e lembra-te no prazo.",
+            "off": "Deixa de registar, organizar e lembrar pendentes. Os existentes mantêm-se e continuam quando voltares a ativar."
+          },
+          "routine": {
+            "name": "Rotinas",
+            "hint": "Cria e mantém rotinas que correm periodicamente.",
+            "off": "Deixa de criar ou alterar rotinas. As existentes continuam a correr e podem ser geridas na página Rotinas."
+          },
+          "follow": {
+            "name": "Painel e acompanhamento",
+            "hint": "Acompanha o estado de todas as tuas tarefas e dá seguimento às que lhe entregas.",
+            "off": "Deixa de verificar e acompanhar as tuas tarefas por iniciativa própria. Podes continuar a perguntar-lhe no chat."
+          }
+        }
+      },
+      "learned": {
+        "group": "Skills aprendidas",
+        "empty": "Ainda não há Skills aprendidas. A aprendizagem noturna transforma em Skills os métodos que se repetem, ou podes pedir-lhe no chat que se lembre de um.",
+        "meta": "Aprendida · Atualizada a {{date}}",
+        "metaUndated": "Aprendida",
+        "missing": "Esta Skill já não existe.",
+        "use": "Usar esta Skill",
+        "useHint": "Desativada, a Skill é mantida, mas não é usada.",
+        "edit": "Editar",
+        "delete": "Eliminar",
+        "cancel": "Cancelar",
+        "save": "Guardar",
+        "saveFailed": "Não foi possível guardar. Tenta novamente mais tarde.",
+        "deleteFailed": "Não foi possível eliminar. Tenta novamente mais tarde.",
+        "deleteTitle": "Eliminar “{{name}}”?",
+        "deleteBody": "O colega deixa de usar esta Skill e o conteúdo não pode ser recuperado. Se precisares dela mais tarde, pede-lhe no chat que volte a guardar o método.",
+        "unsavedTitle": "Alterações não guardadas",
+        "unsavedDescription": "Ao sair, perderá estas alterações à Skill.",
+        "discard": "Descartar alterações",
+        "continueEditing": "Continuar a editar",
+        "descriptionLabel": "Quando usar",
+        "bodyLabel": "Como fazer"
+      },
+      "local": {
+        "group": "Skills deste computador"
+      },
+      "followMeta": "Segue este computador · {{count}}",
+      "selectedMeta": "{{count}} de {{total}} selecionadas",
+      "showRest": "Mostrar mais {{count}}",
+      "showLess": "Mostrar menos",
+      "manage": "Gerir",
+      "toolSettings": "Definições das ferramentas",
+      "notTurnedOn": "Ainda não ativado neste computador",
+      "turnOn": "Ativar",
+      "permissions": "Permissões"
+    },
+    "systemSkills": {
+      "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Volta a ativá-la em Capacidades para usar isto.",
+      "offHint": "A Skill do sistema “{{skill}}” está desativada. Volta a correr quando a reativares em Capacidades."
     },
     "guided": {
       "title": "Criar um colega",

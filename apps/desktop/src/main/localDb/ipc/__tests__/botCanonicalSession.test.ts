@@ -2839,9 +2839,9 @@ describe('Bot canonical Session lifecycle', () => {
     ]);
     expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
     expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
-    expect(opts.botProfileContextPrompt).toContain('login/configuration card is already in this chat');
-    expect(opts.botProfileContextPrompt).toContain('End the turn and wait for the Host authorization-completed notification');
-    expect(opts.botProfileContextPrompt).not.toContain('This remote runtime does not provide');
+    // The card details are on-demand (read_teammate_skill name=plugins); the core keeps the route.
+    expect(opts.botProfileContextPrompt).toContain('Plugin logins go through `connect_account` cards on the trusted desktop.');
+    expect(opts.botProfileContextPrompt).not.toContain('This remote runtime has no authorization cards');
     // 用户配的 Skill 那一栏不受影响。
     expect(opts.botRuntimeProfile?.skillPolicy.catalog).toEqual([]);
   });
@@ -2880,16 +2880,13 @@ describe('Bot canonical Session lifecycle', () => {
     expect(opts.botProfileContextPrompt).toContain('Personal Skill storage and learning are unavailable');
     expect(opts.botProfileContextPrompt).toContain('`create_teammate`');
     expect(opts.botProfileContextPrompt).toContain('`start_session_task`');
-    expect(opts.botProfileContextPrompt).toContain('Respect the user’s memory switch');
+    expect(opts.botProfileContextPrompt).toContain('Respect the memory switch');
     expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
     expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
-    expect(opts.botProfileContextPrompt).not.toContain('login/configuration card is already in this chat');
-    expect(opts.botProfileContextPrompt).not.toContain('End the turn and wait for the Host authorization-completed notification');
+    expect(opts.botProfileContextPrompt).not.toContain('Plugin logins go through `connect_account` cards');
     if (agentKind === 'pi') {
       expect(opts.botProfileContextPrompt).toContain('`ghost_list`, `ghost_info`, `ghost_call`');
-      expect(opts.botProfileContextPrompt).toContain('This remote runtime does not provide plugin authorization cards');
-      expect(opts.botProfileContextPrompt).toContain('Plugins page on the trusted desktop');
-      expect(opts.botProfileContextPrompt).toContain('after the user confirms readiness');
+      expect(opts.botProfileContextPrompt).toContain('This remote runtime has no authorization cards: point the user to the trusted desktop\'s Plugins page.');
     } else {
       expect(opts.botProfileContextPrompt).not.toContain('`ghost_call`');
     }

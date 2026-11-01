@@ -742,7 +742,7 @@
     "search": "Search Messages",
     "models": "Model Chain",
     "permissions": "Operation Permissions",
-    "personalSkills": "Personal Skills",
+    "personalSkills": "Skills",
     "connections": "Referenced Skills & Connections",
     "save": "Save Changes",
     "offline": "Reconnect to {{deviceName}} to continue. Your edits are retained.",

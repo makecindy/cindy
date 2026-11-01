@@ -9,6 +9,7 @@ import type {
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,
   CindyGhostsMcpDeps,
+  CindyHostConnectionId,
   CindyMediaCapability,
 } from "../types.js";
 import {
@@ -1304,14 +1305,16 @@ export function createCindyGhostsMcpServer(
     },
   );
 
+  const hostConnectionIds: readonly CindyHostConnectionId[] = ["grok", "im-telegram", "im-feishu", "im-wecom", "im-dingtalk", "im-discord"];
   if (deps.connectAccount) server.tool(
     "connect_account",
-    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Do not invent connectors, URLs or credentials.",
+    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk or im-discord; the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
     { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), namespace: ghostNamespaceInput, reauthorize: z.boolean().optional().describe("Reopen supported setup for an explicit reconnect, token replacement, authorization update or reconfiguration request, or a known authorization/scope failure") },
     async ({ kind, id, namespace, reauthorize }, extra) => {
-      if (kind === "host" && (id !== "grok" || namespace !== undefined)) return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "UNSUPPORTED_CONNECTION" }) }], isError: true };
+      const hostId = hostConnectionIds.find((candidate) => candidate === id);
+      if (kind === "host" && (!hostId || namespace !== undefined)) return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "UNSUPPORTED_CONNECTION" }) }], isError: true };
       try {
-        const result = await deps.connectAccount!(kind === "host" ? { kind, id: "grok", reauthorize } : { kind, id, ...(namespace !== undefined ? { namespace } : {}), reauthorize }, extra.signal);
+        const result = await deps.connectAccount!(kind === "host" ? { kind, id: hostId!, reauthorize } : { kind, id, ...(namespace !== undefined ? { namespace } : {}), reauthorize }, extra.signal);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch {
         return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "CONNECTION_UNAVAILABLE" }) }], isError: true };

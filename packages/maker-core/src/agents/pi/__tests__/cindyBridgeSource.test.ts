@@ -1619,8 +1619,10 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
+    // A system Skill the owner switched off keeps its tools out of Pi's direct list too.
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      'mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true })',
+      "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');

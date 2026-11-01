@@ -162,6 +162,23 @@ export function companionGlanceOutputs(value: BotDelegationListResult | null | u
   return files.sort((a, b) => b.at - a.at).slice(0, GLANCE_OUTPUT_LIMIT);
 }
 
+export interface CompanionEditorSection { key: string; title?: RemoteText; panels: ProfilePanel[] }
+/**
+ * Sections of a host editor list, shared by the iOS and Android pages: a titled read-only block
+ * (a list or a text) opens its own titled section; other blocks share the untitled section before
+ * them, so hosts that send no titles keep their single group.
+ */
+export function companionEditorSections(panels: readonly ProfilePanel[]): CompanionEditorSection[] {
+  const sections: CompanionEditorSection[] = [];
+  for (const panel of panels) {
+    const last = sections.at(-1);
+    if (panel.title && !panel.action) sections.push({ key: panel.id, title: panel.title, panels: [panel] });
+    else if (last && !last.title) last.panels.push(panel);
+    else sections.push({ key: panel.id, panels: [panel] });
+  }
+  return sections;
+}
+
 export function profileFormDirty(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
   return !!panel?.action?.fields?.some(field => (values[field.id] ?? '') !== (panel.values[field.id] ?? ''));
 }

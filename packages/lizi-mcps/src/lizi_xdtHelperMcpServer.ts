@@ -110,6 +110,7 @@ import {
   withCindyGatedBotToolDescriptions,
   type BotCapabilityCallbacks,
 } from './xdt-helper/bot_capabilities.js';
+import { registerTeammateSkillReader, teammateDeniedTools } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
@@ -257,12 +258,15 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
+  /** Tools of system Skills this teammate turned off (teammate_skills.ts). */
+  deniedTools?: ReadonlySet<string>;
 }
 
 function toolAllowed(
   allow: HelperSurfaceAllow,
   tool: { name: string; category: string },
 ): boolean {
+  if (allow.deniedTools?.has(tool.name)) return false;
   if (!allow.categories) return true;
   return allow.categories.has(tool.category);
 }
@@ -786,6 +790,11 @@ export interface XdtHelperMcpDeps {
   }) => Promise<'default' | 'bot' | 'bot-main' | 'restricted'>;
   /** Live caller/account check for all tasks; the tool list itself never changes mid-session. */
   authorizeCall?: ToolCallAuthorizer;
+  /**
+   * System Skills the calling teammate turned off (`todo` / `routine` / `follow`). Their tools are
+   * denied at call time and left out of new tool listings; the core prompt stops naming them.
+   */
+  resolveSystemSkillsOff?: (input: { sessionId: string }) => Promise<readonly string[]>;
   runtimeCapabilities?: (
     context: import('./types.js').LiziMcpSessionContext,
     query: import('./xdt-helper/get_capabilities.js').RuntimeCapabilityQuery,
@@ -917,7 +926,10 @@ export function createXdtHelperMcpServer(
     if (surface === 'bot' || surface === 'bot-main') {
       // Companion identity adds self-management, not a narrower ordinary tool surface.
       const categories = remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories;
-      return { categories: new Set([...categories, 'bots']) };
+      const off = deps.resolveSystemSkillsOff
+        ? await deps.resolveSystemSkillsOff({ sessionId }).catch(() => [] as readonly string[])
+        : [];
+      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off) };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -1088,6 +1100,12 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       callbacks: deps.botCapabilities,
     });
+    registerTeammateSkillReader(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      systemSkillsOff: deps.resolveSystemSkillsOff
+        ? ({ callerSessionId }) => deps.resolveSystemSkillsOff!({ sessionId: callerSessionId })
+        : undefined,
+    });
   }
   if (deps.botRoutines) {
     registerBotRoutineTools(registry, deps.botRoutines,
@@ -1163,7 +1181,7 @@ export function createXdtHelperMcpServer(
         description: definition.description, inputSchema: z.strictObject(definition.inputShape),
       }, async (args) => {
         const allowed = await allowedSurface();
-        if (!allowed.categories?.has('bots')) {
+        if (!allowed.categories?.has('bots') || !toolAllowed(allowed, definition)) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
         const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -1196,7 +1214,10 @@ export function createXdtHelperMcpServer(
         ...entryTools,
         ...(await askOwnerListing()),
         ...(allowed.categories?.has('bots')
-          ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
+          ? withCindyGatedBotToolDescriptions(
+            botTools.filter((tool) => !allowed.deniedTools?.has(tool.name)),
+            cindyAvailableForSession(sessionCtx),
+          ) : []),
       ] };
     });
   }

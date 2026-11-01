@@ -880,6 +880,14 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
 
+### Core skill
+
+伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
+
+### System skills
+
+伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
+
 ### Todo
 
 伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。

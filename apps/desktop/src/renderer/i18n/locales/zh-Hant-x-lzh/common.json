@@ -10908,22 +10908,112 @@
       "skill": "技藝",
       "mcp": "MCP",
       "toolset": "內建器具",
-      "unavailable": "不可用",
       "empty": "無相符之才能",
-      "accessHint": "逐項擇同僚可用之內建器具、MCP 與技藝。所改自下次請求起生效，已授權之群內請求亦然。",
-      "inheritedHint": "今從此機已啟之器具。闔其一項，此單即只用君所擇者。",
-      "selectedHint": "此單之中，同僚只用已選之項。",
-      "personalHint": "同僚自習之技藝，隨同僚自載。",
       "unavailableHint": "此機或今之執行環境暫不可用，請先設連線或系統授權。",
       "notOnThisComputer": "此機不可用",
-      "configure": "往設之",
       "empty_toolset": "今之執行環境無可用之內建器具。",
       "empty_mcp": "尚未增自訂 MCP 服務。",
       "empty_skill": "暫無可選之技藝。",
       "inputHandoff": {
         "title": "代書",
         "description": "遇須君親書之登入資訊、密碼或驗證碼，許此同僚請君於任一裝置填之。君所填者不交予它。"
-      }
+      },
+      "intro": "擇此伴可用之技藝、器具與 MCP，自下一言始行。",
+      "alwaysOn": "常開",
+      "core": {
+        "group": "本技",
+        "name": "夥伴本技",
+        "hint": "開任務、聯同伴、易模型、用器具與法器、記事。隨 Cindy 更。",
+        "meta": "諸伴共之 · 常開 · 隨 Cindy 更",
+        "note": "諸伴皆有之調度之能，不可關，不可改。欲其易法，於言談中告之，彼自記為己之技藝。",
+        "covers": "所含",
+        "raw": "觀原文",
+        "items": {
+          "tasks": {
+            "title": "任務",
+            "body": "度何時開後台任務，掌己所開之任務，攜其果歸於言談；亦可至汝他機行事。"
+          },
+          "teammates": {
+            "title": "聯同伴",
+            "body": "致書他伴，或為汝新立一伴。"
+          },
+          "models": {
+            "title": "模型與器具",
+            "body": "依汝之命易模型，因需尋用器具與法器。"
+          },
+          "memory": {
+            "title": "記事",
+            "body": "記汝所好與所歷，用前先查，有變則更。"
+          },
+          "self": {
+            "title": "自知",
+            "body": "知己所能，為汝開關諸能；Cindy 之用法（添 Telegram、設 MCP、裝法器），先閱幫助而後行。"
+          }
+        }
+      },
+      "system": {
+        "group": "系統技藝",
+        "meta": "已開 {{on}} / 共 {{total}}",
+        "pageMeta": "系統技藝 · 隨 Cindy 更",
+        "use": "為此伴開之",
+        "whenOff": "關後",
+        "items": {
+          "todo": {
+            "name": "待辦",
+            "hint": "記汝所囑與彼所察之事，期至則告汝。",
+            "off": "不復記、理、告待辦；舊有待辦存焉，復開則續。"
+          },
+          "routine": {
+            "name": "常例",
+            "hint": "為汝立而守按時而行之常例。",
+            "off": "不復立、改常例；舊有常例照行，汝猶可於「常例」頁理之。"
+          },
+          "follow": {
+            "name": "案頭與督促",
+            "hint": "察汝諸任務之近況，督汝所託之任務。",
+            "off": "不復自察、自督汝之任務；汝猶可於言談中問之。"
+          }
+        }
+      },
+      "learned": {
+        "group": "所習技藝",
+        "empty": "尚無所習之技藝。夜習將屢用之法輯為技藝，汝亦可於言談中令其記之。",
+        "meta": "自習而得 · 更於 {{date}}",
+        "metaUndated": "自習而得",
+        "missing": "此技藝已不存。",
+        "use": "用此技藝",
+        "useHint": "關之則存其文，此伴暫不用之。",
+        "edit": "改",
+        "delete": "刪",
+        "cancel": "罷",
+        "save": "存",
+        "saveFailed": "未能存，稍後再試。",
+        "deleteFailed": "未能刪，稍後再試。",
+        "deleteTitle": "刪「{{name}}」乎？",
+        "deleteBody": "刪後此伴不復用此技藝，其文不可復。後若需之，可於言談中令其復記。",
+        "unsavedTitle": "尚有未存之修改",
+        "unsavedDescription": "離去則捨此番於技藝之修改。",
+        "discard": "棄其修改",
+        "continueEditing": "續修",
+        "descriptionLabel": "何時用之",
+        "bodyLabel": "行法"
+      },
+      "local": {
+        "group": "本機技藝"
+      },
+      "followMeta": "隨本機 · {{count}} 項",
+      "selectedMeta": "已擇 {{count}} / 共 {{total}}",
+      "showRest": "示餘 {{count}} 項",
+      "showLess": "收",
+      "manage": "理",
+      "toolSettings": "器具之設",
+      "notTurnedOn": "此機尚未開",
+      "turnOn": "往開",
+      "permissions": "權"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
+      "offHint": "系統技藝「{{skill}}」已關，於才能頁復開之乃行。"
     },
     "guided": {
       "title": "立同僚",

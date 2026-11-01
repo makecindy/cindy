@@ -191,6 +191,55 @@ export function renderBotSkillFile(input: {
   return `${frontmatter}\n\n${input.body.trim()}\n`;
 }
 
+/**
+ * An edit to a skill whose frontmatter carries fields Cindy does not write (`allowed-tools`,
+ * `license`, extra metadata from an imported skill): keep that frontmatter, replace the
+ * description and body, and set `metadata.displayName` / `metadata.updatedAt` so a rename sticks
+ * and a later stale edit is refused. Returns null for files in Cindy's own format, which save
+ * normally. Throws when the description or metadata is a multi-line block it cannot rewrite in place.
+ */
+export function patchCustomBotSkillSource(source: string,
+  edit: { name: string; description: string; body: string; updatedAt: string }): string | null {
+  const match = /^---\n([\s\S]*?)\n---\n?/.exec(source.replace(/\r\n/g, '\n'));
+  if (!match) return null;
+  const lines = match[1].split('\n');
+  let section = '';
+  const custom = lines.some((line) => {
+    if (!line.trim()) return false;
+    const key = line.slice(0, line.indexOf(':')).trim();
+    if (!/^\s/.test(line)) { section = key; return !['name', 'description', 'metadata'].includes(key); }
+    return section !== 'metadata' || !['displayName', 'updatedAt'].includes(key);
+  });
+  if (!custom) return null;
+  const unsupported = () => new BotSkillStoreError('INVALID_ARGS', 'This skill keeps a multi-line description or metadata; edit it in its SKILL.md');
+  const at = lines.findIndex((line) => line.startsWith('description:'));
+  const current = at < 0 ? '' : lines[at].slice('description:'.length);
+  if (at >= 0 && (isFrontmatterBlock(current) || /^\s/.test(lines[at + 1] ?? ''))) {
+    if (parseBotSkillFile(source).description !== edit.description) throw unsupported();
+  } else {
+    const description = `description: ${escapeFrontmatterValue(edit.description)}`;
+    if (at >= 0) lines[at] = description; else lines.splice(1, 0, description);
+  }
+  let meta = lines.findIndex((line) => line.startsWith('metadata:'));
+  if (meta < 0) { lines.push('metadata:'); meta = lines.length - 1; }
+  else if (lines[meta].slice('metadata:'.length).trim()) throw unsupported();
+  let end = meta + 1;
+  while (end < lines.length && /^\s/.test(lines[end])) end++;
+  for (const [key, value] of [['displayName', edit.name], ['updatedAt', edit.updatedAt]] as const) {
+    const line = `  ${key}: ${escapeFrontmatterValue(value)}`;
+    const existing = lines.slice(meta + 1, end).findIndex((child) => child.trim().startsWith(`${key}:`));
+    if (existing >= 0) {
+      const index = meta + 1 + existing;
+      if (isFrontmatterBlock(lines[index].slice(lines[index].indexOf(':') + 1))) throw unsupported();
+      lines[index] = line;
+    } else {
+      lines.splice(end, 0, line);
+      end++;
+    }
+  }
+  return `---\n${lines.join('\n')}\n---\n\n${edit.body.trim()}\n`;
+}
+
 /** 解析 SKILL.md。frontmatter 缺失或残缺时尽力而为,不抛 —— 手写的技能也要能列出来。 */
 export function parseBotSkillFile(source: string): {
   name: string;
@@ -521,13 +570,16 @@ export async function listBotSkillSources(userDataDir: string, botId: string): P
  * where it lives (moving the whole skill folder); omitted, it keeps its current state.
  */
 export async function saveBotSkillSource(userDataDir: string, botId: string, slug: string, source: string,
-  options: { enabled?: boolean } = {}): Promise<void> {
+  options: { enabled?: boolean; expectedUpdatedAt?: string } = {}): Promise<void> {
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill slug');
   if (Buffer.byteLength(parseBotSkillFile(source).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
     throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
   const key = botSkillRootDir(userDataDir, botId);
   const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
     const previous = await readBotSkill(userDataDir, botId, slug);
+    // Checked inside the write queue: a save based on an older read never overwrites a newer one.
+    if (options.expectedUpdatedAt !== undefined && (previous?.updatedAt ?? null) !== options.expectedUpdatedAt)
+      throw new BotSkillStoreError('INVALID_ARGS', 'Skill changed during review');
     await ensureLayout(userDataDir, botId);
     const enabled = options.enabled ?? previous?.enabled !== false;
     const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
@@ -538,6 +590,27 @@ export async function saveBotSkillSource(userDataDir: string, botId: string, slu
     }
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), source, 'utf8');
+    invalidateBotSkillRuntime(key);
+  });
+  skillWrites.set(key, pending);
+  try { await pending; }
+  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
+}
+
+/**
+ * Turn a skill on or off by moving its folder between skills/ and disabled-skills/. Runs in the
+ * same write queue and checks the skill there, so it never rewrites content or revives a deleted skill.
+ */
+export async function setBotSkillEnabled(userDataDir: string, botId: string, slug: string, enabled: boolean): Promise<void> {
+  if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill slug');
+  const key = botSkillRootDir(userDataDir, botId);
+  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const previous = await readBotSkill(userDataDir, botId, slug);
+    if (!previous) throw new BotSkillStoreError('NOT_FOUND', 'Skill does not exist');
+    if ((previous.enabled !== false) === enabled) return;
+    const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
+    await fs.mkdir(path.dirname(skillDir), { recursive: true });
+    await fs.rename(resolveSkillDir(userDataDir, botId, slug, !enabled), skillDir);
     invalidateBotSkillRuntime(key);
   });
   skillWrites.set(key, pending);

@@ -9,7 +9,9 @@ import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
  *   counted with the word-boundary estimate `/\w+|[^\s\w]/g`;
  * - current speed = tokens in the last 1s window / time since the token
  *   before them, or since generation resumed (min 100ms); a window with
- *   fewer than 5 tokens keeps the previous reading;
+ *   fewer than 5 tokens keeps the previous reading, and a reading above
+ *   10 000 tok/s is discarded as a flushed burst, never shown as a spike and
+ *   never counted towards the following windows either;
  * - the clock pauses when a tool call ends and resumes when
  *   the next content block starts or the next counted delta arrives;
  * - at turn end the count is snapped to the provider's real output and the
@@ -19,11 +21,28 @@ import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
  */
 const WINDOW_MS = 1_000;
 const MIN_SPAN_MS = 100;
+/**
+ * No provider generates faster than this. A window reading above it is not a
+ * measurement but a held/queued burst being flushed in one frame (e.g. output
+ * released after a stall or a hidden thinking block), so it is discarded rather
+ * than shown as a spike. Mirrors magpie's `MaxDecodeSpeed` guard.
+ */
+const MAX_VALID_TPS = 10_000;
+/**
+ * Below one second the turn average is not a measurement: dividing a handful of
+ * tokens by a few hundred ms reads as thousands of tok/s. Same threshold the
+ * desktop renderer uses (`formatOutputTokenRateValue`) and magpie's `MinDecodeMs`.
+ */
+const MIN_VALID_DURATION_MS = 1_000;
 /** A window with fewer tokens than this is noise (e.g. one stray token before a summary). */
 const MIN_WINDOW_TOKENS = 5;
 const COMPACTION_THRESHOLD = 5_000;
 const PUBLISH_INTERVAL_MS = 250;
 const TOKEN_REGEX = /\w+|[^\s\w]/g;
+
+function isRealOutput(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value > 0;
+}
 
 export function estimateDeltaTokens(text: string): number {
   return text ? (text.match(TOKEN_REGEX)?.length ?? 0) : 0;
@@ -41,6 +60,7 @@ export class TokenSpeedMeter {
   /** Where the generation clock last (re)started: turn start or the end of a tool pause. */
   private resumedAt = 0;
   private tps = 0;
+  private peak = 0;
   private events: { time: number; tokens: number }[] = [];
   private windowStartIndex = 0;
   private lastPublishAt = -Infinity;
@@ -57,6 +77,7 @@ export class TokenSpeedMeter {
     this.pausedMs = 0;
     this.resumedAt = 0;
     this.tps = 0;
+    this.peak = 0;
     this.events = [];
     this.windowStartIndex = 0;
     this.lastPublishAt = -Infinity;
@@ -95,13 +116,32 @@ export class TokenSpeedMeter {
     const tokens = estimateDeltaTokens(text);
     if (tokens <= 0) return false;
     this.tokenCount += tokens;
+
+    // Detect single-frame held bursts: when a vendor flushes a large block
+    // much faster than any real generation speed, it must not join the live
+    // sliding window or dilute/pollute subsequent genuine deltas.
+    const lastTime = this.events.length > 0 ? this.events[this.events.length - 1].time : this.startTime;
+    const deltaSpan = Math.max(0, now - Math.max(lastTime, this.resumedAt));
+    const arrivalSpan = deltaSpan > 0 ? deltaSpan : tokens < MIN_WINDOW_TOKENS ? MIN_SPAN_MS : 1;
+    if ((tokens * 1_000) / arrivalSpan > MAX_VALID_TPS) {
+      this.windowStartIndex = this.events.length;
+      this.resumedAt = now;
+      if (now - this.lastPublishAt < PUBLISH_INTERVAL_MS) return false;
+      this.lastPublishAt = now;
+      return true;
+    }
+
     this.events.push({ time: now, tokens });
     if (this.windowStartIndex >= COMPACTION_THRESHOLD) {
       // Keep the event before the window: it bounds the span of the window's first token.
       this.events.splice(0, this.windowStartIndex - 1);
       this.windowStartIndex = 1;
     }
-    this.tps = this.windowTps(now) ?? this.tps;
+    const tps = this.windowTps(now);
+    if (tps !== undefined) {
+      this.tps = tps;
+      this.peak = Math.max(this.peak, tps);
+    }
     if (now - this.lastPublishAt < PUBLISH_INTERVAL_MS) return false;
     this.lastPublishAt = now;
     return true;
@@ -132,21 +172,52 @@ export class TokenSpeedMeter {
       this.events = [];
       this.windowStartIndex = 0;
     }
-    if (realOutputTokens !== undefined && Number.isFinite(realOutputTokens) && realOutputTokens > 0) {
-      this.tokenCount = realOutputTokens;
-    }
+    if (isRealOutput(realOutputTokens)) this.setOutputTokens(realOutputTokens);
+  }
+
+  /**
+   * Turn progress: replace the streamed estimate with the provider's real output
+   * for this turn. The estimate is only a stand-in, so a smaller real value must
+   * calibrate it downwards too — otherwise a tool round that streamed text the
+   * provider did not bill keeps inflating the count.
+   */
+  syncOutputTokens(realOutputTokens?: number): void {
+    // A real provider total replaces the estimate in either direction, including
+    // zero: a tool round that streamed text the provider did not bill must not
+    // keep a non-zero count alive.
+    if (realOutputTokens === undefined || !Number.isFinite(realOutputTokens)) return;
+    this.setOutputTokens(Math.max(0, realOutputTokens));
+  }
+
+  /**
+   * Exact calibration: `realOutputTokens` is the turn's output as reported by the
+   * provider, not a delta. Streaming estimates and the live window readings must
+   * not survive a correction that moves the count either way.
+   */
+  setOutputTokens(realOutputTokens: number): void {
+    if (!Number.isFinite(realOutputTokens) || realOutputTokens < 0) return;
+    if (realOutputTokens === this.tokenCount) return;
+    this.tokenCount = realOutputTokens;
+    // The window still describes estimated deltas; a calibrated count invalidates it.
+    this.events = [];
+    this.windowStartIndex = 0;
+    this.tps = 0;
   }
 
   snapshot(now = Date.now()): TokenSpeedSnapshot | undefined {
     if (!this.started || this.invalid || this.tokenCount <= 0) return undefined;
     const elapsedMs = this.elapsedMs(now);
-    const average = elapsedMs > 0 ? (this.tokenCount * 1_000) / elapsedMs : 0;
+    // A sub-second turn has no stable denominator: publishing it would report a
+    // spike, so the average stays 0 (`rate` follows it while not streaming).
+    const average = elapsedMs >= MIN_VALID_DURATION_MS ? (this.tokenCount * 1_000) / elapsedMs : 0;
+    const isStreaming = this.streaming && !this.paused;
     return {
-      rate: this.streaming ? this.tps : average,
+      rate: isStreaming ? this.tps : average,
       average,
       tokens: Math.round(this.tokenCount),
       elapsedMs,
-      streaming: this.streaming,
+      streaming: isStreaming,
+      ...(this.peak > 0 ? { peak: this.peak } : {}),
     };
   }
 
@@ -174,7 +245,18 @@ export class TokenSpeedMeter {
     // of tok/s.
     const previous = this.windowStartIndex > 0 ? this.events[this.windowStartIndex - 1].time : this.startTime;
     const spanStart = Math.max(previous, this.resumedAt);
-    return (1_000 * windowTokens) / Math.max(now - spanStart, MIN_SPAN_MS);
+    const span = now - spanStart;
+    // A whole held burst landing in a few ms reads far above any real decode
+    // speed; treat it as unmeasurable so the previous reading stays. Drop it
+    // from later windows so the next genuine delta does not divide the whole
+    // burst by its own short gap (e.g. 180 tokens over 110ms reads 1 600 tok/s).
+    if ((1_000 * windowTokens) / Math.max(span, 1) > MAX_VALID_TPS) {
+      this.windowStartIndex = this.events.length;
+      this.resumedAt = now;
+      return undefined;
+    }
+    if (span < MIN_SPAN_MS) return undefined;
+    return (1_000 * windowTokens) / span;
   }
 }
 
