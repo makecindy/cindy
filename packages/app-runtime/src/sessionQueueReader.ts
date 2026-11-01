@@ -17,7 +17,6 @@ export function createSessionQueueReader(deps: {
   isDbClientNotReadyError(error: unknown): boolean;
 }) {
   const {
-    inputCoordinator,
     loadAgentInputQueueSnapshotCounts,
     isDbClientNotReadyError,
   } = deps;
@@ -32,8 +31,8 @@ export function createSessionQueueReader(deps: {
             message: `session ${sessionId} not found`,
           };
         }
-        await inputCoordinator.ensureQueueRestored(sessionId);
-        if (!inputCoordinator.isQueueRestored(sessionId)) {
+        await deps.inputCoordinator.ensureQueueRestored(sessionId);
+        if (!deps.inputCoordinator.isQueueRestored(sessionId)) {
           return {
             ok: false as const,
             errorCode: "INTERNAL" as const,
@@ -42,7 +41,7 @@ export function createSessionQueueReader(deps: {
         }
         return {
           ok: true as const,
-          messages: inputCoordinator.getQueueInspection(sessionId),
+          messages: deps.inputCoordinator.getQueueInspection(sessionId),
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -59,7 +58,7 @@ export function createSessionQueueReader(deps: {
       try {
         const counts = await resolveSessionQueueCounts(sessionIds, {
           getLiveQueue: (sessionId) =>
-            inputCoordinator.getQueueInspectionIfRestored(sessionId),
+            deps.inputCoordinator.getQueueInspectionIfRestored(sessionId),
           loadPersistedCounts: loadAgentInputQueueSnapshotCounts,
         });
         return { ok: true as const, counts };

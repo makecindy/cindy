@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import type { AgentInputCoordinator } from '@cindy/app-runtime/agent-input-coordinator';
+import { createSessionControlCoordinator } from '@cindy/app-runtime/sessionControlCoordinator';
+import { createSessionQueueReader } from '@cindy/app-runtime/sessionQueueReader';
+import { createBotTodoDelivery } from '@cindy/app-runtime/botTodoDelivery';
 import { admitTaskAction } from '../taskActionAuthorization.js';
 import {
   authorizeSessionQueueReorder,
@@ -19,6 +23,57 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+// Unit regression: Desktop composes these services before constructing its input
+// coordinator. Existing control tests start with initialized dependencies and
+// missed the extraction's eager read (a startup ReferenceError). Exercise the
+// production factories with an unavailable dependency, then their queue APIs.
+it('composes queue services before input initialization and reads the ready coordinator on demand', async () => {
+  let ready = false;
+  const queue = {
+    ensureQueueRestored: vi.fn<AgentInputCoordinator['ensureQueueRestored']>().mockResolvedValue(undefined),
+    isQueueRestored: () => true,
+    getQueueInspection: () => [],
+    getQueueInspectionIfRestored: () => [],
+    getQueueControlSnapshot: () => ({ pendingQueue: [], steeringQueueClientIds: [] }),
+    hasQueuedItemWhere: () => false,
+    steer: vi.fn<AgentInputCoordinator['steer']>(),
+    replaceQueuedMessage: vi.fn<AgentInputCoordinator['replaceQueuedMessage']>(),
+    remove: vi.fn<AgentInputCoordinator['remove']>(),
+  };
+  const dependency = {
+    get inputCoordinator() {
+      if (!ready) throw new ReferenceError('inputCoordinator is not initialized');
+      return queue;
+    },
+  };
+  const reader = createSessionQueueReader({
+    get inputCoordinator() { return dependency.inputCoordinator; },
+    getSessionMeta: async () => ({}),
+    loadAgentInputQueueSnapshotCounts: async () => ({}),
+    isDbClientNotReadyError: () => false,
+  });
+  const controller = createSessionControlCoordinator({
+    get inputCoordinator() { return dependency.inputCoordinator; },
+    captureSessionAgentRequest: vi.fn(), getSessionMeta: async () => ({}),
+    buildSessionControlInputItem: vi.fn(), readSenderIdentity: vi.fn(),
+    steerStoredControlMessage: vi.fn(), moveStoredControlMessage: vi.fn(),
+  });
+  const configure = vi.fn<Parameters<typeof createBotTodoDelivery>[0]['configureBotTodoDispatch']>();
+  createBotTodoDelivery({
+    get inputCoordinator() { return dependency.inputCoordinator; },
+    configureBotTodoDispatch: configure, settleBotTodoForSession: vi.fn(),
+    readInputDeliveryReceipts: vi.fn(), saveCancelledInputDelivery: vi.fn(),
+    getCurrentDbClientSnapshot: () => null, isAppSessionBoundaryPending: () => false,
+    send: vi.fn(), log: { warn: vi.fn() },
+  });
+  expect(configure).toHaveBeenCalledOnce();
+  ready = true;
+  expect(await reader.listSessionQueue('task')).toEqual({ ok: true, messages: [] });
+  expect(await controller.getQueueSnapshot('task')).toEqual({ pendingQueue: [], consumingClientIds: [] });
+  expect(controller.removeQueuedMessage('task', 'missing')).toBe(false);
+  expect(queue.ensureQueueRestored).toHaveBeenCalledWith('task');
+});
 
 function item(origin?: AgentInputQueuedMessage['origin']): AgentInputQueuedMessage {
   return {

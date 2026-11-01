@@ -58,7 +58,7 @@ export interface SessionModelSelectionHost extends
   listSshCodexProviders(hostId: string): Promise<ProviderView[]>;
   getDesktopProviderService(): {listProviders(options: {allowSideEffects: false; catalog?: Catalog}): Promise<ProviderView[]>};
   getActiveCatalog(): Catalog;
-  getSessionDbAgentKind(id: string): 'cc' | 'codex' | 'pi' | undefined;
+  getSessionDbAgentKind(id: string): 'cc' | 'codex' | 'pi' | null | undefined;
   assertModelRouteUsable(agent: AgentKind, model: string, providerId: string | null, remoteHostId?: string | null): Promise<string | undefined>;
   clearPendingCredentialSwitchForSession(id: string, options?: {wake?: boolean}): void;
   registerPendingCredentialSwitchForSession: NonNullable<ApplyRuntimeSetModelChangeInput['registerPendingCredentialSwitch']>;

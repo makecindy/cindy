@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as mod from '../WebMicAudioEngine';
+import * as pool from '../audioContextPool';
 
 vi.mock('../audioContextPool', () => ({
   PCM16K_WORKLET_NAME: 'pcm16k-worklet',
   prewarmVoiceInputAudio: vi.fn(),
 }));
 
-type EngineModule = typeof import('../WebMicAudioEngine');
 type PowerCallback = (payload: { reason: 'system_suspend' | 'screen_locked' }) => void;
 
 const WORKLET_URL = 'https://app.local/pcm16k-worklet.js';
@@ -32,12 +33,10 @@ function createFakeTrack(): FakeTrack {
 }
 
 /**
- * The keep-alive session is module-level state, so every case re-imports the
- * engine to start from a clean slate. Without this the process-wide power
- * listener flag would leak across cases and silently skip the subscription.
+ * Use the production module disposal path to release microphone sessions and
+ * power listeners between cases without reloading the module.
  */
 describe('keep-alive microphone idle window', () => {
-  let mod: EngineModule;
   let track: FakeTrack;
   let sink: { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; gain: { value: number } };
   let destination: object;
@@ -82,8 +81,6 @@ describe('keep-alive microphone idle window', () => {
       port: { close: vi.fn(), postMessage: vi.fn(), onmessage: null },
     })));
 
-    vi.resetModules();
-    const pool = await import('../audioContextPool');
     vi.mocked(pool.prewarmVoiceInputAudio).mockResolvedValue({
       context: {
         currentTime: 0,
@@ -96,11 +93,10 @@ describe('keep-alive microphone idle window', () => {
       workletReady: Promise.resolve(),
       workletUrl: WORKLET_URL,
     });
-    mod = await import('../WebMicAudioEngine');
   });
 
   afterEach(async () => {
-    await mod.disposeKeepAliveVoiceInputMicrophone('test_cleanup');
+    await mod.disposeVoiceInputAudioModuleForHmr();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -336,6 +332,7 @@ describe('keep-alive microphone idle window', () => {
 
     expect(track.stopped).toBe(false);
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await engine.stop();
   });
 
   it('replaces a prewarm-only session when the config changes mid warm-up', async () => {

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useFeishuBot } from '../useFeishuBot';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -82,14 +83,17 @@ function installFeishuApi() {
   return { api, statusListeners, registrationListeners };
 }
 
-let useFeishuBot: typeof import('../useFeishuBot').useFeishuBot;
-
 describe('useFeishuBot', () => {
   beforeEach(async () => {
-    vi.resetModules();
+    // Hydrate defaults and clear through the production API so cached state
+    // cannot leak between cases, while keeping the module loaded once.
+    installFeishuApi();
+    const fixture = renderHook(() => useFeishuBot());
+    await act(async () => {});
+    await act(async () => { await fixture.result.current.clear(); });
+    fixture.unmount();
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
-    ({ useFeishuBot } = await import('../useFeishuBot'));
   });
 
   it('updates the live owner and module cache when main claims the first sender', async () => {

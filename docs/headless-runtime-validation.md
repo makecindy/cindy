@@ -82,3 +82,13 @@ Desktop 全量类型检查确认仍有共享提取后的接口缺失与宿主适
 最终 app-runtime 和 cindy-terminal 类型检查通过；Desktop 按项目 12 GB 堆预算执行完整检查后仍有 270 条其它诊断，本次涉及的六处诊断已消除。文档检查 10 项通过，diff 检查通过。Desktop 增量缓存仅写入本机临时目录，不进入仓库。
 
 后续整合应按行为迁移，而非给旧类型补空字段：优先核对 maker-ipc 的宿主回调与任务生命周期，其次供应商组／分享的 Fast 策略、插件模拟安装证据与迁移、伙伴云端能力应用与到达提示。冲突中的 Desktop 转发文件需与对应共享包一起检查，不能只保留转发语句而丢掉主干新增实现。各模块继续遵循专项权限、插件兼容和协议规则，未完成前维持草稿。
+
+### 初始化时序与测试隔离修复（2026-11-01）
+
+修复 Desktop 在 inputCoordinator 初始化前装配队列服务时的提前读取：三个共享工厂在调用时读取宿主依赖，Desktop 使用 getter 注入。自动恢复生命周期移入 providerGroupService 所在作用域；补齐运行时设置宿主的 getSessionProvider，并允许数据库 agent kind 的既有 null 返回值。没有改变队列授权、持久化格式或传输协议。
+
+sessionControlService.test.ts 的新增 unit 回归通过真实三个工厂复现初始化前的 ReferenceError，再验证初始化后的队列读取与控制入口；旧实现先失败，修复后全文件 23 项通过（单独运行墙钟 4.13 秒）。既有用例只使用已初始化依赖，未覆盖该启动时序。Terminal 真实宿主队列、协作、共享和账号限额恢复定向集成 4 passed、121 skipped，55.37 秒。
+
+deviceProvidersCache、useFeishuBot、WebMicAudioEngine.keepAliveIdle 保留既有行为断言，改用生产缓存驱逐／解绑／音频模块释放入口隔离用例，不再逐例 resetModules。麦克风竞态用例完成断言后显式停止录音。三文件单独运行墙钟分别为 3.49、4.47、2.47 秒；与 sessionControlService 合跑 90 项通过（Vitest 6.49 秒）。这些测试只调整夹具，不新增产品清理 API。
+
+app-runtime 与 cindy-terminal 类型检查通过。Desktop 完整复查仍有 259 条诊断（此前 270），本批涉及的测试与共享队列模块无诊断；并非全量通过。test-hygiene --update 仍在可信基线比较阶段拒绝五项既有上调，未执行收紧，基线未修改；其中三个 resetModules 源码问题已修复，两处源码读取测试仍待迁移。主干冲突、完整 CI 与余下类型错误仍未解决，不修改在线 VPS。

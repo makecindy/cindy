@@ -14,7 +14,7 @@ export function createSessionControlCoordinator<Meta>(host:{
   readSenderIdentity:ReturnType<typeof createSessionSenderIdentityReader>;
   inputCoordinator:Pick<AgentInputCoordinator,'ensureQueueRestored'|'isQueueRestored'|'steer'|'getQueueControlSnapshot'|'getQueueInspection'|'hasQueuedItemWhere'|'replaceQueuedMessage'|'remove'>;
 } & ReturnType<typeof createQueueReorderAdapter>):Pick<SessionControlServiceDeps,'createQueuedMessage'|'steerQueuedMessage'|'getQueueSnapshot'|'replaceQueuedMessage'|'removeQueuedMessage'|'steerStoredQueuedMessage'|'moveQueuedMessage'> {
-  const {captureSessionAgentRequest,getSessionMeta,buildSessionControlInputItem,readSenderIdentity,inputCoordinator,steerStoredControlMessage,moveStoredControlMessage}=host;
+  const {captureSessionAgentRequest,getSessionMeta,buildSessionControlInputItem,readSenderIdentity,steerStoredControlMessage,moveStoredControlMessage}=host;
   return {
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
       const request = await captureSessionAgentRequest(callerSessionId, message);
@@ -36,9 +36,9 @@ export function createSessionControlCoordinator<Meta>(host:{
       });
     },
     steerQueuedMessage: async (sessionId, item, expectedTurn) => {
-      await inputCoordinator.ensureQueueRestored(sessionId);
+      await host.inputCoordinator.ensureQueueRestored(sessionId);
       await expectedTurn.beforeMutation?.();
-      return inputCoordinator.steer(sessionId, item, {
+      return host.inputCoordinator.steer(sessionId, item, {
         touchUserSend: true,
         fallbackToTurn: false,
         expectedTurnSession: expectedTurn.session,
@@ -47,26 +47,26 @@ export function createSessionControlCoordinator<Meta>(host:{
       });
     },
     getQueueSnapshot: async (sessionId) => {
-      await inputCoordinator.ensureQueueRestored(sessionId);
-      if (!inputCoordinator.isQueueRestored(sessionId)) {
+      await host.inputCoordinator.ensureQueueRestored(sessionId);
+      if (!host.inputCoordinator.isQueueRestored(sessionId)) {
         throw new Error(`queue restore incomplete for ${sessionId}`);
       }
-      const snapshot = inputCoordinator.getQueueControlSnapshot(sessionId);
-      const consumingClientIds = inputCoordinator
+      const snapshot = host.inputCoordinator.getQueueControlSnapshot(sessionId);
+      const consumingClientIds = host.inputCoordinator
         .getQueueInspection(sessionId)
         .filter((entry) => entry.consuming)
         .map((entry) => entry.queuedMessageId);
       return { pendingQueue: snapshot.pendingQueue, consumingClientIds };
     },
     replaceQueuedMessage: (sessionId, clientId, next, expected) =>
-      (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
-      && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+      (!expected || host.inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
+      && host.inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
     removeQueuedMessage: (sessionId, clientId, expected) => {
-      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
+      if (!host.inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;
       }
-      inputCoordinator.remove(sessionId, clientId);
-      return !inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId);
+      host.inputCoordinator.remove(sessionId, clientId);
+      return !host.inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId);
     },
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,

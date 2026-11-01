@@ -2,9 +2,10 @@
  * useDeviceProviders 的 deviceId-aware 缓存单测(device-link「以被控端为准」)。
  * 守住:远程走隧道 maker:provider:list、按 deviceId 隔离、inflight 去重、缓存命中不重拉、
  * evict 只清该设备、evict 在途结果丢弃不复活 —— 与 useAgentCapabilities 同范式。
- * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
+ * 单次加载被测模块；通过生产驱逐入口和取消订阅隔离每个用例，保留全部缓存契约断言。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as mod from '@/hooks/useDeviceProviders';
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -12,7 +13,21 @@ import {
 } from '@cindy/model-providers';
 
 beforeEach(() => {
-  vi.resetModules();
+  mod.evictAllDeviceProviders();
+});
+
+const subscriptions = new Set<() => void>();
+function subscribe(...args: Parameters<typeof mod.subscribeDeviceProviders>) {
+  const off = mod.subscribeDeviceProviders(...args);
+  subscriptions.add(off);
+  return off;
+}
+afterEach(() => {
+  for (const off of subscriptions) off();
+  subscriptions.clear();
+  mod.evictAllDeviceProviders();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 it('expires only subscription share snapshots and preserves ordinary API discovery cache semantics', async () => {
@@ -20,7 +35,7 @@ it('expires only subscription share snapshots and preserves ordinary API discove
   const api = provider('openai');
   const invoke = vi.fn(async (device: string) => ({ providers: [device === 'share:subscription' ? login : api] }));
   vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-  const mod = await import('@/hooks/useDeviceProviders');
+
   await mod.prefetchDeviceProviders('share:subscription');
   await mod.prefetchDeviceProviders('share:api');
   expect(mod.isSubscriptionShareCatalogStale('share:subscription')).toBe(false);
@@ -41,7 +56,7 @@ it('retains subscription freshness after a failed soft refresh and clears it at 
   const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
   const invoke = vi.fn().mockResolvedValueOnce({ providers: [login] }).mockRejectedValueOnce(Error('temporary disconnect'));
   vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-  const mod = await import('@/hooks/useDeviceProviders');
+
   await mod.prefetchDeviceProviders('share:subscription');
   const later = Date.now() + 61_000;
   mod.evictDeviceProviders('share:subscription', { retainDisplaySnapshot: true });
@@ -95,7 +110,7 @@ function stubDeviceLink() {
 describe('useDeviceProviders deviceId-aware cache', () => {
   it('远程路径:prefetch 命中 deviceLink.invoke(maker:provider:list, [])', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('dev-1');
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
       {
@@ -107,9 +122,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('非法 provider 响应进入 error，不得把 null 当成权威空列表', async () => {
     const invoke = vi.fn(async () => null);
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-invalid', listener);
+    subscribe('dev-invalid', listener);
 
     await mod.prefetchDeviceProviders('dev-invalid');
 
@@ -124,9 +139,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('provider 数组混入非法元素时丢掉坏项，保留合法供应商', async () => {
     const invoke = vi.fn(async () => ({ providers: [provider('valid'), null] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-invalid-item', listener);
+    subscribe('dev-invalid-item', listener);
 
     await mod.prefetchDeviceProviders('dev-invalid-item');
 
@@ -161,7 +176,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     };
     const invoke = vi.fn(async () => ({ providers: [projected] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     await mod.prefetchDeviceProviders('dev-projected');
 
@@ -183,7 +198,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     };
     const invoke = vi.fn(async () => ({ providers: [projected] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     await mod.prefetchDeviceProviders('dev-partial-routing');
 
@@ -214,7 +229,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     };
     const invoke = vi.fn(async () => ({ providers: [malformed] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     await mod.prefetchDeviceProviders('dev-malformed-model');
 
@@ -251,7 +266,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       ],
     }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     await mod.prefetchDeviceProviders('dev-luna');
 
@@ -262,7 +277,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it.each([undefined, true, false])('preserves provider effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const base = providerWithModel('remote');
     const model = {
       ...base.models['claude-code'][0],
@@ -278,7 +293,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('preserves explicit no-thinking and rejects malformed remote defaults', async () => {
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const base = providerWithModel('remote');
     const model = base.models['claude-code'][0];
     const result = mod.parseDeviceProvidersPayload({ providers: [{ ...base, models: {
@@ -313,9 +328,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const deviceId = `dev-invalid-${field}`;
     const invoke = vi.fn(async () => ({ providers: [malformed] }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders(deviceId, listener);
+    subscribe(deviceId, listener);
 
     await mod.prefetchDeviceProviders(deviceId);
 
@@ -356,7 +371,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       ],
     }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     await mod.prefetchDeviceProviders(`dev-drop-${key}`);
 
@@ -373,9 +388,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       modelVisibilityOverrides: { 'claude-code:invalid-override:model': 'hidden' },
     }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-invalid-override', listener);
+    subscribe('dev-invalid-override', listener);
 
     await mod.prefetchDeviceProviders('dev-invalid-override');
 
@@ -389,7 +404,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('缓存命中:同设备二次 prefetch 不再发请求', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-1');
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -402,9 +417,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       modelVisibilityOverrides: overrides,
     }));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-1', listener);
+    subscribe('dev-1', listener);
 
     await mod.prefetchDeviceProviders('dev-1');
 
@@ -421,14 +436,14 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('inflight 去重:同设备并发只发一次', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await Promise.all([mod.prefetchDeviceProviders('dev-1'), mod.prefetchDeviceProviders('dev-1')]);
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('key 隔离:dev-1 / dev-2 各拉各的,互不影响', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-2');
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
@@ -449,7 +464,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('驱逐:evict 后同设备重新拉取;只清该设备(dev-2 仍命中缓存)', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-2');
     expect(invoke).toHaveBeenCalledTimes(2);
@@ -463,7 +478,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const resolvers: Array<(v: Providers) => void> = [];
     const invoke = vi.fn(() => new Promise<Providers>((r) => resolvers.push(r)));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
 
     const p = mod.prefetchDeviceProviders('dev-1'); // 在途(invoke 未 resolve)
     mod.evictDeviceProviders('dev-1'); // 设备下线 → 驱逐(代际自增)
@@ -486,7 +501,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       );
     });
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('dev-old'); // swallow
     await mod.prefetchDeviceProviders('dev-old'); // 上次失败未缓存 → 再发
     expect(call).toBe(2);
@@ -501,13 +516,13 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] timed out'))
       .mockRejectedValueOnce(policyFailure);
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const oldDeviceListener = vi.fn();
     const offlineListener = vi.fn();
     const policyFailureListener = vi.fn();
-    mod.subscribeDeviceProviders('dev-old', oldDeviceListener);
-    mod.subscribeDeviceProviders('dev-offline', offlineListener);
-    mod.subscribeDeviceProviders('dev-policy-failure', policyFailureListener);
+    subscribe('dev-old', oldDeviceListener);
+    subscribe('dev-offline', offlineListener);
+    subscribe('dev-policy-failure', policyFailureListener);
 
     await mod.prefetchDeviceProviders('dev-old');
     await mod.prefetchDeviceProviders('dev-offline');
@@ -534,11 +549,11 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('新快照只通知对应 deviceId 的已挂载订阅者', async () => {
     const invoke = stubDeviceLink();
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const dev1 = vi.fn();
     const dev2 = vi.fn();
-    const off1 = mod.subscribeDeviceProviders('dev-1', dev1);
-    const off2 = mod.subscribeDeviceProviders('dev-2', dev2);
+    const off1 = subscribe('dev-1', dev1);
+    const off2 = subscribe('dev-2', dev2);
 
     await mod.prefetchDeviceProviders('dev-1');
     expect(dev1).toHaveBeenCalledWith({
@@ -556,9 +571,9 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const resolvers: Array<(value: Providers) => void> = [];
     const invoke = vi.fn(() => new Promise<Providers>((resolve) => resolvers.push(resolve)));
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('dev-1', listener);
+    subscribe('dev-1', listener);
 
     const stale = mod.prefetchDeviceProviders('dev-1');
     mod.evictDeviceProviders('dev-1');
@@ -585,9 +600,9 @@ describe('provider visibility readiness retry', () => {
     const invoke = stubDeviceLink();
     invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
     invoke.mockResolvedValue({ ...result('host'), modelVisibilityOverrides: { 'codex:xd:hidden': false } });
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('host', listener);
+    subscribe('host', listener);
     const requests = [mod.prefetchDeviceProviders('host'), mod.prefetchDeviceProviders('host')];
     await vi.runAllTimersAsync();
     await Promise.all(requests);
@@ -599,9 +614,9 @@ describe('provider visibility readiness retry', () => {
   it('stops after three not-ready attempts and reports a real error without legacy fallback', async () => {
     vi.useFakeTimers();
     const invoke = stubDeviceLink().mockRejectedValue(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const listener = vi.fn();
-    mod.subscribeDeviceProviders('host', listener);
+    subscribe('host', listener);
     const pending = mod.prefetchDeviceProviders('host');
     await vi.runAllTimersAsync();
     await pending;
@@ -612,7 +627,7 @@ describe('provider visibility readiness retry', () => {
 
   it.each(['[INTERNAL] failed', 'MODEL_VISIBILITY_NOT_READY: untyped'])('does not retry other errors: %s', async (message) => {
     const invoke = stubDeviceLink().mockRejectedValue(new Error(message));
-    const mod = await import('@/hooks/useDeviceProviders');
+
     await mod.prefetchDeviceProviders('host');
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(mod.isDeviceProvidersUnsupportedError(new Error(message))).toBe(false);
@@ -622,7 +637,7 @@ describe('provider visibility readiness retry', () => {
     vi.useFakeTimers();
     const invoke = stubDeviceLink();
     invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
-    const mod = await import('@/hooks/useDeviceProviders');
+
     const pending = mod.prefetchDeviceProviders('retired');
     await vi.advanceTimersByTimeAsync(0);
     mod.evictDeviceProviders('retired');

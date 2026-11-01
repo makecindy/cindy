@@ -11,7 +11,7 @@ export function createBotTodoDelivery(host:Pick<ReturnType<typeof createBotTodoA
  inputCoordinator:Pick<AgentInputCoordinator,'ensureQueueRestored'|'isQueueRestored'|'hasQueuedItemWhere'>;
  log:Pick<Logger,'warn'>;
 }) {
- const {send,configureBotTodoDispatch,settleBotTodoForSession,readInputDeliveryReceipts,saveCancelledInputDelivery,getCurrentDbClientSnapshot,isAppSessionBoundaryPending,inputCoordinator,log}=host;
+ const {send,configureBotTodoDispatch,settleBotTodoForSession,readInputDeliveryReceipts,saveCancelledInputDelivery,getCurrentDbClientSnapshot,isAppSessionBoundaryPending,log}=host;
   const todoDispatch = createBotTodoDispatch(
     send,
 
@@ -28,9 +28,9 @@ export function createBotTodoDelivery(host:Pick<ReturnType<typeof createBotTodoA
         throw new Error('OWNER_SCOPE_CHANGED');
     };
     assertCurrent();
-    await inputCoordinator.ensureQueueRestored(sessionId);
+    await host.inputCoordinator.ensureQueueRestored(sessionId);
     assertCurrent();
-    if (!inputCoordinator.isQueueRestored(sessionId)) throw new Error('QUEUE_UNAVAILABLE');
+    if (!host.inputCoordinator.isQueueRestored(sessionId)) throw new Error('QUEUE_UNAVAILABLE');
     const recovered: Array<{ requestId: string; state: 'pending' | 'cancelled' | 'unknown' }> = [];
     for (let offset = 0; offset < requestIds.length; offset += 200) {
       const receipts = await readInputDeliveryReceipts(
@@ -42,7 +42,7 @@ export function createBotTodoDelivery(host:Pick<ReturnType<typeof createBotTodoA
         const pending =
           todoDispatch.hasPending(sessionId, receipt.clientId) ||
           receipt.state === 'pending' ||
-          inputCoordinator.hasQueuedItemWhere(
+          host.inputCoordinator.hasQueuedItemWhere(
             sessionId,
             (item) => item.clientId === receipt.clientId,
             { includeRecovery: true },

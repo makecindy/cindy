@@ -1797,18 +1797,6 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
   deferredProductTurnFailureGate.clearSession(sessionId);
 }
 
-const autoResumeInputLifecycle = createAutoResumeInputLifecycle({
-  bookkeeping: () => autoResumeBookkeeping,
-  interrupted: () => interruptedTurnAutoResumeGuard,
-  coordinator: () => agentInputCoordinatorHolder,
-  scheduler: schedulerRecoveryBridge,
-  noteSilentStopUserSend: id => silentStopAutoResumeGuard.noteUserSend(id),
-  noteUsageLimitUserAction: id => usageLimitAutoResume.noteUserAction(id),
-  noteProviderGroupUserAction: id => providerGroupService?.noteUserAction(id),
-  settleProviderGroupContinuation,
-});
-const { settleUndispatchedInterruptedAutoResume } = autoResumeInputLifecycle;
-
 /**
  * 非 renderer 发送路径(scheduler runner / hook runner)调用:给 silent-stop
  * 守卫充值自动续跑额度。renderer 发送走 createMakerSendTransaction 内部已充值,
@@ -7432,6 +7420,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 供应商组(docs/product-rules/provider-groups.md)：在 agentSwitchDeps 就绪后装配。
   let providerGroupService: ProviderGroupService | null = null;
 
+  const autoResumeInputLifecycle = createAutoResumeInputLifecycle({
+    bookkeeping: () => autoResumeBookkeeping,
+    interrupted: () => interruptedTurnAutoResumeGuard,
+    coordinator: () => agentInputCoordinatorHolder,
+    scheduler: schedulerRecoveryBridge,
+    noteSilentStopUserSend: id => silentStopAutoResumeGuard.noteUserSend(id),
+    noteUsageLimitUserAction: id => usageLimitAutoResume.noteUserAction(id),
+    noteProviderGroupUserAction: id => providerGroupService?.noteUserAction(id),
+    settleProviderGroupContinuation,
+  });
+  const { settleUndispatchedInterruptedAutoResume } = autoResumeInputLifecycle;
+
   async function readProviderGroupSessionRow(sessionId: string): Promise<ProviderGroupSessionRow | null> {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -10191,7 +10191,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const {settleTodoDispatch}=createBotTodoDelivery({
     configureBotTodoDispatch,settleBotTodoForSession,readInputDeliveryReceipts,saveCancelledInputDelivery,
-    getCurrentDbClientSnapshot,isAppSessionBoundaryPending,inputCoordinator,log,
+    getCurrentDbClientSnapshot,isAppSessionBoundaryPending,get inputCoordinator() { return inputCoordinator; },log,
     send:    async ({ sessionId, message, displayText, requestId, assertCurrent }) => {
       assertCurrent();
       const result = await sendToSessionInternal({
@@ -14409,7 +14409,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }),
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
     ...createSessionControlCoordinator({captureSessionAgentRequest,getSessionMeta:id=>maker.getSessionMeta(id),
-      buildSessionControlInputItem,readSenderIdentity,inputCoordinator,steerStoredControlMessage,moveStoredControlMessage}),
+      buildSessionControlInputItem,readSenderIdentity,get inputCoordinator() { return inputCoordinator; },steerStoredControlMessage,moveStoredControlMessage}),
     createId,
   });
 
@@ -14418,7 +14418,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // tryGetOrcaCollabService() 拿到这些函数引用, 让 MCP tool
   // 走与 IPC handler 完全相同的业务路径。
   orcaCollabServiceHolder = {
-    ...createSessionQueueReader({ getSessionMeta: id => maker.getSessionMeta(id), inputCoordinator, loadAgentInputQueueSnapshotCounts, isDbClientNotReadyError }),
+    ...createSessionQueueReader({ getSessionMeta: id => maker.getSessionMeta(id), get inputCoordinator() { return inputCoordinator; }, loadAgentInputQueueSnapshotCounts, isDbClientNotReadyError }),
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
@@ -17196,7 +17196,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   registerSessionRuntimeAxisHandlers(ipcMain, {
-    sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked, createSubscriptionFastPolicy, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }
+    sessionRuntimeControlOwnerEpochMatches, withRehydrateCloseSuppressed, maker, setSessionEffort, setSessionFastMode, getSessionProvider, recordRecoveredSessionRuntimeAxisMutation, broadcastSessionRuntimeProjection, log, agentSwitchDeps, readUsableAgentDeviceProviders, getDesktopProviderService, getActiveCatalog, resolveSessionRuntimeAxes, persistSessionFields, agentSwitchPending, wakeSessionInputAfterCredentialSwitch, isDeviceLinkInvoke, assertTrustedAppRendererEvent, captureSessionRuntimeControlOwnerEpoch, captureSharedTaskSettingGuard, updateScheduledPreference, markRemoteSettingPersistedInsideHandler, getDbClient, updateSavedScheduledAxis, resolvePendingRuntimeAxisPatch, recordUserSessionRuntimeAxisMutation, readSessionRuntimeProfiles, withSendToSessionLock, assertReviewSettingsUnlocked, createSubscriptionFastPolicy, get pendingCredentialSwitchHolder() { return pendingCredentialSwitchHolder; }
   });
 
   ipcMain.handle(
