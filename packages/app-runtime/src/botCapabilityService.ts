@@ -21,6 +21,7 @@ type Kind = 'skill' | 'mcp' | 'toolset';
 type Input = { callerSessionId: string; kind: Kind };
 type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean };
 export interface BotCapabilityServiceDeps {
+  readConversationConnections?(botId: string): Promise<NonNullable<BotControlState['conversations']>['connections']>;
   getMaker: () => Pick<Maker, 'listAgentSkills'>;
   resolveBotAgentKind: (sessionId: string, modelChain?: BotModelRoute[]) => Promise<AgentKind | null>;
   getPluginRegistry: () => Pick<PluginRegistry, 'getPlugins' | 'getEnableState'>;
@@ -285,8 +286,16 @@ function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         // A self-read may report inherited selection without exposing owner route IDs.
         const candidates = explicit === null && !ctx.canReadOwnerModels
           ? [] : await readEffectiveBotModelChain(ctx.config);
+        const conversations: BotControlState['conversations'] = ctx.canReadOwnerModels ? {
+          scope: 'local',
+          teammateId: ctx.botId,
+          connections: await deps.readConversationConnections?.(ctx.botId) ?? [],
+          connectionsAvailable: Boolean(deps.readConversationConnections),
+          guidance: 'Recall a topic with search_chat_history(query, teammate_id=teammateId), without a workdir or creation-date filter. list_sessions(teammate_id=teammateId, time_field=activity) includes old active, archived and topic/channel chats. Read matching originals with get_chat_history. If no match, existing account-history permission permits a bounded topic search without teammate_id for unlinked legacy records; report companion=null as unverified ownership, never infer it from a current connection, name or directory. device=all queries online authorized computers; unavailable/older devices and capped results are incomplete coverage.',
+        } : undefined;
         await ctx.refresh();
         const state: BotControlState = {
+          ...(conversations ? { conversations } : {}),
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },

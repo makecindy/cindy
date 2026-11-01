@@ -5368,9 +5368,14 @@ describe('Bot Session task end-to-end runtime', () => {
   it('lets a tools-authorized group inspect its own profile and skills without permitting profile mutation', async () => {
     await seedPair(); seedGroupLane();
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'tools', isCurrent: () => true, validate: async () => {} });
-    const service = createBotCapabilityService(capabilityDeps);
+    const readConversationConnections = vi.fn(async () => [{ channel: 'telegram', connectionId: 'private-owner-connection', status: 'assigned' }]);
+    const service = createBotCapabilityService({ ...capabilityDeps, readConversationConnections });
     try {
-      expect(await service.inspect({ callerSessionId: 'group-lane' })).toMatchObject({ ok: true, state: { profile: { id: 'bot-a' }, session: { id: 'group-lane' } } });
+      const result = await service.inspect({ callerSessionId: 'group-lane' });
+      expect(result).toMatchObject({ ok: true, state: { profile: { id: 'bot-a' }, session: { id: 'group-lane' } } });
+      if (!result.ok) throw new Error('Expected authorized self-read');
+      expect(result.state.conversations).toBeUndefined();
+      expect(readConversationConnections).not.toHaveBeenCalled();
       expect(await listBotSkillsForSession({ callerSessionId: 'group-lane' })).toMatchObject({ ok: true });
       expect(await service.updateProfile({ callerSessionId: 'group-lane', expectedVersion: 1, name: 'Unapproved rename' })).toMatchObject({ ok: false });
       release();
@@ -9955,6 +9960,32 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
+  // Database integration: connections are owner-only (cindy-bots-runtime.md).
+  // Existing profile tests did not exercise the asynchronous connection reader.
+  it.each(['available', 'unavailable', 'owner-changed'] as const)('reports connection availability without leaking a previous owner: %s', async mode => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const connections = [{ channel: 'telegram', connectionId: 'owner-connection', status: 'assigned' }];
+    const readConversationConnections = vi.fn(async () => {
+      if (mode === 'owner-changed') h.ownerScopeKey = 'owner-b:2';
+      return connections;
+    });
+    const service = createBotCapabilityService({ ...capabilityDeps,
+      ...(mode === 'unavailable' ? {} : { readConversationConnections }),
+    });
+    const result = await service.inspect({ callerSessionId: canonical.session.id });
+    if (mode === 'owner-changed') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'BOT_STATE_UNAVAILABLE' });
+      expect(result).not.toHaveProperty('state');
+    } else {
+      expect(result).toMatchObject({ ok: true, state: { conversations: {
+        scope: 'local', teammateId: 'bot-1', connectionsAvailable: mode === 'available',
+        connections: mode === 'available' ? connections : [],
+      } } });
+      if (mode === 'available') expect(readConversationConnections).toHaveBeenCalledWith('bot-1');
+      else expect(readConversationConnections).not.toHaveBeenCalled();
+    }
+  });
+
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;

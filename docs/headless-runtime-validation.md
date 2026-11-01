@@ -178,3 +178,11 @@ registerMakerIpc 补回主干 Pi watcher 的启动与重新注册清理，并导
 Pi watcher 16 项通过（单文件 1.92 秒），Session.close 47 项通过（2.36 秒）。在既有 watcher 文件加入一项内存 SQLite 集成用例，实际执行生产候选谓词和活动时间表达式，覆盖插件隐藏任务与受保护来源，以及三种时间字段更新后的排除；原有测试只注入假候选，无法发现 SQL 筛选错误。无新增文件、真实等待或逐例模块加载。此次不声称已完成真实 Pi 进程三十分钟闲置后的端到端恢复验证。
 
 Desktop 完整类型检查为 223 条诊断（此前 224），本批接线无新增诊断；test-hygiene 通过（349 files within baseline）。完整 CI、主干冲突和其他类型迁移仍未完成，在线 VPS 未修改。
+
+### 伙伴本机连接读取与主人范围（2026-11-01）
+
+Desktop maker-host 补回 bootstrap 已调用的 setBotConversationConnectionsReader；共享 botCapabilityService 在主人可读范围内返回本机连接分配与历史检索说明。读取器每次访问当前账号存储，返回前复核 owner 与群授权；访客自查不调用读取器、不返回连接字段。Terminal 尚未注入读取器时返回 connectionsAvailable=false，不将空列表解释为已确认无连接。不新增历史归属推断或跨电脑查询权限。
+
+沿用 botCanonicalSession 的真实 SQLite／生产服务回归，增加 available、unavailable、owner-changed 三个输入，并在既有群自查用例中验证读取器未调用。最小失败输入为具有连接的当前主人，旧共享服务不返回连接投影；切账号输入在 await 期间改变 owner，必须不返回 state。此 database integration 巨型文件的导入成本超过五秒预算，定向 16 passed、592 skipped，42.02 秒（收集 40.49 秒，执行 974ms），无新增文件、逐例模块重载或真实等待。默认 TEMP 首次执行触发 Windows 短路径 libuv 崩溃，仅将测试 TEMP/TMP 改为同一目录长路径后完成；未将崩溃运行计为通过。
+
+app-runtime 类型检查通过；Desktop 完整检查 220 条诊断（此前 223），本批服务、接线及测试无诊断。PR 实时状态仍为草稿、CONFLICTING，仅 DCO 检查通过，完整 CI 未运行；不能据本轮定向测试宣称可合并。在线 VPS 未修改。
