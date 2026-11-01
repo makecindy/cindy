@@ -3533,9 +3533,16 @@ function MessageBubble({
   const shareSelectionActive = actions.shareSelectionActive === true
     && shareableMessage;
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
-  const rawCopyText = buildMobileMessageCopyText(item.message);
-  const copyText = item.message.kind === 'assistant' ? richAnswerText(rawCopyText) : rawCopyText;
   const canUseCompletedActions = !isStreamingAssistant;
+  // Copy / side-chat text is only reachable once the row has settled (every consumer below is
+  // gated on `canUseCompletedActions` or `showCompletedActionBar`). Skip the rich-answer re-parse
+  // while this row streams, and key the settled value on the message object so a re-render that
+  // did not change the row does not redo it.
+  const copyText = useMemo(() => {
+    if (isStreamingAssistant) return '';
+    const raw = buildMobileMessageCopyText(item.message);
+    return item.message.kind === 'assistant' ? richAnswerText(raw) : raw;
+  }, [isStreamingAssistant, item.message]);
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
@@ -3549,7 +3556,8 @@ function MessageBubble({
   const canCopy = showCompletedActionBar && copyText.trim().length > 0;
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
-  const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
+  // Locale-independent (fixed yyyy-MM-dd HH:mm:ss), so the timestamp alone is the key.
+  const absoluteTime = useMemo(() => formatMessageAbsoluteTime(item.message.createdAt), [item.message.createdAt]);
   const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
     (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
