@@ -52,6 +52,34 @@ export function botGroupMemberBaseName(member: Pick<BotGroupMemberView, 'name' |
   return suffix && name.endsWith(suffix) && name.length > suffix.length ? name.slice(0, -suffix.length) : name;
 }
 
+type MentionLabelMember = Pick<BotGroupMemberView, 'botId' | 'name' | 'ownerName' | 'nickname' | 'displayName'>;
+
+/**
+ * Members as the mention resolver should see them at send time. Besides each member's own labels it
+ * offers the suffix-free base name, so a typed short `@Dash` keeps resolving after the display name
+ * gains 「 (主人昵称)」 while a draft is open. The alias is only added when no other member claims that
+ * label (as a name, nickname or its own alias): a companion truly named `Dash (Xing)` must not make
+ * `@Dash` also wake a different companion named `Dash`.
+ */
+export function botGroupMentionLabelMembers(members: readonly MentionLabelMember[]) {
+  const claims = new Map<string, Set<string>>();
+  const claim = (label: string, botId: string) => {
+    const key = label.trim();
+    if (key) claims.set(key, (claims.get(key) ?? new Set()).add(botId));
+  };
+  for (const member of members) {
+    claim(member.name, member.botId);
+    claim(member.nickname || member.displayName || '', member.botId);
+    claim(botGroupMemberBaseName(member), member.botId);
+  }
+  return members.flatMap((member) => {
+    const own = { botId: member.botId, name: member.name, nickname: member.nickname, displayName: member.displayName };
+    const base = botGroupMemberBaseName(member);
+    const owners = claims.get(base);
+    return base !== member.name.trim() && owners && owners.size === 1 ? [own, { botId: member.botId, name: base }] : [own];
+  });
+}
+
 /** Only active members can be mentioned, speak, or keep a group sendable. */
 export function isActiveBotGroupMember(member: Pick<BotGroupMemberView, 'status'>): boolean {
   return member.status === 'active';

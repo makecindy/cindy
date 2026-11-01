@@ -34,7 +34,7 @@ import {
   isActiveBotGroupMember,
   isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
-  botGroupMemberBaseName,
+  botGroupMentionLabelMembers,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { Text } from '@/components/AppText';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
@@ -234,11 +234,8 @@ export function BotGroupComposer({
       const attachmentIds = attachments.map((attachment) => attachment.id);
       const mentions = resolveBotGroupMentions(draft, {
         // The display name can gain or lose a 「 (主人昵称)」 suffix while a draft is open (someone joins a
-        // self-built group), so a typed short `@name` must keep resolving: offer the base name as a label too.
-        members: mentionMembers.flatMap((member) => [
-          { botId: member.botId, name: member.name, nickname: member.nickname, displayName: member.displayName },
-          { botId: member.botId, name: botGroupMemberBaseName(member) },
-        ]),
+        // self-built group): keep a typed short `@name` resolving, unless another member owns that label.
+        members: botGroupMentionLabelMembers(mentionMembers),
         allLabels: [allLabel], allBotLabels,
         tracked: draftTracked,
       });
