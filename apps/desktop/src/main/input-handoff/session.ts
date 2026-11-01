@@ -111,7 +111,7 @@ export interface HandoffSessionOptions {
   publish(snapshot: InputHandoffSnapshot): void;
   finish(result: HandoffResult): void;
   /** A secret was typed into a page the agent controls (automation browser); restrict its page reads. */
-  onSecretEntered?(target: { pid: number; url?: string }): void;
+  onSecretEntered?(target: { pid: number; url?: string; windowTitle?: string }): void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   finishingDelayMs?: number;
@@ -622,6 +622,10 @@ export class InputHandoffSession {
   private publish(phase: InputHandoffPhase): void {
     this.phase = phase;
     this.revision++;
+    // The owner is sent to type in a page nothing could be read from: cover it before they do.
+    if (this.directSignInOffered() && this.step?.pageMissing && this.target) {
+      this.options.onSecretEntered?.({ pid: this.target.pid, windowTitle: this.target.window.title });
+    }
     this.options.publish(this.snapshot());
   }
 

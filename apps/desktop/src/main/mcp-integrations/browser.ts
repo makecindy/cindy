@@ -85,7 +85,7 @@ import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js'
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
-import { hasSecretPages, isSecretPage } from '../input-handoff/secretTaint.js';
+import { hasSecretPages, isSecretTab } from '../input-handoff/secretTaint.js';
 import {
   BrowserOpenForLoginError,
   browserOpenForLoginErrorCodeFromData,
@@ -637,7 +637,7 @@ export function getBrowserMcpDeps(): {
       // into: while any secret page is remembered, fail closed. Without a target the runtime acts on its
       // last tab, so every listed tab is checked.
       if (targetId && named.length === 0) return true;
-      return (targetId ? named : tabs).some((tab) => typeof tab.url === 'string' && isSecretPage(tab.url));
+      return (targetId ? named : tabs).some((tab) => isSecretTab(tab));
     },
     logger,
   };

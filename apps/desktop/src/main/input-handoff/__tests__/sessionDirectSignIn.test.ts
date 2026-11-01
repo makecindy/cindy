@@ -96,6 +96,7 @@ function start(
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
   const guarded: Array<string | undefined> = [];
+  const guardedWindows: string[] = [];
   let clock = 0;
   const session = new InputHandoffSession({
     requestId: 'req1',
@@ -107,7 +108,10 @@ function start(
     driver,
     publish: (snapshot) => published.push(snapshot),
     finish: (result) => finished.push(result),
-    onSecretEntered: ({ url }) => guarded.push(url),
+    onSecretEntered: ({ url, windowTitle }) => {
+      if (windowTitle) guardedWindows.push(windowTitle);
+      else guarded.push(url);
+    },
     now: () => clock,
     sleep: async (ms) => {
       clock += ms;
@@ -117,7 +121,14 @@ function start(
     settleTimeoutMs: 50,
     windowWatchMs: 2,
   });
-  return { session, finished, guarded, published, latest: () => published[published.length - 1] };
+  return {
+    session,
+    finished,
+    guarded,
+    guardedWindows,
+    published,
+    latest: () => published[published.length - 1],
+  };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
@@ -237,6 +248,14 @@ describe('a browser page that cannot be read', () => {
     const run = start(driver);
     await run.session.start();
     expect(run.latest()).toMatchObject({ phase: 'ready', picture: true, directSignIn: true });
+    run.session.cancel();
+  });
+
+  it('covers the page before the owner types into it, though its address is unknown', async () => {
+    const { driver } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    expect(run.guardedWindows).toEqual(['Sign in']);
     run.session.cancel();
   });
 

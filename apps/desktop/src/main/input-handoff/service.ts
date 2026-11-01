@@ -18,7 +18,7 @@ import {
   type LiveHandoffWindow,
 } from './session.js';
 import type { HandoffDriver } from './macDriver.js';
-import { markSecretEntered } from './secretTaint.js';
+import { markSecretEntered, markSecretWindow } from './secretTaint.js';
 import { TerminalPromptSession, type TerminalProgram } from './terminalPrompt.js';
 import { ImageQrHandoffSession } from './imageQr.js';
 import { qrContent } from './qrCode.js';
@@ -206,7 +206,7 @@ export class InputHandoffService {
       driver,
       publish: (snapshot) => this.publish(entry, snapshot),
       finish: (result) => this.finish(entry, result),
-      onSecretEntered: ({ url }) => markSecretEntered(url),
+      onSecretEntered: ({ url, windowTitle }) => (url ? markSecretEntered(url) : markSecretWindow(windowTitle)),
       ...this.deps.sessionTiming,
     }));
   }
