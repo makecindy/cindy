@@ -9,7 +9,8 @@
  * picture recovers instead of falling further behind.
  *
  * Input: viewer events are mapped to the plugin's event shapes and sent one
- * batch at a time, in order.
+ * batch at a time, in order; whatever arrives meanwhile is merged into the next
+ * batch, and typing the device cannot keep up with is dropped.
  */
 import http from 'node:http';
 import {
@@ -46,7 +47,13 @@ export const LIVE_SCREEN_MESSAGE = {
 const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 16 * 1024 * 1024;
 const KEEPALIVE_MS = 20_000;
-const MAX_PENDING_INPUT = 64;
+/** Events queued behind the batch in flight; touches and buttons beyond this refuse the input. */
+const MAX_WAITING_INPUT = 512;
+/** Keys and text queued behind the batch in flight; more are dropped rather than typed late. */
+const MAX_WAITING_TYPING = 32;
+/** The plugin protocol's largest input batch. */
+const MAX_BATCH_EVENTS = 64;
+const isTyping = (event: LiveScreenEvent) => event.kind === 'key' || event.kind === 'text';
 const MODIFIERS: Record<string, string> = {
   ShiftLeft: 'shift',
   ControlLeft: 'control',
@@ -112,7 +119,9 @@ export class LiveScreenSession {
   private connectGeneration = 0;
   private closed = false;
   private inputChain = Promise.resolve();
-  private pendingInput = 0;
+  private waiting: LiveScreenEvent[] = [];
+  private waitingTyping = 0;
+  private sending = false;
   private touching = false;
   private readonly mapper = new LiveScreenInputMapper();
   private readonly keepalive: ReturnType<typeof setInterval>;
@@ -265,24 +274,47 @@ export class LiveScreenSession {
     this.flush();
   }
 
-  /** Sends one batch after the previous one; throws only for malformed viewer input. */
+  /** Queues events behind the batch in flight; throws only for malformed or excessive viewer input. */
   input(events: DesktopInput[]): void {
     const mapped = this.mapper.map(events);
     if (!mapped.length || this.closed) return;
-    if (this.pendingInput >= MAX_PENDING_INPUT) throw new Error('DESKTOP_INPUT_BUSY');
+    if (this.waiting.length + mapped.filter((e) => !isTyping(e)).length > MAX_WAITING_INPUT)
+      throw new Error('DESKTOP_INPUT_BUSY');
+    let dropped = 0;
     for (const event of mapped) {
       if (event.kind === 'touch')
         this.touching = event.touches.some((t) => t.phase !== 'ended' && t.phase !== 'cancelled');
       else if (event.kind === 'release') this.touching = false;
+      // Typing faster than the device takes keys (or a held key repeating) drops the excess
+      // instead of typing on long after the viewer stopped.
+      if (isTyping(event)) {
+        if (this.waitingTyping >= MAX_WAITING_TYPING) {
+          dropped++;
+          continue;
+        }
+        this.waitingTyping++;
+      }
+      this.waiting.push(event);
     }
-    this.pendingInput++;
-    this.inputChain = this.inputChain
-      // Accepted before close (including the final release): still delivered.
-      .then(() => this.source.input(this.plugin, this.id, mapped))
-      .catch((error) => log.debug('Live screen input failed', error))
-      .finally(() => {
-        this.pendingInput--;
-      });
+    if (dropped) log.debug('Live screen typing ahead of the device; dropped', dropped);
+    if (this.sending) return;
+    this.sending = true;
+    this.inputChain = this.drain();
+  }
+
+  /** Everything that arrived while a batch was with the plugin goes together in the next one. */
+  private async drain(): Promise<void> {
+    // Accepted before close (including the final release): still delivered.
+    while (this.waiting.length) {
+      const batch = this.waiting.splice(0, MAX_BATCH_EVENTS);
+      this.waitingTyping -= batch.filter(isTyping).length;
+      try {
+        await this.source.input(this.plugin, this.id, batch);
+      } catch (error) {
+        log.debug('Live screen input failed', error);
+      }
+    }
+    this.sending = false;
   }
 
   /** Lifts held contacts when control ends, so nothing stays pressed on the device. */

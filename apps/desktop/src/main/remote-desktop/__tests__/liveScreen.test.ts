@@ -193,4 +193,38 @@ describe('live screen session', () => {
     ]);
     await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
   });
+
+  it('merges input that arrives during a send and drops typing the device cannot keep up with', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    let unblock!: () => void;
+    vi.mocked(plugin.input).mockImplementationOnce(async (...args: unknown[]) => {
+      plugin.calls.push(['input', ...args]);
+      await new Promise<void>((resolve) => (unblock = resolve));
+    });
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    const key = (code: string) => ({ kind: 'key' as const, code, down: true });
+    session.input([key('KeyQ')]);
+    // A held key repeating far faster than the device types.
+    for (let i = 0; i < 100; i++) session.input([key('KeyA')]);
+    session.input([{ kind: 'press', button: 'home' }]);
+    const flood = Array.from({ length: 513 }, () => ({ kind: 'press' as const, button: 'home' }));
+    expect(() => session.input(flood)).toThrow('DESKTOP_INPUT_BUSY');
+    unblock();
+    await vi.waitFor(() => expect(plugin.input).toHaveBeenCalledTimes(2));
+    const sent = plugin.calls.map((call) => call[3] as { kind: string; code?: string }[]);
+    expect(sent[0]).toEqual([{ kind: 'key', code: 'KeyQ' }]);
+    expect(sent[1]).toHaveLength(33);
+    expect(sent[1].filter((event) => event.code === 'KeyA')).toHaveLength(32);
+    expect(sent[1].at(-1)).toEqual({ kind: 'press', button: 'home' });
+    session.close();
+  });
 });
