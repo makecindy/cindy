@@ -10,6 +10,25 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 3.2a `live-proven`; 3.5b Code Reviewer passed (owner)
+
+- Setup: `docs/experts-examples/code-reviewer` copied to `~/.cindy-harness/experts/code-reviewer` (new file, nothing overwritten). App restarted on `main` at `c958a9e7` (PR #4 merged).
+- New task, engine Hermes, model `qwen3-8b (lmstudio-local)`, Expert menu → **Code Reviewer**, sent "who are you and what do you do?".
+- Observed: reply "I am your code reviewer, acting as described: I will carefully examine diffs, files, or paths you provide, and assess them for correctness bugs, security issues, and maintainability. I will follow your explicit instructions to report only verifiable problems, without editing files or running commands. Please provide the code you'd like me to review." Header: title, `qwen3-8b`, chip **Code Reviewer**, 15.2k tok.
+- Rows: 3.2a ✅ `live-proven`; 3.5b Code Reviewer ✅ (other three starter experts open). The wrong-route refusal (expert `model:` on another route) was not run live; it is covered by unit tests only.
+
+---
+
+## 2026-11-01 — Unit gate for 3.2a green on the owner's Mac (sharded); desktop SIGSEGV is file-mix dependent
+
+- `packages/*` and `apps/mobile` unit tiers: all PASS (owner's terminal, Node 22.23.4, twice), including `packages/maker-core unit` (50.3 s), where `agents/hermes/agent.ts` changed.
+- `apps/desktop unit` was killed by the known Vitest-worker SIGSEGV 3 times in a row (parallel tier, serial tier, and `--workspace apps/desktop` alone, app closed). No assertion failed in any run.
+- Bisection (owner ran each step): 4-way shards 3–4 PASS, 1–2 SIGSEGV. Shard 2 on the pre-3.2a commit `99af7f2c`: PASS. Shard 2 on the 3.2a tree with `expertSessions.test.ts` and `hermesExpertPicker.test.tsx` moved aside: PASS (so the 3.2a source changes are not the trigger). Those two files plus `expertsHandlers.test.ts` alone under `--pool=threads --maxWorkers=8`: 3/3 PASS (17/17). Conclusion: adding files reshuffles shard membership and the crash follows the file mix — the ROADMAP Debt row, not a 3.2a defect.
+- **Gate result:** 8-way shards (`XDT_UNIT_TEST_SHARD=i/8`) — 1, 2, 3, 6, 7, 8 PASS first time; 4 and 5 SIGSEGV, then PASS on rerun. All 8 green = full `apps/desktop unit` green. Debt row updated with this working form.
+- 3.2a stays `unit-tested` (now with the full gate green); `live-proven` still needs the owner's Code Reviewer run.
+
+---
+
 ## 2026-11-01 — ROADMAP 3.2a: start a Hermes session as an expert (`unit-tested`); ADR 0005 orchestrator plan
 
 **Owner decisions:** build order "3.2 → Hermes as Orca lead → expert creator → orchestrator expert" ("Let's go with that"). Recorded as `docs/decisions/0005-orchestrator-and-expert-creator.md`; "Autonomous multi-agent orchestration" un-parked with limits (depth 1, every job a visible session, new experts approved by the owner = option A, the recommended default since the owner did not pick). New rows 3.7–3.9.
