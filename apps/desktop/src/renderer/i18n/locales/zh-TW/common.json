@@ -10066,7 +10066,11 @@
     "autosave": {
       "saving": "正在儲存…",
       "saved": "已儲存",
-      "retry": "重新儲存"
+      "retry": "重新儲存",
+      "unsavedTitle": "夥伴設定沒能儲存",
+      "unsavedDescription": "這次修改沒能儲存，可能是選中的模型目前無法使用。離開會放棄這次修改。",
+      "discard": "放棄修改",
+      "continueEditing": "繼續編輯"
     },
     "retry": "重試",
     "backToBot": "返回夥伴",

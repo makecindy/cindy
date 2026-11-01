@@ -85,7 +85,7 @@ import {
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
-import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain, normalizeBotModelRoute, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
 import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
 import {
   activeOwnerScopeKey,
@@ -2157,12 +2157,18 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   // Legacy chain-only profiles gain mirrored fields during normalization.
   // Compare the same representation so unrelated edits do not validate stale routes.
-  const modelSelectionChanged = botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig);
+  const normalizedPreviousConfig = normalizeBotModelCapabilitiesOrThrow(previous);
+  const modelSelectionChanged = botProfileModelSelectionChanged(normalizedPreviousConfig, normalizedNextConfig);
   const acceptsModelSelection = modelSelectionChanged || acceptsSavedModel;
   if (acceptsModelSelection) {
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
-    if (!primary || !await validateTaskModel(primary)) {
+    // Backups exist for when the primary is down: editing only the backups must stay
+    // possible then, so an unchanged primary route is not re-validated here.
+    const previousPrimary = acceptsSavedModel ? undefined : (await readEffectiveBotModelChain(normalizedPreviousConfig))[0];
+    owner.assertCurrent();
+    const primaryUnchanged = !!primary && !!previousPrimary && JSON.stringify(normalizeBotModelRoute(primary)) === JSON.stringify(normalizeBotModelRoute(previousPrimary));
+    if (!primary || (!primaryUnchanged && !await validateTaskModel(primary))) {
       throwIpcError('INVALID_PARAMS', 'Model route unavailable');
     }
     owner.assertCurrent();

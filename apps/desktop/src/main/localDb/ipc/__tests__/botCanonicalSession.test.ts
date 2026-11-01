@@ -819,6 +819,24 @@ describe('Bot canonical Session lifecycle', () => {
     } finally { vi.mocked(control.validateTaskModel).mockResolvedValue(true); }
   });
 
+  it('allows editing only the backups while the unchanged primary is unavailable', async () => {
+    // Regression: the primary provider went down and editing its backups was rejected,
+    // so the backups meant for this exact situation could not be changed.
+    const route: BotModelRoute = { harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
+    const backup: BotModelRoute = { harness: 'codex', providerId: 'openai', model: 'gpt-6-astra', effort: 'medium', fastMode: false };
+    await invoke('local-db:bots:create', { id: 'backup-edit', name: 'Backup', capabilities: { modelChainOverride: [route] } });
+    const control = await import('../../../maker-ipc/appDefaultModelControl.js');
+    vi.mocked(control.validateTaskModel).mockClear().mockResolvedValue(false);
+    try {
+      await expect(invoke('local-db:bots:update', { id: 'backup-edit', capabilities: { modelChainOverride: [route, backup] } }))
+        .resolves.toMatchObject({ capabilities: { modelChainOverride: [route, backup] } });
+      // Replacing the primary with another unavailable route is still refused.
+      await expect(invoke('local-db:bots:update', { id: 'backup-edit', capabilities: {
+        modelChainOverride: [{ ...route, model: 'another-unavailable-model' }, backup],
+      } })).rejects.toThrow('Model route unavailable');
+    } finally { vi.mocked(control.validateTaskModel).mockResolvedValue(true); }
+  });
+
   it('validates a legacy location-only selection before persisting settings', async () => {
     const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
     h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')

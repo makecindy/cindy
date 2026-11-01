@@ -10066,7 +10066,11 @@
     "autosave": {
       "saving": "保存中…",
       "saved": "保存しました",
-      "retry": "再保存"
+      "retry": "再保存",
+      "unsavedTitle": "仲間設定を保存できませんでした",
+      "unsavedDescription": "選択したモデルが現在利用できないため、変更を保存できなかった可能性があります。移動すると変更は破棄されます。",
+      "discard": "変更を破棄",
+      "continueEditing": "編集を続ける"
     },
     "retry": "再試行",
     "backToBot": "仲間に戻る",

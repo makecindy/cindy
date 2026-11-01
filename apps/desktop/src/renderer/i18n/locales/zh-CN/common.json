@@ -10066,7 +10066,11 @@
     "autosave": {
       "saving": "正在保存…",
       "saved": "已保存",
-      "retry": "重新保存"
+      "retry": "重新保存",
+      "unsavedTitle": "伙伴设置没能保存",
+      "unsavedDescription": "这次修改没能保存，可能是选中的模型现在不可用。离开会放弃这次修改。",
+      "discard": "放弃修改",
+      "continueEditing": "继续编辑"
     },
     "retry": "重试",
     "backToBot": "返回伙伴",
