@@ -113,7 +113,10 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
-import { REVIEW_READ_TOOLS, asGuestReadResponse, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
+import {
+  GUEST_PROJECT_TOOLS, REVIEW_READ_TOOLS, callGuestProjectTool, callReviewReadTool, guestReadDenied,
+  isGuestProjectTool, isWindowsReviewLocalPath, reviewReadDenied,
+} from './review-read-tools.js';
 import {
   annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
@@ -4983,7 +4986,8 @@ assertRouteCurrent();
     const sessionDynamicTools = [
       // Windows Review requires 0.156+ and exposes flat function tools. The legacy
       // ordinary provider gate concerns namespace tools, not these scoped reads.
-      ...((reviewMode || guestConfined) && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
+      ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
+      ...(guestConfined && process.platform === 'win32' ? GUEST_PROJECT_TOOLS : []),
       ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
     ];
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
@@ -10123,16 +10127,15 @@ assertRouteCurrent();
         return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
           ? response : reviewReadDenied();
       }
-      if (guestConfined && process.platform === 'win32' && !params.namespace
-        && REVIEW_READ_TOOLS.some((tool) => tool.name === params.tool)) {
+      if (guestConfined && process.platform === 'win32' && !params.namespace && isGuestProjectTool(params.tool)) {
         const readIsActive = () => !closed && isCurrentHost()
           && params.threadId === threadId && params.turnId === currentTurnId
           && !turnInterruptOrigins.has(params.turnId)
           && !resolvedWhileBufferedRequestIds.has(String(meta.requestId));
-        if (!readIsActive()) return asGuestReadResponse(reviewReadDenied());
-        const response = asGuestReadResponse(await callReviewReadTool(params.tool, params.arguments, opts.workingDir, guestReadGrants));
+        if (!readIsActive()) return guestReadDenied();
+        const response = await callGuestProjectTool(params.tool, params.arguments, opts.workingDir, guestReadGrants);
         return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
-          ? response : asGuestReadResponse(reviewReadDenied());
+          ? response : guestReadDenied();
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {

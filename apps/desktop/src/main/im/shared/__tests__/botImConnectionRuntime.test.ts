@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   sent: [] as Array<{ channel: string; payload: unknown }>,
   ownerKey: 'owner-a',
   drainWechat: vi.fn(async (update: () => void, isCurrent: () => boolean) => { if (isCurrent()) update(); }),
+  /** Local projects linked to the teammate (#8359 guest bindings). */
+  linkedProjects: [] as Array<{ path: string; deviceId?: string }>,
   /** 每次 Telegram setConfig 落盘前调用(测并发添加 / 建连期间切账号)。 */
   beforeTelegramSetConfig: null as (() => Promise<void> | void) | null,
 }));
@@ -42,6 +44,11 @@ vi.mock('../../../maker-host/logger-adapter.js', () => ({
 vi.mock('../../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.ownerKey,
   isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: () => path.join(h.root, 'owner-data'),
+}));
+vi.mock('../../../maker-ipc/botWorkbenchService', () => ({
+  readBotLinkedProjects: async () => h.linkedProjects,
+  linkedProjectDirectoryKey: (dir: string) => dir,
 }));
 // 记录存储(.js 说明符)与凭证存储(无后缀说明符)解析到同一个模块: 一份 mock 同时提供两者。
 vi.mock('../../ownerScopedStorage.js', () => ({
@@ -91,6 +98,7 @@ import {
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
+  setBotImConnectionGuestAccessForSettings,
   removeBotImConnectionsForBot,
   startBotImConnections,
   stopBotImConnections,
@@ -463,7 +471,32 @@ describe('bot im connection runtime', () => {
     expect(listBotImConnections()[0]?.groupActivation).toBeUndefined();
   });
 
+  // #8359: the settings IPC is the only writer of guest bindings. It must
+  // reject projects the teammate has not linked and any project that would
+  // expose Cindy's own data, and keep the live record in sync.
+  it('binds guests only to linked projects that do not contain app data', async () => {
+    const added = await addBotImConnection({
+      botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', ownerUserId: '42',
+    });
+    const id = added.connection.id;
+    const clientA = path.join(h.root, 'client-a');
+    h.linkedProjects = [{ path: clientA }, { path: h.root }, { path: path.join(h.root, 'remote'), deviceId: 'dev-2' }];
+
+    await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: path.join(h.root, 'unlinked') } }))
+      .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_NOT_LINKED') });
+    await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: path.join(h.root, 'remote') } }))
+      .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_NOT_LINKED') });
+    // h.root contains owner-data (Cindy's own data): never a guest project.
+    await expect(setBotImConnectionGuestAccessForSettings({ connectionId: id, binding: { guestId: '555', projectPath: h.root } }))
+      .rejects.toMatchObject({ message: expect.stringContaining('PROJECT_CONTAINS_APP_DATA') });
+
+    const bound = await setBotImConnectionGuestAccessForSettings({ connectionId: id, unbound: 'refuse', binding: { guestId: '555', projectPath: clientA } });
+    expect(bound.connections.find((view) => view.id === id)?.guestAccess).toEqual({ unbound: 'refuse', bindings: { '555': { projectPath: clientA } } });
+    expect(__testing.instances.get(id)?.record.guestAccess?.bindings).toEqual({ '555': { projectPath: clientA } });
+  });
+
   afterEach(async () => {
+    h.linkedProjects = [];
     vi.restoreAllMocks();
     laneTesting.setStore(null);
     await stopBotImConnections();

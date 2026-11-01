@@ -4201,6 +4201,26 @@ describe('CodexAgent confined guest workspace', () => {
     await handle.close();
   });
 
+  // Windows sandboxes cannot narrow reads: the guest gets no shell, only the
+  // host-checked project tools (run on the Windows CI shards).
+  it.skipIf(process.platform !== 'win32')('replaces the shell with project tools on Windows', async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-guest-project-'));
+    tempRoots.push(project);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'guest-confined-win', model: 'gpt-6-luna', workingDir: project,
+      permissionMode: 'ask', workspaceConfinement: 'project',
+    });
+    const [, params] = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)!;
+    const start = params as { config: Record<string, unknown>; dynamicTools?: Array<{ name: string }> };
+    expect(start.config).toMatchObject({ 'features.shell_tool': false, 'features.unified_exec': false });
+    const names = (start.dynamicTools ?? []).map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(['project_read_file', 'project_list_directory', 'project_view_image']));
+    expect(names).not.toContain('review_read_file');
+    await handle.close();
+  });
+
   it('refuses to start when the app-server cannot enforce permission profiles', async () => {
     const agent = new CodexAgent(createDeps());
     installFakeHost(agent, undefined, { userAgent: 'codex/0.140.0' });
