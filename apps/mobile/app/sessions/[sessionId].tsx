@@ -10070,9 +10070,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [deviceId, invoke, maker, openLink]);
 
+  // Read messages through the ref: this callback reaches every row via `actions`, so a
+  // `messages` dependency would re-render all visible rows (Markdown included) on every
+  // streaming flush. The lookup only needs the list as it is at tap time.
   const addMessageToComposer = useCallback((clientId: string) => {
     if (!sessionId || !canUseComposer) return;
-    const target = messages.find((message) => message.clientId === clientId || message.id === clientId,
+    const target = latestMessagesRef.current.find((message) => message.clientId === clientId || message.id === clientId,
       );
     const summary = target ? mobileSessionMessageDisplayText(target) : null;
     const bounded = summary ? boundAgentReferenceText(summary) : null;
@@ -10087,7 +10090,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (editor) editor.insertNode(node);
     else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
     requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, canUseComposer, currentSession, deviceId, messages, sessionId]);
+  }, [applyComposerDocument, canUseComposer, currentSession, deviceId, sessionId]);
 
   // 伙伴近况里点一条待办：作为待办引用放进输入框，主人写一句话交代，伙伴按话更新它。
   const quoteTodoInComposer = useCallback((todo: { id: string; title: string }) => {
