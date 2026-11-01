@@ -159,13 +159,14 @@ function readString(obj: unknown, key: string): string | undefined {
 
 /**
  * call_api 的目标钉死:除主人私聊轮次外,path / params / data 里出现的 chat_id 都必须是当前
- * chat;消息列表等按 container 选对话的接口,container_id_type 只能是 chat、container_id 必须是
- * 当前 chat(否则可借 `GET messages?container_id=<别的群>` 读别的群历史);`messages` 创建接口
+ * chat;按 container 选对话时只允许当前 chat,或 GET 消息列表的 query 中与可信 scope.threadId
+ * 匹配的当前话题(不接受模型自行指定其他话题);`messages` 创建接口
  * 缺 receive_id 时自动补成当前 chat,指定别的 receive_id(含按 open_id 私发给别人)一律拒绝;
  * 带 message_id 的路径按 resolveMessageId 校验归属。
  */
 async function pinCallApiTarget(
   scope: FeishuBotLaneScope,
+  method: string,
   path: string,
   params: Record<string, unknown>,
   data: unknown,
@@ -182,8 +183,15 @@ async function pinCallApiTarget(
     }
     const containerIdType = readString(source, 'container_id_type');
     const containerId = readString(source, 'container_id');
-    if ((containerIdType && containerIdType !== 'chat') || (containerId && containerId !== scope.chatId)) {
-      return { ok: false, result: denied('container_id 必须是本轮所在的对话(container_id_type=chat); 只有主人私聊触发的轮次可以读别的对话。') };
+    // 只放行本轮可信话题的读取, 其余字段仍逐项检查, 不把话题例外扩展到请求体或写接口。
+    const currentThreadRead = source === params
+      && method === 'GET'
+      && path === 'open-apis/im/v1/messages'
+      && containerIdType === 'thread'
+      && Boolean(scope.threadId)
+      && containerId === scope.threadId;
+    if (!currentThreadRead && ((containerIdType && containerIdType !== 'chat') || (containerId && containerId !== scope.chatId))) {
+      return { ok: false, result: denied('container_id 必须是本轮所在的对话(container_id_type=chat), 或读取消息时的当前话题(container_id_type=thread); 只有主人私聊触发的轮次可以读别的对话或话题。') };
     }
   }
   let nextParams = params;
@@ -463,7 +471,7 @@ export function registerFeishuLaneTools(
 
   server.tool(
     'call_api',
-    '以当前 bot 身份调任意飞书 / Lark Open API(具名工具没覆盖到的能力, 如 urgent 加急、消息卡片 patch、日历 / 云文档等)。path 形如 /open-apis/im/v1/messages/{id}/urgent_app。目标默认钉在当前对话: 非主人私聊轮次里 chat_id / receive_id 必须是当前 chat(发消息缺省自动补); 非主人触发只能 GET 或在本对话里发消息 / 回复 / 表情 / 上传。',
+    '以当前 bot 身份调任意飞书 / Lark Open API(具名工具没覆盖到的能力, 如 urgent 加急、消息卡片 patch、日历 / 云文档等)。path 形如 /open-apis/im/v1/messages/{id}/urgent_app。目标默认钉在当前对话: 非主人私聊轮次里 chat_id / receive_id 必须是当前 chat(发消息缺省自动补); GET /open-apis/im/v1/messages 可用 container_id_type=thread、container_id=当前话题 id 读取回复; 非主人触发只能 GET 或在本对话里发消息 / 回复 / 表情 / 上传。',
     {
       method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).describe('HTTP 方法。'),
       path: z.string().trim().min(1).max(512).describe('接口路径, 以 /open-apis/ 开头。'),
@@ -483,7 +491,7 @@ export function registerFeishuLaneTools(
       if (!scope.requesterIsOwner && method !== 'GET' && !GUEST_WRITE_PATH_RE.test(normalized)) {
         return denied('非主人触发的轮次只能读取, 或在本对话里发消息 / 回复 / 表情 / 上传。');
       }
-      const pinned = await pinCallApiTarget(scope, normalized, params ?? {}, data);
+      const pinned = await pinCallApiTarget(scope, method, normalized, params ?? {}, data);
       if (!pinned.ok) return pinned.result;
       try {
         const response = await scope.im.callApi({
