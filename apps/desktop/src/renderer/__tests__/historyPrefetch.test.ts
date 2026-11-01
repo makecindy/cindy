@@ -14,9 +14,29 @@ const source = readFileSync(
   resolve(__dirname, '../components/chat/MessageStream.tsx'),
   'utf8',
 ).replace(/\r\n/g, '\n');
-const start = source.indexOf('  const triggerUserIntentFill =');
-const end = source.indexOf('\n  useEffect(', start);
-const callback = ts.transpileModule(source.slice(start, end), {
+const sourceFile = ts.createSourceFile(
+  'MessageStream.tsx',
+  source,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+let callbackStatement: ts.VariableStatement | undefined;
+function findCallback(node: ts.Node): void {
+  if (
+    ts.isVariableStatement(node) &&
+    node.declarationList.declarations.some(
+      ({ name }) => ts.isIdentifier(name) && name.text === 'triggerUserIntentFill',
+    )
+  ) {
+    callbackStatement = node;
+    return;
+  }
+  ts.forEachChild(node, findCallback);
+}
+findCallback(sourceFile);
+if (!callbackStatement) throw new Error('Missing triggerUserIntentFill callback');
+const callback = ts.transpileModule(callbackStatement.getText(sourceFile), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
