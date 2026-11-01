@@ -511,13 +511,13 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         </div>
         <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
           {!continued ? (
-            <span className="flex min-w-0 max-w-full select-none items-baseline gap-1.5">
+            <span className="flex min-w-0 max-w-full items-baseline gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{authorName}</span>
               {isPlanCard ? <BotGroupOrganizerTag /> : null}
               {props.stepNumber ? <BotGroupNameTag>{t('bots.groupChat.timeline.stepTag', { count: props.stepNumber })}</BotGroupNameTag> : null}
               {props.ownerOf ? <BotGroupNameTag>{t('bots.groupChat.ownerOf', { name: props.ownerOf })}</BotGroupNameTag> : null}
               {timed ? (
-                <time dateTime={dateTime} className="shrink-0 text-11 tabular-nums text-[var(--text-tertiary)]">
+                <time dateTime={dateTime} className="shrink-0 select-none text-11 tabular-nums text-[var(--text-tertiary)]">
                   {clock}
                 </time>
               ) : null}

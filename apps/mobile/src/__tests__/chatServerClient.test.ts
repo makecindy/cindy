@@ -135,12 +135,15 @@ describe('direct Chat Server client', () => {
   it('keeps owner labels scoped to each group and follows refreshed names without changing identities', () => {
     const human = { ...snapshot().members[0], name: 'Nickname A' };
     const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Companion X', ownerName: 'Account B' };
+    const other = { ...human, id: id(13), name: 'Chris', ownerActorId: id(13) };
     const messages = [message(20), { ...message(21), authorId: bot.id, author: { kind: 'bot', name: bot.name } }];
-    const group = (name: string, roomNumber = 1) => ({ ...snapshot(), room: room(roomNumber), members: [{ ...human, name }, bot], messages });
+    // A second human keeps the owner suffix meaningful; a self-built group (owner alone) drops it (#8061).
+    const group = (name: string, roomNumber = 1) => ({ ...snapshot(), room: room(roomNumber), members: [{ ...human, name }, bot, other], messages });
     const project = (s: ChatSnapshot) => chatGroupView({ snapshot: s, messages, before: null }, id(11));
     const first = group('Nickname A');
     expect(project(first).messages.map(m => m.authorName)).toEqual(['Nickname A', 'Companion X (Nickname A)']);
-    expect(chatRoomRow(first.room, first).item.display.subtitle).toBe('Nickname A · Companion X (Nickname A)');
+    expect(chatRoomRow(first.room, first).item.display.subtitle).toBe('Nickname A · Companion X (Nickname A) · Chris');
+    expect(project({ ...first, members: [human, bot] }).messages[1].authorName).toBe('Companion X');
     expect(project(group('Nickname C')).messages[1].authorName).toBe('Companion X (Nickname C)');
     expect(project(group('Nickname D', 2)).messages[1].authorName).toBe('Companion X (Nickname D)');
     expect(project(first).messages[1].authorName).toBe('Companion X (Nickname A)');
@@ -447,7 +450,7 @@ describe('direct Chat Server client', () => {
     const member = { ...owner, id: id(12), kind: 'bot', state: 'joined', name: 'Current name', ownerName: 'Account B' };
     const request = vi.fn().mockImplementation(async (path: string, method?: string) => {
       if (method === 'POST') return { id: id(21) };
-      return path.endsWith('/members') ? [member, owner] : original;
+      return path.endsWith('/members') ? [member, owner, { ...owner, id: id(13), name: 'Chris', ownerActorId: id(13) }] : original;
     });
     const client = createChatServerClient(request);
     const input = { clientId: 'quote-reply-operation', text: 'Agreed', mentions: { all: false, botIds: [] }, quote: { messageId: id(20) } };
