@@ -37,12 +37,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import {
-  ArrowLeft,
-  Keyboard as KeyboardIcon,
-  Monitor,
-  SlidersHorizontal,
-} from "lucide-react-native";
+import { ArrowLeft, Monitor, SlidersHorizontal } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -158,6 +153,7 @@ import {
 import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
 import {
   LIVE_SCREEN_ICONS,
+  LIVE_SCREEN_NOT_IN_MENU,
   LIVE_SCREEN_TOOLBAR_BUTTONS,
   parseLiveScreenParam,
 } from "./liveScreen";
@@ -3344,6 +3340,37 @@ export function RemoteDesktopSession({
       </Text>
     </Pressable>
   );
+  // A device screen turns with the phone: hold the phone sideways and the
+  // device goes landscape; upright again, and it turns back. The pose is
+  // absolute, so it holds whatever the device was showing before.
+  const deviceTurn = useRef<string | null>(null);
+  const turnable = Boolean(
+    lease?.screen?.buttons.some((b) => b.id === "orientation-portrait") &&
+    lease.screen.buttons.some((b) => b.id === "orientation-landscape"),
+  );
+  useEffect(() => {
+    if (!lease || !turnable || !frameReady || !canInput) return;
+    const turn = `${lease.lease}:${landscape}`;
+    if (deviceTurn.current === turn) return;
+    deviceTurn.current = turn;
+    send({
+      type: "events",
+      events: [
+        {
+          kind: "press",
+          button: landscape ? "orientation-landscape" : "orientation-portrait",
+        },
+      ],
+    });
+    // The picture turns with it: lay the viewer out for the new shape now,
+    // on the same stream, instead of fitting a landscape picture in a
+    // portrait frame.
+    const { width, height } = lease.display;
+    if (width > height === landscape) return;
+    const display = { ...lease.display, width: height, height: width };
+    send({ type: "displayGeometry", ...display, restore: true });
+    setLease({ ...lease, display });
+  }, [lease, turnable, frameReady, canInput, landscape, send]);
   // Fingers on a live screen are device touches; the desktop viewer modes stay off.
   const liveScreenTouches = lease?.screen ? lease.screen.maxTouches : null;
   useEffect(() => {
@@ -3400,24 +3427,19 @@ export function RemoteDesktopSession({
       label: t("remoteDesktop.back"),
       onPress: () => void back(),
     },
-    ...deviceButtons.map((button) => ({
-      key: button.key,
-      icon: button.icon,
-      label: button.label,
-      disabled: !canInput,
-      onPress: button.press,
-    })),
-    ...(liveScreen?.keyboard
-      ? [
-          {
-            key: "keyboard",
-            icon: KeyboardIcon,
-            label: t("remoteDesktop.keyboard"),
-            disabled: !canInput,
-            onPress: toggleKeyboard,
-          },
-        ]
-      : []),
+    // Turning follows the phone itself, and the device's own keyboard types.
+    ...deviceButtons
+      .filter(
+        (button) =>
+          !LIVE_SCREEN_NOT_IN_MENU.has(button.key.slice("device-".length)),
+      )
+      .map((button) => ({
+        key: button.key,
+        icon: button.icon,
+        label: button.label,
+        disabled: !canInput,
+        onPress: button.press,
+      })),
     {
       key: "settings",
       icon: SlidersHorizontal,

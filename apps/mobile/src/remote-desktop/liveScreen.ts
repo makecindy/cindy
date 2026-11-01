@@ -66,3 +66,15 @@ export const LIVE_SCREEN_ICONS: Record<LiveScreenButtonIcon, LucideIcon> = {
 
 /** Buttons on the toolbar itself; the rest stay in the controls panel. */
 export const LIVE_SCREEN_TOOLBAR_BUTTONS = 3;
+
+/**
+ * Device buttons the full-screen menu leaves out: turning follows the phone's
+ * own orientation, and shaking belongs to the phone itself (not wired yet).
+ */
+export const LIVE_SCREEN_NOT_IN_MENU: ReadonlySet<string> = new Set([
+  "rotate-left",
+  "rotate-right",
+  "orientation-portrait",
+  "orientation-landscape",
+  "shake",
+]);
