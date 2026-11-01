@@ -3651,6 +3651,8 @@
           "removeRow": "删除该行"
         },
         "wireProtocol": {
+          "defaultLabel": "连接默认协议",
+          "precedenceHelp": "模型单独设置或模型目录指定的协议优先。可在模型详情中查看来源或恢复默认协议与地址。",
           "responses": "OpenAI Responses（原生）",
           "chat": "Chat Completions（Cindy 桥接）",
           "anthropic": "Anthropic Messages（Cindy 桥接）",
@@ -3966,6 +3968,11 @@
           },
           "effortMixed": "各引擎的档位不同；选择后应用于支持该档位的引擎。",
           "protocol": {
+            "sourceConnection": "使用连接默认协议",
+            "sourceModel": "模型单独设置",
+            "sourceCatalog": "模型目录指定",
+            "connectionDefault": "连接默认：{{protocol}}",
+            "restoreRoute": "恢复默认协议与地址",
             "reference": "原生协议",
             "compatibility": "兼容模式",
             "compatibilityHint": "由 Cindy 在本地转换请求格式，可能出现运行不稳定或功能异常，建议有经验的用户使用。",

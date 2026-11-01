@@ -3651,6 +3651,8 @@
           "removeRow": "이 행 삭제"
         },
         "wireProtocol": {
+          "defaultLabel": "연결 기본 프로토콜",
+          "precedenceHelp": "모델의 개별 설정이나 모델 카탈로그에서 지정한 프로토콜이 우선합니다. 모델 상세 정보에서 설정 출처를 확인하거나 프로토콜과 주소를 기본값으로 복원할 수 있습니다.",
           "responses": "OpenAI Responses(네이티브)",
           "chat": "Chat Completions(Cindy 브리지)",
           "anthropic": "Anthropic Messages(Cindy 브리지)",
@@ -3966,6 +3968,11 @@
           },
           "effortMixed": "엔진마다 추론 강도가 다릅니다. 선택한 단계를 지원하는 엔진에 적용합니다.",
           "protocol": {
+            "sourceConnection": "연결 기본값 사용",
+            "sourceModel": "모델 개별 설정",
+            "sourceCatalog": "모델 카탈로그 지정",
+            "connectionDefault": "연결 기본값: {{protocol}}",
+            "restoreRoute": "프로토콜과 주소를 기본값으로 복원",
             "reference": "기본 API",
             "compatibility": "호환 모드",
             "compatibilityHint": "Cindy가 로컬에서 요청을 변환합니다. 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",

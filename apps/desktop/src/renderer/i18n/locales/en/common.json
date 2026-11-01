@@ -3692,6 +3692,8 @@
           "removeRow": "Remove row"
         },
         "wireProtocol": {
+          "defaultLabel": "Connection Default Protocol",
+          "precedenceHelp": "Models can use their own protocol from individual settings or the model catalog. View the source or restore defaults in model details.",
           "responses": "OpenAI Responses (native)",
           "chat": "Chat Completions (Cindy bridge)",
           "anthropic": "Anthropic Messages (Cindy bridge)",
@@ -4008,6 +4010,11 @@
           },
           "effortMixed": "Effort differs by engine. A selection applies to engines that support that level.",
           "protocol": {
+            "sourceConnection": "Connection default",
+            "sourceModel": "Model override",
+            "sourceCatalog": "Model catalog",
+            "connectionDefault": "Connection default: {{protocol}}",
+            "restoreRoute": "Restore Default Protocol and Address",
             "reference": "Native API",
             "compatibility": "Compatibility mode",
             "compatibilityHint": "Cindy converts requests locally. This may be unstable or behave unexpectedly. Recommended for experienced users.",

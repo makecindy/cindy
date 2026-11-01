@@ -2752,7 +2752,7 @@ export function ProviderConnectionDialog({
               <div id={fieldId('advanced-fields')} className="flex flex-col gap-4">
             {(editing || !onDetected) && !templateBound && (
               <div className="flex flex-col gap-[7px]">
-                <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
+                <FieldLabel>{t('settings.providers.custom.wireProtocol.defaultLabel')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
                   {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
                     <button
@@ -2786,6 +2786,9 @@ export function ProviderConnectionDialog({
                     </button>
                   ))}
                 </div>
+                <span className="text-12 leading-snug text-[var(--text-secondary)]">
+                  {t('settings.providers.custom.wireProtocol.precedenceHelp')}
+                </span>
                 {activeTab !== 'claude-code' && (
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t(

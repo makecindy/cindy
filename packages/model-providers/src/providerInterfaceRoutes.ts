@@ -124,7 +124,11 @@ export function providerInterfaceModelRoute<T extends ProviderRuntimeModelConfig
       ? { ...model, interfaceUnavailable: true, availableInterfaces: [] } : model;
   }
   // Custom per-model origins/paths are outside the template's credential scope.
-  if (model.route && !choices.some(p => clean(p.route.baseUrl) === clean(model.route!.baseUrl))) return model;
+  if (model.route && !choices.some(p => {
+    const profile = registry.interfaceProfiles?.find(item => item.id === p.profileId);
+    return [p.route.baseUrl, ...(profile?.inputBaseUrls ?? [])]
+      .some(input => clean(input) === clean(model.route!.baseUrl));
+  })) return model;
   const automatic = model.interfaceId === 'auto';
   // Existing Pi adapter declarations remain authoritative until a Server binding
   // explicitly replaces them; a product's generic default must not flatten them.

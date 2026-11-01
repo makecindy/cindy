@@ -1994,7 +1994,7 @@ it('keeps a template connection editable without offering protocol or path switc
     finishKeyHydration(null);
     await keyHydration;
   });
-  expect(screen.queryByText('settings.providers.custom.fields.wireProtocol')).toBeNull();
+  expect(screen.queryByText('settings.providers.custom.wireProtocol.defaultLabel')).toBeNull();
   expect(screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.action' })).toBeNull();
   const endpoint = screen.getByDisplayValue('https://generativelanguage.googleapis.com/v1beta') as HTMLInputElement;
   expect(endpoint.readOnly).toBe(true);

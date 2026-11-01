@@ -281,7 +281,7 @@ describe('model advanced editor', () => {
     render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
     expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
     expect(document.getElementById(screen.getByRole('switch', { name: 'GPT-6 · Pi' }).getAttribute('aria-describedby')!)?.textContent)
-      .toBe('Chat Completions');
+      .toBe('Chat Completionssettings.providers.models.advanced.protocol.sourceConnection');
   });
 
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
@@ -555,7 +555,8 @@ describe('model advanced editor', () => {
       const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
       expect(toggle.getAttribute('aria-checked')).toBe('true');
       expect(toggle.hasAttribute('data-compatibility')).toBe(false);
-      expect(document.getElementById(toggle.getAttribute('aria-describedby')!)?.textContent).toBe(api);
+      expect(document.getElementById(toggle.getAttribute('aria-describedby')!)?.textContent)
+        .toBe(`${api}settings.providers.models.advanced.protocol.sourceCatalog`);
     }
     expect(screen.getByText('Messages · Responses · Chat Completions')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /settings\.providers\.custom\.fields\.wireProtocol/ })).toBeNull();
