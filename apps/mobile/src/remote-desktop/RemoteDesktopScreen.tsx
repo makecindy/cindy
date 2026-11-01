@@ -2,7 +2,17 @@ import { deviceDisplayName } from "@/device-link/deviceName";
 import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
-import { FoldDesktopKeyboard } from "./FoldDesktopKeyboard";
+import {
+  FoldDesktopKeyboard,
+  type FoldSystemAction,
+} from "./FoldDesktopKeyboard";
+import {
+  AllWindowsIcon,
+  OmarchyMenuIcon,
+  ShowDesktopIcon,
+  WorkspaceLeftIcon,
+  WorkspaceRightIcon,
+} from "./RemoteDesktopIcons";
 import { FoldTouchpad } from "./FoldTouchpad";
 import {
   FoldDesktopBezel,
@@ -39,7 +49,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import { Monitor } from "lucide-react-native";
+import { LayoutGrid, Monitor, Search } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -3370,7 +3380,13 @@ export function RemoteDesktopSession({
         : ["ControlLeft", "KeyY"],
     );
   // Desktop-level shortcuts cannot reach anything in a single-window handoff.
-  const foldSystemActions = handoff
+  const foldDesktopAction = {
+    id: "desktop",
+    label: t("remoteDesktop.showDesktop"),
+    Icon: ShowDesktopIcon,
+    press: showDesktop,
+  };
+  const foldSystemActions: FoldSystemAction[] = handoff
     ? []
     : caps?.workspaceNavigation
       ? [
@@ -3379,6 +3395,7 @@ export function RemoteDesktopSession({
                 {
                   id: "omarchyMenu",
                   label: t("remoteDesktop.omarchyMenu"),
+                  Icon: OmarchyMenuIcon,
                   press: () => workspaceAction("omarchyMenu"),
                 },
               ]
@@ -3386,49 +3403,69 @@ export function RemoteDesktopSession({
           {
             id: "workspaceLeft",
             label: t("remoteDesktop.workspaceLeft"),
+            Icon: WorkspaceLeftIcon,
             press: () => workspaceAction("workspaceLeft"),
           },
           {
             id: "workspaceRight",
             label: t("remoteDesktop.workspaceRight"),
+            Icon: WorkspaceRightIcon,
             press: () => workspaceAction("workspaceRight"),
           },
         ]
-      : caps?.platform === "darwin"
-        ? [
-            {
-              id: "spotlight",
-              label: "Spotlight",
-              press: () => shortcut(["MetaLeft", "Space"]),
-            },
-            {
-              id: "missionControl",
-              label: "Mission Control",
-              press: () => shortcut(["ControlLeft", "ArrowUp"]),
-            },
-            {
-              id: "appWindows",
-              label: t("remoteDesktop.keyAppWindows"),
-              press: () => shortcut(["ControlLeft", "ArrowDown"]),
-            },
-          ]
-        : [
-            {
-              id: "search",
-              label: t("remoteDesktop.keySearch"),
-              press: () =>
-                shortcut(
-                  caps?.platform === "win32"
+      : [
+          {
+            id: "search",
+            label:
+              caps?.platform === "darwin"
+                ? "Spotlight"
+                : t("remoteDesktop.keySearch"),
+            Icon: Search,
+            press: () =>
+              shortcut(
+                caps?.platform === "darwin"
+                  ? ["MetaLeft", "Space"]
+                  : caps?.platform === "win32"
                     ? ["MetaLeft", "KeyS"]
                     : ["MetaLeft"],
-                ),
-            },
-            {
-              id: "taskView",
-              label: t("remoteDesktop.keyTaskView"),
-              press: () => shortcut(["MetaLeft", "Tab"]),
-            },
-          ];
+              ),
+          },
+          {
+            id: "overview",
+            label:
+              caps?.platform === "darwin"
+                ? "Mission Control"
+                : t("remoteDesktop.keyTaskView"),
+            Icon: LayoutGrid,
+            press: () =>
+              shortcut(
+                caps?.platform === "darwin"
+                  ? ["ControlLeft", "ArrowUp"]
+                  : ["MetaLeft", "Tab"],
+              ),
+          },
+          // Cindy's own window list when the host offers it; otherwise App Exposé.
+          ...(caps?.windowActions
+            ? [
+                {
+                  id: "windows",
+                  label: t("remoteDesktop.allWindows"),
+                  Icon: AllWindowsIcon,
+                  press: openWindows,
+                },
+              ]
+            : caps?.platform === "darwin"
+              ? [
+                  {
+                    id: "windows",
+                    label: t("remoteDesktop.keyAppWindows"),
+                    Icon: AllWindowsIcon,
+                    press: () => shortcut(["ControlLeft", "ArrowDown"]),
+                  },
+                ]
+              : []),
+          foldDesktopAction,
+        ];
   const foldDeckInsets = {
     top: Math.max(0, foldControls.y - hardwareControls.y),
     bottom: Math.max(0, geometry.height - foldControls.y - foldControls.height),
@@ -3916,10 +3953,7 @@ export function RemoteDesktopSession({
                 redo={foldRedo}
                 keyLabel={keyLabel}
                 onInputMethod={openFoldInputMethod}
-                onWindows={openWindows}
-                onDesktop={showDesktop}
                 onOperations={toggleOperations}
-                windowOnly={Boolean(handoff)}
                 clipboard={
                   <RemoteDesktopClipboardButton
                     enabled={!connectionPending && canInput}

@@ -26,6 +26,8 @@ import {
   Ellipsis,
   Keyboard,
   Option,
+  Redo2,
+  Undo2,
   ArrowRightToLine,
   type LucideIcon,
 } from "lucide-react-native";
@@ -43,7 +45,6 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { AllWindowsIcon, ShowDesktopIcon } from "./RemoteDesktopIcons";
 import { FoldTouchpad } from "./FoldTouchpad";
 import {
   FOLD_CAPS,
@@ -66,10 +67,12 @@ import {
 export type FoldSystemAction = {
   id: string;
   label: string;
+  Icon: LucideIcon;
   press(): void;
 };
 
 const INPUT_METHOD = "inputMethod";
+const HINT_WIDTH = 160;
 const FN_LEGENDS: Record<string, string> = {
   Delete: "Del",
   Home: "Home",
@@ -122,7 +125,11 @@ const Keycap = memo(function Keycap({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const selected = latch !== null;
-  const foreground = selected ? colors.ctaText : colors.textPrimary;
+  const foreground = selected
+    ? colors.ctaText
+    : rect.bare || subdued
+      ? colors.textSecondary
+      : colors.textPrimary;
   const small = (legend?.length ?? 0) > 1;
   return (
     <View
@@ -136,6 +143,7 @@ const Keycap = memo(function Keycap({
       style={[
         styles.key,
         subdued && styles.keySubdued,
+        rect.bare && styles.keyBare,
         pressed && styles.keyPressed,
         selected && styles.keySelected,
         {
@@ -229,11 +237,8 @@ export function FoldDesktopKeyboard({
   redo,
   keyLabel,
   onInputMethod,
-  onWindows,
-  onDesktop,
   onOperations,
   clipboard,
-  windowOnly = false,
   safeInsets,
   bottomReserve = 0,
 }: {
@@ -246,16 +251,12 @@ export function FoldDesktopKeyboard({
   redo(): void;
   keyLabel(code: string): string;
   onInputMethod(): void;
-  onWindows(): void;
-  onDesktop(): void;
   onOperations(): void;
   clipboard: ReactNode;
-  windowOnly?: boolean;
   safeInsets: { top: number; bottom: number; left: number; right: number };
   bottomReserve?: number;
 }) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const surface = useRef<View>(null);
   const origin = useRef({ x: 0, y: 0 });
@@ -284,11 +285,16 @@ export function FoldDesktopKeyboard({
       ...systemKey
         .split(",")
         .filter(Boolean)
-        .map((id) => ({ id, weight: 2.1 })),
-      { id: "undo", weight: 1.5 },
-      { id: "redo", weight: 1.5 },
+        .map((id, index) => ({
+          id,
+          weight: 1,
+          bare: true,
+          groupGap: index === 0 ? 0.6 : 0,
+        })),
+      { id: "undo", weight: 1, bare: true, groupGap: 0.6 },
+      { id: "redo", weight: 1, bare: true },
       FOLD_FN_CELL,
-      { id: INPUT_METHOD, weight: 0.9 },
+      { id: INPUT_METHOD, weight: 1, bare: true },
     ];
     return foldKeyRects(
       foldKeyboardRows(platform, functionRow),
@@ -363,15 +369,15 @@ export function FoldDesktopKeyboard({
         : rect.legend;
     if (rect.id === "Escape") return "esc";
     if (rect.id === FOLD_FN) return "fn";
-    if (rect.id === "undo") return t("remoteDesktop.keyUndo");
-    if (rect.id === "redo") return t("remoteDesktop.keyRedo");
-    const system = systemActions.find((action) => action.id === rect.id);
-    if (system) return system.label;
     if (rect.code === "MetaLeft") return platform === "win32" ? "Win" : "Super";
     return rect.code ? PC_LEGENDS[rect.code] : undefined;
   };
   const icon = (rect: FoldKeyRect, fn: boolean) => {
     if (rect.id === INPUT_METHOD) return Keyboard;
+    if (rect.id === "undo") return Undo2;
+    if (rect.id === "redo") return Redo2;
+    const system = systemActions.find((action) => action.id === rect.id);
+    if (system) return system.Icon;
     if (!rect.code) return undefined;
     if (fn && foldFnCode(rect.code) !== rect.code) return undefined;
     return (
@@ -379,6 +385,8 @@ export function FoldDesktopKeyboard({
       (platform === "darwin" ? MAC_ICONS[rect.code] : undefined)
     );
   };
+  // Icons carry no words, so holding one names it before the finger lifts.
+  const hint = rects.find((rect) => !rect.code && pressed.has(rect.id));
   const fn = input.latch(FOLD_FN) !== null;
   const uppercase = input.uppercase();
   const activateRef = useRef((_id: string) => {});
@@ -439,39 +447,48 @@ export function FoldDesktopKeyboard({
             }
             Icon={icon(rect, fn)}
             label={label(rect)}
-            subdued={!rect.legend && rect.id !== "Space"}
+            subdued={!rect.legend && rect.id !== "Space" && !rect.bare}
             pressed={pressed.has(rect.id)}
             latch={rect.code ? input.latch(rect.code) : null}
             onActivate={activate}
           />
         ))}
+        {hint ? (
+          <View
+            pointerEvents="none"
+            testID="remoteDesktop.foldKeyHint"
+            style={[
+              styles.hint,
+              {
+                top: hint.y + hint.height + 2,
+                left: Math.max(
+                  0,
+                  Math.min(
+                    size.width - HINT_WIDTH,
+                    hint.x + (hint.width - HINT_WIDTH) / 2,
+                  ),
+                ),
+              },
+            ]}
+          >
+            <Text numberOfLines={1} style={styles.hintText}>
+              {label(hint)}
+            </Text>
+          </View>
+        ) : null}
       </View>
       <View style={styles.lower}>
-        <View style={styles.roundColumn}>
-          {windowOnly ? null : (
-            <RoundButton
-              testID="remoteDesktop.foldDesktop"
-              label={t("remoteDesktop.showDesktop")}
-              Icon={ShowDesktopIcon}
-              disabled={!enabled}
-              onPress={onDesktop}
-            />
-          )}
+        <View style={styles.side}>
           <View style={styles.round}>{clipboard}</View>
         </View>
-        <View style={[styles.pad, { borderColor: colors.border }]}>
-          <FoldTouchpad send={send} enabled={enabled} bare />
+        <View style={styles.padZone}>
+          <View pointerEvents="none" style={styles.pad} />
+          {/* The whole palm rest moves the pointer; a thumb need not land on the visible pad. */}
+          <View style={StyleSheet.absoluteFill}>
+            <FoldTouchpad send={send} enabled={enabled} bare />
+          </View>
         </View>
-        <View style={styles.roundColumn}>
-          {windowOnly ? null : (
-            <RoundButton
-              testID="remoteDesktop.foldWindows"
-              label={t("remoteDesktop.allWindows")}
-              Icon={AllWindowsIcon}
-              disabled={!enabled}
-              onPress={onWindows}
-            />
-          )}
+        <View style={styles.side}>
           <RoundButton
             testID="remoteDesktop.foldOperations"
             label={t("remoteDesktop.operations")}
@@ -488,10 +505,10 @@ const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     deck: {
       flex: 1,
-      gap: spacing.sm,
+      gap: spacing.md,
       backgroundColor: colors.surface,
     },
-    keys: { flex: 62, minHeight: 0 },
+    keys: { flex: 68, minHeight: 0 },
     key: {
       position: "absolute",
       alignItems: "center",
@@ -503,8 +520,9 @@ const makeStyles = (colors: ThemeColors) =>
     keySubdued: {
       backgroundColor: colors.surfaceElevated,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
+      borderColor: colors.borderTranslucent,
     },
+    keyBare: { backgroundColor: "transparent", borderRadius: radius.pill },
     keyPressed: { backgroundColor: colors.border },
     keySelected: { backgroundColor: colors.cta },
     legend: {
@@ -532,31 +550,44 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.pill,
     },
     lower: {
-      flex: 38,
+      flex: 32,
       minHeight: 96,
       flexDirection: "row",
       alignItems: "stretch",
-      gap: spacing.sm,
     },
+    padZone: { flex: 1, alignItems: "center" },
+    // Close to a laptop trackpad's proportions, set by the deck height.
     pad: {
-      flex: 1,
-      overflow: "hidden",
+      height: "100%",
+      aspectRatio: 1.6,
+      maxWidth: "100%",
       borderRadius: radius.container,
       borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderTranslucent,
       backgroundColor: colors.surfaceElevated,
     },
-    roundColumn: {
-      width: 44,
-      justifyContent: "flex-end",
-      gap: spacing.sm,
-    },
+    side: { width: 44, justifyContent: "flex-end" },
     round: {
       width: 44,
       height: 44,
       alignItems: "center",
       justifyContent: "center",
       borderRadius: radius.pill,
-      backgroundColor: colors.surfaceChip,
+    },
+    hint: {
+      position: "absolute",
+      width: HINT_WIDTH,
+      alignItems: "center",
+    },
+    hintText: {
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      color: colors.textSecondary,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      overflow: "hidden",
+      backgroundColor: colors.surfaceGlassPanel,
     },
     disabled: { opacity: 0.4 },
   });

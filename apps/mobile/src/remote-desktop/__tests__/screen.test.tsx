@@ -304,6 +304,10 @@ vi.mock("lucide-react-native", () => ({
   CornerDownLeft: () => null,
   Delete: () => null,
   Ellipsis: () => null,
+  LayoutGrid: () => null,
+  Redo2: () => null,
+  Search: () => null,
+  Undo2: () => null,
   Option: () => null,
   createLucideIcon: () => () => null,
   Clipboard: () => null,
@@ -5653,6 +5657,7 @@ describe("remote desktop controls", () => {
     });
     // Unit: function-row shortcuts run when the finger lifts.
     act(() => keys.onTouchStart(touch(3, "undo")));
+    expect(fixture.views["remoteDesktop.foldKeyHint"]).toBeDefined();
     act(() => keys.onTouchEnd(touch(3, "undo")));
     expect(sent().filter((m) => m.type === "events").at(-1)).toEqual({
       type: "events",

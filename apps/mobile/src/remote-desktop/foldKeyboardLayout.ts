@@ -10,6 +10,10 @@ export type FoldKeyCell = {
   legend?: string;
   /** Arrow up and down share one cell, each half its height. */
   half?: "top" | "bottom";
+  /** Function-row controls sit directly on the deck, without a keycap. */
+  bare?: boolean;
+  /** Empty width before this key, in key units, separating groups. */
+  groupGap?: number;
 };
 export type FoldKeyRect = FoldKeyCell & {
   x: number;
@@ -19,8 +23,8 @@ export type FoldKeyRect = FoldKeyCell & {
 };
 export type FoldHostPlatform = string | undefined;
 
-const GAP = 4;
-const FUNCTION_ROW_HEIGHT = 0.82;
+const GAP = 5;
+const FUNCTION_ROW_HEIGHT = 0.74;
 
 const letters = (keys: string) =>
   [...keys].map((key) => ({
@@ -102,12 +106,15 @@ export function foldKeyboardRows(
 export const FOLD_ESCAPE: FoldKeyCell = {
   id: "Escape",
   code: "Escape",
-  weight: 1.1,
+  weight: 1,
+  bare: true,
 };
 export const FOLD_FN_CELL: FoldKeyCell = {
   id: FOLD_FN,
   code: FOLD_FN,
-  weight: 0.9,
+  weight: 1,
+  bare: true,
+  groupGap: 0.6,
 };
 
 /**
@@ -127,10 +134,14 @@ export function foldKeyRects(
     const currentHeight =
       rowIndex === 0 ? rowHeight * FUNCTION_ROW_HEIGHT : rowHeight;
     const slots = row.filter((cell) => cell.half !== "bottom");
-    const total = slots.reduce((sum, cell) => sum + cell.weight, 0);
+    const total = slots.reduce(
+      (sum, cell) => sum + cell.weight + (cell.groupGap ?? 0),
+      0,
+    );
     const unit = Math.max(0, width - GAP * (slots.length - 1)) / total;
     let x = 0;
     for (const cell of slots) {
+      x += (cell.groupGap ?? 0) * unit;
       const cellWidth = cell.weight * unit;
       if (cell.half === "top") {
         const lower = row.find((other) => other.half === "bottom")!;

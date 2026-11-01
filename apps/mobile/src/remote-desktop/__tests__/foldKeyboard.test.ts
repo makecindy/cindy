@@ -107,6 +107,22 @@ describe("foldKeyRects", () => {
     }
   });
 
+  it("keeps group gaps inside the row width, with the last key at the edge", () => {
+    const [esc, undo] = foldKeyRects(
+      [
+        [
+          { id: "a", weight: 1, bare: true },
+          { id: "b", weight: 1, bare: true, groupGap: 1 },
+        ],
+      ],
+      305,
+      40,
+    );
+    expect(esc.width).toBeCloseTo(100, 3);
+    expect(undo.x).toBeCloseTo(205, 3);
+    expect(undo.x + undo.width).toBeCloseTo(305, 3);
+  });
+
   it("stacks arrow up and down in one cell", () => {
     const upKey = rects.find((item) => item.id === "ArrowUp")!;
     const downKey = rects.find((item) => item.id === "ArrowDown")!;
