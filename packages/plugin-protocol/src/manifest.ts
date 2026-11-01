@@ -1892,7 +1892,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             reason: 'tools[].parameters 必须是对象(JSON Schema)',
           };
         try {
-          if (JSON.stringify(t.parameters).length > 16_384) {
+          if (new TextEncoder().encode(JSON.stringify(t.parameters)).length > 16_384) {
             return { ok: false, reason: 'tools[].parameters 过大(上限 16KB)' };
           }
         } catch {

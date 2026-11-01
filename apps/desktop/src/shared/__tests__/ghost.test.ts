@@ -45,6 +45,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateInstalledGhostManifest,
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
@@ -1016,6 +1017,38 @@ describe('ghost · 清单校验', () => {
     for (const icon of ['../evil.png', '/abs.png', 'a\\b.png', 'icon.svg', 'icon.js', 'icon', 42]) {
       expect(validateGhostManifest({ ...goodManifest(), icon }).ok, String(icon)).toBe(false);
     }
+  });
+
+  it('tools[].parameters 新包按 UTF-8 字节限 16KB,已装快照保留旧口径', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const withParameters = (parameters: Record<string, unknown>) => ({
+      ...goodManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事', parameters }],
+    });
+    const atLimit = schema('a'.repeat(16_384 - utf8Bytes(schema(''))));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest(withParameters(atLimit)).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest(withParameters(overLimit))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    // 升级前按 UTF-16 长度装入的多字节 schema,读取安装快照时不能因口径收紧失效。
+    expect(validateInstalledGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    expect(validateInstalledGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
   });
 });
 
