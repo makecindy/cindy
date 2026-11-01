@@ -6781,6 +6781,34 @@ interface ElectronAPI {
       defaultEnabled: boolean;
       effective: 'immediate';
     }>;
+    /** 任务级额度备用路线：读当前任务配置的备用目标；stale=配置时的组合已不是当前组合。 */
+    sessionUsageLimitFallbackGet: (sessionId: string) => Promise<{
+      target: { providerId: string; model: string } | null;
+      stale: boolean;
+    }>;
+    /** 复用 MCP 控制面的同一套校验与门禁；target=null 等价清除。 */
+    sessionUsageLimitFallbackSet: (
+      sessionId: string,
+      target: { providerId: string; model: string } | null,
+    ) => Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    >;
+    /** 清除当前任务的额度备用路线。 */
+    sessionUsageLimitFallbackClear: (
+      sessionId: string,
+    ) => Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    >;
 
     /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
     compactionGetPct: () => Promise<number>;
