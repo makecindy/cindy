@@ -302,6 +302,8 @@ export class HermesAgent extends BaseAgent {
       return this.createSessionHandle({
         sessionId,
         resumableSessionId,
+        ...(opts.sessionId ? { cindySessionId: opts.sessionId } : {}),
+        freshHermesSession: !requestedResumeId,
         model: opts.model,
         permissionMode: requestedPermissionMode,
         transport,
@@ -338,6 +340,10 @@ export class HermesAgent extends BaseAgent {
     transport: HermesTransport;
     /** Unregisters the bridge identity; idempotent, called on close. */
     disposeBridgeSession?: () => void;
+    /** Cindy session id (expert binding key, ROADMAP 3.2a). */
+    cindySessionId?: string;
+    /** True when this handle started a new Hermes session (no `--resume`). */
+    freshHermesSession?: boolean;
   }): AgentSessionHandle {
     const { sessionId, transport } = input;
     const logger = this.deps.logger;
@@ -354,6 +360,9 @@ export class HermesAgent extends BaseAgent {
     // Hermes home route). Stamped on the done usage so the turn is labelled and priced
     // by the endpoint it actually ran on (ROADMAP 1.9b-3c).
     let turnProviderId: string | undefined;
+    // A fresh Hermes session has not seen its expert instructions yet; they ride the
+    // first accepted turn only (a resumed session already holds them in its history).
+    let expertPreamblePending = input.freshHermesSession === true && Boolean(input.cindySessionId);
     // Monotonic per-send epoch. `session/closed` has no epoch on the wire, so
     // each result-settled turn leaves exactly one close to be consumed; any
     // other close belongs to the currently active epoch only.
@@ -666,6 +675,7 @@ export class HermesAgent extends BaseAgent {
     });
 
     const preflightRoute = this.deps.preflightHermesRoute ?? ((model: string) => preflightModelRoute(model));
+    const resolveExpertPreamble = this.deps.resolveHermesExpertPreamble;
     // The current Cindy model id ('hermes-default' sentinel or an override).
     // Session.model reads it and expects it to follow successful switches.
     let currentModel = input.model;
@@ -695,7 +705,11 @@ export class HermesAgent extends BaseAgent {
         const preflight = await preflightRoute(currentModel);
         if (!preflight.ok) throw new Error(preflight.message);
         turnProviderId = resolveModelRoute(currentModel)?.providerId;
-        const text = await flattenUserMessage(message);
+        const expertPreamble = expertPreamblePending && input.cindySessionId && resolveExpertPreamble
+          ? await resolveExpertPreamble({ sessionId: input.cindySessionId, model: currentModel })
+          : null;
+        const userText = await flattenUserMessage(message);
+        const text = expertPreamble ? `${expertPreamble}\n\n${userText}` : userText;
         // Mark the turn before the RPC so a terminal notification arriving in
         // the same socket chunk cannot be cleared by the accepted-send path.
         const epoch = ++sendEpoch;
@@ -715,6 +729,7 @@ export class HermesAgent extends BaseAgent {
         });
         try {
           await transport.request(HERMES_METHODS.QUERY_SEND, { sessionId, text });
+          expertPreamblePending = false;
         } catch (error) {
           if (activeEpoch === epoch) activeEpoch = previousEpoch;
           throw error;

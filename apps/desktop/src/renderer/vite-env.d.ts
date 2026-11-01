@@ -5527,6 +5527,15 @@ interface ElectronAPI {
       onChanged: (
         cb: (entries: import('@cindy/maker-core/experts').ExpertEntry[]) => void,
       ) => () => void;
+      /** ROADMAP 3.2a: the expert the next fresh Hermes session starts as. */
+      getPending: () => Promise<string | null>;
+      setPending: (slug: string | null) => Promise<string | null>;
+      getSessionBinding: (
+        sessionId: string,
+      ) => Promise<import('../main/maker-ipc/expertSessions').ExpertSessionBindingView | null>;
+      onSessionEvent: (
+        cb: (event: import('../main/maker-ipc/expertSessions').ExpertSessionEvent) => void,
+      ) => () => void;
     };
     providers: {
       list: () => Promise<import('@cindy/maker-core/providers-file').ProviderFileResult>;

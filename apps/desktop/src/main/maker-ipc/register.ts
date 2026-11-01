@@ -910,6 +910,7 @@ import {
 } from './sessionReferenceResolver.js';
 import { registerAndroidAutomationHandlers } from './androidHandlers.js';
 import { registerExpertsHandlers } from './expertsHandlers.js';
+import { getDesktopExpertSessionStore } from './expertSessions.js';
 import { registerProvidersHandlers } from './providersHandlers.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
@@ -25554,6 +25555,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rootDir: path.join(os.homedir(), '.cindy-harness', 'experts'),
     assertTrusted: (event) => assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
     broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
+    sessions: getDesktopExpertSessionStore(),
   });
 
   // ── Providers (ROADMAP 2.1b/2.2b IPC): read-only list + on-demand probe of ~/.cindy-harness/providers.yaml ──

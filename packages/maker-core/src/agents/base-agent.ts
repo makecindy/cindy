@@ -756,6 +756,17 @@ export interface AgentDeps {
   ) => Promise<{ ok: true } | { ok: false; message: string; providerId?: string }>;
 
   /**
+   * Hermes-only (ROADMAP 3.2a): the expert preamble for the first turn of a fresh
+   * (non-resumed) Hermes session, keyed by the Cindy session id. Returns null for a
+   * session without an expert; throws to refuse the turn (expert broken or on the
+   * wrong model route). The preamble is prepended to that turn's text only.
+   */
+  resolveHermesExpertPreamble?: (input: {
+    sessionId: string;
+    model: string;
+  }) => Promise<string | null>;
+
+  /**
    * Hermes-only: registers this Cindy session with the tool bridge and returns
    * the non-secret env (`CINDY_BRIDGE_SESSION`) the shim reads via `${VAR}` in
    * config.yaml. Absent or failing → the session runs without Cindy tools.
