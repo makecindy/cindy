@@ -807,6 +807,40 @@ describe('HermesManager socket integration (fake hermes)', () => {
     expect(h.warnings[0].msg).toBe('Unable to verify Hermes CLI version');
   });
 
+  it('toggles a home plugin through the Hermes CLI, in the manager home, refusing unsafe names', async () => {
+    const h = current!;
+    const envLog = path.join(h.dir, 'plugin-env.jsonl');
+    process.env.FAKE_RECORD_ENV = envLog;
+    try {
+      await expect(h.client.request(METHODS.CONFIG_SET_PLUGIN_ENABLED,
+        { name: 'superpowers', enabled: false }, { timeoutMs: 10_000 }))
+        .resolves.toEqual({ name: 'superpowers', enabled: false });
+      await h.client.request(METHODS.CONFIG_SET_PLUGIN_ENABLED,
+        { name: 'superpowers', enabled: true }, { timeoutMs: 10_000 });
+      const calls = fs.readFileSync(envLog, 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as { home: string; argv: string[] });
+      expect(calls.map((c) => c.argv.slice(-3))).toEqual([
+        ['plugins', 'disable', 'superpowers'],
+        ['plugins', 'enable', 'superpowers'],
+      ]);
+      expect(calls.every((c) => c.home === path.join(h.dir, 'home'))).toBe(true);
+
+      for (const bad of ['../evil', '--force', '', 'a b']) {
+        await expect(h.client.request(METHODS.CONFIG_SET_PLUGIN_ENABLED,
+          { name: bad, enabled: true }, { timeoutMs: 5_000 })).rejects.toMatchObject({ rpcError: { code: 'INVALID_PARAMS' } });
+      }
+      expect(fs.readFileSync(envLog, 'utf8').trim().split('\n')).toHaveLength(2);
+
+      process.env.FAKE_PLUGINS_FAIL = '1';
+      await expect(h.client.request(METHODS.CONFIG_SET_PLUGIN_ENABLED,
+        { name: 'superpowers', enabled: true }, { timeoutMs: 10_000 }))
+        .rejects.toMatchObject({ rpcError: { code: 'INTERNAL' } });
+    } finally {
+      delete process.env.FAKE_RECORD_ENV;
+      delete process.env.FAKE_PLUGINS_FAIL;
+    }
+  });
+
   it('rejects protocol version mismatch', async () => {
     const h = current!;
     const socket = net.createConnection(path.join(h.dir, 'm.sock'));

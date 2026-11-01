@@ -37,6 +37,7 @@ vi.mock('../../logger.js', () => ({
 import {
   ensureHermesManagerDaemon,
   hermesManagerSocketPath,
+  parseHermesPluginLists,
   resetHermesManagerClientForTests,
   resolveHermesHome,
   stopHermesManagerDaemon,
@@ -317,3 +318,21 @@ function makeFakeUtilityProcess(): {
   Object.assign(fake, { pid: 424242, stderr, stdout: new PassThrough(), kill });
   return { child: fake as unknown as ReturnType<HermesManagerFork>, kill, stderr };
 }
+
+describe('parseHermesPluginLists (ROADMAP 1.6)', () => {
+  it('reads the shape Hermes writes after `plugins disable` (inline [] + block list)', () => {
+    // Owner's ~/.hermes-cindy/config.yaml after `hermes-cindy plugins disable superpowers`, 2026-11-01.
+    const lists = parseHermesPluginLists(
+      'model:\n  default: x\nplugins:\n  enabled: []\n  disabled:\n    - superpowers/.hermes-plugin\n\nmcp_servers: {}\n',
+    );
+    expect([...lists.enabled]).toEqual([]);
+    expect([...lists.disabled]).toEqual(['superpowers']);
+  });
+
+  it('reads an enabled block list and tolerates missing or broken config', () => {
+    expect([...parseHermesPluginLists('plugins:\n  enabled:\n    - superpowers/.hermes-plugin\n    - other\n').enabled])
+      .toEqual(['superpowers', 'other']);
+    expect(parseHermesPluginLists('model: {}\n').enabled.size).toBe(0);
+    expect(parseHermesPluginLists('plugins: [\n').enabled.size).toBe(0);
+  });
+});

@@ -29,6 +29,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { app, utilityProcess } from 'electron';
+import yaml from 'js-yaml';
 
 import {
   METHODS as HERMES_MGR_METHODS,
@@ -338,6 +339,36 @@ export async function getHermesModelCatalog(
   );
 }
 
+/**
+ * Plugin ids from the Hermes home config's `plugins.enabled` / `plugins.disabled`
+ * lists. Entries look like `superpowers/.hermes-plugin`; the suffix is dropped.
+ * Accepts both block lists and inline `[]`. Read-only: Hermes writes this section.
+ */
+export function parseHermesPluginLists(configYaml: string): {
+  enabled: Set<string>;
+  disabled: Set<string>;
+} {
+  const out = { enabled: new Set<string>(), disabled: new Set<string>() };
+  let doc: unknown;
+  try {
+    doc = yaml.load(configYaml);
+  } catch {
+    return out;
+  }
+  const plugins = (doc as { plugins?: unknown } | null)?.plugins;
+  if (!plugins || typeof plugins !== 'object') return out;
+  for (const key of ['enabled', 'disabled'] as const) {
+    const list = (plugins as Record<string, unknown>)[key];
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry !== 'string') continue;
+      const id = entry.trim().replace(/\/\.hermes-plugin$/, '');
+      if (id) out[key].add(id);
+    }
+  }
+  return out;
+}
+
 export interface HermesHomePluginInfo {
   id: string;
   source?: string;
@@ -372,24 +403,17 @@ export async function getHermesHomeStatus(requestTimeoutMs = 15_000): Promise<He
   const plugins: HermesHomePluginInfo[] = [];
   const skills: string[] = [];
 
-  // Read config.yaml for enabled plugins
-  const enabledPluginNames = new Set<string>();
+  // Read config.yaml for the plugin enabled/disabled lists (Hermes owns them).
+  let pluginLists = { enabled: new Set<string>(), disabled: new Set<string>() };
   try {
     const configContent = await fs.promises.readFile(path.join(homePath, 'config.yaml'), 'utf8');
-    const enabledMatch = configContent.match(/plugins:\s*\n\s*enabled:\s*\n((?:\s*-\s*[^\n]+\n)+)/);
-    if (enabledMatch) {
-      const lines = enabledMatch[1].split('\n');
-      for (const line of lines) {
-        const m = line.match(/-\s*([^\s]+)/);
-        if (m) {
-          const raw = m[1].replace(/\/\.hermes-plugin$/, '');
-          enabledPluginNames.add(raw);
-        }
-      }
-    }
+    pluginLists = parseHermesPluginLists(configContent);
   } catch {
     // Tolerant if config is missing or unreadable
   }
+  const enabledPluginNames = new Set(
+    [...pluginLists.enabled].filter((name) => !pluginLists.disabled.has(name)),
+  );
 
   // Read installed plugins from plugins/.install-metadata.json
   try {

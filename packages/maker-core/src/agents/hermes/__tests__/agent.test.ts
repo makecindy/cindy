@@ -629,6 +629,24 @@ describe('HermesAgent', () => {
     }
   });
 
+  it('handle.model follows a successful setModel, keeping the Cindy sentinel', async () => {
+    // Session.model reads handle.model and assumes it tracks switches; runtime
+    // profiles (desktop readSessionRuntimeProfiles) report live.model. A fixed
+    // start-time value made a mid-session switch report the old model.
+    await startDaemon();
+    const handle = await start(buildAgent());
+    try {
+      const startModel = handle.model;
+      await handle.setModel!('qwen3-8b');
+      expect(handle.model).toBe('qwen3-8b');
+      expect(handle.model).not.toBe(startModel);
+      await handle.setModel!('hermes-default');
+      expect(handle.model).toBe('hermes-default');
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('advertises switchModel so the session gate lets a per-session model change through', () => {
     // Regression: the capability said unsupported while handle.setModel already
     // implemented the per-session override (query/setModel). Session.setModel checks

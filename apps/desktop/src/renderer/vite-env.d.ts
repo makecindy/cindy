@@ -5590,6 +5590,7 @@ interface ElectronAPI {
         },
       ) => Promise<Record<string, unknown>>;
       removeMcpServer: (name: string) => Promise<Record<string, unknown>>;
+      setPluginEnabled: (name: string, enabled: boolean) => Promise<{ name: string; enabled: boolean }>;
     },
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     onAgentsChanged: (cb: () => void) => () => void;

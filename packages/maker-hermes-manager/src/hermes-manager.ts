@@ -23,6 +23,7 @@ import {
   readInstalledHermesVersion,
 } from './hermes-version.js';
 import { spawn } from 'node:child_process';
+import { isValidHermesPluginName, setHermesPluginEnabled } from './hermes-plugins.js';
 import { readFile } from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import { isInvalidResumeFailure, startHermesRun, type HermesRunHandle } from './hermes-run.js';
@@ -579,6 +580,28 @@ export class HermesManager {
       return {
         servers: await removeHermesMcpServer(this.hermesHome, name),
       };
+    });
+
+    s.setHandler(METHODS.CONFIG_SET_PLUGIN_ENABLED, async (raw) => {
+      const p = raw as { name?: unknown; enabled?: unknown };
+      const name = typeof p?.name === 'string' ? p.name.trim() : '';
+      if (!isValidHermesPluginName(name) || typeof p.enabled !== 'boolean') {
+        throw rpcError('INVALID_PARAMS', 'a plugin name and enabled:boolean are required');
+      }
+      try {
+        await setHermesPluginEnabled(
+          {
+            hermesBin: this.hermesBin,
+            hermesHome: this.hermesHome,
+            ...(this.hermesExtraArgs ? { hermesExtraArgs: this.hermesExtraArgs } : {}),
+          },
+          name,
+          p.enabled,
+        );
+      } catch (error) {
+        throw rpcError('INTERNAL', error instanceof Error ? error.message : String(error));
+      }
+      return { name, enabled: p.enabled };
     });
 
     s.setHandler(METHODS.QUERY_SET_MODEL, async (raw) => {

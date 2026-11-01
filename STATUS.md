@@ -10,6 +10,24 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Hermes handle model tracks switches + plugin on/off in Settings (ROADMAP 1.6a) (`unit-tested`)
+
+**1. Hermes `AgentSessionHandle.model` follows `setModel`** (`packages/maker-core/src/agents/hermes/agent.ts`). The handle exposed `model` as a fixed property from session start. `Session.model` and the desktop runtime profiles (`readSessionRuntimeProfiles`: `live.model`) therefore reported the start model after a mid-session switch. It is now a getter over a variable updated after `QUERY_SET_MODEL` succeeds, keeping the Cindy id (`hermes-default` sentinel or the override). Test: `agent.test.ts` "handle.model follows a successful setModel" failed first (`expected 'hermes-default' to be 'qwen3-8b'`), then passed. 44/44 Hermes agent tests.
+
+**2. Plugin on/off switch (1.6a).**
+- Owner input: `hermes-cindy plugins disable superpowers` left `plugins: { enabled: [], disabled: [superpowers/.hermes-plugin] }` in `~/.hermes-cindy/config.yaml`.
+- Daemon: `config/setPluginEnabled {name, enabled}` → `hermes plugins enable|disable <name>` with `HERMES_HOME` = manager home (`hermes-plugins.ts`). Names must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, so no `..`, no flags. The CLI's stderr comes back as an `INTERNAL` RPC error. Cindy never writes the plugins YAML itself (AGENTS.md §3).
+- Fixture: `fake-hermes.mjs` answers `plugins …` (exit 0, or 1 with `FAKE_PLUGINS_FAIL`).
+- Desktop: channel `maker:hermes-config:set-plugin-enabled` (trusted renderer only), preload `hermesConfig.setPluginEnabled`, `HermesSection.tsx` `Switch` per plugin with a toast. Hint text says changes apply to new chats.
+- `parseHermesPluginLists` (`hermes-manager-client.ts`, js-yaml read-only) replaces a regex that only understood a block `enabled:` list and ignored `disabled:`.
+- Tests: daemon `hermes-manager.test.ts` +1 (both argv calls, home, four bad names refused with no CLI call, CLI failure → `INTERNAL`); mutation check swapping enable/disable failed it. Client `hermesManagerClient.test.ts` +2 (owner's exact config shape; block list; missing/broken YAML). Package: maker-hermes-manager 104/104.
+
+**Gates (Node 22.23.4, cloud container):** serial `pnpm -r typecheck` → `EXIT=0`; `pnpm test:runner` → `EXIT=0` (607/0); `pnpm check:test-hygiene` → PASS. Targeted suites green: maker-hermes-manager 104/104, Hermes agent 44/44, hermesManagerClient 9/9, lizi-mcps 76/76. **Related unit tier NOT yet green.** The first full run failed only on the container's missing `better_sqlite3.node` build (566 "Could not locate the bindings file"; deps were installed with `--ignore-scripts`). After building it, lizi-mcps went 76/76. The full re-run (maker-core change pulls the entire desktop suite, about 30 min here) was still running when this was committed at the owner's request. Do not merge until `pnpm test:unit:related` is green.
+
+**Still open:** 1.6b live proof (owner: Settings → Hermes Harness → toggle `superpowers` off/on; check `grep -A4 "^plugins:" ~/.hermes-cindy/config.yaml` matches the page). The dev restart rebuilds `dist/hermes-mgr.mjs`; if the switch errors with an unknown method, the daemon bundle is stale.
+
+---
+
 ## 2026-11-01 — ROADMAP 2.2 closed `live-proven` (owner check after merging PR #1)
 
 Owner pulled `main` (PR th3ottoman-png/cindy#1 merged), restarted the dev app, and reported:

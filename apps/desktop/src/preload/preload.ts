@@ -6307,6 +6307,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         name: string,
       ): Promise<Record<string, import('../main/maker-host/hermes-manager-client').HermesMcpServerConfig>> =>
         ipcRenderer.invoke('maker:hermes-config:remove-mcp-server', { name }),
+      setPluginEnabled: (name: string, enabled: boolean): Promise<{ name: string; enabled: boolean }> =>
+        ipcRenderer.invoke('maker:hermes-config:set-plugin-enabled', { name, enabled }),
     },
     listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi'>> =>
       ipcRenderer.invoke('maker:list-available-agents'),

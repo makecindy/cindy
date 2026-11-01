@@ -51,6 +51,16 @@ if (process.env.FAKE_RECORD_ENV) {
 // (see real-hermes-transcript.ndjson).
 const emit = (obj) => process.stdout.write(JSON.stringify({ ...obj, timestamp: Date.now() }) + '\n');
 
+// `plugins enable|disable <name>`: FAKE_PLUGINS_FAIL makes it fail like a
+// missing plugin. The argv is already recorded above (FAKE_RECORD_ENV).
+if (process.argv.includes('plugins')) {
+  if (process.env.FAKE_PLUGINS_FAIL) {
+    process.stderr.write('simulated plugin toggle failure\n');
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 if (process.argv.includes('--version')) {
   if (process.env.FAKE_VERSION_ERROR) {
     process.stderr.write('simulated version failure\n');

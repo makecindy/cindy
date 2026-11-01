@@ -19,6 +19,8 @@ export const MAKER_INVOKE = {
   HERMES_CONFIG_GET_STATUS: 'maker:hermes-config:get-status',
   HERMES_CONFIG_SET_MCP_SERVER: 'maker:hermes-config:set-mcp-server',
   HERMES_CONFIG_REMOVE_MCP_SERVER: 'maker:hermes-config:remove-mcp-server',
+  /** ROADMAP 1.6: enable/disable a Hermes home plugin via `hermes plugins enable|disable`. */
+  HERMES_CONFIG_SET_PLUGIN_ENABLED: 'maker:hermes-config:set-plugin-enabled',
   /** ROADMAP 3.1b: list experts under ~/.cindy-harness/experts (valid and invalid). */
   EXPERTS_LIST: 'maker:experts:list',
   /** ROADMAP 2.1b: providers.yaml entries plus file issues (read-only). */
