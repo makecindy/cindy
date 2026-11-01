@@ -875,8 +875,9 @@ describe('UserBrowserBackend · 读取与动作', () => {
       const other = pathMod.join(root, 'other.bin');
       await fsp.writeFile(other, '');
       await fsp.truncate(other, 400 * 1024 * 1024);
-      const real = await fsp.realpath(big);
-      expect(await resolveUploadFiles([big], [root], gib, gib)).toEqual([real]);
+      // Windows may spell the same folder with its 8.3 short name, so compare names, not whole paths.
+      const resolved = await resolveUploadFiles([big], [root], gib, gib);
+      expect(resolved.map((file) => pathMod.basename(file))).toEqual(['big.bin']);
       expect(await resolveUploadFiles([big, other], [root], gib, gib)).toHaveLength(2);
       await expect(resolveUploadFiles([big], [root])).rejects.toThrow(/exceeds/);
       await expect(resolveUploadFiles([big], [root], gib)).rejects.toThrow(/batch exceeds/);

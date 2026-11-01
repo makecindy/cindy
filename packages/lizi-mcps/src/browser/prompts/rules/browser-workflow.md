@@ -89,7 +89,7 @@
 - **`data.backend === "external"` = 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。旧宿主可能省略该字段,不要把缺少模式信息当成已使用内置浏览器。
   - 此模式的 `status.data.proxy` 报告当前启动路由:`direct`、`proxied`(带脱敏 `server`)或无法确认继承进程路由时的 `unknown`。需要指定代理时必须重新调用 `start` 并检查结果,不要从已有 tab 猜测出口。代理模式下只有 `proxyAllowedHostnames` 列出的公网域名可导航,内网地址不在其中。
 - **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点;用户自己的标签页只在任务需要时操作,不要关闭、重排或切换它们。
-    - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize`、`pdf` 与配方都可用,但有这些差别:
+    - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图(只限可视区域)、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize` 可用,但有这些差别:
     - 这些动作要 Chrome 的调试接口,而 Chrome 不允许扩展按需申请,所以这里做不了:`pdf`、读 Cookie 或抓网络请求的配方;整页 / 元素截图退回可视区域并在 `note` 里说明,用户窗口里的后台标签页不能截图。不要让用户去找开启入口;需要时告诉用户可以改用 Cindy 专用浏览器,由用户决定。大文件上传不受影响,最大 1 GB。`resize` 只作用于 Cindy 自己的窗口。
     - 快照已包含所有 iframe 和开放 Shadow DOM 里的内容,主内容区与对话框排在最前,ref 可直接操作,不需要 `frame` 参数(`evaluate`、`extract` 与 selector 定位的动作仍只作用于顶层页面)。`truncated:true` 表示后面还有内容:加大 `limit` / `maxChars` 或用 `selector` 限定(如 `[role=main]`),不要据此判断页面上没有或工具做不到。
     - 点击、坐标与拖拽是合成事件(非可信输入),个别要求可信输入的站点会忽略;页面 CSP 禁止脚本时 `evaluate` 报 `EVAL_BLOCKED_BY_PAGE`,改用 snapshot / extract。
