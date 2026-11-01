@@ -858,6 +858,30 @@ describe('chat selection clipboard', () => {
     expect(pasted.innerHTML).not.toMatch(/background|color:/);
   });
 
+  // Review4434819471: KaTeX radical SVG paint is stylesheet-owned; partial
+  // equation export must inherit destination ink after that stylesheet is gone.
+  it('keeps partial radical SVG paint relative to destination ink', () => {
+    installKatexClipboardStyles();
+    const { root, copy } = setup(katex.renderToString('\\sqrt{x} + y'));
+    const visual = root.querySelector('.katex-html')!;
+    const svg = visual.querySelector('svg')!;
+    expect(getComputedStyle(svg).fill).toBe('rgb(0, 0, 0)');
+    expect(svg.querySelector('path')!.hasAttribute('fill')).toBe(false);
+    const plus = [...visual.querySelectorAll('.mbin')].find(e => e.textContent === '+')!.firstChild!;
+    const range = document.createRange();
+    range.setStart(visual, 0); range.setEnd(plus, 1);
+    window.getSelection()!.addRange(range);
+    const calls = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = calls.find(([type]) => type === 'text/html')![1];
+    expect((pasted.querySelector('svg') as SVGElement).style.fill.toLowerCase()).toBe('currentcolor');
+    expect(pasted.querySelector('svg path')).not.toBeNull();
+    expect(pasted.textContent).toContain('+');
+    expect(pasted.textContent).not.toContain('y');
+    expect(calls.find(([type]) => type === 'text/plain')![1]).not.toContain('y');
+    expect(pasted.innerHTML).not.toMatch(/background|(?:^|[;" ])color:/);
+  });
+
   it('does not expand an internal partial formula selection', () => {
     const { root, copy } = setup(katex.renderToString('x + y'));
     const letter = root.querySelector('.katex-html .mord.mathnormal')!.firstChild!;

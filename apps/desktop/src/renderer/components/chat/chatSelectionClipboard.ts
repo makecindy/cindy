@@ -177,6 +177,9 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
         const value = (element as HTMLElement).style.getPropertyValue(property) || computed.getPropertyValue(property);
         if (value) (copy as HTMLElement).style.setProperty(property, value);
       }
+      // KaTeX's SVG glyphs use stylesheet-owned currentColor paint. Preserve
+      // destination-relative ink instead of the SVG default black or source theme.
+      if (element.localName === 'svg') (copy as SVGElement).style.fill = 'currentColor';
       if (/^KaTeX_/i.test(computed.fontFamily)) (copy as HTMLElement).style.fontFamily = computed.fontFamily;
     }
     if (element.matches('img[data-chat-audio-cover]')) {
