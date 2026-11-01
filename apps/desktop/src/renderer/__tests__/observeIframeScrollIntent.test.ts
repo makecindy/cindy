@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it, vi } from 'vitest';
-import { act, createElement } from 'react';
+import { act, createElement, useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { observeIframeScrollIntent, useIframeScrollIntent } from '../components/chat/observeIframeScrollIntent';
 
@@ -29,7 +29,7 @@ function setup() {
 }
 
 describe('iframe scroll takeover', () => {
-  it('retains iframe hover across rerenders and uses the current takeover callback', async () => {
+  it('captures mount-time iframe hover across rerenders and uses the current takeover callback', async () => {
     // Review regression: history/message changes used to rebuild the listener,
     // losing hover even though the pointer never left the embedded document.
     const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -46,11 +46,15 @@ describe('iframe scroll takeover', () => {
     const after = vi.fn(() => { restoring = false; });
     function Fixture({ takeOver }: { takeOver: () => void }) {
       useIframeScrollIntent(rootRef, () => restoring, takeOver);
+      // A stationary pointer can enter the mounted iframe before passive effects.
+      // No further pointerover occurs when history/messages rerender beneath it.
+      useLayoutEffect(() => {
+        frame.dispatchEvent(new Event('pointerover', { bubbles: true }));
+      }, []);
       return null;
     }
     try {
       await act(async () => { root.render(createElement(Fixture, { takeOver: before })); });
-      frame.dispatchEvent(new Event('pointerover', { bubbles: true }));
       await act(async () => { root.render(createElement(Fixture, { takeOver: after })); });
       list.addEventListener('scroll', () => { if (restoring) list.scrollTop = 100; });
       list.scrollTop = 180;

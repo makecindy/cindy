@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 
 /** Observe scroll chaining from embedded documents without reading their contents. */
 export function observeIframeScrollIntent(
@@ -39,7 +39,9 @@ export function useIframeScrollIntent(
 ): void {
   const callbacks = useRef({ shouldTakeOver, onTakeOver });
   useLayoutEffect(() => { callbacks.current = { shouldTakeOver, onTakeOver }; });
-  useEffect(() => {
+  // Install before paint: mounting beneath a stationary pointer can deliver the
+  // iframe's only pointerover before passive effects run.
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     return observeIframeScrollIntent(
