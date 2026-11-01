@@ -559,6 +559,14 @@ function browserRecipeSecretId(key: string): string {
  */
 export async function bindSecretTabsByTitle(windowTitle: string): Promise<void> {
   try {
+    // Tab ids are per profile and `tabs` answers for the default one: with more than one profile (or an
+    // answer that cannot be read) the tab cannot be told from a same-titled decoy, so everything pauses.
+    const profiles = await backendController.call({ action: 'profiles' });
+    const list = (profiles.data as { profiles?: unknown } | undefined)?.profiles;
+    if (!profiles.ok || !Array.isArray(list) || list.length > 1) {
+      markSecretAllTabs();
+      return;
+    }
     const listed = await backendController.call({ action: 'tabs' });
     const tabs = listed.ok ? ((listed.data as { tabs?: Array<Record<string, unknown>> } | undefined)?.tabs ?? []) : [];
     const ids = tabs

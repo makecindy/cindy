@@ -169,6 +169,14 @@ describe('a target window that is minimized', () => {
     expect(beside.raised).toEqual([]);
   });
 
+  it('refuses to guess among several windows when the pre-check was skipped', async () => {
+    const { driver, raised } = browser();
+    const { session, finished } = start(driver, { app: 'Google Chrome' });
+    await session.start();
+    expect(raised).toEqual([]);
+    expect(finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
+  });
+
   it('never offers the address bar when no page can be read', async () => {
     const { driver } = browser({ loadReads: Number.MAX_SAFE_INTEGER });
     const { session, finished, latest } = start(driver, {

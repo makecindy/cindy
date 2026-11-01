@@ -10,6 +10,7 @@ import { INPUT_HANDOFF_ENDED_PREFIX } from '@cindy/maker-shared/synthetic-trigge
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import {
   InputHandoffSession,
+  ambiguousWindowTitles,
   resolveHandoffTarget,
   type HandoffCompletionHints,
   type HandoffEndReason,
@@ -235,14 +236,10 @@ export class InputHandoffService {
     if (resolved) {
       // A named window that matched stands as asked.
       if (target.windowTitle) return null;
-      if (target.pid === undefined && !target.app) return null;
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
-      const sameApp = target.pid !== undefined
-        ? list.apps.filter((app) => app.pid === resolved.pid)
-        : list.apps.filter((app) => app.pid !== this.deps.hostPid && app.bundleId === resolved.bundleId);
-      const titles = sameApp.flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
-      if (titles.length < 2) return null;
+      const titles = ambiguousWindowTitles(list, target, resolved, this.deps.hostPid);
+      if (!titles) return null;
       return {
         errorCode: 'TARGET_AMBIGUOUS',
         message: `${resolved.app} has several windows: ${[...new Set(titles)].slice(0, 8).map((title) => JSON.stringify(title)).join(', ')}. `

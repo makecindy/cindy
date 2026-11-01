@@ -216,6 +216,25 @@ const fieldShape = (step: ExtractedStep): string =>
     : [control.id, control.kind === 'note' ? control.text : ''])));
 
 /**
+ * The windows of one program when the agent named neither a window nor a process, so that guessing
+ * which one the owner means could send them to the wrong browser profile; null when there is no doubt.
+ * Shared by the request-time check and the session, so a check that was skipped cannot be bypassed.
+ */
+export function ambiguousWindowTitles(
+  list: NativeWindowList,
+  spec: HandoffTargetSpec,
+  resolved: HandoffTarget,
+  hostPid: number,
+): string[] | null {
+  if (spec.windowTitle || (spec.pid === undefined && !spec.app)) return null;
+  const sameApp = spec.pid !== undefined
+    ? list.apps.filter((app) => app.pid === resolved.pid)
+    : list.apps.filter((app) => app.pid !== hostPid && app.bundleId === resolved.bundleId);
+  const titles = sameApp.flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
+  return titles.length < 2 ? null : titles;
+}
+
+/**
  * One 代输入 request: a loop of read step → owner answers → act → wait for
  * the screen to settle → read the next step, until the flow ends.
  *
@@ -425,7 +444,7 @@ export class InputHandoffSession {
       const target = this.resolveTarget(windows);
       // What the window watch compares against, so a page renaming its window from here on is not a closed window.
       this.watchList = windows;
-      if (!target) {
+      if (!target || ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid)) {
         this.end('failed', 'failure', 'target_gone');
         return;
       }
@@ -1059,6 +1078,8 @@ export class InputHandoffSession {
     if (window.minimized) return;
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
     const step = await this.read().catch(() => null);
+    // The hold on an unreadable page lasts a while: keep renewing it for as long as the owner may still type.
+    if (step?.pageMissing && this.watching()) this.coverUnreadablePage(this.target ?? target);
     if (!step || step.pageMissing || !this.watching()) return;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {

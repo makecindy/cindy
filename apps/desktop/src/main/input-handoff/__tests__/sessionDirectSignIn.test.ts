@@ -326,6 +326,15 @@ describe('a browser page that cannot be read', () => {
     session.cancel();
   });
 
+  it('keeps renewing the cover while the owner may still type', async () => {
+    const { driver } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    const before = run.guardedWindows.length;
+    await vi.waitFor(() => expect(run.guardedWindows.length).toBeGreaterThan(before));
+    run.session.cancel();
+  });
+
   it('goes back to the form flow as soon as the page can be read', async () => {
     const { driver, seen } = unreadable();
     const run = start(driver);
