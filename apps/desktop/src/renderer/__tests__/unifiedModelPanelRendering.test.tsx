@@ -370,6 +370,26 @@ describe('分享模型收藏', () => {
     expect(listModelFavorites()).toEqual([]);
   });
 
+  // #7466 also covers the remote-provider branch: browsing must leave an empty
+  // global search without selecting a model or changing the saved route (unit).
+  it('leaves global search when browsing a remote provider', async () => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      remoteAgent: { devices: [{ deviceId: 'share:s1', name: 'Remote source' }], selectedDeviceId: null },
+      onUnifiedSelect,
+    });
+    const search = screen.getByRole('textbox') as HTMLInputElement;
+    fireEvent.change(search, { target: { value: '213' } });
+    const provider = document.querySelector('[data-rail-item="remote:share:s1:anthropic"]')!;
+    expect(provider).not.toBeNull();
+    await act(async () => fireEvent.click(provider));
+    expect(search.value).toBe('');
+    expect(document.querySelector('[data-rail-item="remote:share:s1:anthropic"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(within(screen.getByRole('listbox')).getByText('Opus 5')).toBeTruthy();
+    expect(within(screen.getByRole('listbox')).queryByText('GPT-5.6')).toBeNull();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+  });
+
   it('从分享供应商切到收藏侧栏仍保留分享来源，选择回传完整路由', async () => {
     const onUnifiedSelect = vi.fn();
     renderPanel({
@@ -768,6 +788,28 @@ describe('统一面板 · 会话内形态', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '' } });
     expect(screen.getByRole('button', { name: 'Anthropic' }).getAttribute('aria-pressed')).toBe('true');
     expect(within(list).queryByText('GPT-5.5')).toBeNull();
+  });
+
+  // #7466: ModelSelectorContent owns the query while UnifiedModelPanel owns the rail.
+  // Existing coverage only cleared search manually; this unit regression checks an
+  // explicit provider click after a no-result query without mocking either component.
+  it('leaves global search when selecting a provider after a no-result query', () => {
+    const onUnifiedSelect = vi.fn();
+    renderPanel({ onUnifiedSelect });
+    const search = screen.getByRole('textbox') as HTMLInputElement;
+    const list = screen.getByRole('listbox');
+    fireEvent.change(search, { target: { value: '213' } });
+    expect(within(list).queryByText('GPT-5.6')).toBeNull();
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenAI' }));
+
+    expect(search.value).toBe('');
+    expect(screen.getByRole('button', { name: 'OpenAI' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(list).getByText('GPT-5.6')).toBeTruthy();
+    expect(within(list).queryByText('Opus 5')).toBeNull();
+    expect(within(list).queryByText('GPT-5.5')).toBeNull();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
   });
 
   it('默认展示全部模型，可直接选择其它引擎的模型', async () => {

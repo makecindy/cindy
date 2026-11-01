@@ -148,6 +148,7 @@ export interface UnifiedModelPanelProps {
    */
   sourceVersion: string;
   query: string;
+  onQueryChange: (query: string) => void;
   /** 当前选中的 (来源, 模型);providerId 为 null = 跟随默认路由。 */
   selected: { providerId: string | null; modelId: string };
   /** 选中的收藏锚点(M5 接线后由 draft 提供);缺省 = 收藏行不显示选中态。 */
@@ -391,6 +392,7 @@ export function UnifiedModelPanel({
   excludeModel,
   sourceVersion,
   query,
+  onQueryChange,
   selected,
   selectedFavoriteUid = null,
   liveAgentKind,
@@ -602,6 +604,8 @@ export function UnifiedModelPanel({
   const remoteListPending = remoteRail !== null && !remoteSources?.ready;
   const handleRailSelect = useCallback(
     (item: UnifiedRailItem) => {
+      // Explicit browsing leaves global search so the query cannot mask the chosen rail.
+      onQueryChange('');
       if (item.kind === 'remote-provider') {
         setRail(RAIL_ALL);
         remoteSources?.onActivate({ deviceId: item.deviceId, providerId: item.providerId });
@@ -611,7 +615,7 @@ export function UnifiedModelPanel({
       if (remoteSources?.active) remoteSources.onActivate(null);
       setRail(item);
     },
-    [remoteSources],
+    [onQueryChange, remoteSources],
   );
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
