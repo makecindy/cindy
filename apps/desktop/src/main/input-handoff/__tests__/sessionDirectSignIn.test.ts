@@ -114,6 +114,7 @@ function start(
     finish: (result) => finished.push(result),
     onSecretEntered: ({ url }) => guarded.push(url),
     now: () => clock,
+    liveView: () => true,
     sleep: async (ms) => {
       clock += ms;
     },
@@ -205,6 +206,27 @@ describe('a sign-in step', () => {
     );
     expect(run.latest().directSignIn).toBe(true);
     expect(run.guarded).toContain('https://login.example.com/');
+    run.session.cancel();
+  });
+
+  it('shows a step that can no longer be a sign-in on the window even when someone holds the card, and gives no live view of a window that stayed behind', async () => {
+    const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'noAddress';
+    await vi.waitFor(() => expect(run.latest().directSignIn).toBeUndefined());
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    run.session.cancel();
+  });
+
+  it('gives no live view of a window macOS would not bring forward', async () => {
+    const { driver } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    expect(await run.session.liveWindow()).not.toBeNull();
+    driver.raise = async () => ({ frame, windowId: 7, activated: false });
+    expect(await run.session.liveWindow()).toBeNull();
     run.session.cancel();
   });
 

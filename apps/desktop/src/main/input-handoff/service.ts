@@ -229,8 +229,6 @@ export class InputHandoffService {
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
     if (resolved) {
-      // A named window that matched stands as asked.
-      if (target.windowTitle) return null;
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
       const titles = ambiguousWindowTitles(list, target, resolved, this.deps.hostPid);
@@ -238,7 +236,9 @@ export class InputHandoffService {
       return {
         errorCode: 'TARGET_AMBIGUOUS',
         message: `${resolved.app} has several windows: ${[...new Set(titles)].slice(0, 8).map((title) => JSON.stringify(title)).join(', ')}. `
-          + 'Ask again with target.window_title naming the one that shows the step.',
+          + (target.windowTitle
+            ? 'The title fits more than one: ask again with a more specific target.window_title (or the pid).'
+            : 'Ask again with target.window_title naming the one that shows the step.'),
       };
     }
     // The program is there but nothing carries that title: say what its windows are called now.

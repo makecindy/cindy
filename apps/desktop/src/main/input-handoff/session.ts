@@ -231,12 +231,15 @@ export function ambiguousWindowTitles(
   resolved: HandoffTarget,
   hostPid: number,
 ): string[] | null {
-  if (spec.windowTitle || (spec.pid === undefined && !spec.app)) return null;
+  if (spec.pid === undefined && !spec.app && !spec.windowTitle) return null;
   const sameApp = spec.pid !== undefined
     ? list.apps.filter((app) => app.pid === resolved.pid)
     : list.apps.filter((app) => app.pid !== hostPid && app.bundleId === resolved.bundleId);
-  const titles = sameApp.flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
-  return titles.length < 2 ? null : titles;
+  const windows = sameApp.flatMap((app) => app.windows).filter((w) => w.title);
+  // A named window must be the only one that name fits: a broad title ("Sign in") may fit another profile's too.
+  const title = spec.windowTitle?.toLowerCase();
+  const candidates = title ? windows.filter((w) => w.title.toLowerCase().includes(title)) : windows;
+  return candidates.length < 2 ? null : candidates.map((w) => w.title);
 }
 
 /**
@@ -392,7 +395,8 @@ export class InputHandoffSession {
     const target = this.target;
     if (!target || !driver.raise || !this.liveViewOffered() || this.busy) return null;
     const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    if (!raised || 'error' in raised || this.ended || this.target !== target) return null;
+    // A window macOS would not bring forward can be watched but not worked in: no live view of it.
+    if (!raised || 'error' in raised || raised.activated === false || this.ended || this.target !== target) return null;
     return {
       pid: target.pid,
       app: target.app,
@@ -1094,11 +1098,12 @@ export class InputHandoffSession {
       if (fieldShape(step) === fieldShape(this.step)) {
         // Same question: keep the card as it is (a form may be open), but act on the fresh screen.
         this.step = step;
-      } else if (!this.holder) {
+      } else if (!this.holder || !step.signIn) {
         this.present(step, true);
       }
       // Held: the holder may be typing in this card's form (the way back from the window); swapping its
       // fields for the new ones would throw the draft away, and the window needs no card update to be used.
+      // A step that can no longer be a sign-in on the window (its page address went missing) is shown anyway.
       return;
     }
     if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
