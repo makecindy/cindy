@@ -18,8 +18,10 @@ export const CLOUD_HOME_UNREACHABLE_AFTER_MS = 15_000;
 /**
  * A message of this chat has not been handed to the main computer yet, and only because that computer
  * is unreachable: the phone is connected, but presence says it is offline or it stopped answering.
- * Messages the computer already took (awaiting history confirmation or cleanup) and holds for the
- * phone's own sync or reconnect do not count — switching computers would not help with those.
+ * Messages the computer already took (awaiting history confirmation or cleanup), messages stopped on their
+ * own failure (`failed`: rejected upload, enqueue or clear boundary — retry/delete is the fix), and holds
+ * for the phone's own sync or reconnect do not count — switching computers would not help with those.
+ * A retryable connection error keeps its state, so a message retrying against the offline computer still counts.
  */
 export function isMessageWaitingForCloudHome(
   records: readonly Pick<DurableOutboxRecord, 'deviceId' | 'item' | 'state' | 'retrySafe' | 'historyConfirmed' | 'cleanupOutcome' | 'cancelRequested' | 'suspended'>[],
@@ -28,7 +30,7 @@ export function isMessageWaitingForCloudHome(
 ): boolean {
   if (!connection.relayOnline || (connection.targetAvailable !== false && !connection.deviceUnresponsive)) return false;
   return records.some(record => record.deviceId === target.deviceId && record.item.sessionId === target.sessionId
-    && !isDurableOutboxHandedOff(record) && !record.cancelRequested && !record.suspended);
+    && !isDurableOutboxHandedOff(record) && record.state !== 'failed' && !record.cancelRequested && !record.suspended);
 }
 
 /** True once `waiting` has held continuously for `afterMs` (a message cannot reach the computer). */
