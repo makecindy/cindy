@@ -128,7 +128,7 @@ function nearbyLabel(field: NativeAxNode, texts: Array<{ node: NativeAxNode; ind
 export function contentTypeFor(node: NativeAxNode, label: string): InputHandoffContentType {
   if (node.secure) return 'password';
   const hint = [label, node.placeholder, node.domId, node.desc, node.title].filter(Boolean).join(' ');
-  if (/(one[- ]?time|\botp\b|verification code|security code|auth(entication)? code|2fa|two[- ]?(factor|step)|\bdigit\b|验证码|动态码|校验码|安全码)/i.test(hint))
+  if (/(one[- ]?time|\botp\b|verification code|security code|auth(entication)? code|2fa|two[- ]?(factor|step)|\d+[- ]?digit\s+(?:(?:verification|security|login|sign-?in|authentication|auth|confirmation|one-time|access)\s+)*(?:code|pin|otp)|验证码|动态码|校验码|安全码)/i.test(hint))
     return 'one-time-code';
   if (/(e-?mail|邮箱|邮件)/i.test(hint)) return 'email';
   if (/(phone|mobile|\btel\b|手机|电话)/i.test(hint)) return 'tel';

@@ -569,11 +569,18 @@ export async function bindSecretTabsByTitle(windowTitle: string): Promise<void> 
     }
     const listed = await backendController.call({ action: 'tabs' });
     const tabs = listed.ok ? ((listed.data as { tabs?: Array<Record<string, unknown>> } | undefined)?.tabs ?? []) : [];
-    const ids = tabs
-      .filter((tab) => typeof tab.title === 'string' && tab.title.trim() !== '' && windowTitle.includes(tab.title.trim()))
+    // A window title is its shown tab's title, then the browser's name. Only an exact match of the shown
+    // tab counts: a looser one (a substring, a tab in the background) could be a same-titled decoy.
+    const shownAs = (tab: Record<string, unknown>) => {
+      const title = typeof tab.title === 'string' ? tab.title.trim() : '';
+      return title !== '' && tab.active === true && (windowTitle === title || windowTitle.startsWith(`${title} - `));
+    };
+    const matched = tabs.filter(shownAs);
+    const ids = matched
       .flatMap((tab) => [tab.targetId, tab.tabId, tab.suggestedTargetId])
       .filter((id): id is string => typeof id === 'string');
-    if (ids.length > 0) markSecretTargets(ids);
+    // Exactly one shown tab can be told; none or several cannot, so every tab pauses.
+    if (matched.length === 1 && ids.length > 0) markSecretTargets(ids);
     else markSecretAllTabs();
   } catch {
     markSecretAllTabs();

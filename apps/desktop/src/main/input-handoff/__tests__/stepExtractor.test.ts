@@ -136,6 +136,9 @@ describe('contentTypeFor', () => {
   it.each([
     ['验证码', 'one-time-code'],
     ['Enter the 6-digit verification code', 'one-time-code'],
+    ['Enter your 6-digit code', 'one-time-code'],
+    ['Enter the 5-digit ZIP code', 'text'],
+    ['Last 4 digits of your card', 'text'],
     ['邮箱', 'email'],
     ['手机号', 'tel'],
     ['用户名', 'username'],

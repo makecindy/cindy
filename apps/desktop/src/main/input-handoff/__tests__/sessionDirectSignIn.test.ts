@@ -483,6 +483,22 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected' });
   });
 
+  it('does not swap the fields under a form its holder is typing in, but still ends when they are gone', async () => {
+    const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { local: true });
+    const revision = run.latest().revision;
+    state.screen = 'password';
+    await settle();
+    expect(run.latest().revision).toBe(revision);
+    expect(run.guarded.length).toBeGreaterThan(0);
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected' });
+  });
+
   it('stays out of the way while the owner is answering through the form', async () => {
     const { driver, state } = desktop('address');
     const run = start(driver);

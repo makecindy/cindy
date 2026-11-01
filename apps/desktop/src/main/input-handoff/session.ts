@@ -1096,13 +1096,16 @@ export class InputHandoffSession {
     if (!this.step) return;
     if (this.signInMode ? step.signIn : actionable(step)) {
       this.fieldsGoneReads = 0;
-      if (fieldShape(step) !== fieldShape(this.step)) {
-        this.present(step, true);
-      } else {
+      // Whatever page the owner is on is covered, whoever is typing where.
+      this.guardSignInPage(step);
+      if (fieldShape(step) === fieldShape(this.step)) {
         // Same question: keep the card as it is (a form may be open), but act on the fresh screen.
         this.step = step;
-        this.guardSignInPage(step);
+      } else if (!this.holder) {
+        this.present(step, true);
       }
+      // Held: the holder may be typing in this card's form (the way back from the window); swapping its
+      // fields for the new ones would throw the draft away, and the window needs no card update to be used.
       return;
     }
     if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
