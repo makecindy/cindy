@@ -25,6 +25,8 @@ import {
 } from './botImConnectionClient';
 
 const NO_PROJECT = '__none__';
+/** Same cadence as the connection's task list. */
+const GUESTS_REFRESH_MS = 20_000;
 
 /** Display-side match only; main re-checks with the platform path rules. */
 function sameProjectPath(left: string, right: string): boolean {
@@ -58,23 +60,31 @@ export function BotChannelGuestAccess({ api, view, botId, botName, onApplied }: 
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([
-      listBotImConnectionLanes(apiRef.current, view.id),
-      window.electronAPI.localDb.bots.projects.list(botId),
-    ])
-      .then(([lanes, options]) => {
-        if (cancelled) return;
-        setGuests(lanes.lanes
-          .filter((lane) => lane.kind === 'guest-dm' && lane.chatId)
-          .map((lane) => ({ guestId: lane.chatId as string, name: lane.name })));
-        setProjects(options.filter((project) => project.linked && !project.deviceId && project.available));
-        setFailed(null);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed('load');
-      });
+    const load = () => {
+      void Promise.all([
+        listBotImConnectionLanes(apiRef.current, view.id),
+        window.electronAPI.localDb.bots.projects.list(botId),
+      ])
+        .then(([lanes, options]) => {
+          if (cancelled) return;
+          setGuests(lanes.lanes
+            .filter((lane) => lane.kind === 'guest-dm' && lane.chatId)
+            .map((lane) => ({ guestId: lane.chatId as string, name: lane.name })));
+          setProjects(options.filter((project) => project.linked && !project.deviceId && project.available));
+          setFailed((current) => (current === 'load' ? null : current));
+        })
+        .catch(() => {
+          if (!cancelled) setFailed('load');
+        });
+    };
+    load();
+    // A new guest appears after its first message; re-read while the page is visible.
+    const timer = setInterval(() => {
+      if (!document.hidden) load();
+    }, GUESTS_REFRESH_MS);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [botId, view.id]);
 

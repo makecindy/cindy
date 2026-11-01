@@ -106,8 +106,8 @@ describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
         role TEXT NOT NULL, route_key TEXT, created_at INTEGER, archived_at INTEGER
       );
       CREATE TABLE bot_group_plans (id TEXT PRIMARY KEY, group_id TEXT, work_dir TEXT);
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT);
-      INSERT INTO sessions VALUES ('bound', '/owner-root/bots/mimi/workspace'), ('stale', '/work/unlinked');
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, workspace_kind TEXT, project_dir TEXT);
+      INSERT INTO sessions VALUES ('bound', '/owner-root/bots/mimi/workspace', 'dialogue', NULL), ('stale', '/work/unlinked', 'project', '/work/unlinked');
       INSERT INTO bot_session_links (id, bot_id, session_id, role, route_key) VALUES
         ('a', 'mimi', 'bound', 'channel', 'im:telegram:777:dm:42'),
         ('b', 'mimi', 'stale', 'channel', 'im:telegram:777:dm:43'),
@@ -125,7 +125,8 @@ describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
     await prepareBotWorkspaceRuntime(o, deps);
     expect(o).toMatchObject({ workingDir: '/work/client-a', workspaceKind: 'project', remoteHostId: undefined });
     // The IM runner's file roots come from the stored row.
-    expect(h.sqlite!.prepare("SELECT working_dir FROM sessions WHERE id = 'bound'").pluck().get()).toBe('/work/client-a');
+    expect(h.sqlite!.prepare("SELECT working_dir, workspace_kind, project_dir FROM sessions WHERE id = 'bound'").get())
+      .toEqual({ working_dir: '/work/client-a', workspace_kind: 'project', project_dir: '/work/client-a' });
   });
 
   it('refuses unbound guests and stale bindings instead of opening the Home', async () => {

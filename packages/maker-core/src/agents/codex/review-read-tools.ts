@@ -39,6 +39,15 @@ export const REVIEW_READ_TOOLS: DynamicToolSpec[] = [
   },
 ];
 
+const GUEST_DENIED = 'Cindy refused this read: it is outside this conversation\'s project, unavailable, or the arguments are invalid.';
+
+/** The same refusal for a confined guest (#8359), without Review wording. */
+export function asGuestReadResponse(response: DynamicToolCallResponse): DynamicToolCallResponse {
+  if (response.success !== false) return response;
+  return { ...response, contentItems: response.contentItems.map((item) =>
+    item.type === 'inputText' && item.text === DENIED ? { ...item, text: GUEST_DENIED } : item) };
+}
+
 export function reviewReadDenied(): DynamicToolCallResponse {
   return { success: false, contentItems: [{ type: 'inputText', text: DENIED }] };
 }

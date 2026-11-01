@@ -113,7 +113,7 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
-import { REVIEW_READ_TOOLS, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
+import { REVIEW_READ_TOOLS, asGuestReadResponse, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
 import {
   annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
@@ -10129,10 +10129,10 @@ assertRouteCurrent();
           && params.threadId === threadId && params.turnId === currentTurnId
           && !turnInterruptOrigins.has(params.turnId)
           && !resolvedWhileBufferedRequestIds.has(String(meta.requestId));
-        if (!readIsActive()) return reviewReadDenied();
-        const response = await callReviewReadTool(params.tool, params.arguments, opts.workingDir, guestReadGrants);
+        if (!readIsActive()) return asGuestReadResponse(reviewReadDenied());
+        const response = asGuestReadResponse(await callReviewReadTool(params.tool, params.arguments, opts.workingDir, guestReadGrants));
         return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
-          ? response : reviewReadDenied();
+          ? response : asGuestReadResponse(reviewReadDenied());
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {
