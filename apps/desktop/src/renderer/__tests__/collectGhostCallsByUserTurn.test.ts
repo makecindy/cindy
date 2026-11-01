@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
+import { projectRemoteUsers, reserveRemoteUser } from '@/lib/remoteUserHandoff';
 
 const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({ clientId, role: 'user', content: clientId, isStreaming: false, ...extra }) as ChatMessage;
@@ -26,6 +27,37 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
   }) as ChatMessage;
 
 describe('collectGhostCallsByUserTurn', () => {
+  it.each(['pending', 'reserved'] as const)('ignores %s remote clock timestamps when attributing historical calls', (mode) => {
+    // #8296 review, unit: remote projection reserves the new bubble after history,
+    // even when its controller clock predates an old continuation. Previous
+    // tests only used persisted users and missed this false fulfillment.
+    const history = makerChatStore.__mapServerMessagesForTest([
+      { id: 'u1', sessionId: 's1', clientId: 'u1', role: 'user', content: 'old',
+        toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'c', sessionId: 's1', clientId: 'c', role: 'user', content: 'continue',
+        toolUseId: null, agentMeta: { delivery: 'steer' }, createdAt: '2026-01-01T00:00:02.000Z' },
+      { id: 't1', sessionId: 's1', clientId: 't1', role: 'tool_use',
+        content: { toolUseId: 't1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } },
+        toolUseId: 't1', agentMeta: { replyToClientId: 'c' }, createdAt: '2026-01-01T00:00:03.000Z' },
+    ]);
+    const next = user('u2', { createdAt: '2026-01-01T00:00:01.000Z', isPendingPersist: mode === 'pending' });
+    const remote = mode === 'reserved' ? reserveRemoteUser(next, history) : next;
+    const projected = projectRemoteUsers([...history, remote], new Set(history.map(m => m.clientId)));
+    expect(projected.at(-1)?.clientId).toBe('u2');
+    expect([...collectGhostCallsByUserTurn(projected)]).toEqual([['u1', new Set(['art'])]]);
+    // Old records without reply metadata must use the same persisted candidates.
+    const legacy = projected.map(m => m.clientId === 't1' ? { ...m, replyToClientId: undefined } : m);
+    expect([...collectGhostCallsByUserTurn(legacy)]).toEqual([['u1', new Set(['art'])]]);
+    // A truncated window with no persisted visible user must stay unowned;
+    // an explicit reply to the new user can still belong to that user.
+    const truncated = projected.filter(m => m.clientId !== 'u1');
+    expect(collectGhostCallsByUserTurn(truncated).size).toBe(0);
+    expect(collectGhostCallsByUserTurn(legacy.filter(m => m.clientId !== 'u1')).size).toBe(0);
+    expect([...collectGhostCallsByUserTurn([
+      remote, { ...ghostCall('new-call', 'art'), replyToClientId: 'u2' },
+    ])]).toEqual([['u2', new Set(['art'])]]);
+  });
+
   it.each(['live', 'history'] as const)('preserves tool ownership through the %s production projection', (source) => {
     const data = { toolUseId: 'tool-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } };
     const agentMeta = { replyToClientId: 'u1' };

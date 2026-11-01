@@ -816,7 +816,10 @@ export function collectGhostCallsByUserTurn(
     time(a) - time(b) ||
     (typeof a.rowid === 'number' && Number.isFinite(a.rowid) &&
       typeof b.rowid === 'number' && Number.isFinite(b.rowid) ? a.rowid - b.rowid : 0);
-  const timedUsers = users.filter(m => Number.isFinite(time(m))).sort(compare);
+  // Remote optimistic/reserved rows use the controller clock, not persisted
+  // chronology. They can own explicit replies, but must not capture old calls.
+  const timedUsers = users.filter(m => !m.isPendingPersist &&
+    !m.localSendPrecedingClientIds && Number.isFinite(time(m))).sort(compare);
   const timedOwner = (message: ChatMessage): string | null => {
     // Upper bound in persisted order, independent of the display array.
     let lo = 0;
@@ -839,7 +842,7 @@ export function collectGhostCallsByUserTurn(
       userTurnOwners.set(m.clientId, m.clientId);
     } else {
       userTurnOwners.set(m.clientId,
-        Number.isFinite(time(m)) && timedUsers.length ? timedOwner(m) : precedingUser);
+        Number.isFinite(time(m)) ? timedOwner(m) : precedingUser);
     }
   }
   let currentUserClientId: string | null = null;
@@ -856,7 +859,7 @@ export function collectGhostCallsByUserTurn(
       let owner = currentUserClientId;
       if (m.replyToClientId) {
         owner = userTurnOwners.get(m.replyToClientId) ?? null;
-      } else if (Number.isFinite(time(m)) && timedUsers.length) {
+      } else if (Number.isFinite(time(m))) {
         owner = timedOwner(m);
       }
       if (!owner) continue;
