@@ -275,6 +275,8 @@ const taskCardDevices = vi.hoisted(() => [] as string[]);
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionTaskCard: ({ deviceId }: { deviceId: string }) => { taskCardDevices.push(deviceId); return null; } }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
+import { GeometryContext } from '@/platform/AdaptiveWindowContext';
+import { navigationChrome } from '@/theme/tokens';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -466,6 +468,20 @@ describe('group timeline', () => {
     expect(h.headerBlur.at(-1)).toBe(72);
     // The two-line identity stays over solid blur; the feather starts at the header's lower edge.
     expect(h.headerFade.at(-1)).toBe(0);
+  });
+
+  // #8303: beside the persistent task list the system bar would span both panes,
+  // so the wide iOS window uses the in-pane header; narrowing restores the native bar.
+  it('uses the in-pane iOS header beside the persistent sidebar and the native bar when narrow', async () => {
+    const window = (width: number) => ({ width, height: 800, insets: { top: 59, right: 0, bottom: 34, left: 0 },
+      regularWidth: width >= 600, regularHeight: true, barEdge: 'none' as const, regions: [], reservedRegionsSupported: false });
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() } };
+    const screen = (width: number) => act(async () => root.render(el(GeometryContext.Provider, { value: window(width) },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen(1000);
+    expect(h.headerBlur.at(-1)).toBe(59 + navigationChrome.target);
+    await screen(430);
+    expect(h.headerBlur.at(-1)).toBe(72);
   });
 
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {

@@ -39,6 +39,7 @@ import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton
 import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sessionPaneLayout } from './sessionPaneLayout';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -202,7 +203,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
   const window = useAdaptiveWindow();
-  const nativeHeader = floatingHeader && window.barEdge === 'none';
+  // Beside the persistent task list the system bar would span both panes; use the in-pane header.
+  const panePersistent = sessionPaneLayout(window).persistent;
+  const nativeHeader = floatingHeader && window.barEdge === 'none' && !panePersistent;
   const nativeHeaderHeight = useHeaderHeight();
   const [headerHeight, setHeaderHeight] = useState(0);
   const stickToBottom = useRef(!messageId && !threadRootId);
@@ -710,7 +713,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     </KeyboardAvoidingView>;
   }
 
-  return <SafeAreaView style={styles.screen} edges={floatingHeader ? ['left', 'right', 'bottom'] : ['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
+  // The persistent pane already sits inside the window's safe area horizontally.
+  const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
+  return <SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
