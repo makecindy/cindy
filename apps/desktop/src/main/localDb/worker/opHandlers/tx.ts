@@ -913,6 +913,11 @@ function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLan
       LIMIT 1`).get(botId, role, routeKey) as { sessionId: string } | undefined;
     if (existing) return { sessionId: existing.sessionId, created: false };
     insertBotSession(db, s);
+    if (role === 'channel' && routeKey.startsWith('im:plugin:plugin-topic:')) {
+      // Plugin topics are background lanes from their first observable state;
+      // native IM and routine visibility continue through their existing paths.
+      db.prepare('UPDATE sessions SET hidden_at = ? WHERE id = ?').run(createdAt, sessionId);
+    }
     db.prepare(`INSERT INTO bot_session_links
       (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`)

@@ -31,6 +31,30 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // Unit: plugin topics must execute the companion's current profile rather than
+  // a copied plugin task configuration. Existing cases only exercise native IM.
+  it('loads the companion personality, memory and own skills in a plugin topic', async () => {
+    seed('channel', 'im:plugin:plugin-topic:host-binding', {
+      memory: true, skillMode: 'allowlist', skills: [], mcpMode: 'allowlist', mcpServers: [],
+      toolsetMode: 'allowlist', toolsets: [],
+    });
+    const opts = { id: 'topic', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'companion-model' } as MakerSessionCreateOpts;
+    const deps = {
+      readMemoryIndex: vi.fn(async () => 'Project reference'),
+      listOwnSkills: vi.fn(async () => ({ pluginRoot: '/bots/bot/skills',
+        skills: [{ name: 'project-search', description: 'Search project', path: '/bots/bot/skills/project-search' }] })),
+    };
+    const snapshot = await hydrateBotProfileRuntime(opts, deps, { persistSnapshot: false });
+    expect(snapshot?.botId).toBe('bot');
+    expect(prompt(opts)).toContain(SOUL.trim());
+    expect(opts.makerMemoryIndexSnapshot).toContain('Project reference');
+    expect(deps.listOwnSkills).toHaveBeenCalledWith({ botId: 'bot' });
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'project-search' }),
+    ]));
+    expect(opts.model).toBe('companion-model');
+  });
+
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

@@ -505,6 +505,32 @@ describe('Bot named worker transactions', () => {
   // directions. Existing tests never changed permission after creating a channel.
   // Minimal failure: ask main + ask channel, save main bypass -> channel stayed ask.
   // Unit tier, isolated SQLite; this also covers new-lane snapshots and old-data repair.
+  it('creates plugin topic lanes atomically hidden while preserving native channel visibility and permissions', () => {
+    db.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'bot-topic', displayName: 'Expert', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: '{"permissions":"trusted"}', now: 1,
+    } });
+    const session = (id: string) => ({ id, title: id, workingDir: null, workspaceKind: 'dialogue',
+      model: 'chosen-model', effort: 'high', permissionMode: 'bypassPermissions', agentKind: 'codex',
+      extraDirs: '[]', source: 'bot', createdAt: 2, updatedAt: 2 });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: { botId: 'bot-topic', expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1, session: session('main-topic'), now: 2 } });
+    const request = { botId: 'bot-topic', routeKey: 'im:plugin:plugin-topic:host-binding', session: session('topic') };
+    expect(tx(db, { name: 'bots.createChannelLane', args: request })).toMatchObject({ created: true, sessionId: 'topic' });
+    expect(tx(db, { name: 'bots.createChannelLane', args: { ...request, session: session('duplicate-topic') } }))
+      .toMatchObject({ created: false, sessionId: 'topic' });
+    tx(db, { name: 'bots.createChannelLane', args: { ...request, routeKey: 'im:feishu:connection:g:chat', session: session('native') } });
+    expect(db.prepare('SELECT id, hidden_at AS hiddenAt, permission_mode AS permission FROM sessions ORDER BY id').all())
+      .toEqual([
+        { id: 'main-topic', hiddenAt: null, permission: 'bypassPermissions' },
+        { id: 'native', hiddenAt: null, permission: 'bypassPermissions' },
+        { id: 'topic', hiddenAt: 2, permission: 'bypassPermissions' },
+      ]);
+    tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'main-topic', mode: 'ask' } });
+    expect(db.prepare("SELECT permission_mode FROM sessions WHERE id = 'topic'").pluck().get()).toBe('ask');
+  });
+
   it('cascades canonical permissions without changing history or delegated work', () => {
     tx(db, { name: 'bots.createProfile', args: {
       id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',

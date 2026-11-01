@@ -62,6 +62,7 @@ import {
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { resolvePluginCompanionTopic } from './pluginCompanionTopics.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
 import { isPluginTaskPermissionMode, type PluginTaskRoute, type PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -15084,6 +15085,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     delegationReviewAvailable: () => pluginTargetReviewReady,
     candidates: listPluginTargetCandidates,
     session: resolvePluginTargetSession,
+    resolveTopic: (pluginId, botId, topicKey, options) => pluginTaskServiceForCurrentOwner!()
+      .withTargetBinding(() => resolvePluginCompanionTopic(pluginId, botId, topicKey, options)),
     assertCreatePermission: (pluginId, permissionMode) => {
       if (!isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task capability is unavailable');
       if (!isPluginTaskPermissionMode(permissionMode)) throw new PluginTaskError('INVALID_REQUEST', 'Unsupported task creation permission');
