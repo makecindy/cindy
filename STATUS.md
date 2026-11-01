@@ -10,6 +10,18 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 2.2 closed `live-proven` (owner check after merging PR #1)
+
+Owner pulled `main` (PR th3ottoman-png/cindy#1 merged), restarted the dev app, and reported:
+- qwen3-8b with the Hermes `superpowers` plugin disabled answers normally, with no `skill_view` loop. 2.2b-4 is closed by configuration, with no code change.
+- Switching models mid-conversation keeps the selected model in the header and picker.
+
+Row 2.2 is now ✅ `live-proven`. No code changed in this entry.
+
+**Still open in Phase 2 (all owner-clicked live checks, code already `unit-tested`):** 2.1b-live, 2.4b-live, 2.5b-live (the "Summarise and continue" button itself; the banner percentage was proven 2026-11-01).
+
+---
+
 ## 2026-11-01 — Owner live check after disabling `superpowers` (`live-proven`)
 
 Owner disabled the Hermes `superpowers` plugin via the `hermes-cindy` launcher, then ran a new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, 262,144 loaded) with three turns. Screenshot evidence:
