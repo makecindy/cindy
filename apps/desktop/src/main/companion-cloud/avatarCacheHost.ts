@@ -36,6 +36,6 @@ export const companionAvatarCache = createCompanionAvatarCache({
     };
   },
   fetchFromDevice: (deviceId, url) => fetchRemoteMediaImageBytes(rewriteToRemoteMediaOrigin(url, { kind: 'device', deviceId })),
-  fetchPublic: (url) => fetchPublicImageBytes(url, BOT_AVATAR_MAX_BYTES, undefined, { timeoutMs: AVATAR_FETCH_TIMEOUT_MS }),
+  fetchPublic: (url) => fetchPublicImageBytes(url, BOT_AVATAR_MAX_BYTES, undefined, { timeoutMs: AVATAR_FETCH_TIMEOUT_MS, allowProxyFakeIp: true }),
   sniff: (bytes) => sniffMediaMime(bytes),
 });

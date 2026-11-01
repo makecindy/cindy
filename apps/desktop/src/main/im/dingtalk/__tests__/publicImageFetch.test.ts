@@ -33,23 +33,31 @@ describe('IM public image fetch', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('exempts proxy fake-IP ranges only, keeping private and metadata addresses blocked (#8020)', async () => {
+  it('exempts 198.18/15 only for opted-in callers; IM default and private ranges stay blocked (#8020)', async () => {
     const seen: Array<unknown> = [];
     const guardedFetch: GuardedImageFetch = async (params) => {
       seen.push(params.policy);
       throw new Error('stop before any network I/O');
     };
     await expect(fetchPublicImageBytes('https://cdn.example/a.png', 1024, guardedFetch)).rejects.toThrow('stop before');
-    expect(seen[0]).toEqual({ allowRfc2544BenchmarkRange: true });
+    await expect(
+      fetchPublicImageBytes('https://cdn.example/a.png', 1024, guardedFetch, { allowProxyFakeIp: true }),
+    ).rejects.toThrow('stop before');
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toEqual({ allowRfc2544BenchmarkRange: true });
 
-    // The same policy through the real guard: these must still be refused
-    // before any connection is attempted.
-    for (const address of ['127.0.0.1', '10.0.0.1', '169.254.169.254', '192.168.1.1', 'fd00::1']) {
+    // Through the real guard: the untrusted-URL default refuses 198.18.x, and
+    // even the opted-in path refuses private ranges, before any connection.
+    const blocked = async (address: string, options?: { allowProxyFakeIp?: boolean }) => {
       const lookupFn = (async () => [{ address, family: address.includes(':') ? 6 : 4 }]) as never;
       await expect(
-        fetchPublicImageBytes('https://cdn.example/a.png', 1024, (params) => fetchWithSsrFGuard({ ...params, lookupFn })),
+        fetchPublicImageBytes('https://cdn.example/a.png', 1024, (params) => fetchWithSsrFGuard({ ...params, lookupFn }), options),
         address,
       ).rejects.toBeInstanceOf(SsrFBlockedError);
+    };
+    await blocked('198.18.0.5');
+    for (const address of ['127.0.0.1', '10.0.0.1', '169.254.169.254', '192.168.1.1', 'fd00::1']) {
+      await blocked(address, { allowProxyFakeIp: true });
     }
   });
 

@@ -24,15 +24,16 @@ export type GuardedImageFetch = (params: {
 
 /**
  * Proxy fake-IP stacks (Clash / Surge / sing-box in TUN mode) resolve public
- * CDN hostnames into 198.18.0.0/15 (RFC 2544). Without this exemption a
- * legitimate HTTPS image is rejected as a private address. Loopback, RFC 1918,
- * link-local, cloud-metadata and IPv6 unique-local (fc00::/7) addresses stay
- * blocked: fc00::/7 hosts real internal services and cannot be told apart from
- * an IPv6 fake-IP, so exempting it would let an untrusted image URL read
- * private HTTPS endpoints (SSRF). This mirrors the managed browser's proxy
- * mode, which exempts only RFC 2544 (browser-managed-config.ts).
+ * CDN hostnames into 198.18.0.0/15 (RFC 2544). That range is only a placeholder
+ * the TUN maps back to the original hostname, so the guard cannot see where the
+ * proxy really connects. Exempting it is therefore opt-in and only for callers
+ * whose URL is server-supplied (companion avatars); the default (IM path, which
+ * fetches untrusted Agent Markdown URLs) keeps 198.18/15 blocked so a
+ * crafted URL cannot reach private HTTPS endpoints through the proxy mapping.
+ * fc00::/7 stays blocked in every case: it hosts real internal services and is
+ * indistinguishable from an IPv6 fake-IP (browser-managed-config.ts).
  */
-export const PUBLIC_IMAGE_SSRF_POLICY: SsrFPolicy = {
+export const PROXY_FAKE_IP_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
 };
 
@@ -69,7 +70,7 @@ export async function fetchPublicImageBytes(
   url: string,
   maxBytes: number,
   guardedFetch: GuardedImageFetch = fetchWithSsrFGuard,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; allowProxyFakeIp?: boolean } = {},
 ): Promise<{ buffer: Uint8Array; mimeType?: string }> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error('invalid remote image size limit');
@@ -86,7 +87,7 @@ export async function fetchPublicImageBytes(
       signal: controller.signal,
       requireHttps: true,
       maxRedirects: MAX_REDIRECTS,
-      policy: PUBLIC_IMAGE_SSRF_POLICY,
+      ...(options.allowProxyFakeIp ? { policy: PROXY_FAKE_IP_SSRF_POLICY } : {}),
     });
     const { response } = result;
     if (!response.ok) throw new Error(`remote image request failed: HTTP ${response.status}`);
