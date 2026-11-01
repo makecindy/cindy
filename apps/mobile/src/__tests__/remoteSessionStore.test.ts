@@ -3576,6 +3576,24 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('projects Claude statusless retry progress as a connection attempt', () => {
+    // PR #7202 / unit: applyRemotePush must keep Claude connection retries out of
+    // the model-overload presentation. Existing overload tests only cover capacity;
+    // the minimal corrected translator output is Reconnecting... 2/10.
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: { message: 'Reconnecting... 2/10', isTerminal: false, willRetry: true },
+        source: 'claude-code',
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 2,
+      maxAttempts: 10,
+    });
+  });
+
   it('projects the overload auto-retry marker as an overload attempt', () => {
     // 上游过载退避与传输层重连共用同一个 attempt 字段, 但必须能分辨: 不认
     // `(auto-retry N/M)` 的话, 整个退避窗口(最长约 30s)手机端只显示笼统的「思考中」
