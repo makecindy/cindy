@@ -9,6 +9,7 @@
  * - tier:unit(假的 deviceLink.invoke,无 DOM)。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createIpcError } from '../../../../shared/ipc-errors';
 import { BOT_MEMORY_CHANGED } from '../../../../shared/botMemory';
 import type { BotSettingsOp } from '../../../../shared/botRemoteSettings';
 import { extractIpcError } from '../../../utils/ipcError';
@@ -66,6 +67,45 @@ it('rolls an optimistic write back and rejects with the host error when the host
   await expect(write).rejects.toSatisfy((error) => extractIpcError(error)?.code === 'INVALID_PARAMS');
   expect(profiles.get()?.name).toBe('Sora');
 });
+
+// A model settings save must preserve both independent selections across the
+// actual remote adapter and its read-back normalizer; no provider inference runs.
+it('saves and reads back distinct primary and task model routes without local defaults', async () => {
+  const { target, profiles } = create();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  const primary = { harness: 'claude' as const, model: 'fixture-sonnet', providerId: null, effort: 'high', fastMode: false };
+  const task = { ...primary, model: 'fixture-opus', effort: 'medium' };
+  const capabilities = { harness: primary.harness, model: primary.model, modelOverride: { model: primary.model, providerId: primary.providerId, effort: primary.effort, fastMode: primary.fastMode },
+    modelChain: [primary], modelChainOverride: [primary], taskModelOverride: task };
+  const saved = profile({ capabilities, currentVersion: 2 });
+  host.invoke.mockResolvedValueOnce(ok({ profile: saved }));
+  const result = await target.profile.update('bot-1', { capabilities });
+  expect(sent(1)).toMatchObject({ input: { op: 'profile.update', args: { patch: { capabilities } } } });
+  expect(result.capabilities).toMatchObject(capabilities);
+  host.invoke.mockResolvedValueOnce(ok({ profile: saved }));
+  await profiles.refresh();
+  expect(sent(2)).toMatchObject({ input: { op: 'profile.get' } });
+  expect(profiles.get()).toMatchObject({ currentVersion: 2, capabilities });
+});
+
+it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'PRECONDITION_FAILED'] as const)(
+  'preserves a remote %s failure, rolls back optimism and permits an explicit retry', async (code) => {
+    const { target, profiles } = create();
+    host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+    await profiles.load();
+    if (code === 'PRECONDITION_FAILED') host.invoke.mockResolvedValueOnce(refused(code, 'Version changed'));
+    else host.invoke.mockRejectedValueOnce(createIpcError(code, 'Synthetic transport failure'));
+    const write = target.profile.update('bot-1', { name: 'Draft' });
+    expect(profiles.get()?.name).toBe('Draft');
+    await expect(write).rejects.toSatisfy(error => extractIpcError(error)?.code === code);
+    expect(profiles.get()?.name).toBe('Sora');
+    expect(host.invoke).toHaveBeenCalledTimes(2);
+    host.invoke.mockResolvedValueOnce(ok({ profile: profile({ name: 'Draft', currentVersion: 2 }) }));
+    await target.profile.update('bot-1', { name: 'Draft' });
+    expect(profiles.get()).toMatchObject({ name: 'Draft', currentVersion: 2 });
+  },
+);
 
 it('ignores a read that was overtaken by a write', async () => {
   const { target, profiles } = create();

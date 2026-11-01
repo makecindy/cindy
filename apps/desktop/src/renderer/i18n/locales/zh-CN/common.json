@@ -10063,9 +10063,15 @@
     "cancel": "取消",
     "save": "保存",
     "autosave": {
+      "remoteUnconfirmed": "远端保存结果尚未确认",
+      "remoteUnsavedDescription": "离开会丢弃本页草稿，但不会撤销远端可能已保存的修改。重新打开设置可核对结果。",
       "saving": "正在保存…",
       "saved": "已保存",
-      "retry": "重新保存"
+      "retry": "重新保存",
+      "unsavedTitle": "伙伴设置没能保存",
+      "unsavedDescription": "这次修改没能保存，可能是选中的模型现在不可用。离开会放弃这次修改。",
+      "discard": "放弃修改",
+      "continueEditing": "继续编辑"
     },
     "retry": "重试",
     "backToBot": "返回伙伴",
