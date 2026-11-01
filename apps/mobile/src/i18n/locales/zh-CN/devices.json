@@ -741,6 +741,7 @@
     "settings": "模型与权限",
     "search": "搜索消息",
     "models": "模型候选链",
+    "media": "媒体模型",
     "permissions": "操作权限",
     "personalSkills": "技能",
     "connections": "引用的技能与连接",

@@ -1,3 +1,4 @@
+import type { TeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
 import { readCachedBotWelcomeContext } from './botWelcomeContext';
 import { getEffectiveLocale } from '@/lib/localePreference';
@@ -34,6 +35,7 @@ import {
 } from '../../../shared/botModelChain';
 
 export interface BotCapabilities {
+  mediaModels?: TeammateMediaModels | null;
   model: string;
   /** Only present when the user explicitly chose a model for this Bot. */
   modelOverride?: BotModelOverride | null;

@@ -741,6 +741,7 @@
     "settings": "모델 및 권한",
     "search": "메시지 검색",
     "models": "모델 후보 목록",
+    "media": "미디어 모델",
     "permissions": "작업 권한",
     "personalSkills": "스킬",
     "connections": "참조 중인 스킬 및 연결",

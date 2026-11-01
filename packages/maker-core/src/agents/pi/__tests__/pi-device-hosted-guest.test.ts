@@ -332,7 +332,8 @@ describe('Pi device-hosted guest sessions', () => {
         },
       }),
       // 本机用户开了视觉桥：视觉后端(本机用户自己的其它供应商)的地址与密钥。
-      resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE_TEST: 'vision-secret' }),
+      // Teammate settings are resolved asynchronously from the Host-owned profile.
+      resolvePiVisionBridgeEnv: async () => ({ CINDY_PI_VISION_BRIDGE_TEST: 'vision-secret' }),
       registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
         registered.push(resolveProviderId());
         return () => {};

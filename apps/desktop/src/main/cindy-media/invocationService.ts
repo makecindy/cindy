@@ -1,3 +1,4 @@
+import { readSessionMediaModels } from '../vision-bridge/teammate-media-models.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1950,6 +1951,7 @@ export async function callCindyMedia(
       }
       return {
         ok: true,
+        media_model_overrides: (await readSessionMediaModels(sessionId)).overrides,
         models: availability.models.map((model) => ({
           id: model.id,
           provider_id: model.providerId,
@@ -1965,9 +1967,11 @@ export async function callCindyMedia(
       };
     }
     if (request.action === 'prepare') {
+      const { overrides } = await readSessionMediaModels(sessionId);
+      const selected = request.capability.startsWith('image.') ? overrides?.image : overrides?.video;
       return await prepareInvocation(
-        request.providerId,
-        request.modelId,
+        selected?.providerId ?? request.providerId,
+        selected?.modelId ?? request.modelId,
         request.capability as MediaCapability,
       );
     }

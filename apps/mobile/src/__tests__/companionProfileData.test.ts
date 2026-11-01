@@ -83,3 +83,35 @@ it('recognizes creation model support without exposing a raw JSON form field to 
   expect(panel.action?.fields?.map(field => field.id)).toEqual(['name']);
   expect(parseCompanionProfileData(raw(), ref).panels[0].creationModelChain).toBeUndefined();
 });
+
+// Review regression: use the production host form and mobile parser, not a copied JSON schema.
+// Legal maximum route IDs (including escaped characters) must remain editable on older clients.
+// vi.importActual loads the pure host projection once without adding desktop types to the app graph.
+const { createBotRemoteSettingsResource } = await vi.importActual<{ createBotRemoteSettingsResource: (deps: any) => any }>(
+  '../../../desktop/src/main/localDb/ipc/botRemoteSettingsResource.ts');
+it('round-trips maximum media route IDs through real host grants and the mobile parser', async () => {
+  const route = { providerId: 'p'.repeat(512), modelId: '\u0001'.repeat(2048) };
+  const settings: any = { source: { id: 'bot-a', name: 'Cindy', avatar: '', avatarColor: 'teal', description: 'Assistant', currentVersion: 1, status: 'active' }, identity: '', userContext: '', memory: true, permissions: 'ask', modelChain: [], followsDefault: true, skills: [], connections: [], toolsets: [] };
+  const update = vi.fn(async (input: any) => { Object.assign(settings, input.capabilities); settings.source.currentVersion++; });
+  const deps: any = { owner: () => 'owner', assertOwner() {}, read: async () => settings, update, skills: async () => [], lifecycle: async () => ({}),
+    mediaModels: async () => ({ vision: [{ ...route, label: 'Vision' }], image: [{ ...route, label: 'Image' }], video: [{ ...route, label: 'Video' }] }) };
+  const host = createBotRemoteSettingsResource(deps);
+  const context = { controllerDeviceId: 'phone' };
+  const get = async () => parseCompanionProfileData(await host.get(context, 'bot-a'), ref);
+  const panel = (await get()).panels.find(item => item.id === 'media')!;
+  expect(panel.action).toBeDefined();
+  const input = Object.fromEntries(panel.action!.fields!.map(field => {
+    expect(field.options!.every(option => option.value.length <= 160)).toBe(true);
+    return [field.id, field.options![1].value];
+  }));
+  const invoke = (actionId: string, input: object) => host.invoke(context, { collectionId: 'teammates', resourceRef: ref, actionId, input, client: { protocolVersion: 1, primitives: ['form'] } });
+  await invoke(panel.action!.id, input);
+  expect(settings.mediaModels).toEqual({ vision: { primary: route, fallback: null }, image: route, video: route });
+  deps.mediaModels = async () => { throw new Error('catalog offline'); };
+  const saved = (await get()).panels.find(item => item.id === 'media')!;
+  expect(saved.notice).toMatchObject({ fallback: expect.stringContaining('unavailable'), translations: expect.objectContaining({ ja: expect.any(String) }) });
+  expect(saved.action!.fields!.map(field => field.id)).toContain('fallback');
+  await expect(invoke(saved.action!.id, { image: 'not-an-issued-option' })).rejects.toThrow('Invalid media selection');
+  await invoke(saved.action!.id, { vision: 'inherit', image: 'inherit', video: 'inherit' });
+  expect(settings.mediaModels).toBeNull();
+});

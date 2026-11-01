@@ -11,6 +11,7 @@
  *
  * 对齐 docs/vision-bridge-design.md 层 C + 五、视觉通道。
  */
+import type { VisionBridgeSettings } from '../../shared/visionBridgeSettings.js';
 import { readVisionBridgeSettings } from './vision-bridge-settings-store.js';
 import { getVisionBridgeController } from './vision-bridge-controller.js';
 import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
@@ -80,8 +81,9 @@ export function buildPiVisionBridgeEnv(
   deps: VisionChannelDeps,
   model: string,
   sessionId?: string,
+  effectiveSettings?: VisionBridgeSettings,
 ): Record<string, string> | null {
-  const settings = readVisionBridgeSettings();
+  const settings = effectiveSettings ?? readVisionBridgeSettings();
   if (!settings.enabled) return null;
   if (!settings.primary) return null;
   // 按 session model 判定（与层 B / 层 A 同源 shouldBridge）：未命中目标模型

@@ -1,3 +1,4 @@
+import type { TeammateMediaCatalog } from '@cindy/maker-shared/teammate-media-models';
 import {
   BOT_SETTINGS_CAPABILITY_FIELDS,
   BOT_SETTINGS_PATCH_FIELDS,
@@ -32,6 +33,7 @@ export interface BotCapabilityCatalogEntry {
 
 /** Services the local settings IPC already uses; injected so the operations stay free of main singletons. */
 export interface BotSettingsOpsDeps {
+  mediaModels?(): Promise<TeammateMediaCatalog>;
   readProfile(botId: string): Promise<unknown>;
   updateProfile(input: Record<string, unknown>): Promise<unknown>;
   setAvatar(botId: string, avatarImageBase64: string): Promise<unknown>;
@@ -206,6 +208,7 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       return deps.lifecycle({ botId, action: action as BotLifecycleActionRequest['action'], confirmName, worktreeDisposition, keepTaskHistory: call.args.keepTaskHistory === true },
         async () => call.assertCurrent());
     },
+    ...(deps.mediaModels ? { 'models.media': async () => deps.mediaModels!() } : {}),
     'models.default': async () => ({ modelChain: await deps.defaultModelChain() }),
     'memory.list': async call => deps.memory.list(botOf(call), call.args.query === undefined ? '' : text(call.args.query, 'query', 200, true)),
     'memory.read': async call => deps.memory.read(botOf(call), text(call.args.filename, 'filename', 256)),

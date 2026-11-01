@@ -9917,6 +9917,17 @@
       "done": "已完成",
       "unread": "未读"
     },
+    "mediaModels": {
+      "unavailable": "无法加载可用模型，已保留保存的选择。",
+      "vision": "视觉桥模型",
+      "fallback": "视觉桥备用模型",
+      "image": "图像生成模型",
+      "video": "视频生成模型",
+      "inherit": "使用应用设置",
+      "none": "不使用备用模型",
+      "title": "媒体模型",
+      "hint": "为此伙伴选择模型。视觉桥沿用应用总开关和目标模型。更改后，重启此伙伴以更新 Pi 工具。生成模型覆盖用于 Cindy 媒体工具，独立服务仍使用各自设置。"
+    },
     "workbench": {
       "ownedMark": "归属 {{names}}",
       "createdMark": "由 {{names}} 创建",
