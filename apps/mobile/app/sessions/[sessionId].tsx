@@ -1448,6 +1448,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const messageEditingRef = useRef<MessageEditingState | null>(null);
   const [messageEditSubmitting, setMessageEditSubmitting] = useState(false);
   const messageEditSubmittingRef = useRef(false);
+  // 提交锁的代际:切任务时释放锁并推进代际,旧任务的迟到收尾只释放自己那一代,不动新任务的锁。
+  const messageEditLockGenerationRef = useRef(0);
   // 进入 / 退出 / 切任务都推进代际,迟到的预览结果不落到别的编辑上。
   const messageEditSeqRef = useRef(0);
   const [voiceStartPending, setVoiceStartPending] = useState(false);
@@ -3437,6 +3439,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     messageEditSeqRef.current += 1;
     messageEditingRef.current = null;
     setMessageEditing(null);
+    messageEditLockGenerationRef.current += 1;
+    messageEditSubmittingRef.current = false;
+    setMessageEditSubmitting(false);
     setSettlingQueueItems(() => EMPTY_SETTLING_ITEMS);
     settlingAddedAtRef.current.clear();
     setSettlingBaseline({ ...EMPTY_SETTLING_BASELINE, sessionId });
@@ -8155,6 +8160,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 避免等待期间用户再点发送造成重复发送。
     messageEditSubmittingRef.current = true;
     setMessageEditSubmitting(true);
+    const lockGeneration = ++messageEditLockGenerationRef.current;
     setError(null);
     try {
       let updated: Awaited<ReturnType<typeof maker.rewindCommit>>;
@@ -8201,8 +8207,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 重发没被受理时编辑内容仍在输入框,原草稿接在后面。
       restoreMessageEditStash(editing, 'merge');
     } finally {
-      messageEditSubmittingRef.current = false;
-      setMessageEditSubmitting(false);
+      if (messageEditLockGenerationRef.current === lockGeneration) {
+        messageEditSubmittingRef.current = false;
+        setMessageEditSubmitting(false);
+      }
     }
   }
 
