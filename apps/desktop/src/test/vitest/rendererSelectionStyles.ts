@@ -33,9 +33,18 @@ let rendererUtilities: Promise<{ css: string; aliases: Map<string, string> }> | 
 export async function installRendererClipboardStyles(root: Element): Promise<HTMLStyleElement> {
   rendererUtilities ??= postcss([tailwindcss({
     ...rendererTailwindConfig,
-    content: ['MarkdownMermaidBlock', 'VideoSitePreview', 'GhostSummonCard'].map(name =>
+    content: ['MarkdownMermaidBlock', 'VideoSitePreview', 'GhostSummonCard', 'GeneratedFilesCard'].map(name =>
       resolve(__dirname, `../../renderer/components/chat/${name}.tsx`)),
   })]).process('@tailwind utilities;', { from: undefined }).then(result => {
+    // jsdom leaves gap custom properties unresolved. Use the actual generated
+    // spacing tokens for these geometry declarations; native fixtures load the
+    // unmodified tokens and compiler output instead.
+    const spacingTokens = new Map<string, string>();
+    postcss.parse(readFileSync(resolve(__dirname, '../../renderer/styles/generated/tokens.css'), 'utf8'))
+      .walkDecls(decl => { if (decl.prop.startsWith('--space-')) spacingTokens.set(decl.prop, decl.value); });
+    result.root.walkDecls(/^(?:column-gap|row-gap|gap)$/, decl => {
+      decl.value = decl.value.replace(/var\((--space-[\w-]+)\)/g, (value, name) => spacingTokens.get(name) ?? value);
+    });
     const aliases = new Map<string, string>();
     result.root.walkRules(rule => {
       rule.selector = rule.selector.replace(/\.((?:\\.|[\w-])+)/g, (_match, token: string) => {

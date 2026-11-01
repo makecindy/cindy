@@ -290,6 +290,8 @@ describe('chat selection clipboard', () => {
         ]} /><p>after generated</p></>);
       await waitFor(() => expect(root.querySelector('button[title="/workspace/report.pdf"]:not(:disabled)')).toBeTruthy());
       expect(root.querySelector('button[title="/workspace/preview.png"]')).toBeTruthy();
+      // Review4434278361: compile actual block/flex/gap utilities before copy.
+      await installRendererClipboardStyles(root);
       select();
       const formats = copy().clipboardData.setData.mock.calls;
       for (const [, value] of formats) {
@@ -298,6 +300,13 @@ describe('chat selection clipboard', () => {
       const pasted = document.createElement('div');
       pasted.innerHTML = formats.find(([type]) => type === 'text/html')![1];
       expect(pasted.querySelector('button, [role="button"], [tabindex]')).toBeNull();
+      // Unit: title and metadata must remain separate after stripping layout;
+      // both clipboard formats retain authored content boundaries.
+      for (const value of [pasted.textContent!, formats.find(([type]) => type === 'text/plain')![1]]) {
+        expect(value).toMatch(/Quarterly report\s+chat\.generatedFiles\.formats\.pdf/);
+        expect(value).toContain('chat.generatedFiles.formats.pdf · chat.generatedFiles.summary.pages:3 · report.pdf');
+        expect(value).not.toContain('chat.generatedFiles.formats.pdfchat.generatedFiles.summary.pages:3');
+      }
       expect(root.querySelector('button[title="/workspace/report.pdf"]')).toBeTruthy();
     } finally {
       Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
@@ -401,6 +410,33 @@ describe('chat selection clipboard', () => {
     expect(chart.style.maxWidth).toBe('100%');
     expect(pasted.textContent).toContain('before drawing');
     expect(pasted.textContent).toContain('after drawing');
+  });
+
+  // Review4434278365: unit through real RichAnswer props.style, not a raw
+  // SVG fixture. Explicit author typography survives; inherited host fonts do not.
+  it('preserves explicit vector font geometry without freezing inherited theme fonts', () => {
+    const source = [
+      { id: 'sized', kind: 'svg', props: { label: 'Sized lettering', viewBox: [0, 0, 200, 100], style: {
+        fontSize: 36, letterSpacing: 2, fontWeight: 600,
+      }, shapes: [{ type: 'text', x: 5, y: 45, text: 'Hello' }] } },
+      { id: 'neutral', kind: 'svg', props: { label: 'Inherited lettering', viewBox: [0, 0, 200, 100],
+        shapes: [{ type: 'text', x: 5, y: 45, text: 'World' }] } },
+    ].map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node })).join('\n');
+    const { root, select, copy } = setup(<div style={{ fontSize: 19, letterSpacing: 5, fontFamily: 'SourceTheme' }}>
+      <RichAnswer stateKey="explicit-svg-typography" source={source} complete renderMarkdown={text => <span>{text}</span>} />
+    </div>);
+    expect((root.querySelector('svg[aria-label="Sized lettering"]') as SVGElement).style.fontSize).toBe('36px');
+    select();
+    const pasted = document.createElement('div');
+    pasted.innerHTML = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    const sized = pasted.querySelector('svg[aria-label="Sized lettering"]') as SVGElement;
+    expect(sized.style.fontSize).toBe('36px');
+    expect(sized.style.letterSpacing).toBe('2px');
+    expect(sized.style.fontWeight).toBe('600');
+    const neutral = pasted.querySelector('svg[aria-label="Inherited lettering"]') as SVGElement;
+    expect(neutral.style.fontSize).toBe('');
+    expect(neutral.style.letterSpacing).toBe('');
+    expect(pasted.innerHTML).not.toContain('SourceTheme');
   });
 
   // Review #4334592398: RichAnswer role colors come from the host theme,

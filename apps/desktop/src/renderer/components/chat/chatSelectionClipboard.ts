@@ -151,6 +151,40 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     }
     return copy;
   };
+  const preserveTextBoundaries = (source: Element, copy: Element): void => {
+    if (!copy.textContent?.trim()) return;
+    const style = styleOf(source);
+    const gap = style.columnGap && style.columnGap !== 'normal'
+      ? style.columnGap : style.gap.split(/\s+/).at(-1) ?? '';
+    // Flex gaps carry word boundaries even when adjacent JSX has no whitespace.
+    // Export text separators rather than retaining the application's layout CSS.
+    if (['flex', 'inline-flex'].includes(style.display) &&
+        !style.flexDirection.startsWith('column') && (parseFloat(gap) > 0 ||
+          ['space-between', 'space-around', 'space-evenly'].includes(style.justifyContent))) {
+      let previous: Node | undefined;
+      for (const child of [...copy.childNodes]) {
+        if (previous && !/\s$/.test(previous.textContent ?? '') && !/^\s/.test(child.textContent ?? '')) {
+          copy.insertBefore(doc.createTextNode(' '), child);
+          needsRenderedPlainText = true;
+        }
+        previous = child;
+      }
+    }
+    // Block-like spans (notably document titles/metadata) otherwise become
+    // inline when their classes disappear. BRs preserve the visible line breaks;
+    // literal newlines also keep textContent-only clipboard consumers separated.
+    const parentStyle = source.parentElement && styleOf(source.parentElement);
+    // Flex row items are blockified by layout even when their authored tag is
+    // inline. Keep those labels on the same line; the row's gap supplies spaces.
+    const rowItem = style.display === 'block' && parentStyle &&
+      (['grid', 'inline-grid'].includes(parentStyle.display) ||
+        (['flex', 'inline-flex'].includes(parentStyle.display) && !parentStyle.flexDirection.startsWith('column')));
+    if (source.localName === 'span' && !rowItem && ['block', 'flex', 'grid'].includes(style.display)) {
+      copy.prepend(doc.createElement('br'), doc.createTextNode('\n'));
+      copy.append(doc.createElement('br'), doc.createTextNode('\n'));
+      needsRenderedPlainText = true;
+    }
+  };
   const cloneSelected = (node: Node): Node | null => {
     if (!range.intersectsNode(node)) return null;
     // Application chrome and screen-reader copies are excluded even when the
@@ -238,7 +272,9 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
           // The chart's class-based grid and labels have no authored paint.
           if (chart && original.localName === 'line') target.style.stroke = 'currentColor';
           if (chart && original.localName === 'text') target.style.fontSize = styleOf(original).fontSize;
-          for (const property of ['width', 'height', 'max-width', 'max-height']) {
+          // Keep only explicitly authored typography, never inherited host fonts.
+          for (const property of ['width', 'height', 'max-width', 'max-height',
+            'font-size', 'font-family', 'font-weight', 'font-style', 'letter-spacing']) {
             const value = authored.getPropertyValue(property);
             if (value) target.style.setProperty(property, value);
           }
@@ -349,6 +385,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
       if (selected) copy.appendChild(selected);
     }
     preserveOrderedStart(element, copy);
+    preserveTextBoundaries(element, copy);
     // Empty semantic nodes carry spacing/list positions; SVG leaf geometry
     // carries drawing commands without text children. Do not prune either.
     const preservesEmpty = element.matches('br, img, hr, th, td') ||
@@ -387,6 +424,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
       const wrapper = shell(ancestor);
       wrapper.appendChild(fragment);
       preserveOrderedStart(ancestor, wrapper);
+      preserveTextBoundaries(ancestor, wrapper);
       fragment = wrapper;
     }
     ancestor = ancestor.parentElement;
