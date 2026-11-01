@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
@@ -141,10 +142,12 @@ export type SessionRowWithCount = SessionRow & {
 const PREVIEW_MAX_CHARS = 140;
 /** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
 const PREVIEW_CONTENT_BOUND_CHARS = 4096;
-// Cache only this pure projection, never a session row. Exact text/role keys
-// keep edits visible; both entry count and input size bound retained memory.
+const PREVIEW_CACHE_MAX_ENTRY_CHARS = 64 * 1024;
 const PREVIEW_CACHE_ENTRIES = 1024;
-const plainPreviewCache = new Map<string, string | null>();
+const PREVIEW_CACHE_MAX_CHARS = PREVIEW_CONTENT_BOUND_CHARS * PREVIEW_CACHE_ENTRIES;
+type PlainPreviewCacheEntry = { preview: string | null; source?: string; retainedChars: number };
+const plainPreviewCache = new Map<string, PlainPreviewCacheEntry>();
+let plainPreviewCacheChars = 0;
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -158,21 +161,41 @@ export function finalizePlainPreview(
   role: string | null | undefined,
 ): string | null {
   if (!text) return null;
-  const key = text.length <= PREVIEW_CONTENT_BOUND_CHARS
-    ? `${role === 'assistant' ? 'assistant' : 'plain'}:${text}`
-    : null;
-  if (key !== null && plainPreviewCache.has(key)) {
-    const cached = plainPreviewCache.get(key)!;
-    plainPreviewCache.delete(key);
-    plainPreviewCache.set(key, cached);
-    return cached;
+  const roleKey = role === 'assistant' ? 'assistant' : 'plain';
+  const cacheable = text.length <= PREVIEW_CACHE_MAX_ENTRY_CHARS;
+  const hashed = text.length > PREVIEW_CONTENT_BOUND_CHARS;
+  const key = !cacheable ? null : hashed
+    ? `${roleKey}:hashed:${text.length}:${createHash('sha256').update(text).digest('base64url')}`
+    : `${roleKey}:${text}`;
+  if (key !== null) {
+    const cached = plainPreviewCache.get(key);
+    if (cached && (!hashed || cached.source === text)) {
+      plainPreviewCache.delete(key);
+      plainPreviewCache.set(key, cached);
+      return cached.preview;
+    }
+    if (cached) {
+      plainPreviewCache.delete(key);
+      plainPreviewCacheChars -= cached.retainedChars;
+    }
   }
   const preview = computePlainPreview(text, role);
   if (key !== null) {
-    plainPreviewCache.set(key, preview);
-    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
-      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    const entry: PlainPreviewCacheEntry = {
+      preview,
+      ...(hashed ? { source: text } : {}),
+      retainedChars: key.length + (hashed ? text.length : 0) + (preview?.length ?? 0),
+    };
+    while (plainPreviewCache.size >= PREVIEW_CACHE_ENTRIES
+      || plainPreviewCacheChars + entry.retainedChars > PREVIEW_CACHE_MAX_CHARS) {
+      const oldestKey = plainPreviewCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = plainPreviewCache.get(oldestKey)!;
+      plainPreviewCache.delete(oldestKey);
+      plainPreviewCacheChars -= oldest.retainedChars;
     }
+    plainPreviewCache.set(key, entry);
+    plainPreviewCacheChars += entry.retainedChars;
   }
   return preview;
 }
