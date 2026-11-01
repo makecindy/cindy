@@ -21,6 +21,19 @@ export type BranchPickEffect =
   | { kind: 'noop' }
   | { kind: 'set-source'; branch: string };
 
+/**
+ * worktree 未勾时，任务直接跑在仓库当前 checkout 上(这里从不切换用户分支)，所选源分支
+ * 不会生效。用户若选了与当前 checkout 不同的分支，发送/Goal 必须保留草稿并提示，不能
+ * 静默建在当前分支上。当前分支未知(探测中、detached HEAD)时无法判断，不拦。
+ */
+export function isSourceBranchIgnoredWithoutWorktree(
+  state: Pick<BranchPickState, 'worktreeEnabled' | 'currentBranch' | 'sourceBranch'>,
+): boolean {
+  if (state.worktreeEnabled || !state.currentBranch) return false;
+  const picked = state.sourceBranch.trim();
+  return picked.length > 0 && picked !== state.currentBranch;
+}
+
 export function resolveBranchPick(state: BranchPickState, picked: string): BranchPickEffect {
   // ON / OFF 都只改源分支。effect union 刻意没有 enable / disable,从类型层保证
   // 分支选择无法联动 checkbox。

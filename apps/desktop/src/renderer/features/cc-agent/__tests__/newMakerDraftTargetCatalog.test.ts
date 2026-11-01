@@ -123,7 +123,7 @@ function harness(options: {
     prefetchDeviceCapabilities: vi.fn(), prefetchDeviceProviders: vi.fn(), prefetchDeviceGitSafetySettings: vi.fn(),
     setWtBranchPreferenceSaving: vi.fn(), setWtBranchSync: vi.fn(), setWtBranchPreferenceError: vi.fn(),
     setWtBaseRepo: vi.fn(), setWtSourceBranch: vi.fn(), setWtSupportsRecoveryKeyDiscard: vi.fn(),
-    setWtConfirmedIneligible: vi.fn(), setWtPreferenceSaving: vi.fn(),
+    setWtConfirmedIneligible: vi.fn(), setWtCurrentBranch: vi.fn(), setWtPreferenceSaving: vi.fn(),
   };
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
