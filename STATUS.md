@@ -10,6 +10,26 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Defect Fix: Hermes context banner uses the serving endpoint's limit (`unit-tested`)
+
+**Owner repro:** new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, loaded at 262,144). After one turn (35.4k tokens) the banner said "Context is 108% full". The footer ring said 17%. `~/.cindy-harness/providers.yaml` already had `lmstudio-local.capabilities.contextLength: 262144`, and `routing.yaml` had `chat.default: ollama-offline`.
+
+**Root cause:** `resolveSessionContextLength` (`apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx`) only knew models hand-listed in `routing.yaml`. Hermes sessions have no providerId, and discovered models are not routes, so it fell through to `chat.default`'s provider (Ollama, 32,768).
+
+**Outcome:**
+1. `SessionContextGuardBanner.tsx`: after the routing lookup, use the `contextLength` of the **online** probed endpoint whose model list contains the session model. The banner already fetched `probes`; they are now passed in. Offline endpoints are ignored.
+2. `apps/desktop/src/renderer/__tests__/sessionContextGuardBanner.test.tsx`: +1 test (discovered model on an online LM Studio endpoint → that endpoint's limit; offline endpoint → no match, falls through). 5/5.
+
+**Mutation check (1):** the new test ran first against the unchanged code and failed (`expected 32768 to be 65536`), then passed with the change.
+
+**Owner workaround already applied (keep or remove):** a `gemma-local` route (`provider: lmstudio-local`, `model: google/gemma-4-26b-a4b-qat`) in `~/.cindy-harness/routing.yaml`, backed up to `routing.yaml.bak-20261101`. With this fix it is no longer needed.
+
+**Gates (Node 22.23.4):** serial `pnpm -r typecheck` → `EXIT=0`; `pnpm test:runner` → `EXIT=0` (607/0); `test-workspaces --tier unit --related --workspace-concurrency=1` → `EXIT=0`; `pnpm check:test-hygiene` → PASS.
+
+**Still open:** live check (new Gemma chat → banner percentage should roughly match the ring). The ring still assumes a fixed 200k Hermes window. Not changed here.
+
+---
+
 ## 2026-11-01 — Defect Fix: Hermes model label reverts to `hermes-default` after first send (`unit-tested`)
 
 **Root cause (found by reading, proved by a failing test):**
