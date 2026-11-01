@@ -191,20 +191,11 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
     status = t('inputHandoff.qr.scanned');
     actions = [skip, handBack];
   } else if (snapshot.phase === 'ready' && directSignIn) {
-    // With a picture the page could not be read, so the end cannot be seen either: the owner says when.
-    const unread = snapshot.picture === true;
-    status = t(unread ? 'inputHandoff.directSignIn.hintUnread' : 'inputHandoff.directSignIn.hint');
+    status = t('inputHandoff.directSignIn.hint');
     actions = [
       skip,
-      ...(unread ? [{ ...handBack, primary: false }] : []),
       {
-        label: t(
-          !onThisComputer
-            ? 'inputHandoff.action.openRemoteDesktop'
-            : unread
-              ? 'inputHandoff.action.openPlainWindow'
-              : 'inputHandoff.action.openWindow',
-        ),
+        label: t(!onThisComputer ? 'inputHandoff.action.openRemoteDesktop' : 'inputHandoff.action.openWindow'),
         primary: true,
         onClick: () => {
           setError(null);

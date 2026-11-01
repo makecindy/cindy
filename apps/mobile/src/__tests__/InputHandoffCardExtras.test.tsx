@@ -253,9 +253,6 @@ it("sends a sign-in to the live view, and keeps the form when there is none", as
   expect(onQuietDecision).toHaveBeenCalledWith(expect.objectContaining({ action: "claim", expectedRevision: 2 }));
   await press(container, "interaction.inputHandoff.action.useForm");
   expect(buttons(container)).toContain("interaction.inputHandoff.action.fill");
-  const unread = mount(step({ directSignIn: true, liveView: true, picture: true, controls: [] }));
-  expect(unread.container.textContent).toContain("interaction.inputHandoff.directSignIn.hintUnread");
-  expect(buttons(unread.container)).toContain("interaction.inputHandoff.action.done");
   const noLive = mount(step({ directSignIn: true }));
   expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
 });

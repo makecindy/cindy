@@ -15869,7 +15869,6 @@
       "backToForm": "归表单",
       "liveView": "即景",
       "openWindow": "启登录之窗",
-      "openPlainWindow": "启窗",
       "openRemoteDesktop": "启远程桌面",
       "useForm": "改以表单填写",
       "fill": "填",
@@ -15881,7 +15880,6 @@
       "scan": "扫码"
     },
     "directSignIn": {
-      "hintUnread": "此页之文不可读，请径于窗中为之，毕则点「交还于 Agent」或发讯告我。",
       "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远方受输入。请于主机之机上完成此步，再交还 Agent。",

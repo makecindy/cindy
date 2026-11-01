@@ -14,7 +14,6 @@ import {
 } from '@cindy/device-link';
 import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
-import { isBrowserBundle } from './originPolicy.js';
 import { qrContent } from './qrCode.js';
 import { extractStep, type ExtractedStep } from './stepExtractor.js';
 import type {
@@ -114,7 +113,7 @@ export interface HandoffSessionOptions {
   publish(snapshot: InputHandoffSnapshot): void;
   finish(result: HandoffResult): void;
   /** A secret was typed into a page the agent controls (automation browser); restrict its page reads. */
-  onSecretEntered?(target: { pid: number; url?: string; windowTitle?: string }): void;
+  onSecretEntered?(target: { pid: number; url?: string }): void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   finishingDelayMs?: number;
@@ -363,13 +362,10 @@ export class InputHandoffSession {
   }
 
   /**
-   * The owner does this on the window: a sign-in, or a browser page nothing can be
-   * read from (the form could only be guessed at). `picture` then stays the way to
-   * answer from a device with no live view.
+   * The owner does this on the window: a sign-in whose page could be read.
    */
   private directSignInOffered(): boolean {
-    if (this.ended || this.phase !== 'ready' || this.qrState || !this.options.driver.raise) return false;
-    if (this.picture) return !this.pictureChosen && !!this.step?.pageMissing;
+    if (this.ended || this.phase !== 'ready' || this.qrState || this.picture || !this.options.driver.raise) return false;
     return this.signInMode && !!this.step?.signIn && !this.step.deviceCode;
   }
 
@@ -457,12 +453,9 @@ export class InputHandoffSession {
       }
       await this.useTarget(target);
       this.initial = target;
-      if (target.minimized) await this.coverBeforeRestoring(target);
+      if (target.minimized) await this.coverBeforeRestoring();
       const restored = await this.restoreTarget(target);
       const step = await this.readFirstStep(restored);
-      // The code and screenshot probes below raise the window: an unreadable page is covered before them,
-      // by the title it has now (reading may have renamed the window).
-      if (!step || step.pageMissing) this.coverUnreadablePage(this.target ?? target);
       if (step && actionable(step)) {
         // A sign-in happens on the window itself, wherever the owner answers from.
         if (step.signIn && !restored) {
@@ -658,10 +651,6 @@ export class InputHandoffSession {
   private publish(phase: InputHandoffPhase): void {
     this.phase = phase;
     this.revision++;
-    // The owner is sent to type in a page nothing could be read from: cover it before they do.
-    if (this.directSignInOffered() && this.step?.pageMissing && this.target) {
-      this.options.onSecretEntered?.({ pid: this.target.pid, windowTitle: this.target.window.title });
-    }
     this.options.publish(this.snapshot());
   }
 
@@ -1086,8 +1075,6 @@ export class InputHandoffSession {
     if (window.minimized) return;
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
     const step = await this.read().catch(() => null);
-    // The hold on an unreadable page lasts a while: keep renewing it for as long as the owner may still type.
-    if (step?.pageMissing && this.watching()) this.coverUnreadablePage(this.target ?? target);
     if (!step || step.pageMissing || !this.watching()) return;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
@@ -1179,23 +1166,11 @@ export class InputHandoffSession {
 
   /**
    * The window is about to come back where the owner can type in it. Read it first while it is still
-   * minimized (accessibility sees it), and cover a sign-in page before it shows; a browser page that
-   * cannot be read is covered by its window title, since it may well be one.
+   * minimized (accessibility sees it), and cover a sign-in page before it shows.
    */
-  private async coverBeforeRestoring(target: HandoffTarget): Promise<void> {
+  private async coverBeforeRestoring(): Promise<void> {
     const before = await this.read().catch(() => null);
-    if (before && !before.pageMissing) {
-      this.guardSignInPage(before);
-      return;
-    }
-    this.coverUnreadablePage(target);
-  }
-
-  /** A browser page nothing could be read from may well be a sign-in: cover it by its window title before any probe can raise it. */
-  private coverUnreadablePage(target: HandoffTarget): void {
-    if (isBrowserBundle(target.bundleId)) {
-      this.options.onSecretEntered?.({ pid: target.pid, windowTitle: target.window.title });
-    }
+    if (before && !before.pageMissing) this.guardSignInPage(before);
   }
 
   /** A minimized window draws nothing and the owner cannot see it: bring it back before asking anything. */

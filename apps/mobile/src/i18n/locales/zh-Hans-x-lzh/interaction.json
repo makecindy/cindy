@@ -310,7 +310,6 @@
       "scan": "扫码"
     },
     "directSignIn": {
-      "hintUnread": "此页之文不可读，请径于窗中为之，毕则点「交还于 Agent」或发讯告我。",
       "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远程受书。请于主机之上竟此步，再交还 Agent。",

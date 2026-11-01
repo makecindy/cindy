@@ -19,7 +19,7 @@ import {
   type LiveHandoffWindow,
 } from './session.js';
 import type { HandoffDriver } from './macDriver.js';
-import { markSecretEntered, markSecretWindow } from './secretTaint.js';
+import { markSecretEntered } from './secretTaint.js';
 import { TerminalPromptSession, type TerminalProgram } from './terminalPrompt.js';
 import { ImageQrHandoffSession } from './imageQr.js';
 import { qrContent } from './qrCode.js';
@@ -97,8 +97,6 @@ export interface InputHandoffServiceDeps {
   remoteInputAvailable(): boolean;
   /** Whether another device may open a live view of the window (remote desktop allowed here). */
   liveViewAvailable?(): boolean;
-  /** Binds the browser tabs a window title stands for, by their ids (page reads pause there whatever the title becomes). */
-  bindUnreadablePageTabs?(windowTitle: string): Promise<void>;
   /** Hidden continuation to the requesting agent; metadata only. */
   continueAgent(sessionId: string, requestId: string, message: string): Promise<void>;
   /** Owner attention outside the app (mobile push, Agent Island). Never includes values. */
@@ -211,12 +209,7 @@ export class InputHandoffService {
       driver,
       publish: (snapshot) => this.publish(entry, snapshot),
       finish: (result) => this.finish(entry, result),
-      onSecretEntered: ({ url, windowTitle }) => {
-        if (url) return markSecretEntered(url);
-        // No address: cover by title at once, and bind the tabs it stands for by id (a page can rename itself).
-        markSecretWindow(windowTitle);
-        if (windowTitle) void this.deps.bindUnreadablePageTabs?.(windowTitle);
-      },
+      onSecretEntered: ({ url }) => markSecretEntered(url),
       ...this.deps.sessionTiming,
     }));
   }

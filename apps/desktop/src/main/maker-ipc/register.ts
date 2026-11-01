@@ -348,7 +348,6 @@ import {
   type RenameSessionsConfirmInteractionSnapshot,
 } from '../session-title-rename/index.js';
 import {
-  bindSecretTabsByTitle,
   clearUserBrowserMarksForSession,
   getBrowserAvailability,
   openBrowserForLogin,
@@ -3656,7 +3655,6 @@ initInputHandoffService({
     return settings.remoteControlEnabled && settings.remoteDesktopEnabled;
   },
   notifyOwner: (sessionId, snapshot) => notifyInputHandoffOwner(sessionId, snapshot),
-  bindUnreadablePageTabs: bindSecretTabsByTitle,
   describeDevice: describeInputHandoffDevice,
   onClosed: (sessionId, requestId) => {
     forgetInputHandoffNotice(sessionId, requestId);

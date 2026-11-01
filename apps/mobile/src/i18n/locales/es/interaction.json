@@ -310,7 +310,6 @@
       "scan": "Escanear"
     },
     "directSignIn": {
-      "hintUnread": "No se puede leer esta página. Trabaja directamente en la ventana y, al terminar, devuélvela al agente o envía un mensaje.",
       "hint": "Inicia sesión directamente en la ventana. Al terminar, se continuará automáticamente."
     },
     "remoteUnavailable": "Esta computadora no admite entradas remotas. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",

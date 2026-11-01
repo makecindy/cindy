@@ -15836,7 +15836,6 @@
       "backToForm": "양식으로 돌아가기",
       "liveView": "실시간 화면",
       "openWindow": "로그인 창 열기",
-      "openPlainWindow": "창 열기",
       "openRemoteDesktop": "원격 데스크톱 열기",
       "useForm": "양식으로 입력",
       "fill": "입력",
@@ -15848,7 +15847,6 @@
       "scan": "스캔"
     },
     "directSignIn": {
-      "hintUnread": "이 페이지는 읽을 수 없습니다. 창에서 직접 작업한 뒤 Agent에게 돌려주거나 메시지를 보내세요.",
       "hint": "창에서 직접 로그인하세요. 완료되면 자동으로 계속됩니다."
     },
     "remoteUnavailable": "이 컴퓨터는 원격으로 입력을 받을 수 없습니다. 호스트 컴퓨터에서 이 단계를 완료한 뒤 Agent에게 넘기세요.",

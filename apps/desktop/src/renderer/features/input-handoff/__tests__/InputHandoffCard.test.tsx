@@ -430,14 +430,6 @@ describe('InputHandoffCard', () => {
       expect(mocks.resolve).toHaveBeenCalledWith('req1', expect.objectContaining({ action: 'claim', expectedRevision: 4 }));
     });
 
-    it('lets the owner say when, if the page could not be read', () => {
-      stubDesktop();
-      render(<InputHandoffCard sessionId="s1" snapshot={signIn({ picture: true, controls: [] })} />);
-      expect(screen.getByRole('status').textContent).toBe('inputHandoff.directSignIn.hintUnread');
-      expect(screen.getByRole('button', { name: 'inputHandoff.action.openPlainWindow' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'inputHandoff.action.done' })).toBeTruthy();
-    });
-
     it('offers the form when the window cannot be used, and shows an error when opening it did not work', async () => {
       stubDesktop();
       raise.mockResolvedValueOnce(false);

@@ -266,15 +266,9 @@ export function InputHandoffCard({
     formFor !== snapshot.requestId
   ) {
     // A sign-in happens on the window, here through its live view; without one, the form below finishes it.
-    // With a picture the page could not be read, so the end cannot be seen either: the owner says when.
-    status = t(
-      snapshot.picture
-        ? "interaction.inputHandoff.directSignIn.hintUnread"
-        : "interaction.inputHandoff.directSignIn.hint",
-    );
+    status = t("interaction.inputHandoff.directSignIn.hint");
     actions = [
       skip,
-      ...(snapshot.picture ? [{ ...handBack, tone: "secondary" as const }] : []),
       {
         label: t("interaction.inputHandoff.action.openRemoteDesktop"),
         disabled: busy,

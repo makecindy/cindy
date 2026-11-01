@@ -85,7 +85,7 @@ import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js'
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { raiseAgentBrowserWindow } from './raise-agent-browser-window.js';
-import { hasSecretPages, isSecretTab, markSecretAllTabs, markSecretTargets } from '../input-handoff/secretTaint.js';
+import { hasSecretPages, isSecretPage } from '../input-handoff/secretTaint.js';
 import {
   BrowserOpenForLoginError,
   browserOpenForLoginErrorCodeFromData,
@@ -553,40 +553,6 @@ function browserRecipeSecretId(key: string): string {
   return `browser-recipe-${key}`;
 }
 
-/**
- * 代输入 on a page nothing could be read from: the tabs its window title stands for are bound
- * by id, which a page cannot change. When they cannot be told, every tab's page reads pause.
- */
-export async function bindSecretTabsByTitle(windowTitle: string): Promise<void> {
-  try {
-    // Tab ids are per profile and `tabs` answers for the default one: with more than one profile (or an
-    // answer that cannot be read) the tab cannot be told from a same-titled decoy, so everything pauses.
-    const profiles = await backendController.call({ action: 'profiles' });
-    const list = (profiles.data as { profiles?: unknown } | undefined)?.profiles;
-    if (!profiles.ok || !Array.isArray(list) || list.length > 1) {
-      markSecretAllTabs();
-      return;
-    }
-    const listed = await backendController.call({ action: 'tabs' });
-    const tabs = listed.ok ? ((listed.data as { tabs?: Array<Record<string, unknown>> } | undefined)?.tabs ?? []) : [];
-    // A window title is its shown tab's title, then the browser's name. Only an exact match of the shown
-    // tab counts: a looser one (a substring, a tab in the background) could be a same-titled decoy.
-    const shownAs = (tab: Record<string, unknown>) => {
-      const title = typeof tab.title === 'string' ? tab.title.trim() : '';
-      return title !== '' && tab.active === true && (windowTitle === title || windowTitle.startsWith(`${title} - `));
-    };
-    const matched = tabs.filter(shownAs);
-    const ids = matched
-      .flatMap((tab) => [tab.targetId, tab.tabId, tab.suggestedTargetId])
-      .filter((id): id is string => typeof id === 'string');
-    // Exactly one shown tab can be told; none or several cannot, so every tab pauses.
-    if (matched.length === 1 && ids.length > 0) markSecretTargets(ids);
-    else markSecretAllTabs();
-  } catch {
-    markSecretAllTabs();
-  }
-}
-
 export function getBrowserMcpDeps(): {
   experienceStore: NonNullable<BrowserMcpDeps['experienceStore']>;
   getRuntime(): BrowserControlRuntime;
@@ -671,7 +637,7 @@ export function getBrowserMcpDeps(): {
       // into: while any secret page is remembered, fail closed. Without a target the runtime acts on its
       // last tab, so every listed tab is checked.
       if (targetId && named.length === 0) return true;
-      return (targetId ? named : tabs).some((tab) => isSecretTab(tab));
+      return (targetId ? named : tabs).some((tab) => typeof tab.url === 'string' && isSecretPage(tab.url));
     },
     logger,
   };

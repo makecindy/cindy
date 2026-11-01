@@ -96,7 +96,6 @@ function start(
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
   const guarded: Array<string | undefined> = [];
-  const guardedWindows: string[] = [];
   let clock = 0;
   const session = new InputHandoffSession({
     requestId: 'req1',
@@ -108,10 +107,7 @@ function start(
     driver,
     publish: (snapshot) => published.push(snapshot),
     finish: (result) => finished.push(result),
-    onSecretEntered: ({ url, windowTitle }) => {
-      if (windowTitle) guardedWindows.push(windowTitle);
-      else guarded.push(url);
-    },
+    onSecretEntered: ({ url }) => guarded.push(url),
     now: () => clock,
     sleep: async (ms) => {
       clock += ms;
@@ -125,7 +121,6 @@ function start(
     session,
     finished,
     guarded,
-    guardedWindows,
     published,
     latest: () => published[published.length - 1],
   };
@@ -235,8 +230,8 @@ describe('a sign-in step', () => {
 });
 
 describe('a minimized window brought back for a sign-in', () => {
-  it('is covered before it comes back, whether or not its page could be read', async () => {
-    for (const readable of [true, false]) {
+  it('is covered before it comes back', async () => {
+    for (const readable of [true]) {
       const { driver, state } = desktop('password');
       state.minimized = true;
       const events: string[] = [];
@@ -263,7 +258,7 @@ describe('a minimized window brought back for a sign-in', () => {
         driver,
         publish: () => undefined,
         finish: () => undefined,
-        onSecretEntered: ({ url, windowTitle }) => events.push(`cover:${url ?? windowTitle}`),
+        onSecretEntered: ({ url }) => events.push(`cover:${url}`),
         sleep: async () => undefined,
         windowWatchMs: 5000,
         settleTimeoutMs: 50,
@@ -277,6 +272,15 @@ describe('a minimized window brought back for a sign-in', () => {
 });
 
 describe('a browser page that cannot be read', () => {
+  it('stays a screenshot step, not a sign-in on the window', async () => {
+    const { driver } = unreadable();
+    const run = start(driver);
+    await run.session.start();
+    expect(run.latest()).toMatchObject({ phase: 'ready', picture: true });
+    expect(run.latest().directSignIn).toBeUndefined();
+    run.session.cancel();
+  });
+
   const unreadable = () => {
     const { driver, state } = desktop();
     const read = driver.snapshot.bind(driver);
@@ -294,55 +298,6 @@ describe('a browser page that cannot be read', () => {
     });
     return { driver, state, seen };
   };
-
-  it('is done on the window too, with the picture kept for devices without a live view', async () => {
-    const { driver } = unreadable();
-    const run = start(driver);
-    await run.session.start();
-    expect(run.latest()).toMatchObject({ phase: 'ready', picture: true, directSignIn: true });
-    run.session.cancel();
-  });
-
-  it('covers the page before the owner types into it, though its address is unknown', async () => {
-    const { driver } = unreadable();
-    const run = start(driver);
-    await run.session.start();
-    expect(new Set(run.guardedWindows)).toEqual(new Set(['Sign in']));
-    run.session.cancel();
-  });
-
-  it('is covered before the code and screenshot probes raise the window', async () => {
-    const { driver } = unreadable();
-    const events: string[] = [];
-    const capture = driver.capture!.bind(driver);
-    driver.capture = async (target) => {
-      events.push('capture');
-      return capture(target);
-    };
-    driver.qr = async () => {
-      events.push('qr');
-      return null;
-    };
-    const session = new InputHandoffSession({
-      requestId: 'req1', purpose: 'Sign in', target: { app: 'Google Chrome', windowTitle: 'Sign in' }, timeoutMs: 600_000,
-      hostPid: 1, remoteInput: true, driver, publish: () => undefined, finish: () => undefined,
-      onSecretEntered: ({ windowTitle }) => events.push(`cover:${windowTitle}`),
-      sleep: async () => undefined, windowWatchMs: 5000, settleTimeoutMs: 50,
-    });
-    await session.start();
-    expect(events[0]).toBe('cover:Sign in');
-    expect(events.some((event) => event === 'qr' || event === 'capture')).toBe(true);
-    session.cancel();
-  });
-
-  it('keeps renewing the cover while the owner may still type', async () => {
-    const { driver } = unreadable();
-    const run = start(driver);
-    await run.session.start();
-    const before = run.guardedWindows.length;
-    await vi.waitFor(() => expect(run.guardedWindows.length).toBeGreaterThan(before));
-    run.session.cancel();
-  });
 
   it('goes back to the form flow as soon as the page can be read', async () => {
     const { driver, seen } = unreadable();
@@ -485,7 +440,10 @@ describe('a waiting card watching its window', () => {
     const { driver, state } = desktop();
     const run = start(driver);
     await run.session.start();
-    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    await run.session.decide(
+      { kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision },
+      { deviceId: 'phone' },
+    );
     state.screen = 'signedIn';
     state.windowTitle = 'Inbox';
     await vi.waitFor(() => expect(run.finished).toHaveLength(1));
@@ -496,7 +454,10 @@ describe('a waiting card watching its window', () => {
     const { driver, state } = desktop();
     const run = start(driver);
     await run.session.start();
-    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { local: true });
+    await run.session.decide(
+      { kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision },
+      { local: true },
+    );
     const revision = run.latest().revision;
     state.screen = 'password';
     await settle();
