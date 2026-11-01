@@ -67,6 +67,7 @@ import {
   loadGroupBy,
   loadGroupDialogue,
   loadGroupDevice,
+  loadGroupInProgress,
   loadLastActivity,
   loadSortBy,
   loadProjectOrder,
@@ -80,6 +81,7 @@ import {
   persistGroupBy,
   persistGroupDialogue,
   persistGroupDevice,
+  persistGroupInProgress,
   persistLastActivity,
   persistSortBy,
   persistProjectOrder,
@@ -149,6 +151,8 @@ export interface UseSidebarFilterReturn {
   groupDialogue: boolean;
   /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
+  /** 「进行中」段开关:默认 true,关掉后进行中的任务留在各自项目里。 */
+  groupInProgress: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;
   /** 按项目分组时的项目行顺序。默认 'activity'。 */
@@ -181,6 +185,8 @@ export interface UseSidebarFilterReturn {
   setGroupDialogue: (groupDialogue: boolean) => void;
   /** 设置「按设备分组」，持久化到 localStorage。 */
   setGroupDevice: (groupDevice: boolean) => void;
+  /** 设置「进行中」段开关,只把关闭写进 localStorage。 */
+  setGroupInProgress: (groupInProgress: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
@@ -270,6 +276,9 @@ export function useSidebarFilter(
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
   const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
+  const [groupInProgress, setGroupInProgressState] = useState<boolean>(() =>
+    loadGroupInProgress(),
+  );
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => {
     migrateLegacyManualSort();
     return loadSortBy();
@@ -545,6 +554,11 @@ export function useSidebarFilter(
     persistGroupDevice(next);
   }, []);
 
+  const setGroupInProgress = useCallback((next: boolean) => {
+    setGroupInProgressState(next);
+    persistGroupInProgress(next);
+  }, []);
+
   const setSortBy = useCallback((next: FilterSortBy) => {
     setSortByState(next);
     persistSortBy(next);
@@ -661,6 +675,7 @@ export function useSidebarFilter(
     groupBy,
     groupDialogue,
     groupDevice,
+    groupInProgress,
     sortBy,
     projectOrder,
     manualProjectOrder,
@@ -675,6 +690,7 @@ export function useSidebarFilter(
     setGroupBy,
     setGroupDialogue,
     setGroupDevice,
+    setGroupInProgress,
     setSortBy,
     setProjectOrder,
     resetContentFilters,

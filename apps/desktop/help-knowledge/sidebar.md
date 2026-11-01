@@ -38,6 +38,7 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
   - **Project** (default on): sessions with a project fold into project rows; project rows and stray chats share one timeline. Turn it off for a flat list.
   - **Chat** (default on): collects projectless sessions into one collapsible **Chat** group.
   - **Device** (default on): appears when you have a remote device. Splits the list into device sections (this computer first), each with a collapsible header showing the device name and online state.
+  - **In Progress** (on for new installs; off if you were already using Cindy before it was added): shows an **In Progress** section below **Pinned** with every session that is waiting on you, finished but unread, or running, gathered from all projects and chats. Teammate sessions stay in their own groups. While there, a session is not repeated inside its project. It returns to its project after it finishes and you've opened it and moved on. Sessions are ordered by creation time, so a row doesn't move when its status changes, and each run of an automation gets its own row. The section follows the sidebar filters.
 - **Session sort** — **Priority** (waiting on you first, then unread, then running, then by time; a project row ranks by its most urgent session), **Recent Activity** (default, most recent first), or **Creation Time** (newest first).
 - **Project sorting** (only while grouping by project) — **Follow sessions** (default) or **Manual**: drag project rows to reorder them; sessions inside still follow **Session sort**.
 - **Session status** — **Active** (default) / **Archived** / **All**. See above.
@@ -49,6 +50,7 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Pinning:**
 
 - Right-click a session and choose **Pin** / **Unpin**. There's no limit; a new pin goes to the front.
+- **Pin suggestion:** when you've often opened a session over the last 7 days (reopening it within 30 minutes counts once) and it isn't pinned, a line below **Pinned** suggests pinning it. Click **Pin** to pin it, or **×** to stop suggesting that session. Cindy only suggests; it never pins or reorders on its own. Open history is kept on this computer for each Cindy account.
 - In a project's **⋮** menu, choose **Pin project** / **Unpin project** to pin the whole project. Pinned projects and sessions share one draggable order.
 - The **Pinned** header has its own view-style button: **Text**, **Cards**, or **List** (Cards is only available in Pinned).
 

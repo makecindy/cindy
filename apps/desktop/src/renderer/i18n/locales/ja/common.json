@@ -14028,6 +14028,11 @@
       "pinned": "ピン留め",
       "pinnedToggleExpand": "ピン留めを展開",
       "pinnedToggleCollapse": "ピン留めを折りたたむ",
+      "inProgress": "進行中",
+      "inProgressToggleExpand": "進行中を展開",
+      "inProgressToggleCollapse": "進行中を折りたたむ",
+      "pinSuggestion": "よく開いています：{{title}}",
+      "pinSuggestionDismiss": "今後表示しない",
       "pinnedShowMore": "もっと見る",
       "viewStyle": "表示スタイルを切り替え",
       "viewStyleList": "テキスト",
@@ -14083,7 +14088,8 @@
         "project": "プロジェクト",
         "flat": "フラット表示",
         "device": "デバイス",
-        "dialogue": "チャット"
+        "dialogue": "チャット",
+        "inProgress": "進行中"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイスグループを使えません",
       "deviceGroup": {
@@ -14409,7 +14415,8 @@
       "groupSummary": {
         "project": "プロジェクト",
         "dialogue": "チャット",
-        "device": "デバイス"
+        "device": "デバイス",
+        "inProgress": "進行中"
       },
       "taskStatusHeading": "セッションの状態",
       "taskStatus": {

@@ -104,6 +104,26 @@ function safeStorage(): Storage | null {
   }
 }
 
+/**
+ * 侧栏重设计之后才有的标记:installVintage 的固化结果与主列表显示模式偏好。用过重设计后
+ * 侧栏、却从没打开过任务的老用户只留下这两个键,同样算「本次启动前就在用」。
+ * 它们会在本次启动的首帧被写入(MainLayout 等处读显示模式时),所以只认**模块求值时**
+ * 已存在的值——模块随应用启动加载、早于任何渲染,那一刻存在的只可能是旧会话留下的。
+ */
+const POST_REDESIGN_MARKER_KEYS = [INSTALL_VINTAGE_KEY, 'sidebar.mainListMode'] as const;
+
+function readPostRedesignMarkers(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return POST_REDESIGN_MARKER_KEYS.some((key) => storage.getItem(key) !== null);
+  } catch {
+    return false;
+  }
+}
+
+let postRedesignMarkersAtLaunch = readPostRedesignMarkers();
+
 function hasLegacyUsageTrace(storage: Storage): boolean {
   // owner-scoped key 形如 `<base>.owner.<ownerId>`(sidebarOwnerStorageKey),
   // 按该前缀匹配整张表。(2026-08-13 复查修正:此前误写成 `<base>:` 前缀,
@@ -131,6 +151,16 @@ function hasLegacyUsageTrace(storage: Storage): boolean {
  * 首次调用时推断并固化;此后直接读固化值。localStorage 不可用时按 fresh 处理
  * (读不到痕迹也写不了标记,给新默认是更合理的兜底)。
  */
+/**
+ * 此刻本机是否已有使用过 Cindy 的痕迹(不读也不写固化结果)。供后来新增、同样要求
+ * 「老用户升级后不变」的默认值在自己首次读取时各自判定一次。
+ */
+export function hasSidebarUsageTrace(): boolean {
+  if (postRedesignMarkersAtLaunch) return true;
+  const storage = safeStorage();
+  return storage ? hasLegacyUsageTrace(storage) : false;
+}
+
 export function getSidebarInstallVintage(): SidebarInstallVintage {
   if (memoized !== null) return memoized;
   const storage = safeStorage();
@@ -158,5 +188,9 @@ export const __testing = {
   OWNER_CLAIM_KEY,
   resetMemo(): void {
     memoized = null;
+  },
+  /** 模拟一次新的启动:重新读取启动前标记。 */
+  relaunch(): void {
+    postRedesignMarkersAtLaunch = readPostRedesignMarkers();
   },
 };
