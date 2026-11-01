@@ -757,10 +757,11 @@ func handoffRaise(_ request: [String: Any]) -> [String: Any] {
   let app = AXUIElementCreateApplication(pid)
   handoffPrepare(app)
   guard let window = handoffResolveWindow(app, request)?.0 else { return ["error": "target_gone"] }
-  handoffActivate(pid, window)
+  // Whether the app now takes keys: macOS may refuse a background helper, and the owner must be told.
+  let activated = handoffActivate(pid, window)
   usleep(180000)
   guard let frame = handoffFrame(window), frame[2] > 0, frame[3] > 0 else { return ["error": "target_gone"] }
-  var result: [String: Any] = ["frame": frame]
+  var result: [String: Any] = ["frame": frame, "activated": activated]
   if let id = handoffWindowID(pid, frame) { result["windowId"] = Int(id) }
   return result
 }

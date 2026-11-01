@@ -379,7 +379,8 @@ export class InputHandoffSession {
     const target = this.target;
     if (!target || !driver.raise || this.ended || this.busy) return false;
     const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    return !!raised && !('error' in raised);
+    // The window came up only if macOS let the app take the front: a refused activation is a failure to show.
+    return !!raised && !('error' in raised) && raised.activated !== false;
   }
 
   /**

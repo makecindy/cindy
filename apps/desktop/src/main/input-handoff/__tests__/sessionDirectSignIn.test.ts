@@ -155,6 +155,15 @@ describe('a sign-in step', () => {
     run.session.cancel();
   });
 
+  it('says so when macOS refused to bring the window forward', async () => {
+    const { driver } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    driver.raise = async () => ({ frame, windowId: 7, activated: false });
+    expect(await run.session.bringToFront()).toBe(false);
+    run.session.cancel();
+  });
+
   it('brings the window forward again when the owner asks', async () => {
     const { driver, state } = desktop();
     const run = start(driver);
