@@ -158,6 +158,16 @@ function opensObjectMetadata(text: string, bodyStart: number): boolean {
   return false;
 }
 
+/**
+ * Whether the character before `lastNonSpace` introduces a value inside object
+ * metadata: a `:` key separator, a `,` between entries, an enclosing bracket, or
+ * the start of the body itself.
+ */
+function opensMetadataValue(text: string, bodyStart: number, lastNonSpace: number): boolean {
+  if (lastNonSpace < bodyStart) return true;
+  return [':', ',', '[', '(', '{'].includes(text[lastNonSpace]);
+}
+
 function opensQuotedLabel(
   text: string,
   bodyStart: number,
@@ -373,7 +383,16 @@ function skipBareEdgeText(
 ): number {
   const lineEnd = text.indexOf('\n', from) === -1 ? text.length : text.indexOf('\n', from);
   let start = from;
+  // A quoted bare edge text (`A -- "go --> stop" --> B`) is visible text: the first
+  // tip inside the quotes does not end the segment, so the quotes keep their
+  // pairing and the label reaches the plain buffer as one piece.
+  let quoted = false;
   for (let at = from; at < lineEnd; at += 1) {
+    if (text[at] === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
     if (at === from || !PUNCTUATION_RUN_RE.test(text[at - 1])) {
       start = at;
       // `A -- foo --- B` ends the text with a plain tip that has no arrow head, and
@@ -388,6 +407,14 @@ function skipBareEdgeText(
   }
   return lineEnd;
 }
+
+/**
+ * The characters a quote may follow when it *opens* a string: whitespace, a bracket,
+ * an edge label pipe, a statement separator, a key colon or an edge tip. Any other
+ * character in front of the quote is part of an id token, including non-ASCII ones
+ * (`屏幕" --> B`), so that quote stays inside the token.
+ */
+const STRING_OPENING_BEFORE_RE = /[\s[({|,;:=<>]/;
 
 /**
  * Mermaid statements are separated by newlines *or* by a `;`, so an accessibility
@@ -578,8 +605,14 @@ function mapOutsideQuotesAndLabels(text: string, fn: (segment: string) => string
         }
         continue;
       }
+      // A bare scalar in object metadata keeps its punctuation as text
+      // (`A@{ shape: rect, label: foo( }`), so an opener there only starts a nested
+      // value when a key, a comma or an enclosing bracket stands in front of it;
+      // otherwise the `}` of the metadata could never close it and the rest of the
+      // document would stay inside the body.
+      const metadataScalar = labelInMetadata && !opensMetadataValue(text, labelBodyStart, lastNonSpace);
       const nested =
-        labelQuoted || !OPENER_HEADS.has(ch)
+        labelQuoted || metadataScalar || !OPENER_HEADS.has(ch)
           ? undefined
           : LABEL_OPENERS.find(([open]) => text.startsWith(open, i));
       if (nested) {
@@ -629,11 +662,16 @@ function mapOutsideQuotesAndLabels(text: string, fn: (segment: string) => string
         i = end;
         continue;
       }
+      // A `;` separates Mermaid statements as well, so a subgraph header may start
+      // after it (`A --> B; subgraph id [go -> stop]`) and its title is text as well.
+      subgraphTitlePending = /^subgraph\s/.test(statementHead);
     }
     if (ch === '"') {
-      // A quote glued to an id character belongs to that token (`screen5" --> B`),
-      // so it is not a delimiter and must not swallow the rest of the document.
-      if (!quoted && i > 0 && /[A-Za-z0-9_.-]/.test(text[i - 1])) {
+      // A quote glued to an id belongs to that token (`screen5" --> B`, `屏幕" --> B`),
+      // so it is not a delimiter and must not swallow the rest of the document. The
+      // decision reads the delimiter set instead of an id character class, because a
+      // node id may hold any non-ASCII character as well.
+      if (!quoted && i > 0 && !STRING_OPENING_BEFORE_RE.test(text[i - 1])) {
         plain += ch;
         i += 1;
         continue;

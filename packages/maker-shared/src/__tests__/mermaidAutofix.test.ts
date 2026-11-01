@@ -734,4 +734,42 @@ describe('quotes, complete edges and block headers', () => {
     const output = repairMermaidSource(source);
     expect(output).toContain('C --> D');
   });
+
+  it('does not open a label at a bare scalar in object metadata', () => {
+    // `foo(` is a bare scalar value, not a nested shape, so the `}` behind it still
+    // closes the metadata and the next statement is graph syntax again.
+    const source = ['flowchart TD', '  A@{ shape: rect, label: foo( }', '  C \u2192 D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A@{ shape: rect, label: foo( }');
+    expect(output).toContain('C --> D');
+  });
+
+  it('still opens a nested shape value in object metadata', () => {
+    const source = ['flowchart TD', '  A@{ shape: rect, constraint: [on], label: foo( }', '  C \u2192 D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('constraint: [on]');
+    expect(output).toContain('C --> D');
+  });
+
+  it('keeps the title of a subgraph that follows a semicolon', () => {
+    const source = ['flowchart TD', '  A --> B; subgraph id [go \u2192 stop]', '  C \u2192 D', '  end'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('subgraph id [go \u2192 stop]');
+    expect(output).not.toContain('subgraph id [go --> stop]');
+    expect(output).toContain('C --> D');
+  });
+
+  it('stops a quoted bare edge text at the tip behind the quotes', () => {
+    const source = ['flowchart TD', '  A -- "go --> stop" --> B', '  C \u2192 D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A -- "go --> stop" --> B');
+    expect(output).toContain('C --> D');
+  });
+
+  it('keeps a quote behind a non-ascii id in the token', () => {
+    const source = ['flowchart TD', '  \u5c4f\u5e55" --> B', '  C \u2192 D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('\u5c4f\u5e55"');
+    expect(output).toContain('C --> D');
+  });
 });
