@@ -112,3 +112,13 @@ agent-input-coordinator.test.ts 的远程入队与插话测试曾从 register.ts
 app-runtime、cindy-terminal 类型检查通过。maker-shared 没有 typecheck script，因此额外执行其 build（tsc --noEmit）：发现存量 findLastIndex 与 ES2022 lib 不兼容，改为等价倒序查找后通过；五组空列表、无撤销、仅撤销及多次撤销输入与原行为一致。该改动不提高运行时语言版本要求。主干冲突、完整 CI、正式 test-hygiene 与发送端身份迁移仍未完成，在线 VPS 不变。
 
 最终 Desktop 全量检查为 241 条诊断（本批之前 259），共享恢复与原话解析代码无新增诊断；队列测试中仍有原有重复 statDirectory 夹具字段的诊断，发送端缺失接口也仍报告类型错误。未将这些错误隐藏或标为通过。文档检查 10 项通过，diff 检查通过。
+
+### 伙伴身份与发送端原话证据（2026-11-01）
+
+共享 taskActionHost 补回当前分支伙伴自主范围合同，区分 owner、entrusted 和 autonomous，并隔离独立工具调用的授权上下文。采用主干 `7eb991b79c^` 对应行为；后续主干已调整伙伴策略，合并时必须同步迁移规则、实现与测试，不能只选一侧代码。Desktop 与 Terminal 均接入工作台真实任务归属查询，Terminal 随伙伴服务解绑一并清理查询回调。
+
+发送端仅为本轮宿主核实的伙伴主人请求写入 ownerVerified，不继承旧回执标记。IM 原话从同一任务、同一 clientId、未撤回的用户消息读取；普通任务保留原有正文。远程发送复用本机相同捕获入口，账号切换仍中止交付。不新增数据库角色或 migration。
+
+沿用既有生产入口测试：taskActionAuthorization、botWorkbenchAccess、forwardedRequest 三文件 145 项通过（9.40 秒）；原发送端失败已消除。companion-core、app-runtime、cindy-terminal 类型检查通过。Desktop 完整类型检查仍有 232 条诊断（本批之前 241），本批授权及原话捕获模块无诊断。
+
+Terminal 宿主五项定向集成因 Windows libuv `src/win/fs-event.c:72` 原生断言崩溃，继发 ERR_IPC_CHANNEL_CLOSED；启用 Chokidar polling 和缩小至四项分别重试仍复现，未获得有效通过结果。未修改产品监听行为、放宽测试或将该组计为成功。此项、其它 Desktop 类型错误、Orca 测试门禁及主干冲突仍待解决，PR 保持草稿，在线 VPS 未修改。

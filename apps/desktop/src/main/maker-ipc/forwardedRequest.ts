@@ -1,6 +1,6 @@
 import { getResolvedMainLocale } from '../i18n.js';
 import { createAgentRequestCapture } from '@cindy/app-runtime/agentRequestCapture';
-export { requestSourceFromInput } from '@cindy/app-runtime/agentRequestCapture';
+export { requestSourceFromInput, ownerChannelInputEvidence } from '@cindy/app-runtime/agentRequestCapture';
 export type { RequestInputEvidence, CapturedAgentRequest } from '@cindy/app-runtime/agentRequestCapture';
 import { formatForwardedRequest as formatLocalizedForwardedRequest, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 export const captureAgentRequest=createAgentRequestCapture(formatForwardedRequest);

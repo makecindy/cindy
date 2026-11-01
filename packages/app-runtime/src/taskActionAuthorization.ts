@@ -12,10 +12,14 @@ import { TASK_ACTION_TOOLS, ORCA_TASK_ACTION_TOOLS } from '@cindy/mcps/host/task
 /** A confirmed new delegation may advance only its own live execution. */
 export const DELEGATED_TASK_ACTIONS = ['message_session_task', 'stop_session_task'] as const;
 
+/** Host-decided identity; independent of the runtime permission mode. */
+export type TaskActionPrincipal = 'owner' | 'entrusted' | 'autonomous';
+
 export interface TaskActionScope {
   /** Host identity/active-input generation, captured before the confirmation. */
   key: string;
   ownerInput: boolean;
+  principal?: TaskActionPrincipal;
   /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
   delegated: boolean;
   /** Rechecked at mutation/delivery; includes account, target and delegation revocation. */
@@ -29,6 +33,7 @@ interface ActionContext {
   sessionId: string;
   tool: string;
   fingerprint: string;
+  principal?: TaskActionPrincipal;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
@@ -55,6 +60,29 @@ export function taskActionFingerprint(call: Pick<Call, 'tool' | 'args'>): string
   return createHash('sha256')
     .update(JSON.stringify([call.tool, call.args]))
     .digest('hex');
+}
+
+export const NEEDS_OWNER_REQUEST: Decision = {
+  ok: false,
+  errorCode: 'NEEDS_OWNER_REQUEST',
+  message: 'The owner did not ask for this in the current turn (host-verified). On your own initiative you may read, keep Todos, notify the owner, message teammates, manage background tasks you started and continue tasks already handed to you; changing the owner’s other tasks needs the owner’s request. Do not retry: record a Todo or notify the owner with the concrete task, action and reason so they can ask you to do it.',
+};
+
+/** Independent calls must not inherit the action that started their transport. */
+export function runTaskActionRequest<T>(operation: () => Promise<T>): Promise<T> {
+  return actionContext.exit(operation);
+}
+
+export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): ToolCallAuthorizer {
+  return (call) => runTaskActionRequest(async () => {
+    const decision = await authorize(call);
+    if (!decision.ok) return decision;
+    return {
+      ok: true,
+      run: <T>(operation: () => Promise<T>) => runTaskActionRequest(() =>
+        decision.run ? decision.run(operation) : operation()),
+    };
+  });
 }
 
 /** One Host-confirmed call, consumed once. Direct and progressive tools use this same gate. */
@@ -108,6 +136,7 @@ export async function admitTaskAction(
           sessionId: call.sessionId!,
           tool: call.tool,
           fingerprint,
+          principal: scope.principal,
           assertCurrent: scope.assertCurrent,
           assertCurrentSync: scope.assertCurrentSync,
           assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
@@ -130,6 +159,12 @@ export function approvedTaskDelegation(
 
 export async function assertTaskActionCurrent(): Promise<void> {
   await actionContext.getStore()?.assertCurrent();
+}
+
+/** Only the admitted caller can read its host-decided identity. */
+export function taskActionPrincipal(callerSessionId: string): TaskActionPrincipal | undefined {
+  const current = actionContext.getStore();
+  return current?.sessionId === callerSessionId ? current.principal : undefined;
 }
 
 /** Host lifecycle only: durable completion delivery is not another invocation

@@ -3161,11 +3161,13 @@ export class TerminalTaskHost {
         authorizeGroupTool:this.bots.groups.authorizeGroupTool,
       }).createDesktopTaskActionAuthorizer({
         getSession:maker.getSession,
+        isEntrustedTask:(callerSessionId,taskId)=>this.companionEntrustedTask?.(callerSessionId,taskId)??Promise.resolve(false),
         input:id=>{
           const accepted=this.inputCoordinator.getAcceptedInputProvenance(id),session=maker.getSession(id);
           const input={input:accepted,executing:!!accepted||!!session?.isTurnRunning()};
           const ownerInput=this.inputCoordinator.isActiveInputOwnerAuthored(id);
           return {key:JSON.stringify(input),permission:resolveGhostFsSessionSnapshot(maker.getSession,id,session?.instanceId),ownerInput,
+            ownerContinuation:this.inputCoordinator.isActiveInputOwnerContinuation(id),
             automatic:!!accepted&&!ownerInput,orcaSenderSessionId:accepted?.orcaSenderSessionId,
             boundary:`${session?.instanceId??''}:${this.inputCoordinator.getGeneration(id)}`};
         },
@@ -3325,9 +3327,11 @@ export class TerminalTaskHost {
 
   configureScheduler(deps?: import('../../../../packages/lizi-mcps/src/types.js').SchedulerMcpDeps) {this.schedulerDeps=deps;this.eventRuntime?.scheduledOutput.setSilencedRunProbe(runId=>this.schedulerDeps?.getScheduler().isRunSilenced(runId)===true);}
   private companionHelperFactory?: (input:{sessionId:string;workingDir:string;agentKind:AgentKind})=>Pick<import('@cindy/mcps').XdtHelperMcpDeps,'botWorkbench'|'botRoutines'|'botProfiles'|'teammateHome'>;
-  configureCompanionHelper(factory:NonNullable<TerminalTaskHost['companionHelperFactory']>){
+  private companionEntrustedTask?: (callerSessionId:string,taskId:string)=>Promise<boolean>;
+  configureCompanionHelper(factory:NonNullable<TerminalTaskHost['companionHelperFactory']>,isEntrustedTask?:TerminalTaskHost['companionEntrustedTask']){
     this.companionHelperFactory=factory;
-    return ()=>{if(this.companionHelperFactory===factory)this.companionHelperFactory=undefined;};
+    this.companionEntrustedTask=isEntrustedTask;
+    return ()=>{if(this.companionHelperFactory===factory){this.companionHelperFactory=undefined;this.companionEntrustedTask=undefined;}};
   }
   isTaskInputOwnerAuthored(id:string){this.guard({source:'local'});return this.inputCoordinator.isActiveInputOwnerAuthored(id);}
   private projectHelper?:Pick<import('@cindy/mcps').XdtHelperMcpDeps,'createProject'|'projectManagement'|'moveSession'>;
@@ -3429,16 +3433,7 @@ export class TerminalTaskHost {
   private readonly remoteSessionHandoff=createRemoteSessionHandoff({
     captureAccess:()=>{this.guard({source:'local'});return ()=>this.guard({source:'local'});},
     invoke:(...args)=>this.invokeHelperRemote(...args),
-    captureRequest:async(id,text)=>{
-      this.guard({source:'local'});const active=this.inputCoordinator.getAcceptedInputProvenance(id);
-      const database=await this.database;
-      const links=await database.getDbClient().drizzle.select({role:botSessionLinks.role}).from(botSessionLinks)
-        .where(dbAnd(dbEq(botSessionLinks.sessionId,id),dbIsNull(botSessionLinks.archivedAt))).limit(8);
-      const preserve=links.some(link=>['canonical','group','channel'].includes(link.role));
-      const capture=createAgentRequestCapture((source,supplement)=>formatLocalizedForwardedRequest(source,supplement,this.options.language?.()??'en'));
-      const result=await capture(id,text,active??null,async()=>(await this.contextMessages(id,Infinity)).filter(row=>row.role==='user').slice(-1).map(row=>({...row,agentMeta:row.agentMeta??null})),preserve);
-      this.guard({source:'local'});return result;
-    },
+    captureRequest:(id,text)=>this.sessionControls.captureRequest(id,text),
   });
   private async helperSurface(sessionId: string) {
     this.guard({source:'local'});

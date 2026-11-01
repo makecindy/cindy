@@ -104,7 +104,7 @@ export async function createTerminalCompanionServices(host:TerminalCompanionHost
         const result=await send(params);assertCurrent();return result;},
       readRemoteMessages:createRemoteWorkbenchMessageReader(tasks.invokeHelperRemote),
     },
-  }));
+  }),workbenchTools.canBotContinueWorkbenchTask);
   createBotAutonomyIpc({...autonomy,ipcMain,getDbClient,assertTrustedAppRendererEvent,
     isDeviceLinkInvoke:()=>invocation.getStore()?.source==='remote'}).registerBotAutonomyIpc();
   tasks.configureBotInputProjection(autonomy.noteBotAutonomyInputProjection);

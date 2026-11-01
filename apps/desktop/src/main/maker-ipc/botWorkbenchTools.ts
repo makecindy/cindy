@@ -40,4 +40,4 @@ import {
 
 /** 伙伴主任务才能用工作台;远端、归档、非主任务一律拒绝。 */
 export type {BotWorkbenchHostDeps} from '@cindy/app-runtime/botWorkbenchTools';
-export const {resolveWorkbenchCaller,runBotProjectsTool,readBotResponsibleSessionIds,readBotResponsibilityScope,captureBotCreatedTaskResponsibility,runBotWorkbenchTool,readBotWorkbenchTaskForOwner}=createBotWorkbenchTools({getDbClient:()=>getDbClient(),activeOwnerScopeKey,isAppSessionBoundaryPending,ownerScopedUserDataPath,broadcastBotWorkbenchChanged,botLinkedProjectAccess,...transcripts,...autonomyBridge,...responsibilities});
+export const {resolveWorkbenchCaller,runBotProjectsTool,readBotResponsibleSessionIds,readBotResponsibilityScope,captureBotCreatedTaskResponsibility,runBotWorkbenchTool,readBotWorkbenchTaskForOwner,canBotContinueWorkbenchTask}=createBotWorkbenchTools({getDbClient:()=>getDbClient(),activeOwnerScopeKey,isAppSessionBoundaryPending,ownerScopedUserDataPath,broadcastBotWorkbenchChanged,botLinkedProjectAccess,...transcripts,...autonomyBridge,...responsibilities});

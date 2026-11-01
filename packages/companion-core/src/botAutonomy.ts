@@ -14,6 +14,8 @@
 
 /** 事件源 id；在引擎每次创建后由宿主重新登记。 */
 export const HOST_SESSIONS_SOURCE_ID = 'host:sessions';
+/** Host-started routines are not the owner's standing instructions. */
+export const BUILTIN_ROUTINE_SCHEDULE_PREFIX = 'routine-builtin-';
 
 /** 内置跟进例行任务的 id 前缀；完整 id 由主进程 builtinRoutine.ts 的 builtinFollowUpRoutineId 生成，幂等。 */
 export { BUILTIN_FOLLOW_UP_ROUTINE_PREFIX } from '@cindy/companion-core/routines';

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { botSessionLinks } from '@cindy/runtime-db/schema';
+import { botSessionLinks, messages } from '@cindy/runtime-db/schema';
 import type { DbClient } from '@cindy/runtime-db';
 import { createSessionTerminalReader } from '@cindy/runtime-db/sessionTerminal';
 import { createSessionActivityReader, createPersistedSessionActivityReader } from '@cindy/app-runtime/sessionActivityProjection';
@@ -8,7 +8,10 @@ import { createSessionControlService } from '@cindy/app-runtime/sessionControlSe
 import { createSessionControlCoordinator } from '@cindy/app-runtime/sessionControlCoordinator';
 import { createSessionControlInputBuilder } from '@cindy/app-runtime/sessionControlInput';
 import { createSessionSenderIdentityReader } from '@cindy/app-runtime/sessionSenderIdentity';
-import { createAgentRequestCapture } from '@cindy/app-runtime/agentRequestCapture';
+import { createAgentRequestCapture, ownerChannelInputEvidence } from '@cindy/app-runtime/agentRequestCapture';
+import { taskActionPrincipal } from '@cindy/app-runtime/taskActionAuthorization';
+import { readChannelToolScope } from '@cindy/im-runtime/channelToolScope';
+import { extractPlainText } from '@cindy/im-runtime/agentHandoff';
 import { createSessionRuntimeManagement } from '@cindy/app-runtime/sessionRuntimeManagement';
 import { setSessionRuntimeHarness } from '@cindy/app-runtime/sessionRuntimeHarnessSelection';
 import { hasExplicitSessionTaskModel } from '@cindy/app-runtime/sessionTaskModelOverride';
@@ -50,9 +53,17 @@ export function createTerminalSessionControl(host:{
   const captureRequest=async(id:string,supplement:string)=>{
     guard(); const scope=conversations.broadcastTap.captureDataOwnerBroadcastScope();
     const active=coordinator.getAcceptedInputProvenance(id);
+    const lane=readChannelToolScope({sessionId:id,sessionInstanceId:live(id)?.instanceId});
+    const principal=taskActionPrincipal(id);
     const [companion]=await guardedDb().drizzle.select({role:botSessionLinks.role}).from(botSessionLinks)
-      .where(and(eq(botSessionLinks.sessionId,id),inArray(botSessionLinks.role,['canonical','group','channel']),isNull(botSessionLinks.archivedAt))).limit(1);
-    const request=await capture(id,supplement,active,()=>conversations.messages.listMessagesForAgentHandoff(id,1,undefined,'user'),!!companion);
+      .where(and(eq(botSessionLinks.sessionId,id),inArray(botSessionLinks.role,['canonical','group','channel','thread']),isNull(botSessionLinks.archivedAt))).limit(1);
+    const ownerVerified=!!companion&&principal==='owner';
+    const evidence=active??(ownerVerified?await ownerChannelInputEvidence(lane,async clientId=>{
+      const [row]=await guardedDb().drizzle.select({content:messages.content}).from(messages)
+        .where(and(eq(messages.sessionId,id),eq(messages.clientId,clientId),eq(messages.role,'user'),isNull(messages.rewindAt))).limit(1);
+      return row?extractPlainText(row.content):null;
+    }):null);
+    const request=await capture(id,supplement,evidence,()=>conversations.messages.listMessagesForAgentHandoff(id,1,undefined,'user'),!!companion,ownerVerified);
     guard(); if(!conversations.broadcastTap.isDataOwnerBroadcastScopeCurrent(scope))throw new Error('Data owner changed before request capture');
     return request;
   };

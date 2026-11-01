@@ -122,5 +122,13 @@ async function readBotWorkbenchTaskForOwner(botId: string, taskId: string) {
   return runBotWorkbenchTool(NO_HOST, (access) => access.readForOwner({ botId, taskId }));
 }
 
-return {resolveWorkbenchCaller,runBotProjectsTool,readBotResponsibleSessionIds,readBotResponsibilityScope,captureBotCreatedTaskResponsibility,runBotWorkbenchTool,readBotWorkbenchTaskForOwner};
+async function canBotContinueWorkbenchTask(callerSessionId: string, taskId: string): Promise<boolean> {
+  const result = await runBotWorkbenchTool(NO_HOST, async access => ({
+    ok: true as const,
+    allowed: await access.canContinue({ callerSessionId, taskId }),
+  }));
+  return result.ok && result.allowed;
+}
+
+return {resolveWorkbenchCaller,runBotProjectsTool,readBotResponsibleSessionIds,readBotResponsibilityScope,captureBotCreatedTaskResponsibility,runBotWorkbenchTool,readBotWorkbenchTaskForOwner,canBotContinueWorkbenchTask};
 }
