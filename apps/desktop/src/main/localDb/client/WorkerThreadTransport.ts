@@ -1115,6 +1115,8 @@ function sessionsRenameTitles(readyDb, args) {
   })();
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -1143,7 +1145,8 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
-      if (existing.source === 'bot') {
+      // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
+      if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
         throw Object.assign(new Error('Bot 任务必须通过 Bot 生命周期管理: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
@@ -1166,8 +1169,6 @@ function sessionsSetStatus(readyDb, args) {
     return applied;
   })();
 }
-
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
 
 // Keep this in sync with worker/opHandlers/tx.ts.
 function sessionsSetTerminalStatus(readyDb, args) {
