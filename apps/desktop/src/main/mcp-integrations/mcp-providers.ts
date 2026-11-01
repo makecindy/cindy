@@ -1,3 +1,5 @@
+import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
+import type { GithubReadMethod } from '@cindy/maker-shared';
 import { reportTaskDelivery } from '../bot-autonomy/hub.js';
 import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
@@ -7,7 +9,7 @@ import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type pre
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface } from './helperSurface.js';
+import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
@@ -117,10 +119,6 @@ import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js'
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
-import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
-import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
-import { readContactsSettings } from '../maker-host/contacts-settings-store.js';
-import { readSystemContacts, writeSystemContacts } from '../maker-host/system-contacts.js';
 import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
@@ -739,20 +737,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       logger: createLogger('mcp/cindy_memory'),
     },
-    // 智能通讯录: 全局单库 manager 懒加载单例; 开关现读 settings store —
-    // 每次 session start 时 provider isEnabled 评估, 关着时 server 整个不注册。
-    contacts: {
-      withAccountDataAccess,
-      getManager: getDesktopContactsManager,
-      isEnabled: () => readContactsSettings().enabled,
-      // 系统通讯录读取仅 macOS 注入(JXA); 缺省时 contacts_import_system 工具不注册。
-      // 静态 import(动态 import 的 vite chunk 副作用会二次注册 IPC handler)
-      ...(process.platform === 'darwin' ? { readSystemContacts, writeSystemContacts } : {}),
-      // agent 经 MCP 直写 store 不经 IPC 层, 变更靠这个回调广播给 renderer
-      // (设置页统计/待确认角标/管理浮层的实时刷新)
-      onMutated: broadcastContactsChanged,
-      logger: createLogger('mcp/cindy_contacts'),
-    },
     lsp: {
       pool: deps.lspPool,
       logger: createLogger('mcp/cindy_lsp'),
@@ -775,6 +759,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      github: { call: (caller, method, args) => withAccountDataAccess(caller, async assertCurrent => {
+        const session = typeof args.session_id === 'string' ? args.session_id : caller;
+        const parts = session.split('::');
+        if (parts.length > 2 || parts.some(part => !part)) throw new Error('INVALID_SESSION');
+        const device = typeof args.device === 'string' && args.device !== 'local' ? args.device : parts.length === 2 ? parts[0] : undefined;
+        if (parts.length === 2 && device !== parts[0]) throw new Error('DEVICE_MISMATCH');
+        const localArgs = { ...args, session_id: parts.at(-1) };
+        await assertCurrent();
+        if (device && device !== getDeviceId()) {
+          if (!deps.historyRemote) throw new Error('REMOTE_GITHUB_UNAVAILABLE');
+          const assertAccess = deps.historyRemote.captureAccess();
+          const remote = await deps.invokeRemote(device, 'git-context:github-read', [{ method, args: localArgs }], { preSend: assertAccess });
+          assertAccess();
+          await assertCurrent();
+          if (!remote.ok) return { ok: false, errorCode: remote.error?.message?.startsWith('GITHUB_READ_UNSUPPORTED') ? 'GITHUB_READ_UNSUPPORTED' : 'REMOTE_GITHUB_UNAVAILABLE', error: remote.error };
+          return remote.result as Record<string, unknown>;
+        }
+        const result = method === 'manage_session_prs'
+          ? await manageGithubPrs(parts.at(-1)!, localArgs, `agent:${caller}`)
+          : await readGithub(method as GithubReadMethod, localArgs);
+        await assertCurrent();
+        return result;
+      }) },
       getSessionProject: readCurrentSessionProject,
       runtimeCapabilities: deps.runtimeCapabilities,
       productHelpDocs: HELP_KNOWLEDGE,
@@ -946,6 +953,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const surface = await resolveHelperSurface(dbClient, sessionId);
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
+      },
+      resolveSystemSkillsOff: async ({ sessionId }) => {
+        const dbClient = tryGetDbClient();
+        if (!dbClient || isAppSessionBoundaryPending()) return [];
+        return resolveHelperSystemSkillsOff(dbClient, sessionId);
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),

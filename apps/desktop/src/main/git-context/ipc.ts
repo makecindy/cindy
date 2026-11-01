@@ -1,3 +1,5 @@
+import { setGithubReadRuntime } from './githubReadRuntime';
+import { manageSessionPrs } from './manageSessionPrs';
 /**
  * git-context IPC 装配层 — 单例组装 + handler 注册 + renderer 广播。
  *
@@ -25,7 +27,14 @@ import { eq } from 'drizzle-orm';
 import { createLogger } from '../logger.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import {
+  createGithubReadService,
+  githubReadScope,
+  githubStatusFetch,
+  githubTransport,
+} from './githubReadHost';
+import type { GithubReadService } from './githubReadService';
+import type { GithubReadMethod } from '@cindy/maker-shared';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { registerGithubSetupIpc } from './githubSetupIpc.js';
@@ -45,7 +54,6 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
-  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -104,7 +112,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     token,
     owner: q.owner,
     repo: q.repo,
-    fetchImpl: outboundFetch,
+    fetchImpl: githubStatusFetch(token),
   });
   // 核心状态走 REST(所有 token 类型通用);未解决数走 GraphQL 增强信号,
   // 失败(老 fine-grained PAT 不支持 GraphQL 等)降级 null,不拖垮整条状态。
@@ -115,7 +123,24 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       return null;
     }),
   ]);
+  const metadata = pr as typeof pr & {
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+    updated_at?: string;
+    labels?: unknown[];
+    requested_reviewers?: unknown[];
+  };
   return {
+    metadata: {
+      body: pr.body,
+      author: pr.user,
+      base_sha: pr.base.sha ?? null,
+      mergeable: metadata.mergeable ?? null,
+      merge_state: metadata.mergeable_state ?? null,
+      updated_at: metadata.updated_at ?? null,
+      labels: metadata.labels ?? [],
+      review_requests: metadata.requested_reviewers ?? [],
+    },
     state: pr.state,
     draft: pr.draft,
     merged: pr.merged,
@@ -123,6 +148,9 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     title: pr.title,
     html_url: pr.html_url,
     branch: pr.head.ref,
+    head_sha: pr.head.sha,
+    base_branch: pr.base.ref,
+    review_decision: summary && summary.headOid === pr.head.sha ? (summary.reviewDecision ?? null) : null,
     unresolved_count: summary?.unresolved ?? null,
     checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
   };
@@ -130,6 +158,30 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
 
 let gitContextService: GitContextService | null = null;
 let prStatusService: PrStatusService | null = null;
+let githubReadService: GithubReadService | null = null;
+export async function manageGithubPrs(
+  sessionId: string,
+  args: Record<string, unknown>,
+  origin = 'same-account-remote',
+): Promise<Record<string, unknown>> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  return manageSessionPrs(
+    sessionId,
+    args,
+    async (pr) => {
+      const [status] = await prStatusService!.getStatuses([pr], { waitForFresh: true });
+      if (!status?.ok) throw new Error('PR_VERIFICATION_FAILED');
+    },
+    origin,
+  );
+}
+export async function readGithub(
+  method: GithubReadMethod,
+  args: unknown,
+): Promise<Record<string, unknown>> {
+  if (!githubReadService) throw new Error('HOST_NOT_READY');
+  return githubReadService.read(method, args);
+}
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
 export function registerGitContextIpc(): void {
@@ -138,11 +190,28 @@ export function registerGitContextIpc(): void {
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
+    scope: githubReadScope,
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
   });
-  registerGithubSetupIpc(() => prStatusService?.invalidate());
+  githubReadService = createGithubReadService(prStatusService);
+  setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });
+  registerGithubSetupIpc(() => {
+    prStatusService?.invalidate();
+    githubTransport.invalidate();
+  });
+  ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const input = payload as { method?: unknown; args?: unknown };
+    if (input?.method === 'manage_session_prs') {
+      const args = input.args as Record<string, unknown>;
+      return manageGithubPrs(requireString(args?.session_id, 'session_id'), args);
+    }
+    if (!['get_pr_status', 'get_pr_changes', 'get_pr_details'].includes(String(input?.method)))
+      throwIpcError('INVALID_PARAMS', 'Unknown GitHub read method');
+    return readGithub(input.method as GithubReadMethod, input.args);
+  });
   setPrRefsChangedListener((sessionId) => {
     broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId });
   });
@@ -257,9 +326,6 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
-    // 一次性历史回填(fire-and-forget,幂等):功能上线前的老会话也能绑上 PR。
-    // 此处触发是因为 db 此时必然 ready;完成后经 pr-refs-changed 推送刷新。
-    void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
 
@@ -267,9 +333,6 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
-    // sidebar 启动期就会调这条 → 回填触发点前移到 app 打开侧边栏时,
-    // 不再依赖"先打开某个会话"。
-    void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 

@@ -28,6 +28,7 @@ import {
 } from '@/../shared/voiceConversation';
 import { referenceSpeechVoices } from '@/../shared/speechVoices';
 import { PcmSpeechPlayer } from './PcmSpeechPlayer';
+import { useVoiceCallSummary } from './voiceCallStore';
 import { VoicePreviewController } from './VoicePreviewController';
 import { SpeechVoicePicker } from './SpeechVoicePicker';
 import { resolveVoiceConfiguration } from './voiceConfiguration';
@@ -174,9 +175,12 @@ export function CompanionVoiceSettings(props: Props) {
       void preview.stop();
     };
   }, [preview, loadPreference, refresh]);
+  // A running call holds the voice lease. Its settings stay editable for the next call.
+  const callOpen = useVoiceCallSummary().open;
+  const previewBlocked = blocked || callOpen;
   useEffect(() => {
-    if (blocked) void preview.stop();
-  }, [blocked, preview]);
+    if (previewBlocked) void preview.stop();
+  }, [previewBlocked, preview]);
   useEffect(() => {
     const initialOwner = getDataOwnerGeneration();
     const owner = `${initialOwner.dataOwnerId}:${initialOwner.generation}`;
@@ -461,7 +465,7 @@ export function CompanionVoiceSettings(props: Props) {
           autoSelectFirstVoice={autoSelectVoice}
           speed={effectiveSpeed}
           disabled={!ready || saving || blocked}
-          previewDisabled={!ready || saving || blocked || !props.sessionId || !voiceApi.previewApi}
+          previewDisabled={!ready || saving || previewBlocked || !props.sessionId || !voiceApi.previewApi}
           preview={preview}
           onChange={(value, save) => {
             setAutoSelectVoice(false);

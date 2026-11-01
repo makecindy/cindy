@@ -11,6 +11,8 @@ import {
   withBotHomeAccess,
 } from '../botProfileRuntime';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults';
+import { TEAMMATE_CORE_TOPICS, TEAMMATE_SYSTEM_SKILLS } from '@cindy/mcps';
+import { TEAMMATE_CORE_MAX_CHARS, buildTeammateGuide } from '../teammateGuide';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog';
 
 // Unit regression: default inheritance must retain engine connectors while an
@@ -71,38 +73,53 @@ describe('Bot Profile runtime prompt', () => {
     expect(context).toContain('Do not present terminal-only slash commands');
   });
 
-  it('uses direct Bot tools and avoids whole-surface discovery loops', () => {
+  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): the core keeps orchestration and points to
+  // details instead of preloading them; every detail it names must be one read away.
+  it('keeps orchestration in a capped core and the details one read away', () => {
     const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('You are a teammate with a durable profile');
-    expect(prompt).toContain('Use direct teammate tools');
-    expect(prompt).toContain('`find_teammate_capabilities`');
-    expect(prompt).toContain('`set_teammate_capability`');
-    expect(prompt).toContain('installed-plugin gateway (`ghost_list`, `ghost_info`, `ghost_call`)');
-    expect(prompt).toContain('New mounts take effect next turn in this same task');
-    expect(prompt).toContain('`start_session_task`');
-    expect(prompt).toContain('Prefer completing work in the current chat');
-    expect(prompt).toContain('the user explicitly requests an independent task');
-    expect(prompt).not.toContain('proactively start independent tasks');
-    expect(prompt).toContain('`check_session_task`');
-    expect(prompt).toContain('`message_session_task`');
-    expect(prompt).toContain('`stop_session_task`');
-    expect(prompt).toContain('`send_to_agent`');
-    expect(prompt).toContain('do not repeatedly list the whole tool surface');
-    expect(prompt).toContain('Completion returns automatically');
-    expect(prompt).toContain('It is not a task and has no progress or cancellation');
-    expect(prompt).toContain('does not rewrite another teammate\'s identity');
-    expect(prompt).toContain('offer either a message or a tracked Session task');
+    expect(prompt.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
+    for (const tool of ['`read_teammate_skill`', '`send_to_agent`', '`find_teammate_capabilities`', '`set_teammate_capability`',
+      '`get_teammate_state`', '`update_teammate_profile`', '`ghost_list`', '`connect_account`'])
+      expect(prompt).toContain(tool);
+    for (const topic of Object.keys(TEAMMATE_CORE_TOPICS)) expect(prompt).toContain(`\`${topic}\``);
+    // Moved, not dropped: the task and teammate boundaries live in their topics.
+    expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('Completion returns automatically');
+    expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('the user explicitly requests an independent task');
+    expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('It is not a task and has no progress or cancellation');
+    expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('offer either a message or a tracked Session task');
+    // MCP (Chris 2026-11-01): config files are not a connection and a new task is never the fix;
+    // registering uses Cindy's own form and an already-joined server is left alone.
+    expect(prompt).toContain('writing config files such as `.mcp.json` connects nothing');
+    expect(prompt).toContain('never tell the owner to start a new task');
+    expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('`request_mcp_setup`');
+    expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('If it is already joined, change nothing');
+    // System Skills are listed by name only.
+    expect(prompt).not.toContain('list_teammate_todos');
+    expect(prompt).not.toContain('schedule_set_pre_run_hook');
     expect(prompt).not.toContain('delegate_to_bot');
-    expect(prompt).not.toContain('list_bot_delegations');
+  });
+
+  it('names turned-off system Skills as unavailable and drops them from the list', () => {
+    const prompt = buildBotCapabilityContextPrompt({ systemSkillsOff: ['todo'] });
+    expect(prompt).toContain('On: `routine`');
+    expect(prompt).not.toContain(`\`todo\` — ${TEAMMATE_SYSTEM_SKILLS.todo.description}`);
+    expect(prompt).toContain('Off: `todo`. Their tools are unavailable');
+  });
+
+  // Greptile #8330: every local teammate mounts the same core file, so it must not claim a teammate's switches.
+  it('keeps per-teammate system Skill state out of the shared core file', () => {
+    const shared = buildTeammateGuide({ shared: true, systemSkillsOff: ['todo'] });
+    expect(shared).not.toMatch(/\bOn: |\bOff: |All system Skills are off/);
+    for (const id of ['todo', 'routine', 'follow']) expect(shared).toContain(`\`${id}\` — `);
+    expect(shared).toContain('your preloaded profile says which are on for you');
+    expect(shared.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
   });
 
   it('does not advertise helper discovery or delegation when the target cannot mount it', () => {
     const prompt = buildBotCapabilityContextPrompt({ helperAvailable: false });
-    expect(prompt).toContain('durable profile');
-    expect(prompt).toContain('Respect the user’s memory switch');
-    expect(prompt).not.toContain('`list_tools`');
-    expect(prompt).not.toContain('discover other available Bots');
-    expect(prompt).not.toContain('`start_session_task`');
+    expect(prompt).toContain('Respect the memory switch');
+    expect(prompt).not.toContain('`read_teammate_skill`');
+    expect(prompt).not.toContain('`send_to_agent`');
     expect(prompt).not.toContain('`save_teammate_skill`');
     expect(prompt).not.toContain('ghost_list');
   });
@@ -111,39 +128,24 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt({ helperAvailable: true, cindyAvailable: false });
     expect(prompt).toContain('`find_teammate_capabilities`');
     expect(prompt).toContain('`set_teammate_capability`');
-    expect(prompt).toContain('`start_session_task`');
-    expect(prompt).toContain('do not repeatedly list the whole tool surface');
+    expect(prompt).toContain('discover only what the work needs');
     expect(prompt).not.toContain('ghost_list');
-    expect(prompt).not.toContain('ghost_info');
-    expect(prompt).not.toContain('ghost_call');
+    expect(prompt).not.toContain('`plugins`');
   });
 
   it('keeps learned Skills deliberate instead of writing a diary of every turn', () => {
     const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('Use a `learned-` name only for a stable reusable working habit');
-    expect(prompt).toContain('Respect the user’s memory switch');
-    expect(prompt).toContain('without waiting for a request to remember');
-    expect(prompt).toContain('only when the user explicitly asks you to keep a method as a Skill');
-    expect(prompt).not.toContain('One verified reusable success is enough');
+    expect(prompt).toContain('Save a personal Skill only when the owner asks');
+    expect(prompt).toContain('Respect the memory switch');
+    const memory = TEAMMATE_CORE_TOPICS.memory.body;
+    expect(memory).toContain('Use a `learned-` name only for a stable reusable working habit');
+    expect(memory).toContain('without waiting for a request to remember');
+    expect(memory).toContain('only when the user explicitly asks you to keep a method as a Skill');
     // 回复后复盘已于 2026-10-23 停用，提示词不得再承诺宿主会事后补漏。
-    expect(prompt).not.toContain('the host also reviews the completed reply for missed learning');
-    expect(prompt).toContain('nightly learning may later merge or tidy saved memories');
-    expect(prompt).toContain('Do not launch a separate review task yourself');
-    expect(prompt).toContain('never for a one-off conclusion');
-  });
-
-  /**
-   * 批次 ζ:「TA 学会的」列的是**真技能**,来源是伙伴自己调 `save_teammate_skill`。
-   * 这条约定掉了,技能就永远长不出来 —— 判断「这次做法值不值得沉淀」是语言理解
-   * 问题,代码判不了(maker-core-and-agent-behavior.md §2 的分界)。
-   */
-  it('only saves a verified reusable workflow as a real Skill', () => {
-    const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('`save_teammate_skill`');
-    expect(prompt).toContain('`list_teammate_skills`');
-    expect(prompt).toContain('only after the workflow has succeeded');
-    expect(prompt).toContain('reusable steps are known');
-    expect(prompt).toContain('at a safe turn boundary in this same chat');
+    expect(memory).not.toContain('the host also reviews the completed reply for missed learning');
+    expect(memory).toContain('Do not launch a separate review task yourself');
+    expect(memory).toContain('only after the workflow has succeeded');
+    expect(memory).toContain('at a safe turn boundary in this same chat');
   });
 
   it('keeps the same affirmative delegation guidance beside the default and every preset SOUL', () => {
@@ -160,9 +162,7 @@ describe('Bot Profile runtime prompt', () => {
         buildBotCapabilityContextPrompt(),
       ].join('\n\n');
       expect(runtimePrompt).toContain('`send_to_agent`');
-      expect(runtimePrompt).toContain('`start_session_task`');
-      expect(runtimePrompt).toContain('Completion returns automatically');
-      expect(runtimePrompt).toContain('offer either a message or a tracked Session task');
+      expect(runtimePrompt).toContain('`read_teammate_skill`');
       expect(runtimePrompt).not.toContain('redirecting them to a separate team workflow.\n\nYou are');
     }
   });

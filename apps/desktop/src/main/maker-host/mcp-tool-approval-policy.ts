@@ -12,11 +12,11 @@
  *
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
- *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件继续走会话审批
- *   4. 敏感聚合调用（含 browser recipe）—— 每次进入现有会话审批
- *   5. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，其余调用静默
- *   6. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
+ *   2. 第一方插件 ghost_call —— cindy-art 作图/视频、cindy-contacts 只读查询静默；
+ *                              cindy-contacts 其它调用逐次审批；其它插件继续走会话审批
+ *   3. 敏感聚合调用（含 browser recipe）—— 每次进入现有会话审批
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，其余调用静默
+ *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
  * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
 
@@ -24,7 +24,6 @@ import type {
   McpToolApprovalContext,
   McpToolApprovalPolicy,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
 import { ORCA_TASK_ACTION_TOOLS, TASK_ACTION_TOOLS } from '../maker-ipc/taskActionAuthorization.js';
 
 
@@ -69,7 +68,6 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy_docs::read_sheet',
   'cindy_docs::inspect_pdf',
   'cindy_memory::list_tools',
-  'cindy_contacts::list_tools',
   'cindy_slack::slack_status',
   // 只读当前 Telegram 对话的信息(chat 由逐轮作用域钉死, 无自由文本参数, 不出境)。
   'cindy_telegram_bot::get_chat',
@@ -83,8 +81,7 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
  *
  * 这里不能按 `cindy_` 前缀放行：namespace 只表示品牌归属，不代表新 provider
  * 已完成权限 review。SSH（在已配置主机上跑任意命令）、插件宿主 `cindy`
- * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批；
- * Contacts 走 inner-tool 细粒度策略。
+ * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批。
  */
 const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   'cindy_android',
@@ -135,27 +132,34 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-/** 第一方 Cindy Art 的媒体生成工具。风险是额度而非越权，用户点名作图即授权。 */
-const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
-  'gen_image',
-  'edit_image',
-  'gen_video',
-  'edit_video',
+/**
+ * 第一方插件可静默执行的内层工具，键为 ghost_id。
+ * - cindy-art：作图/改图/视频，风险是额度而非越权，用户点名作图即授权。
+ * - cindy-contacts：本机通讯录的只读查询（不写库、不出境），沿用原内置智能通讯录
+ *   查人免确认的体验；写入、合并、删除、导入与 groups 的写动作逐次审批（见下方）。
+ */
+const FIRST_PARTY_GHOST_AUTO_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['cindy-art', new Set(['gen_image', 'edit_image', 'gen_video', 'edit_video'])],
+  ['cindy-contacts', new Set(['find', 'get', 'list', 'stats', 'find_duplicates'])],
 ]);
 
 /**
- * ghost_call 是聚合入口，默认逐次确认。Cindy Art 的作图/改图/视频是第一方媒体
- * 能力，用户发「画一张」即构成授权；Auto-review 下再弹卡会把常规作图变成手动授权。
- * 读不出 ghost_id / tool 时 fail closed，其它插件不受影响。
+ * ghost_call 是聚合入口：上表的第一方内层工具静默，Auto-review 下再弹卡会把常规作图、
+ * 查人变成手动授权。cindy-contacts 的其它调用（写入、合并、删除、导入）逐次审批，
+ * 不允许一次「本会话允许」覆盖后续危险操作——与原内置通讯录的审批保证一致。
+ * 读不出 ghost_id / tool 时返回 null，按默认策略处理，其它插件不受影响。
  */
-function canAutoApproveCindyArtGhostCall(context: McpToolApprovalContext): boolean {
-  if (context.serverName !== 'cindy') return false;
-  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return false;
+function firstPartyGhostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
+  if (context.serverName !== 'cindy') return null;
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   const params = readJsonObject(context.toolParams);
-  if (!params) return false;
+  if (!params) return null;
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
-  return ghostId === 'cindy-art' && CINDY_ART_MEDIA_TOOLS.has(tool);
+  if (FIRST_PARTY_GHOST_AUTO_TOOLS.get(ghostId)?.has(tool)) return 'auto-approve';
+  if (ghostId !== 'cindy-contacts') return null;
+  if (tool === 'groups' && readJsonObject(params.args)?.action === 'list') return 'auto-approve';
+  return 'prompt-each-time';
 }
 
 /** cindy_scheduler 里接受 `device` 的写工具（与 packages/lizi-mcps/src/scheduler 的 writeDeviceShape 一致）。 */
@@ -193,7 +197,7 @@ export function getDesktopClaudeReadOnlyAllowedTools(): string[] {
 }
 
 /**
- * 保持可信内置 MCP 安静执行，同时让 destructive / external contacts action 每次确认。
+ * 保持可信内置 MCP 安静执行，同时让敏感聚合调用每次确认。
  */
 export function getDesktopMcpToolApprovalPolicy(
   context: McpToolApprovalContext,
@@ -238,14 +242,8 @@ export function getDesktopMcpToolApprovalPolicy(
   // sources/preview/start share one native tool identity. Never persist a grant
   // from discovery that could bypass the policy callback for a later import.
   if (serverName === 'companion_import') return 'prompt-each-time';
-  if (serverName === 'cindy_contacts') {
-    return canAutoApproveContactsMcpTool({ toolName, toolParams })
-      ? 'auto-approve'
-      : 'prompt-each-time';
-  }
-  if (canAutoApproveCindyArtGhostCall(context)) {
-    return 'auto-approve';
-  }
+  const ghostPolicy = firstPartyGhostCallPolicy(context);
+  if (ghostPolicy) return ghostPolicy;
   // Rebinding a task's workspace delegates its execution root; publishing a Skill
   // uploads local files under the signed-in account. Review each action instead
   // of reusing the trusted helper server shortcut/grant. Session modes still apply.
@@ -272,6 +270,7 @@ export function getDesktopMcpToolApprovalPolicy(
     }
     if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
+    if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
     // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {

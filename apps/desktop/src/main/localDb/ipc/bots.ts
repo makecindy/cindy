@@ -236,6 +236,7 @@ import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCo
 import { searchConversations } from '../conversationSearch.js';
 import { registerBotAutonomyIpc } from '../../bot-autonomy/ipc.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { readBotSystemSkillsOff } from '../../../shared/botSystemSkills.js';
 import {
   BOT_FAILURE_REASONS,
   isBotFailureAttentionWorthy,
@@ -1361,6 +1362,9 @@ async function readProfile(
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
+      // Absent = every system Skill on (shared/botSystemSkills.ts).
+      ...(readBotSystemSkillsOff(config.systemSkillsOff).length
+        ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -1675,6 +1679,8 @@ export async function getBotRemoteSettingsSource(botId: string) {
     skills: strings(config.skills),
     connections: strings(config.mcpServers),
     toolsets: strings(config.toolsets),
+    // Absent = every system Skill on (shared/botSystemSkills.ts).
+    ...(readBotSystemSkillsOff(config.systemSkillsOff).length ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
   };
 }
 

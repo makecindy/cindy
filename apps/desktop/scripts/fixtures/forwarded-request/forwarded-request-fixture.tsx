@@ -81,9 +81,9 @@ void mountPage({
       <DraftProbe sessionId={ctx.case === 'fork' ? 'forwarded-fork' : 'forwarded-task'} content={content} />
       <UserMessage workingDir="" sessionId="forwarded-task" messageClientId="forwarded-user-2" agentKind="cc" content={content} automationOrigin={{ kind: 'session', senderSessionId: 'sender', senderBotName: 'Cindy', senderBotId: 'bot-a' }} />
     </div>;
-    if (ctx.case === 'card') return <div className="p-4" data-ui-page-subject>
-      <BotDirectMessageCard data={{ v: 1, threadId: 'thread', viewerBotId: 'bot-a', peerBotId: 'bot-b', peerBotName: 'Filo', direction: 'sent', sequence: 1, preview: content.slice(0, 400) }} />
-    </div>;
+    if (ctx.case === 'card') return <AppFrame sidebarWidth={0}><Routes><Route path="/bots/:botId/direct/thread" element={<div className="p-4" data-ui-page-subject>
+      <BotDirectMessageCard data={{ v: 1, threadId: 'opened-thread', viewerBotId: 'bot-a', peerBotId: 'bot-b', peerBotName: 'Filo', direction: 'sent', sequence: 1, preview: content.slice(0, 400) }} />
+    </div>} /><Route path="/bots/:botId/direct/:threadId" element={<BotDirectMessageView />} /></Routes></AppFrame>;
     return <AppFrame sidebarWidth={0}><Routes><Route path="/bots/:botId/direct/:threadId" element={<BotDirectMessageView />} /></Routes></AppFrame>;
   },
 });

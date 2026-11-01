@@ -131,7 +131,7 @@ describe('task digest assembly', () => {
     expect(formatPrStatuses([
       { ok: true, prNumber: 12, repo: 'cindy', status: 'open', unresolvedCount: 3 },
       { ok: false, prNumber: 9, repo: 'cindy' },
-    ])).toBe('PR cindy#12 open,3 条评审未解决;PR cindy#9 状态未知');
+    ])).toBe('PR cindy#12 open,3 条评审未解决,CI 未知;PR cindy#9 状态未知');
     expect(formatPrStatuses([])).toBeNull();
   });
 });

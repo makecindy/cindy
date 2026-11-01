@@ -421,11 +421,14 @@ function Todos({
   host,
   sessionId,
   todos,
+  todoOff,
   onClose,
 }: {
   host: GlanceTodoHost;
   sessionId: string;
   todos: ReturnType<typeof useGlanceTodos>;
+  /** 主人关掉了系统技能「待办」：已有待办照常显示，不再给「帮我查查」「每天帮我查一次」。 */
+  todoOff: boolean;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -487,10 +490,10 @@ function Todos({
   const visible = showAll ? open : open.slice(0, TODO_PREVIEW);
   const hiddenCount = Math.max(0, openTotal - TODO_PREVIEW);
   return (
-    <Section label={t('bots.glance.todos')} action={<button type="button" data-testid="bot-glance-check"
+    <Section label={t('bots.glance.todos')} action={todoOff ? undefined : <button type="button" data-testid="bot-glance-check"
       aria-label={t('bots.glance.check')} title={t('bots.glance.check')} onClick={check}
       className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ScanSearch size={16} /></button>}>
-      <DailyCheckSwitch host={host} todos={todos} />
+      {todoOff ? null : <DailyCheckSwitch host={host} todos={todos} />}
       {visible.map((todo) => (
         <TodoRow
           key={todo.id}
@@ -713,6 +716,9 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
   const sessionId = bot.sessionId ?? '';
   const host = useMemo<GlanceTodoHost>(() => ({ botId: bot.id, deviceId: bot.deviceId }), [bot.deviceId, bot.id]);
   const todos = useGlanceTodos(host, Boolean(sessionId));
+  // 只有本机伙伴的资料在这里；远程伙伴由它所在的电脑在关掉「待办」时不下发每天检查的状态。
+  const localProfile = useBotProfiles().find((profile) => !bot.deviceId && profile.id === bot.id);
+  const todoOff = localProfile?.capabilities?.systemSkillsOff?.includes('todo') === true;
   const due = dueTodos(todos.todos);
   const [unseen, setUnseen] = useState(false);
   const dueSignature = due.map((todo) => `${todo.id}:${todo.revision}`).join('|');
@@ -772,7 +778,7 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
             onClose={() => setOpen(false)}
           />
         </Section>
-        <Todos host={host} sessionId={sessionId} todos={todos} onClose={() => setOpen(false)} />
+        <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />
         <Activity bot={bot} onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>

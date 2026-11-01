@@ -12,6 +12,7 @@ import {
   type BotGlance,
   type BotAutonomyExecution,
 } from '../../shared/botAutonomy.js';
+import type { BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import {
@@ -21,7 +22,7 @@ import {
 } from '../maker-host/bot-autonomy-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { filterFollowUpEvents, resolveSchedulerBotId, type FollowUpSubject } from './follower.js';
-import { readBotDirectory, readLocalSessionMetas, readTaskOwnership } from './hostData.js';
+import { readBotDirectory, readBotSystemSkillsOffFor, readLocalSessionMetas, readTaskOwnership } from './hostData.js';
 import type { BotAutonomyRuntime, GlanceOptions } from './runtime.js';
 import { errorCode, type BotAutonomyInputProjection } from './taskWatch.js';
 
@@ -134,7 +135,7 @@ function assertOwner(scope: string): void {
   if (!scopeIsCurrent(scope)) throwIpcError('PRECONDITION_FAILED', 'App session changed; retry in the current account.');
 }
 
-/** 设置「自动跟进所有任务」归谁；null = 关闭。目标伙伴必须存在且没被归档。 */
+/** 设置「自动跟进所有任务」归谁；null = 关闭。目标伙伴必须存在、没被归档，且没关掉「跟进」。 */
 export async function setBotAutonomySchedulerBotId(schedulerBotId: string | null): Promise<BotAutonomySettingsView> {
   const scope = activeOwnerScopeKey();
   assertOwner(scope);
@@ -143,6 +144,7 @@ export async function setBotAutonomySchedulerBotId(schedulerBotId: string | null
     assertOwner(scope);
     const bot = bots.get(schedulerBotId);
     if (!bot || bot.status === 'archived' || bot.status === 'deleting') throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (bot.followOff) throwIpcError('PRECONDITION_FAILED', 'SYSTEM_SKILL_OFF: this teammate\'s follow-up system Skill is turned off');
   }
   await writeBotAutonomySchedulerBotId(schedulerBotId);
   return afterSettingsChange(scope);
@@ -162,6 +164,14 @@ async function afterSettingsChange(scope: string): Promise<BotAutonomySettingsVi
   if (runtime) await runtime.refreshFollowers().catch((error) => log.warn('autonomy refresh failed', { error: errorCode(error) }));
   log.info('autonomy scheduler setting changed');
   return getBotAutonomySettingsView();
+}
+
+/**
+ * 伙伴当前关掉的系统技能（cindy-bots-runtime.md §6「伙伴技能分层」）：例行任务执行前据此跳过它的跟进与「每天查待办」，
+ * 待办设置与执行入口据此拒绝。
+ */
+export async function botSystemSkillsOff(botId: string): Promise<BotSystemSkillId[]> {
+  return readBotSystemSkillsOffFor(botId);
 }
 
 /** null means startup is not ready; an empty batch has lost its authorization. */

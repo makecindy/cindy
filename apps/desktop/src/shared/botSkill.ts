@@ -24,3 +24,19 @@ export interface BotSkillSummary {
 export interface BotSkillDetail extends BotSkillSummary {
   body: string;
 }
+
+/** Saving a learned Skill from settings; `expectedUpdatedAt` rejects a stale overwrite. */
+export interface BotSkillSaveInput {
+  slug: string;
+  name: string;
+  description: string;
+  body: string;
+  expectedUpdatedAt?: string;
+}
+
+/** The shared core every teammate receives (read-only in settings). */
+export interface BotCoreSkill {
+  name: string;
+  description: string;
+  body: string;
+}

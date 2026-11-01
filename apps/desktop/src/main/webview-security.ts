@@ -763,6 +763,8 @@ export function installDeferredPopupRouter(
  *   - http(s) 与 about:blank popup 都让 Chromium 创建真实 child WebContents;
  *   - `createWindow` 接管 Electron 预创建的 `options.webContents`,把**同一个**
  *     browsing context 放进 main-owned WebContentsView,再路由成 RSB tab;
+ *   - 点击链接触发的新窗口可能没有 child WebContents;这时直接将 HTTP(S) 地址路由为
+ *     RSB tab,避免把缺省 guest 当成致命错误;
  *   - 不能另建 `<webview>`:那会让 opener 手里的 WindowProxy 指向已关闭的旧
  *     context,破坏 OAuth/SSO 对 closed/location/close 的依赖。
  *   - 推消息走 channel `rsb:browser-popup`,renderer 端通过 preload 的 fanOut 订阅。
@@ -797,7 +799,17 @@ export function installBrowserGuestHandlers(
           options as typeof options & { webContents?: WebContents }
         ).webContents;
         if (!popupContents) {
-          throw new Error('Electron did not provide popup WebContents to createWindow');
+          if (isRoutablePopupUrl(details.url)) {
+            routeBrowserPopup(hostContents, guestContents.id, {
+              url: details.url,
+              disposition: details.disposition,
+            });
+          }
+          // Electron invokes this callback for link-triggered new windows even
+          // when Chromium did not create a child WebContents. In that path it
+          // ignores the returned WebContents, so return the opener after routing
+          // the URL instead of crashing the main process.
+          return guestContents;
         }
         const surfaceId = createRsbNativePopupSurface(hostContents, popupContents);
         if (!surfaceId) {

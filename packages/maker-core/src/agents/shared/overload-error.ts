@@ -70,10 +70,13 @@ export interface OverloadError {
  * 文案 pattern 仍然**保留**而不是删掉：远端可能跑着旧 daemon，Anthropic 侧也只有
  * 文案和状态码可用。它从「唯一依据」降级为「兜底」。
  *
- * pattern 说明：capacity 要求 `at capacity` 精确短语，避免误伤业务文案里的
- * "capacity"（如缓存容量、队列容量）；overloaded 认 529 状态码与 Anthropic 的
- * `overloaded_error` 错误码字面量，不认裸词 "overloaded"——后者在工具输出、日志
- * 摘要里太常见，会把模型正常返回的内容误判成平台故障。
+ * pattern 说明：capacity 认 `at capacity` 精确短语（避免误伤业务文案里的
+ * "capacity"，如缓存容量、队列容量）与 `currently overloaded` 整句——后者是上游
+ * app-server 自己写的容量提示（见 Kimi 的 `The engine is currently overloaded`），
+ * 那条通道不会自己重试，与 `at capacity` 同属必须由客户端接管的情形；overloaded
+ * 只认 529 状态码与 Anthropic 的 `overloaded_error` 错误码字面量（SDK 自带退避，
+ * 客户端不能叠层），不认裸词 "overloaded"——后者在工具输出、日志摘要里太常见，
+ * 会把模型正常返回的内容误判成平台故障。
  */
 export function parseOverloadError(
   message: string,
@@ -82,7 +85,9 @@ export function parseOverloadError(
 ): OverloadError | null {
   if (codexErrorInfoTag === 'serverOverloaded') return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
-  if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
+  if (/\bat capacity\b/i.test(message) || /\bcurrently overloaded\b/i.test(message)) {
+    return { kind: 'capacity' };
+  }
   if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
   return null;
 }

@@ -126,18 +126,17 @@ it.each(['codex', 'claude-code', 'pi'] as const)('keeps helper tools available a
 });
 
 it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] as const).flatMap(agentKind =>
-  (['cindy_contacts', 'cindy_scheduler', 'cindy_slack', 'cindy_memory'] as const).map(name => ({ sessionId, agentKind, name })))))(
+  (['cindy_scheduler', 'cindy_slack', 'cindy_memory'] as const).map(name => ({ sessionId, agentKind, name })))))(
   'allows $sessionId through $agentKind $name regardless of plugin creation source', async ({ sessionId, agentKind, name }) => {
     const f = fixture();
     const privateData = [{ id: 'private', displayName: 'Synthetic private contact', prompt: 'Synthetic private schedule' }];
     const read = vi.fn(async () => privateData);
-    const manager = vi.fn(() => ({ isEnabled: () => true, getStore: () => ({ listContacts: read, list: async () => (await read()).map(item => ({ filename: 'private.md', frontmatter: { title: item.displayName } })) }) }));
+    const manager = vi.fn(() => ({ isEnabled: () => true, getStore: () => ({ list: async () => (await read()).map(item => ({ filename: 'private.md', frontmatter: { title: item.displayName } })) }) }));
     const scheduler = vi.fn(() => ({ list: read }));
     const getBridge = vi.fn(() => ({ availability: () => ({ bound: true, connected: true, serverSupportsTools: true }),
       callTool: async () => ({ ok: true, result: await read() }) }));
     const { withAccountDataAccess } = f;
     const providers = createLiziMcpProviders({ enabled: [name],
-      contacts: { getManager: manager, withAccountDataAccess },
       memory: { getManager: manager, withAccountDataAccess, searchSessions: read },
       scheduler: { getScheduler: scheduler, withAccountDataAccess },
       slackHook: { getBridge, withAccountDataAccess },
@@ -153,7 +152,7 @@ it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] 
     await Promise.all([client.connect(ct), server.connect(st)]);
     const call = (spill = false) => client.callTool(name === 'cindy_slack'
       ? { name: 'slack_call_tool', arguments: { name: 'search', ...(spill ? { out_file: 'private.json' } : {}) } }
-      : { name: 'call_tool', arguments: { name: name === 'cindy_contacts' ? 'contacts_list' : name === 'cindy_memory' ? 'memory_list' : 'schedule_list', args: {} } });
+      : { name: 'call_tool', arguments: { name: name === 'cindy_memory' ? 'memory_list' : 'schedule_list', args: {} } });
     const denied = (result: unknown) => {
       expect(result).toMatchObject({ isError: true });
       expect(JSON.parse((result as {content:Array<{text:string}>}).content[0]!.text)).toMatchObject({ok:false,errorCode:'CAPABILITY_NOT_AVAILABLE'});

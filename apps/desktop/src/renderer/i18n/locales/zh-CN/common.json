@@ -1334,6 +1334,10 @@
       "lock-unreadable": "无法读取或保存本地数据的维护锁。请检查数据目录的访问权限；恢复访问后重新打开。若仍失败，请联系支持人员。",
       "recovery-busy": "另一个 Cindy 实例正在检查本地数据的维护锁。请稍后重新打开。"
     },
+    "passiveCorrupt": {
+      "title": "共享数据库无法恢复",
+      "description": "当前以只读／共享模式运行，Cindy 不会自动恢复或修改该共享数据库。若另有实例在使用同一份 userData，请先关闭后重试；也可改用 --isolated 启动。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "数据库清理中断",
       "interruptedDescription": "数据库清理异常中断。请重新启动 Cindy，系统会根据维护记录安全恢复。",
@@ -1348,6 +1352,16 @@
     "preparing": {
       "description": "本地数据已由更新版本的 Cindy 升级，当前版本无法打开。正在获取新版本，请稍候…",
       "progress": "已下载 {{progress}}%"
+    },
+    "initFailed": {
+      "title": "本地数据库启动失败",
+      "description": "本地数据库未能正常启动。请先重试；若持续失败，请将下方技术细节反馈给开发团队。",
+      "retry": "重试启动数据库"
+    },
+    "corrupt": {
+      "title": "本地数据库无法打开",
+      "description": "本地数据库可能已损坏，也可能正被共用同一份数据的其他 Cindy 实例占用。若已打开其他实例，请先关闭后重试；若仍失败，说明没有可用备份能够自动恢复，请复制技术细节并反馈给开发团队，以获取数据恢复协助。",
+      "copy": "复制技术细节"
     },
     "noUpdate": {
       "title": "本地数据暂时无法打开",
@@ -4848,9 +4862,6 @@
         "title": "群聊参与模式",
         "hint": "bot 进过的群会出现在这里。「全响应」= 每条消息都看，bot 自己判断要不要插话（每条都会消耗 token）。",
         "empty": "还没有群。把 bot 拉进群、有人说话后就会出现在这里。",
-        "contactsOn": "群里说话的人会自动记入智能通讯录（总开关已开启）。",
-        "contactsOff": "智能通讯录未开启，群里说话的人不会被自动记住。",
-        "contactsEnable": "开启",
         "error": {
           "load": "未能读取 Telegram 群列表，请检查连接后重试。",
           "save": "群参与模式未保存，已恢复上次确认的模式。",
@@ -5707,10 +5718,6 @@
         "ssh": {
           "name": "SSH 远程命令",
           "description": "通过本机配置的 SSH 连接在远程电脑上执行命令。"
-        },
-        "contacts": {
-          "name": "智能通讯录",
-          "description": "查询、整理联系人资料与交往记录。"
         }
       }
     },
@@ -6196,9 +6203,6 @@
             "title": "群聊参与模式",
             "hint": "官方 bot 见过的群会出现在这里。「全响应」仅对已绑定账号的每条发言生效；其他成员只进入本机群聊上下文，不会触发任务。",
             "empty": "还没有群。把 bot 拉进群，并用已绑定账号发一条消息后就会出现在这里。",
-            "contactsOn": "群里其他发言人会自动记入智能通讯录。",
-            "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
-            "contactsEnable": "开启",
             "error": {
               "load": "未能读取 Telegram 群列表，请检查连接后重试。",
               "save": "群参与模式未保存，已恢复上次确认的模式。",
@@ -8242,7 +8246,8 @@
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。"
+        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
         "name": "显示名称",
@@ -8276,186 +8281,6 @@
         "title": "删除 “{{name}}”？",
         "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
-      }
-    },
-    "contacts": {
-      "title": "智能通讯录",
-      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。数据默认只保存在本机，也可由你开启设备间同步；查询与整理会经由你自己的模型处理。",
-      "enable": {
-        "label": "启用智能通讯录",
-        "description": "开启后 Agent 可以查询并自动采集人物信息(不确定的条目会进入待确认)。关闭不影响在此浏览和管理已有数据。",
-        "toggleAria": "切换智能通讯录"
-      },
-      "sync": {
-        "label": "在我的设备之间同步",
-        "description": "在需要参与的每台桌面设备上开启一次。设备在线时自动同步；同一局域网优先直连，否则发送端到端加密的中转数据。纯程序比对，不调用模型，也不产生 token 消耗。",
-        "toggleAria": "切换通讯录设备同步",
-        "syncNow": "立即同步",
-        "onlineDevices_other": "{{count}} 台其他设备在线",
-        "route": {
-          "lan": "局域网直连",
-          "relay": "加密中转"
-        },
-        "status": {
-          "loading": "正在读取同步状态…",
-          "signInRequired": "登录 Cindy 账号后可在设备间同步",
-          "off": "同步已关闭",
-          "waiting": "等待其他已开启同步的桌面设备上线",
-          "syncing": "正在安全同步…",
-          "ready": "已准备好，设备上线后会自动同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "系统安全存储不可用，无法保护设备私钥",
-          "peer-identity-changed": "设备身份发生变化，已暂停同步以保护数据",
-          "sync-failed": "同步失败，将在设备下次在线时重试"
-        },
-        "toast": {
-          "enabled": "设备同步已开启",
-          "disabled": "设备同步已关闭"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 组织 / {{groups}} 分组",
-      "kind": {
-        "person": "人物",
-        "org": "组织"
-      },
-      "filters": {
-        "all": "全部",
-        "person": "人物",
-        "org": "组织",
-        "pending": "待确认"
-      },
-      "list": {
-        "searchPlaceholder": "搜索姓名 / 邮箱 / 关键词",
-        "newAria": "新建联系人",
-        "newNamePlaceholder": "姓名或组织名",
-        "newKindAria": "切换类型(人物 / 组织)",
-        "newConfirm": "创建",
-        "groupFilterAria": "按分组筛选",
-        "groupFilterAll": "全部分组",
-        "loadMore": "加载更多",
-        "noResults": "没有匹配的联系人",
-        "empty": "通讯录还是空的。开启后 Agent 会在工作中自动沉淀，也可以点右上角 + 手动添加。"
-      },
-      "detail": {
-        "empty": "在左侧选择一个联系人查看档案",
-        "pendingBanner": "这是 Agent 低置信采集的条目，请确认是否入册。",
-        "pendingConfirm": "确认入册",
-        "pendingDiscard": "丢弃",
-        "nameAria": "显示名",
-        "deleteAria": "删除档案",
-        "summaryPlaceholder": "一行简介",
-        "identities": "身份",
-        "identityRemoveAria": "移除身份 {{value}}",
-        "identityPlatformAria": "平台",
-        "identityValuePlaceholder": "邮箱 / 平台 id / handle",
-        "identityAddAria": "添加身份",
-        "narrative": "关系与背景",
-        "narrativePlaceholder": "与你的关系、协作历史、背景信息(Markdown)",
-        "agentNotes": "给 Agent 的指令",
-        "agentNotesPlaceholder": "例如：这是老板的私人邮箱，勿群发",
-        "events": "事件记录",
-        "eventsEmpty": "还没有事件记录",
-        "eventDeleteAria": "删除事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "发生了什么",
-        "eventAddAria": "添加事件",
-        "groups": "分组",
-        "groupRemoveAria": "从分组 {{name}} 移除",
-        "groupAddAria": "加入分组",
-        "groupAddPlaceholder": "加入分组…",
-        "discardChanges": "放弃修改",
-        "save": "保存",
-        "identitiesEmpty": "还没有身份记录",
-        "relations": "关联",
-        "relationsEmpty": "还没有关联(所属组织 / 相关人物)",
-        "relationAddAria": "添加关联",
-        "relationRemoveAria": "移除与 {{name}} 的关联",
-        "relationVerbPlaceholder": "任职 / 家人…",
-        "relationTargetAria": "选择关联对象",
-        "relationTargetPlaceholder": "选择人或组织…",
-        "relationNotePlaceholder": "备注(职位…)"
-      },
-      "deleteConfirm": {
-        "title": "删除「{{name}}」？",
-        "description": "将同时删除其全部身份、事件记录与分组关系，不可恢复。",
-        "confirm": "删除",
-        "cancel": "取消"
-      },
-      "toast": {
-        "enabled": "智能通讯录已启用",
-        "disabled": "智能通讯录已关闭",
-        "codexRefreshDeferred": "开关已保存，但 Codex 正忙：将在重启应用后对 Codex 任务生效",
-        "toggleFailed": "切换智能通讯录失败",
-        "created": "已创建「{{name}}」",
-        "createFailed": "创建失败",
-        "deleted": "已删除「{{name}}」",
-        "deleteFailed": "删除失败",
-        "saved": "已保存",
-        "saveFailed": "保存失败",
-        "confirmFailed": "确认入册失败",
-        "identityAddFailed": "添加身份失败",
-        "identityRemoveFailed": "移除身份失败",
-        "eventAddFailed": "添加事件失败",
-        "eventDeleteFailed": "删除事件失败",
-        "groupAddFailed": "加入分组失败",
-        "groupRemoveFailed": "移出分组失败",
-        "relationAddFailed": "添加关联失败",
-        "relationRemoveFailed": "移除关联失败"
-      },
-      "manage": "管理",
-      "manager": {
-        "title": "智能通讯录",
-        "closeAria": "关闭"
-      },
-      "merge": {
-        "button": "合并重复档案",
-        "buttonAria": "合并重复档案",
-        "hint": "选择一份重复档案，将其身份、事件、关联并入「{{target}}」后删除。",
-        "searchPlaceholder": "搜索重复档案…",
-        "confirmTitle": "把「{{source}}」并入「{{target}}」？",
-        "confirmDescription": "「{{source}}」的身份、事件、关联、分组将全部迁入，其档案随后删除，不可恢复。",
-        "confirm": "合并",
-        "success": "已把「{{source}}」并入「{{target}}」",
-        "failed": "合并失败"
-      },
-      "import": {
-        "title": "导入联系人",
-        "button": "导入",
-        "pickHint": "从外部来源批量导入。邮箱/电话与已有档案相同的会自动并入(不产生重复)；名字相似的会列入待人工确认清单。",
-        "sourceSystem": "系统通讯录",
-        "sourceSystemDesc": "只读拉取，首次需系统授权",
-        "sourceVcf": "vCard 文件",
-        "sourceVcfDesc": ".vcf(通讯录导出的通用格式)",
-        "emptySource": "来源里没有可导入的联系人",
-        "permissionDenied": "未获通讯录授权：请在 系统设置 → 隐私与安全性 → 自动化 中允许访问",
-        "systemReadFailed": "读取系统通讯录失败",
-        "vcfParseFailed": "解析 vCard 文件失败",
-        "selectedCount": "已选 {{checked}} / {{total}}",
-        "groupPlaceholder": "导入后归入分组(可选，不存在则创建)",
-        "run": "导入 {{count}} 条",
-        "running": "导入中…",
-        "failed": "导入失败",
-        "doneSummary": "导入完成：新建 {{created}} 人，并入已有档案 {{enriched}} 条，新建组织 {{orgs}} 个。",
-        "needsReview": "{{count}} 条与现有档案名字相似，未自动导入，请人工确认：{{names}}",
-        "identityConflicts": "{{count}} 条记录的部分身份已属于其他联系人（{{names}}），未并入——请在管理界面确认是否为同一人并合并",
-        "relationErrors": "{{count}} 条任职关系未能建立（{{names}}）",
-        "skipped": "{{count}} 条被跳过(无效或出错)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "该身份已属于另一个联系人，请改为更新既有档案或先合并",
-        "PERMISSION_DENIED": "系统通讯录访问未授权，请在 系统设置 > 隐私与安全性 > 自动化 中允许",
-        "UNSUPPORTED_CAPABILITY": "当前平台不支持此操作",
-        "NOT_FOUND": "目标不存在或已被删除",
-        "ALREADY_EXISTS": "已存在同名或相同内容的条目",
-        "INVALID_PARAMS": "输入无效，请检查后重试",
-        "INTERNAL": "操作失败，请稍后重试"
-      },
-      "guide": {
-        "hint": "让 AI 帮你补充联系人档案、处理待确认项并整理重复信息。",
-        "cta": "让 AI 帮你管理通讯录",
-        "managementPrompt": "帮我管理智能通讯录。先检查当前状态和已有工具，再带我补充联系人、整理重复项和待确认项；任何写入、合并或删除前先让我确认。"
       }
     },
     "remotePermission": {
@@ -11086,22 +10911,112 @@
       "skill": "技能",
       "mcp": "MCP",
       "toolset": "内置工具",
-      "unavailable": "不可用",
       "empty": "没有匹配的能力",
-      "accessHint": "逐项选择伙伴可使用的内置工具、MCP 与技能。更改从下一次请求生效，也适用于已授权的群内请求。",
-      "inheritedHint": "当前跟随本机已开启的工具。关闭任意一项后，此列表只使用你选择的项目。",
-      "selectedHint": "此列表中，伙伴只使用已选中的项目。",
-      "personalHint": "伙伴自己学到的技能，随伙伴自动加载。",
       "unavailableHint": "本机或当前执行环境暂不可用，请先配置连接或系统授权。",
       "notOnThisComputer": "这台电脑不可用",
-      "configure": "前往配置",
       "empty_toolset": "当前执行环境没有可用的内置工具。",
       "empty_mcp": "尚未添加自定义 MCP 服务。",
       "empty_skill": "暂无可选的技能。",
       "inputHandoff": {
         "title": "代输入",
         "description": "遇到需要你本人输入的登录信息、密码或验证码时，允许这位伙伴请你在任意设备上填写。你填写的内容不会交给它。"
-      }
+      },
+      "intro": "选择这位伙伴能用的技能、工具和 MCP，从下一条消息开始生效。",
+      "alwaysOn": "始终开启",
+      "core": {
+        "group": "核心技能",
+        "name": "伙伴核心技能",
+        "hint": "开任务、联系伙伴、换模型、用工具和插件、记忆。随 Cindy 更新。",
+        "meta": "所有伙伴共用 · 始终开启 · 随 Cindy 更新",
+        "note": "每位伙伴都有的编排能力，不能关闭或修改。想让它换种做法，在对话里告诉它，它会记成自己的技能。",
+        "covers": "包括",
+        "raw": "查看原文",
+        "items": {
+          "tasks": {
+            "title": "任务",
+            "body": "判断什么时候开后台任务，控制自己开的任务，把结果带回对话；也能到你的其他电脑上干活。"
+          },
+          "teammates": {
+            "title": "联系伙伴",
+            "body": "给其他伙伴发消息，或帮你创建新伙伴。"
+          },
+          "models": {
+            "title": "模型与工具",
+            "body": "按你的要求切换模型，按需找到并使用工具和插件。"
+          },
+          "memory": {
+            "title": "记忆",
+            "body": "记住你的偏好和背景，用前先查、有变化就更新。"
+          },
+          "self": {
+            "title": "了解自己",
+            "body": "知道自己有哪些功能并帮你开关；Cindy 的用法（加 Telegram、配 MCP、装插件）先查帮助再动手。"
+          }
+        }
+      },
+      "system": {
+        "group": "系统技能",
+        "meta": "已开 {{on}} / 共 {{total}}",
+        "pageMeta": "系统技能 · 随 Cindy 更新",
+        "use": "为这位伙伴开启",
+        "whenOff": "关闭后",
+        "items": {
+          "todo": {
+            "name": "待办",
+            "hint": "记下你交代的事和它发现的事，到期提醒你。",
+            "off": "不再记录、整理和提醒待办；已有待办保留，重新开启后继续。"
+          },
+          "routine": {
+            "name": "例行任务",
+            "hint": "帮你建立和维护定期执行的例行任务。",
+            "off": "不再新建或修改例行任务；已有例行任务照常运行，你仍可在「例行任务」页管理。"
+          },
+          "follow": {
+            "name": "工作台与跟进",
+            "hint": "关注你所有任务的近况，跟进你交给它的任务。",
+            "off": "不再主动查看和跟进你的任务；你仍可以在对话里直接问它。"
+          }
+        }
+      },
+      "learned": {
+        "group": "学会的技能",
+        "empty": "还没有学会的技能。夜间学习会把反复用到的做法整理成技能，你也可以在对话里让它记下来。",
+        "meta": "自己学会的 · 更新于 {{date}}",
+        "metaUndated": "自己学会的",
+        "missing": "这个技能已不存在。",
+        "use": "使用这个技能",
+        "useHint": "关闭后保留内容，伙伴暂时不用它。",
+        "edit": "修改",
+        "delete": "删除",
+        "cancel": "取消",
+        "save": "保存",
+        "saveFailed": "没能保存，请稍后再试。",
+        "deleteFailed": "没能删除，请稍后再试。",
+        "deleteTitle": "删除「{{name}}」？",
+        "deleteBody": "删除后伙伴不再使用这个技能，内容无法恢复。以后需要时，可以在对话里让它重新记下。",
+        "unsavedTitle": "尚有未保存的修改",
+        "unsavedDescription": "离开后会丢弃这次对技能的修改。",
+        "discard": "放弃修改",
+        "continueEditing": "继续编辑",
+        "descriptionLabel": "什么时候用",
+        "bodyLabel": "做法"
+      },
+      "local": {
+        "group": "本机技能"
+      },
+      "followMeta": "跟随本机 · {{count}} 项",
+      "selectedMeta": "已选 {{count}} / 共 {{total}}",
+      "showRest": "显示其余 {{count}} 项",
+      "showLess": "收起",
+      "manage": "管理",
+      "toolSettings": "工具设置",
+      "notTurnedOn": "这台电脑还没开启",
+      "turnOn": "去开启",
+      "permissions": "权限"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
+      "offHint": "系统技能「{{skill}}」已关闭，在能力页重新开启后才会运行。"
     },
     "guided": {
       "title": "创建伙伴",
@@ -11493,6 +11408,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "打开对话",
+      "inCallWith": "正在与 {{name}} 通话",
       "showDetails": "展开通话记录",
       "hideDetails": "收起通话记录",
       "transcriptTitle": "当前识别文字",
@@ -11561,6 +11478,7 @@
       "unsent": "尚未发送 · 可选中文字复制",
       "hint": "停顿后自动发送，回复由 AI 语音朗读。随时开口即可插话。",
       "status": {
+        "questionElsewhere": "任务里有问题等你回答 · 仍在通话",
         "idle": "准备好就开始",
         "connecting": "正在连接语音识别…",
         "listening": "正在听",
@@ -11576,6 +11494,7 @@
         "muted": "麦克风已关闭 · 可以继续收听"
       },
       "errors": {
+        "busy": "语音正被其他通话、朗读、试听或听写占用，请结束后重试。",
         "connection": "语音连接中断，未发送的文字已保留。",
         "microphone": "麦克风已停止，请检查权限和设备连接后继续。",
         "send": "这条消息未被接收，文字已保留。",
@@ -12462,6 +12381,7 @@
         "titleLocal": "改回这台电脑运行 Agent？",
         "titleOther": "改到「{{device}}」上运行 Agent？",
         "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
+        "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "confirm": "换电脑运行",
         "cancel": "保持不变"
       }
@@ -14652,6 +14572,7 @@
           "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
           "empty": "粘贴 GitHub PR 链接即可添加",
           "removed": "已移除 {{count}} 个",
+          "legacy": "未确认的历史引用：{{count}}",
           "addLabel": "添加 PR 链接",
           "add": "添加 PR",
           "loading": "正在读取…",
@@ -14981,6 +14902,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "项目「{{projectName}}」中发现待导入的自动任务",
+        "review": "查看导入内容",
+        "title": "导入仓库自动任务",
+        "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增自动任务，它们可以执行命令、启动完全访问权限的 Agent。请仅导入你信任的内容。",
+        "accept": "确认导入",
+        "removed": "将删除：{{names}}"
+      },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 删除 {{deleted}}",
         "installed": "项目「{{projectName}}」自动化已安装（{{summary}}）",
@@ -15155,6 +15084,7 @@
         "timeout": "超时（秒，可选）",
         "timeoutPlaceholder": "不限制",
         "capabilities": {
+          "github_read": "读取 GitHub",
           "jira_read": "读取 Jira",
           "jira_comment": "评论 Jira",
           "sessions_dispatch": "派发任务",
@@ -15166,6 +15096,7 @@
         "capabilitiesSearch": "搜索能力",
         "capabilitiesEmpty": "没有匹配的能力",
         "capabilityDescs": {
+          "github_read": "读取 PR、CI、评审与观察到的变化；查询不会关联任务",
           "jira_read": "查询与读取 Jira 单（按 key 读取 / JQL 搜索）",
           "jira_comment": "向 Jira 单添加评论",
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",

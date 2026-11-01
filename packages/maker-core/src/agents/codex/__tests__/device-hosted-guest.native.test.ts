@@ -125,7 +125,6 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         answerDeliveryPrompt: 'CINDY_ANSWER_DELIVERY_CANARY',
       },
       getGhostRosterPrompt: () => 'WORKDIR_GHOST_ROSTER_CANARY',
-      getContactsPromptState: () => 'enabled',
       prepareCodexHostToolCatalog: async modelId => {
         const target=path.join(root,'host-tool-models.json');
         await writeFile(target,JSON.stringify({models:[{slug:modelId,display_name:modelId,description:null,supported_reasoning_levels:[],shell_type:'unified_exec',visibility:'none',supported_in_api:true,priority:99,base_instructions:'Use the available host tools.',include_skills_usage_instructions:false,include_plugin_usage_instructions:false,include_apps_usage_instructions:false,supports_reasoning_summary_parameter:true,default_reasoning_summary:'auto',support_verbosity:false,truncation_policy:{mode:'bytes',limit:10000},context_window:272000,max_context_window:272000,effective_context_window_percent:95,experimental_supported_tools:[],apply_patch_tool_type:null,supports_search_tool:false}]}));
@@ -230,7 +229,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
           : bodies[0];
         for (const segment of [
           'CINDY_HOST_IDENTITY_CANARY', 'CINDY_ANSWER_DELIVERY_CANARY',
-          'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY', 'Smart Contacts',
+          'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY',
         ]) expect(prompt).toContain(segment);
         expect(prompt).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
         expect(bodies.join('')).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');

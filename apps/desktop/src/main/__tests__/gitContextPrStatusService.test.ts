@@ -35,7 +35,7 @@ describe('PR summary', () => {
     const pr = { headRefOid: 'head', commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
       reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: true } } };
     const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: pr } });
-    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', unresolved: null, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', reviewDecision: null, unresolved: null, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
     expect(graphql).toHaveBeenCalledTimes(1);
     pr.reviewThreads.pageInfo.hasNextPage = false;
     expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 1 });

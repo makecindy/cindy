@@ -124,7 +124,7 @@ class ShareIntoViewController: UIResponder {
   ${method("private func close()")}
   ${method("func finishOpening(")}
   ${method("func showShareFeedback(")}
-  ${method("override func didSelectCancel(")}
+  ${method("func didSelectCancel(")}
 }
 func check(_ condition: @autoclosure () -> Bool) { precondition(condition()) }
 func make() -> (ShareIntoViewController, UIApplication) {

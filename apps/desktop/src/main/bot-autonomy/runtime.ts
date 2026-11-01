@@ -3,7 +3,8 @@
  *
  * 随例行任务引擎创建而创建、随引擎停止而停止：
  * - 每次创建都向引擎重新登记宿主内置事件源 `host:sessions`（引擎的事件源表只在内存里）。
- * - 为每个在用（active、本机为主力电脑）的伙伴 ensure 一条内置「跟进」例行任务（幂等）。
+ * - 为每个在用（active、本机为主力电脑）的伙伴 ensure 一条内置「跟进」例行任务（幂等）；主人关掉它的
+ *   系统技能「跟进」时只 ensure 夜间学习，不装跟进，也不叫醒它（谁跟见 follower.ts）。
  * - 状态表变化或周期扫描后判定阈值事件：有人跟 → 发布给引擎，由 followerBotId 过滤叫醒对应伙伴；
  *   没人跟（没有总调度、伙伴暂停、跟进规则被主人暂停）→ 本机任务的「等你」改为系统提醒主人。
  * - 条件兜底：某伙伴还有待处理的任务（等你 / 出错 / 用量上限 / 卡住），且距它上次被叫醒已满
@@ -29,7 +30,7 @@ import {
   toSweepEvent,
   type AutonomyEventCandidate,
 } from './events.js';
-import { isFollowerAvailable } from './follower.js';
+import { isBotHomeHere, isFollowerAvailable } from './follower.js';
 import { projectBotGlance } from './glance.js';
 import { errorCode, type TaskWatch, type TaskWatchLogger } from './taskWatch.js';
 
@@ -71,7 +72,8 @@ export class BotAutonomyRuntime {
   private readonly inflight = new Set<string>();
   private readonly deferredEvents = new Set<string>();
   private readonly reminded = new Map<string, number>();
-  private readonly ensured = new Set<string>();
+  /** 已对齐内置规则的伙伴 → 当时是否包含跟进（关掉「跟进」时只对齐夜间学习；开关变化后重新对齐）。 */
+  private readonly ensured = new Map<string, boolean>();
   /** 正在对齐的内置规则：并发的 ensure 与发布共用同一次写入。 */
   private readonly ensuring = new Map<string, Promise<boolean>>();
   /** 伙伴上次被叫醒（任一事件被它的规则接收）的时刻；启动时视为刚叫醒过，避免重启后一起白跑。 */
@@ -181,7 +183,7 @@ export class BotAutonomyRuntime {
   /** 伙伴恢复 / 新建后：补建内置规则（幂等）。 */
   async ensureBot(botId: string): Promise<void> {
     this.ensured.delete(botId);
-    await this.ensureOne(botId);
+    await this.ensureOne(botId, !this.watch.getBots().get(botId)?.followOff);
   }
 
   /** 设置（总调度）变化：重读归属、重算跟进者，并立即判定一次。 */
@@ -217,51 +219,59 @@ export class BotAutonomyRuntime {
 
   private async ensureBuiltins(): Promise<void> {
     for (const [botId, bot] of this.watch.getBots()) {
-      if (!isFollowerAvailable(bot)) {
+      if (!isBotHomeHere(bot)) {
         // 暂停 / 归档 / 不是主力电脑：恢复后重新对齐一次。
         this.ensured.delete(botId);
         continue;
       }
-      if (!this.ensured.has(botId)) await this.ensureOne(botId);
+      const follow = isFollowerAvailable(bot);
+      if (this.ensured.get(botId) !== follow) await this.ensureOne(botId, follow);
     }
   }
 
-  /** 返回内置规则是否已落地；失败时不记为已对齐，下次扫描或发布前重试。 */
-  private ensureOne(botId: string): Promise<boolean> {
+  /**
+   * 返回内置规则是否已落地；失败时不记为已对齐，下次扫描或发布前重试。
+   * `follow=false`（主人关掉了「跟进」）只对齐夜间学习：已有的跟进规则留着，收不到事件，运行也会被跳过。
+   */
+  private ensureOne(botId: string, follow = true): Promise<boolean> {
     if (this.stopped || !this.deps.isCurrent()) return Promise.resolve(false);
-    const inflight = this.ensuring.get(botId);
+    // 含跟进与只含夜间学习是两次不同的对齐，不共用在途结果。
+    const key = follow ? botId : `${botId}:own`;
+    const inflight = this.ensuring.get(key);
     if (inflight) return inflight;
     const id = builtinFollowUpRoutineId(botId);
     if (!ROUTINE_ID_PATTERN.test(id)) {
       // 兜底：builtinFollowUpRoutineId 对任何伙伴 id 都给出合法 id，正常不会走到这里。
-      this.ensured.add(botId);
+      this.ensured.set(botId, follow);
       this.deps.log.warn('builtin routine skipped: unsupported teammate id');
       return Promise.resolve(false);
     }
     const run = (async (): Promise<boolean> => {
       try {
-        await this.deps.engine.ensureBuiltin(
-          botId,
-          'follow-up',
-          buildFollowUpRoutineInput(botId),
-          id,
-          FOLLOW_UP_BUILTIN_VERSION,
-        );
-        if (this.stopped) return false;
+        if (follow) {
+          await this.deps.engine.ensureBuiltin(
+            botId,
+            'follow-up',
+            buildFollowUpRoutineInput(botId),
+            id,
+            FOLLOW_UP_BUILTIN_VERSION,
+          );
+          if (this.stopped) return false;
+        }
         // 夜间学习落地失败只记日志：不能因此让跟进被判为未就绪、挡住事件发布。
         await this.deps.ensureOwnBuiltins?.(botId).catch((error) =>
           this.deps.log.warn('default builtin routine ensure failed', { error: errorCode(error) }));
         if (this.stopped) return false;
-        this.ensured.add(botId);
+        this.ensured.set(botId, follow);
         return true;
       } catch (error) {
         this.deps.log.warn('builtin routine ensure failed', { error: errorCode(error) });
         return false;
       } finally {
-        this.ensuring.delete(botId);
+        this.ensuring.delete(key);
       }
     })();
-    this.ensuring.set(botId, run);
+    this.ensuring.set(key, run);
     return run;
   }
 
@@ -270,7 +280,7 @@ export class BotAutonomyRuntime {
    * 引擎会记下回执却没有规则接收（accepted=0），这次事件就永久丢了。
    */
   private async ensureFollower(botId: string): Promise<boolean> {
-    return this.ensured.has(botId) || await this.ensureOne(botId);
+    return this.ensured.get(botId) === true || await this.ensureOne(botId);
   }
 
   /** 判定并发布阈值事件。可重入：同一事件 id 在途时不重复处理。 */

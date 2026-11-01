@@ -84,7 +84,7 @@ function existingHarness(args = 'target') {
   const bindings = {
     setError: vi.fn(), setGoalError: vi.fn(), t: (key: string) => key,
     isRemoteSessionMissing: () => false, readSessionRowNow: () => session, goalBusy: false, setGoalBusy: vi.fn(),
-    executeMobileGoalCommand, sessionId: 'existing-task', deviceId: 'host', deviceIdRef: { current: 'host' },
+    executeMobileGoalCommand, unarchiveSessionAfterSend: vi.fn(), sessionId: 'existing-task', deviceId: 'host', deviceIdRef: { current: 'host' },
     params: {} as Record<string, string | string[] | undefined>,
     outboxSessionAliveRef: { current: 'existing-task' }, getMobileAuthOwner: () => ({}), isMobileAuthOwnerCurrent: () => true,
     maker: { goal: { set: vi.fn(async () => {}), clear: vi.fn(async () => {}), getStatus: vi.fn(async () => ({ status: 'active', objective: 'target' })) } },

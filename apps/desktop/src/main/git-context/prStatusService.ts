@@ -16,6 +16,7 @@
  *   - 依赖(token 读取 / PR 查询)构造时注入,单测不碰网络与 Electron。
  */
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '../logger.js';
 import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
 import type { PrChecksSummary } from '@cindy/maker-shared';
@@ -61,6 +62,12 @@ export type PrStatusResult =
        */
       unresolvedCount: number | null;
       checks?: PrChecksSummary | null;
+      headSha?: string;
+      baseBranch?: string;
+      reviewDecision?: string | null;
+      observedAt?: number;
+      revision?: string;
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;
@@ -94,6 +101,10 @@ export interface PrRemoteState {
   /** 未解决 review thread 数;fetch 端拿不到(GraphQL 失败)时为 null。 */
   unresolved_count?: number | null;
   checks?: PrChecksSummary | null;
+  head_sha?: string;
+  base_branch?: string;
+  review_decision?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PrStatusServiceDeps {
@@ -110,6 +121,7 @@ export interface PrStatusServiceDeps {
    */
   staleTtlMs?: number;
   now?: () => number;
+  scope?: () => Promise<string>;
 }
 
 /** 把远端字段映射为四态。merged 优先于 closed;draft 仅在 open 时有意义。 */
@@ -141,6 +153,7 @@ export class PrStatusService {
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<PrStatusResult>>();
   private generation = 0;
+  private scope = '';
 
   invalidate(): void {
     this.generation += 1;
@@ -162,10 +175,20 @@ export class PrStatusService {
    */
   async getStatuses(
     queries: PrStatusQuery[],
-    opts: { remote?: boolean; waitForFresh?: boolean } = {},
+    opts: { remote?: boolean; waitForFresh?: boolean; refresh?: boolean } = {},
   ): Promise<PrStatusResult[]> {
+    const scope = (await this.deps.scope?.()) ?? '';
+    if (scope !== this.scope) {
+      this.invalidate();
+      this.scope = scope;
+    }
+    const generation = this.generation;
     const bounded = queries.slice(0, MAX_BATCH);
-    const results = await Promise.all(bounded.map((q) => this.getOne(q, opts.waitForFresh)));
+    const results = await Promise.all(
+      bounded.map((q) => this.getOne(q, opts.waitForFresh, opts.refresh)),
+    );
+    if (generation !== this.generation || scope !== ((await this.deps.scope?.()) ?? ''))
+      return bounded.map((q) => ({ ...q, ok: false, reason: 'no-token' }));
     if (!opts.remote) return results;
     return results.map((r) =>
       !r.ok && (r.reason === 'gh-missing' || r.reason === 'gh-not-logged-in')
@@ -174,12 +197,16 @@ export class PrStatusService {
     );
   }
 
-  private async getOne(q: PrStatusQuery, waitForFresh = false): Promise<PrStatusResult> {
+  private async getOne(
+    q: PrStatusQuery,
+    waitForFresh = false,
+    refresh = false,
+  ): Promise<PrStatusResult> {
     const key = `${q.owner.toLowerCase()}/${q.repo.toLowerCase()}#${q.prNumber}`;
     const cached = this.cache.get(key);
     const now = this.now();
-    if (cached && cached.expiresAt > now) return cached.result;
-    if (!waitForFresh && cached && cached.staleUntil > now) {
+    if (!refresh && cached && cached.expiresAt > now) return cached.result;
+    if (!refresh && !waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.
       void this.revalidate(key, q).catch(() => undefined);
       return cached.result;
@@ -203,6 +230,8 @@ export class PrStatusService {
         //    保留原值继续作为 stale 回答,直到 staleUntil。
         if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
           const fetchedAt = this.now();
+          if (this.cache.size >= 200 && !this.cache.has(key))
+            this.cache.delete(this.cache.keys().next().value!);
           this.cache.set(key, {
             result,
             expiresAt: fetchedAt + this.ttlMs,
@@ -251,6 +280,12 @@ export class PrStatusService {
         branch: remote.branch,
         unresolvedCount: remote.unresolved_count ?? null,
         checks: remote.checks ?? null,
+        headSha: remote.head_sha,
+        baseBranch: remote.base_branch,
+        reviewDecision: remote.review_decision ?? null,
+        observedAt: this.now(),
+        revision: randomUUID(),
+        metadata: remote.metadata,
       };
     } catch (err) {
       const status = (err as { status?: unknown })?.status;

@@ -11,7 +11,6 @@ import type {
   SlackHookMcpDeps,
   SshMcpDeps,
   MemoryMcpDeps,
-  ContactsMcpDeps,
   LspMcpDeps,
 } from './types.js';
 import { createFeishuBotMcpServer } from './cindy_feishuBotMcpServer.js';
@@ -20,7 +19,6 @@ import { createSlackMcpGatewayServer } from './cindy_slackMcpServer.js';
 import { createSchedulerMcpServer } from './cindy_schedulerMcpServer.js';
 import { createSshMcpServer } from './cindy_sshMcpServer.js';
 import { createCindyMemoryMcpServer } from './cindy_memoryMcpServer.js';
-import { createCindyContactsMcpServer } from './cindy_contactsMcpServer.js';
 import { createXdtHelperMcpServer, type XdtHelperMcpDeps } from './lizi_xdtHelperMcpServer.js';
 import { createCindyDocsMcpServer } from './cindy_docsMcpServer.js';
 import type { DocsMcpDeps } from './cindy-docs/types.js';
@@ -65,11 +63,6 @@ export interface CreateLiziMcpProvidersOptions {
    * 只需要 host 提供 getManager + 可选 logger。
    */
   memory?: Omit<MemoryMcpDeps, 'workdir'>;
-  /**
-   * 智能通讯录(cindy_contacts)deps. 全局单库, 无 workdir 绑定;
-   * isEnabled 来自 host 设置层开关(缺省常开)。
-   */
-  contacts?: ContactsMcpDeps;
   /**
    * TypeScript LSP MCP. workdir is bound per session. A blank workdir means the
    * host cannot provide per-session context (current Codex bridge), so the
@@ -474,21 +467,6 @@ export function createLiziMcpProviders(
           ...(opts.memory!.searchSessions ? { searchSessions: opts.memory!.searchSessions } : {}),
           ...(opts.memory!.logger ? { logger: opts.memory!.logger } : {}),
         }),
-      }),
-    });
-  }
-
-  if (opts.contacts && selected(enabled, 'cindy_contacts')) {
-    providers.push({
-      name: 'cindy_contacts',
-      // 跟 memory 同模式: 设置层开关关闭时 server 整个不注册(LLM 看不到, 不浪费
-      // token); Codex host 长生命周期下运行期关闭由 withContacts 的
-      // CONTACTS_NOT_READY 工具级拦截兜底。
-      ...(opts.contacts.isEnabled ? { isEnabled: () => opts.contacts!.isEnabled!() } : {}),
-      toClaudeSdkConfig: (ctx) => ({
-        type: 'sdk',
-        name: 'cindy_contacts',
-        instance: createCindyContactsMcpServer({ ...opts.contacts!, getSessionContext: () => resolveLiziMcpSessionContext(ctx) }),
       }),
     });
   }
