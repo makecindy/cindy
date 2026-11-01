@@ -1248,6 +1248,32 @@ it('routes a custom-name search through the existing wizard and resumes its draf
   expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
 });
 
+// #8065 r4435752676: unit/jsdom, real parent state with child boundary stubs.
+// Prior deferred-refresh coverage kept drafts/selections but did not reopen a wizard.
+// Complete, reopen through either entry while refreshing, then settle the old refresh:
+// the completed instance must unmount and the new instance must survive.
+it.each(['add', 'suggestion'] as const)('mounts a fresh wizard from %s while the completed wizard refreshes', async entry => {
+  providersState.providers.push(makeProvider('openai', { name: 'OpenAI' }));
+  vi.mocked(window.electronAPI.maker.scanLocalCli).mockResolvedValue({ detections: [{
+    cli: 'codex-cli', providerId: 'openai', installed: true, loggedIn: true, sharedWithCindy: false,
+  }] });
+  renderAt('?tab=providers&wizard=1');
+  const completedWizard = await screen.findByTestId('wizard-stub');
+  let release!: () => void;
+  providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+  let completion!: Promise<void>;
+  act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone(); });
+  expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  fireEvent.click(await screen.findByRole('button', {
+    name: entry === 'add' ? 'settings.providers.addProvider' : /settings.providers.detect.action/,
+  }));
+  const reopenedWizard = screen.getByTestId('wizard-stub');
+  expect(reopenedWizard).not.toBe(completedWizard);
+  expect(wizardSpy).toHaveBeenLastCalledWith(entry === 'add' ? undefined : { kind: 'builtin', providerId: 'openai' });
+  await act(async () => { release(); await completion; });
+  expect(screen.getByTestId('wizard-stub')).toBe(reopenedWizard);
+});
+
 // #8065 r4430752284: the existing cancel test never deferred completion/refetch.
 // Renderer unit: real parent state, mocked child boundaries; a newly opened edit
 // and its unsaved input must survive the old search wizard's refresh completion.

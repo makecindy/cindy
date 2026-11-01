@@ -3596,11 +3596,12 @@ export function ProvidersSection() {
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
+            // 退出已完成；先卸载本实例，让刷新期间的新入口挂载全新向导。
+            setWizard(current => current === wizard ? null : current);
             // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
             setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
             await refetch();
-            setWizard(current => current === wizard ? null : current);
           }}
         />
       )}
