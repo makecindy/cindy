@@ -166,6 +166,23 @@ describe('decideNextGoalState', () => {
     expect(d.shouldFire).toBe(false);
   });
 
+  it('holds (active, no fire) on a waiting verdict instead of looping idle turns', () => {
+    const d = decideNextGoalState(BASE, outcome({ verdict: { status: 'waiting', reason: '等交单' } }));
+    expect(d.status).toBe('active');
+    expect(d.shouldFire).toBe(false);
+    expect(d.lastReason).toBe('waiting: 等交单');
+    expect(d.turnsUsed).toBe(1);
+  });
+
+  it('budget guard wins over a waiting verdict', () => {
+    const d = decideNextGoalState(
+      { ...BASE, budgetTokens: 100 },
+      outcome({ verdict: { status: 'waiting', reason: 'x' }, tokensThisTurn: 100 }),
+    );
+    expect(d.status).toBe('budgetLimited');
+    expect(d.shouldFire).toBe(false);
+  });
+
   it('continues + fires on a continue verdict', () => {
     const d = decideNextGoalState(BASE, outcome({ verdict: { status: 'continue', reason: 'wip' } }));
     expect(d.status).toBe('active');
@@ -1634,6 +1651,10 @@ describe('GoalController', () => {
     expect(text).toContain('20 turns'); // tells the model the current budget so it can judge it
     expect(text).toContain('"goal_status":"blocked"');
     expect(text).toContain('goal_status'); // verdict contract still present
+    // waiting 是对模型协议的一部分:无活可干时退出而非空转 continue;丢了它,
+    // 监督型目标会回到 2026-10 「无变化。待命。」每 8s 一轮的 token 空转。
+    expect(text).toContain('complete|continue|blocked|waiting');
+    expect(text).toContain('NEVER use waiting to dodge work');
     expect(text).not.toContain('goal_assessment'); // no custom block anymore
   });
 
@@ -2443,6 +2464,271 @@ describe('GoalController', () => {
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
     expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+  });
+
+  it('waiting verdict: holds active without continuation, exposes waitingSince in payload', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"B3 交单前无事可做"}\n```', tokens: 30 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('active');
+    expect(st?.lastReason).toBe('waiting: B3 交单前无事可做');
+    // 不立即续跑("无变化。待命。"不再 8s 一轮地烧 token),listener 保留以便唤醒。
+    expect(h.session.sends).toHaveLength(1);
+    expect(h.session.hasListener()).toBe(true);
+    const payload = h.updates.at(-1)?.goal;
+    expect(payload?.status).toBe('active');
+    expect(payload?.waitingSince).toBe(1000);
+  });
+
+  it('waiting goal wakes on session intervention (worker 回报 / 用户消息进队)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等交单"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect(h.session.sends[1].originKind).toBe('goal');
+    // 唤醒即清等待态:payload 立即回到「进行中」,不等唤醒轮的 finalize。
+    expect(h.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
+  });
+
+  it('waiting goal re-checks itself after the safety interval even without events', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"无变化"}\n```' });
+    await tick(); // 10ms < 25ms:仍在等待,无续跑
+    expect(local.session.sends).toHaveLength(1);
+    await tick();
+    await tick(); // 累计 30ms > 25ms:安全网重检轮发出
+    expect(local.session.sends.length).toBeGreaterThan(1);
+    // 重检轮开始即推状态,chip 不再显示等待(waitingSince 已清)。
+    expect(local.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
+  });
+
+  it('resumeGoal wakes a waiting goal (manual wake)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    await h.controller.resumeGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('active');
+    expect(st?.lastReason).toBeNull();
+  });
+
+  it('editing a waiting goal objective wakes it (the new objective runs instead of waiting)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"waiting","reason":"等交单"}\n```',
+    });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+
+    await h.controller.updateGoal('s1', { objective: '新目标:先把 B3 交单' });
+    await tick();
+
+    // 编辑目标 = 新指令:等待判定是针对旧目标给的,必须立刻结束等待;旧等待标记与
+    // 30 分钟安全网不得把新目标一起按住(否则目标永远不跑)。
+    expect(h.session.sends.length).toBeGreaterThan(1);
+    expect(h.session.sends.at(-1)?.content).toContain('新目标:先把 B3 交单');
+    const st = await h.storage.get('s1');
+    expect(st?.objective).toBe('新目标:先把 B3 交单');
+    expect((await h.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+  });
+
+  it('pauseGoal cancels the waiting wake: a later intervention does not fire', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    await h.controller.pauseGoal('s1');
+    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    const sendsAfterPause = h.session.sends.length;
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect(h.session.sends.length).toBe(sendsAfterPause);
+  });
+
+  it('idle observer does not wake a waiting goal (queue projections must not end the wait)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    // 无新输入的收尾(如队列展开/收起的投影)也走 idle 兕底;不能把安全网换成 150ms 续跑。
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+  });
+
+  it('resumeGoal while busy defers the wake and completes it when idle', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    h.session.running = true;
+    await h.controller.resumeGoal('s1');
+    // busy:进入 deferred,等待标记保留(defer 内部 stopSession 会清,需恢复)供重试识别。
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    h.session.running = false;
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect((await h.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
+  it('wake that turns busy during ensureSession defers and restores the waiting marker', async () => {
+    // Greptile 4/5 复核发现:第一处 busy 检查过了、标记已删,ensureSession await 期间
+    // 新输入开跑 → 第二处 busy 走 defer,重试认不出唤醒意图,目标卡死。
+    const busyDuringRestore = { on: false };
+    const local = makeController({
+      ensureSession: async (id) => {
+        const s = local?.session;
+        if (id === 's1' && busyDuringRestore.on && s) {
+          s.running = true;
+          busyDuringRestore.on = false;
+        }
+        return id === 's1' ? s : undefined;
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(local.session.sends).toHaveLength(1);
+    busyDuringRestore.on = true;
+    await local.controller.resumeGoal('s1');
+    // 恢复等待标记:chip 不假显示进行中,deferred 重试也认得出唤醒意图。
+    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    local.session.running = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(local.session.sends).toHaveLength(2);
+    expect((await local.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
+  it('intervention during a busy-deferred wake lets the deferred resume finish the wake', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    h.session.running = true;
+    await h.controller.resumeGoal('s1');
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    // defer 期间 worker 回报/用户消息到达:boundary 是 cancelled,若删标记改排普通续跑
+    // 会发不出轮且让 deferred 重试失去唤醒意图 —— 必须保持沉默,由 deferred resume 兑现。
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    expect(h.session.sends).toHaveLength(1);
+    h.session.running = false;
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect((await h.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
+  it('wake whose ensureSession throws keeps waiting semantics and the safety net alive', async () => {
+    const local = makeController({
+      waitingRecheckMs: 25,
+      ensureSession: async (id) => {
+        if (id === 's1' && wakeBoom.on) { wakeBoom.on = false; throw new Error('restore boom'); }
+        return id === 's1' ? local?.session : undefined;
+      },
+    });
+    const wakeBoom = { on: false };
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(local.session.sends).toHaveLength(1);
+    wakeBoom.on = true;
+    await expect(local.controller.resumeGoal('s1')).rejects.toBeInstanceOf(GoalSessionRestoreError);
+    // 标记恢复 + 边界保留:安全网到点仍能补检(删了边界则等待目标永久失联)。
+    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    await tick();
+    await tick();
+    expect(local.session.sends.length).toBeGreaterThan(1);
+  });
+
+  it('wake losing ownership to a concurrent setGoal does not stamp waiting on the new goal', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const holdOnce = { on: false };
+    const local = makeController({
+      ensureSession: async (id) => {
+        if (id !== 's1') return undefined;
+        if (holdOnce.on) {
+          holdOnce.on = false;
+          await gate;
+          throw new Error('restore boom');
+        }
+        return local?.session;
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    holdOnce.on = true; // 只卡唤醒这一次 ensureSession
+    const wake = local.controller.resumeGoal('s1').catch(() => {});
+    await tick(); // 唤醒挂起在 gate 上,边界仍归唤醒请求所有
+    await local.controller.setGoal({ sessionId: 's1', objective: 'brand new goal', agentKind: 'claude-code' });
+    release();
+    await tick();
+    await tick();
+    // 旧唤醒已失去归属:不得把等待态盖到新目标上(chip 会假显示等待中 + 唤醒按钮)。
+    expect((await local.storage.get('s1'))?.objective).toBe('brand new goal');
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+    await wake;
+  });
+
+  it('resumeOnOpen wakes a waiting goal (opening the session re-checks)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    await h.controller.resumeOnOpen('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect(h.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
+  });
+
+  it('a wake landing during the waiting persist is not postponed by the safety timer', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    // 卡住 finalize 的 waiting 落库,在窗口内让 resume-on-open 抢先唤醒(排短 timer)。
+    // 整条链都是微任务:落库完成、finalize 尾部、唤醒的 0ms timer 触发按此顺序,
+    // 所以未修复时尾部会用 25ms 安全网顶掉短 timer,唤醒被推迟到 25ms 后。
+    const realUpdate = local.storage.update.bind(local.storage);
+    const spy = vi.spyOn(local.storage, 'update').mockImplementation(async (id, patch) => {
+      spy.mockRestore(); // 只 gate 这一次
+      await local.controller.resumeOnOpen('s1');
+      return realUpdate(id, patch);
+    });
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    // 打开会话的唤醒必须立即发轮(第一个 tick 内);被安全网顶掉时这里仍是 1。
+    expect(local.session.sends).toHaveLength(2);
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+  });
+
+  it('waiting persist failure still arms the safety net (self-heal after DB recovery)', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    const realUpdate = local.storage.update.bind(local.storage);
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    await tick();
+    // 落库失败:目标进入等待,安全网已排 —— DB 恢复后自愈补检是唯一的自动通道
+    // (idle 兕底被等待标记挡住)。断言安全网重检轮最终发出(未修复时没有 timer,
+    // 永远 1 轮);用 vi.waitFor 避开与 25ms 触发点的时序竞速。标记在重检发轮时
+    // 被按设计消费,不在消费后断言非空。
+    await vi.waitFor(() => expect(local.session.sends.length).toBeGreaterThan(1), { timeout: 1000 });
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {

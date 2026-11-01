@@ -24,6 +24,17 @@ Mobile 暂无此确认界面；已保存任务及 Agent 工具的授权流程不
 单元格的可选 `resetsAtMs`、`stale` 只进 Desktop 内部视图模型与快照，菜单栏 helper 忽略未知字段。无服务端、relay
 或数据库变更；手机侧组件扩展需要原生新包，见 [Mobile 冷更边界](mobile-development.md#原生配置与-runtime-fingerprint冷更边界)。
 
+## 目标模式 waiting 裁决与跨端 waitingSince（2026-10-31）
+
+goal 裁决契约新增第四态 `waiting`（模型声明本轮无可做之事、进展取决于会话外事件）：controller
+不再立即续跑，目标保持 active 挂起，等事件唤醒——worker 回报/用户消息进队（既有
+sessionIntervention 信号）、手动 resume（GOAL_RESUME 放行 active+waiting）、打开会话
+（既有 resume-on-open）、30 分钟安全网重检轮。持久层六态 `GoalStatus` 与 `session_goals`
+schema 不变；`GoalStatusPayload` additive 追加 `waitingSince: number|null`（不新增状态枚举值，
+手机端 `MobileGoalStatus` 不变，`MobileGoalStatusPayload` 追加可选 `waitingSince?`：旧手机端
+忽略未知字段按 active 显示，旧 Host 不发该字段时新手机端按 undefined 处理）。无新 channel、
+无 allowlist 变化、无 SQLite migration。
+
 ## 插件与伙伴包的十语资源（2026-10-31）
 
 客户端接受 `zh-CN / zh-TW / en / ja / ko / es / fr / de / pt-PT / pt-BR` 的

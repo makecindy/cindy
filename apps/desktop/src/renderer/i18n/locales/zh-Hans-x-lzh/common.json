@@ -10375,6 +10375,7 @@
         "stopAllHint": "兼及他人所发"
       },
       "header": {
+        "queued": "{{name}} 排队中",
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
         "queued": "{{name}} 候次",
@@ -16881,13 +16882,15 @@
       "complete": "已毕",
       "budgetLimited": "已至限",
       "usageLimited": "耗用受限",
-      "capacityLimited": "模型繁忙"
+      "capacityLimited": "模型繁忙",
+      "waiting": "等待中"
     },
     "turns": "{{used}} 轮",
     "turnsWithMax": "{{used}} / {{max}} 轮",
     "clear": "清目标",
     "pause": "暂止目标",
     "resume": "续目标",
+    "wake": "唤醒目标",
     "tokensTooltip": "已用 {{used}} / 上限 {{budget}} tokens",
     "tokensUsedLabel": "已用 {{used}} tokens",
     "elapsedTooltip": "已行之时",

@@ -16848,13 +16848,15 @@
       "complete": "완료",
       "budgetLimited": "한도 도달",
       "usageLimited": "사용량 제한",
-      "capacityLimited": "모델 서비스 혼잡"
+      "capacityLimited": "모델 서비스 혼잡",
+      "waiting": "대기 중"
     },
     "turns": "{{used}} 턴",
     "turnsWithMax": "{{used}} / {{max}} 턴",
     "clear": "목표 지우기",
     "pause": "목표 일시중지",
     "resume": "목표 재개",
+    "wake": "목표 깨우기",
     "tokensTooltip": "{{used}} / {{budget}} 토큰 사용",
     "tokensUsedLabel": "{{used}} 토큰 사용",
     "elapsedTooltip": "경과 시간",

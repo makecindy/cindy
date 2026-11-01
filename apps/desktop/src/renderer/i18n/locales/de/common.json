@@ -16949,13 +16949,15 @@
       "complete": "Abgeschlossen",
       "budgetLimited": "Limit erreicht",
       "usageLimited": "Nutzung eingeschränkt",
-      "capacityLimited": "Modelldienst ausgelastet"
+      "capacityLimited": "Modelldienst ausgelastet",
+      "waiting": "Wartet"
     },
     "turns": "{{used}} Durchläufe",
     "turnsWithMax": "{{used}} / {{max}} Durchläufe",
     "clear": "Ziel entfernen",
     "pause": "Ziel pausieren",
     "resume": "Ziel fortsetzen",
+    "wake": "Ziel wecken",
     "tokensTooltip": "{{used}} / {{budget}} Token verbraucht",
     "tokensUsedLabel": "{{used}} Token verbraucht",
     "elapsedTooltip": "Verstrichene Zeit",

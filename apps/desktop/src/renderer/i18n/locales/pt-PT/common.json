@@ -17109,13 +17109,15 @@
       "complete": "Concluído",
       "budgetLimited": "Limite atingido",
       "usageLimited": "Utilização limitada",
-      "capacityLimited": "Serviço do modelo ocupado"
+      "capacityLimited": "Serviço do modelo ocupado",
+      "waiting": "À espera"
     },
     "turns": "{{used}} turnos",
     "turnsWithMax": "{{used}} / {{max}} turnos",
     "clear": "Limpar objetivo",
     "pause": "Pausar objetivo",
     "resume": "Retomar objetivo",
+    "wake": "Acordar objetivo",
     "tokensTooltip": "{{used}} / {{budget}} tokens utilizados",
     "tokensUsedLabel": "{{used}} tokens utilizados",
     "elapsedTooltip": "Tempo decorrido",

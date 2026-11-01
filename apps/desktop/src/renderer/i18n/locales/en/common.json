@@ -16915,13 +16915,15 @@
       "complete": "Completed",
       "budgetLimited": "Limit reached",
       "usageLimited": "Usage limited",
-      "capacityLimited": "Model service busy"
+      "capacityLimited": "Model service busy",
+      "waiting": "Waiting"
     },
     "turns": "{{used}} turns",
     "turnsWithMax": "{{used}} / {{max}} turns",
     "clear": "Clear goal",
     "pause": "Pause goal",
     "resume": "Resume goal",
+    "wake": "Wake goal",
     "tokensTooltip": "{{used}} / {{budget}} tokens used",
     "tokensUsedLabel": "{{used}} tokens used",
     "elapsedTooltip": "Elapsed time",
