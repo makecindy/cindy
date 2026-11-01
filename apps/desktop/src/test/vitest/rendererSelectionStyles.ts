@@ -97,3 +97,16 @@ export function installKatexClipboardStyles(doc: Document = document): HTMLStyle
   doc.head.appendChild(style);
   return style;
 }
+
+// Exercise RichAnswer control/layout rules as CSS behavior in jsdom, whose
+// Vite CSS imports are stubbed. Conditional viewport rules are outside this fixture.
+export function installRichAnswerClipboardStyles(doc: Document = document): HTMLStyleElement {
+  const source = postcss.parse(readFileSync(resolve(__dirname, '../../renderer/components/chat/rich-answer.css'), 'utf8'));
+  const rules = postcss.root();
+  source.walkRules(rule => { if (rule.parent?.type === 'root') rules.append(rule.clone()); });
+  const style = doc.createElement('style');
+  style.dataset.copyTest = '';
+  style.textContent = rules.toString();
+  doc.head.appendChild(style);
+  return style;
+}

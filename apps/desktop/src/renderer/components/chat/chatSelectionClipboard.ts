@@ -213,7 +213,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
         previous = child;
       }
     }
-    // Block-like spans (notably document titles/metadata) otherwise become
+    // Block-like spans and form labels otherwise become
     // inline when their classes disappear. BRs preserve the visible line breaks;
     // literal newlines also keep textContent-only clipboard consumers separated.
     const parentStyle = source.parentElement && styleOf(source.parentElement);
@@ -222,7 +222,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     const rowItem = style.display === 'block' && parentStyle &&
       (['grid', 'inline-grid'].includes(parentStyle.display) ||
         (['flex', 'inline-flex'].includes(parentStyle.display) && !parentStyle.flexDirection.startsWith('column')));
-    if (source.localName === 'span' && !rowItem && ['block', 'flex', 'grid'].includes(style.display)) {
+    if (source.matches('span, label') && !rowItem && ['block', 'flex', 'grid'].includes(style.display)) {
       copy.prepend(doc.createElement('br'), doc.createTextNode('\n'));
       copy.append(doc.createElement('br'), doc.createTextNode('\n'));
       needsRenderedPlainText = true;

@@ -6,7 +6,7 @@ import katex from 'katex';
 import { File } from 'lucide-react';
 import { Provider as TooltipProvider } from '@radix-ui/react-tooltip';
 import { MessageActionBar, BubbleHoverToolbar } from '../MessageActionBar';
-import { installKatexClipboardStyles, installRendererClipboardStyles, installRendererSelectionStyles as productionSelectionCss } from '../../../../test/vitest/rendererSelectionStyles';
+import { installKatexClipboardStyles, installRichAnswerClipboardStyles, installRendererClipboardStyles, installRendererSelectionStyles as productionSelectionCss } from '../../../../test/vitest/rendererSelectionStyles';
 import { InlineReferenceChip } from '../InlineReferenceChip';
 import { copyChatSelection } from '../chatSelectionClipboard';
 import { CopyAsImageBlock } from '../CopyAsImageBlock';
@@ -1103,6 +1103,35 @@ describe('chat selection clipboard', () => {
   // Reviews 4334030899/4334030908: cross-control ranges bypass endpoint
   // guards. Unit copy must omit dropdown alternatives and interactive state,
   // while disabled GFM task markers remain message content.
+  // Review4434709908: real RichAnswer label flex containers lose their layout
+  // after live input/select state is removed. Labels remain separate content.
+  it.each([false, true])('retains RichAnswer form label boundaries (form only=%s)', formOnly => {
+    installRichAnswerClipboardStyles();
+    const source = [
+      { id: 'contact', kind: 'form' },
+      { id: 'name', parent: 'contact', kind: 'input', props: { label: 'Name', default: 'private name' } },
+      { id: 'email', parent: 'contact', kind: 'input', props: { label: 'Email', default: 'private@example.com' } },
+      { id: 'region', parent: 'contact', kind: 'select', props: { label: 'Region', default: 'private', options: [{ label: 'Private choice', value: 'private' }] } },
+    ].map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node })).join('\n');
+    const { root, select, copy } = setup(<><p>before form</p><RichAnswer stateKey={`clipboard-form-${formOnly}`} source={source} complete renderMarkdown={text => <span>{text}</span>} /><p>after form</p></>);
+    const form = root.querySelector('form')!;
+    expect(form).not.toBeNull();
+    expect([...form.querySelectorAll('label')].map(e => getComputedStyle(e).display)).toEqual(['flex', 'flex', 'flex']);
+    expect(form.querySelector('input')!.value).toBe('private name');
+    select(formOnly ? form : root);
+    const formats = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = formats.find(([type]) => type === 'text/html')![1];
+    for (const value of [pasted.textContent!, formats.find(([type]) => type === 'text/plain')![1]]) {
+      expect(value).toMatch(/Name\s+Email\s+Region/);
+      expect(value).not.toMatch(/private|Private choice/);
+      if (formOnly) expect(value).not.toMatch(/before form|after form/);
+      else { expect(value).toContain('before form'); expect(value).toContain('after form'); }
+    }
+    expect(pasted.querySelector('input, select, option, textarea')).toBeNull();
+    expect(pasted.innerHTML).not.toMatch(/background|class=/);
+  });
+
   it('omits form controls from mixed selections while retaining disabled task state', () => {
     const { select, copy } = setup('<p>before</p><label>Choice<select><option selected>shown</option><option>unseen alternative</option></select></label><label><input type="checkbox" checked/>toggle label</label><input value="draft"/><textarea>draft body</textarea><input type="checkbox" checked disabled/><ul><li class="task-list-item"><input type="checkbox" checked disabled/>done</li></ul><p>after</p>');
     select();
