@@ -54,6 +54,40 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Unit: run_command_background 是「长命令后台化 + 完成回注」的入口;守卫(无会话/
+  // 远程会话拒绝)与参数透传是它的对外契约,坏了会把远端路径当本机命令跑。
+  it('runs a background command for a local task and rejects remote or unbound callers', async () => {
+    const start = vi.fn(async () => ({ ok: true as const, runId: 'bg-1', logPath: '/tmp/bg-1.log', pid: 4321 }));
+    let context: Record<string, unknown> | undefined = {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
+    };
+    const server = createXdtHelperMcpServer({ backgroundCommands: start }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => context as never,
+    });
+    const client = new Client({ name: 'bg-command-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const call = () => client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'run_command_background', args: { command: 'pnpm test', timeout_seconds: 600 } },
+      });
+      expect(parsePayload(await call())).toMatchObject({
+        ok: true, run_id: 'bg-1', log_path: '/tmp/bg-1.log', pid: 4321,
+      });
+      expect(start).toHaveBeenCalledWith({
+        sessionId: 'current-task', sessionInstanceId: 'instance-1',
+        command: 'pnpm test', cwd: '/repo', timeoutMs: 600_000,
+      });
+      context = { agentKind: 'pi', workingDir: '/remote', sessionId: 'ssh-task', remoteHostId: 'host-1' };
+      expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'REMOTE_SESSION_NOT_SUPPORTED' });
+      context = undefined;
+      expect(parsePayload(await call())).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
     const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
     const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {

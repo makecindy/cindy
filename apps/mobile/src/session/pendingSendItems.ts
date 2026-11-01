@@ -19,6 +19,7 @@ import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source'
 import { queueItemVisibleText, type QueueRowPresentation } from '@cindy/maker-shared/queue';
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
+  isBackgroundCommandSchedulerOrigin,
   isHookSchedulerOrigin,
   readMessageSourceDevice,
   readMessageSourcePlugin,
@@ -255,7 +256,8 @@ export function pendingSendSource(
 ): MobilePendingSendSource | null {
   const origin = readRecord(item.origin);
   // Hook 渠道消息复用 scheduler 形态,不是自动化;与历史消息一致,不出自动化标签。
-  if (isHookSchedulerOrigin(origin)) return null;
+  // 后台命令完成回注(`bgcmd:<runId>`)同理:宿主回调且正文自述。
+  if (isHookSchedulerOrigin(origin) || isBackgroundCommandSchedulerOrigin(origin)) return null;
   if (origin?.kind === 'scheduler') {
     // 共享任务访客拿到的来源可能已脱敏(无 scheduleId):不显示名字。
     const scheduleId = readNonEmptyString(origin.scheduleId);
