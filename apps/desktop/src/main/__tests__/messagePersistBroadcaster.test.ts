@@ -2102,6 +2102,35 @@ describe('thinking persistence', () => {
     },
   );
 
+  it('keeps a replacement final marker when an older write settles after history cleanup', async () => {
+    // Greptile P2 回归：releaseSnapshot 闭包持旧快照。若按 blockId 无条件删当前标记,
+    // 旧写收口会误删同 blockId 替代快照的 final 标记 → 随后的 turn 终态误删待写快照,
+    // 写失败时也无法按既有契约保留。修复后标记按捕获的快照身份比对。
+    let finishOld!: () => void;
+    let finishNew!: () => void;
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishOld = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      finishNew = () => resolve({} as Awaited<ReturnType<typeof createMessage>>);
+    }));
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'old' }, null);
+    await flushWrites(); // 旧写已开跑、挂起
+    clearSessionThinkingSnapshots(SESSION);
+    onThinkingEvent(SESSION, { stage: 'delta', blockId: 'reused', text: 'new' }, null);
+    onThinkingEvent(SESSION, { stage: 'final', blockId: 'reused', text: 'new full' }, null);
+    finishOld(); // 旧写收口 → 旧 release 回调跑,不得碰替代快照的标记
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([expect.objectContaining({
+      clientId: 'reused', content: expect.objectContaining({ text: 'new full' }),
+    })]);
+    resetTurnPersistState(SESSION);
+    expect(getSessionThinkingSnapshots(SESSION)).toHaveLength(1);
+    finishNew();
+    await flushWrites();
+    expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
+  });
+
   it('does not let an old write release a replacement snapshot after history cleanup', async () => {
     let finishWrite!: () => void;
     vi.mocked(createMessage).mockImplementationOnce(() => new Promise((resolve) => {

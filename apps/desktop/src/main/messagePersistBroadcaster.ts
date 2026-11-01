@@ -276,10 +276,13 @@ function stampBlockAfterTurnStart(
 // In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
 // so expanding midway does not depend on deltas a collapsed controller never received.
 const historyThinkingBlocks = new Map<string, Map<string, Message>>();
-// blockIds whose `final` arrived while its queued write has not settled yet. Those
-// snapshots survive turn boundaries (the write's release callback owns them); a
-// snapshot without a final belongs to a dead attempt and is dropped on turn settle.
-const historyThinkingFinalBlocks = new Map<string, Set<string>>();
+// blockIds whose `final` arrived while its queued write has not settled yet, mapped
+// to the exact snapshot entry that write persists. Those snapshots survive turn
+// boundaries (the write's release callback owns them); a snapshot without a final
+// belongs to a dead attempt and is dropped on turn settle. Identity compare (not a
+// bare blockId set) keeps a stale write's release from unmarking a newer snapshot
+// re-created under the same blockId after a history cleanup.
+const historyThinkingFinalBlocks = new Map<string, Map<string, Message>>();
 const historyThinkingOwners = new Map<string, OwnerScope>();
 export function clearSessionThinkingSnapshots(sessionId: string): void {
   historyThinkingBlocks.delete(sessionId);
@@ -1612,7 +1615,10 @@ export function onThinkingEvent(
     if (blocks.get(blockId) !== finalSnapshot) return;
     blocks.delete(blockId);
     const finals = historyThinkingFinalBlocks.get(sessionId);
-    if (finals?.delete(blockId) && finals.size === 0) historyThinkingFinalBlocks.delete(sessionId);
+    if (finals !== undefined && finalSnapshot !== undefined && finals.get(blockId) === finalSnapshot) {
+      finals.delete(blockId);
+      if (finals.size === 0) historyThinkingFinalBlocks.delete(sessionId);
+    }
     if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
       historyThinkingBlocks.delete(sessionId);
       historyThinkingOwners.delete(sessionId);
@@ -1620,9 +1626,14 @@ export function onThinkingEvent(
   };
 
   if (data.stage === 'final') {
-    const finals = historyThinkingFinalBlocks.get(sessionId) ?? new Set<string>();
-    finals.add(blockId);
-    historyThinkingFinalBlocks.set(sessionId, finals);
+    const finals = historyThinkingFinalBlocks.get(sessionId) ?? new Map<string, Message>();
+    // The entry was just set above for this same blockId, so it is defined at runtime;
+    // the guard only satisfies the checker.
+    const marked = blocks.get(blockId);
+    if (marked) {
+      finals.set(blockId, marked);
+      historyThinkingFinalBlocks.set(sessionId, finals);
+    }
     const finishedAt = receivedAt;
     const text = typeof data.text === 'string' ? data.text : '';
     const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
@@ -2158,8 +2169,10 @@ function releaseUnfinalizedThinkingSnapshots(sessionId: string): void {
   const blocks = historyThinkingBlocks.get(sessionId);
   if (!blocks) return;
   const finals = historyThinkingFinalBlocks.get(sessionId);
-  for (const blockId of [...blocks.keys()]) {
-    if (finals?.has(blockId)) continue;
+  for (const [blockId, entry] of [...blocks]) {
+    // Only the exact generation whose final-write is still queued is protected;
+    // a stale entry under the same blockId is a dead attempt, not this marker.
+    if (finals?.get(blockId) === entry) continue;
     blocks.delete(blockId);
   }
   if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
