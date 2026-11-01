@@ -35,7 +35,7 @@ export function PinSuggestionHint({
         type="button"
         onClick={() => onPin(session.id)}
         className={cn(
-          'h-5 shrink-0 rounded-md px-1.5 text-xs font-medium text-foreground',
+          'h-5 shrink-0 rounded-full px-2 text-xs font-medium text-foreground',
           'transition-colors hover:bg-sidebar-item-hover',
           'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
         )}
@@ -48,7 +48,7 @@ export function PinSuggestionHint({
           onClick={() => onDismiss(session.id)}
           aria-label={dismissLabel}
           className={cn(
-            'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+            'flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
             'text-sidebar-action-icon transition-colors hover:bg-sidebar-item-hover',
             'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
           )}

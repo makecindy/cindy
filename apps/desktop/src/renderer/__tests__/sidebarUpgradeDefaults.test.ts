@@ -116,10 +116,12 @@ describe('「进行中」段:按首次读取时的使用痕迹分叉默认', () 
   beforeEach(() => {
     installMemoryLocalStorage();
     vintageTesting.resetMemo();
+    vintageTesting.relaunch();
   });
   afterEach(() => {
     uninstallLocalStorage();
     vintageTesting.resetMemo();
+    vintageTesting.relaunch();
   });
 
   it('新装默认开,之后留下使用痕迹也不翻转', () => {
@@ -132,6 +134,19 @@ describe('「进行中」段:按首次读取时的使用痕迹分叉默认', () 
     localStorage.setItem('cc-agent.sidebar.installVintage.v1', 'fresh');
     localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
     expect(loadGroupInProgress()).toBe(false);
+  });
+
+  it('只用过重设计后侧栏、没打开过任务的升级用户也算老用户;本次启动才写入的标记不算', () => {
+    localStorage.setItem('cc-agent.sidebar.installVintage.v1', 'fresh');
+    vintageTesting.relaunch();
+    expect(loadGroupInProgress()).toBe(false);
+
+    localStorage.clear();
+    vintageTesting.relaunch();
+    // 新装:首帧 MainLayout 读显示模式时才写下这两个标记,晚于启动快照。
+    localStorage.setItem('cc-agent.sidebar.installVintage.v1', 'fresh');
+    localStorage.setItem('sidebar.mainListMode', 'list');
+    expect(loadGroupInProgress()).toBe(true);
   });
 
   it('只存与默认值不同的覆盖,切回默认即删除', () => {
