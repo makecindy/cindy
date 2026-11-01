@@ -12319,15 +12319,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             { visibleText: source.persistedText ?? message },
           )
         : null;
-      const inputHandoffNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
-        ? getInputHandoffService()?.ownerMessageNote(session.id)
-        : null;
-      const withInputHandoffNote: UserMessage = inputHandoffNote
-        ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, inputHandoffNote) as UserMessage)
-        : withHandoff;
       const sourcedMessage: UserMessage = sourceNote
-        ? (prependNoteToWireUserMessage(withInputHandoffNote as HandoffWireMessage, sourceNote) as UserMessage)
-        : withInputHandoffNote;
+        ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
+        : withHandoff;
       const deliveryNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
         ? await readTaskDeliveryNote(session.id) : null;
       const deliveryPlan = wireNoteMemory.plan(session.id, { 'task-delivery': deliveryNote }, { force: !!pendingHandoff, partial: true });
@@ -12340,7 +12334,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const sendResult = await session.send(outgoingMessage, {
           ...opts,
           onAccepted: async (signal) => {
-            if (inputHandoffNote) getInputHandoffService()?.ownerMessageNoteDelivered(session.id);
             await opts.onAccepted?.(signal);
             await beginTurnChangeSetAtDispatch(session, anchorClientId);
             turnChangeSetStarted = true;
@@ -18768,6 +18761,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
     readTaskDeliveryNote,
+    readInputHandoffOwnerNote: (sessionId) => getInputHandoffService()?.ownerMessageNote(sessionId) ?? null,
+    inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);

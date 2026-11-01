@@ -3507,6 +3507,25 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
   });
 
+  it('tells the agent the owner\'s message closed its input handoff card, on that message only and without saving it', async () => {
+    const session = createSession({ agentKind: 'codex' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Signed in', undefined, {
+      persistUserMessage: { clientId: 'owner-1', content: 'Signed in' },
+    });
+    expect(vi.mocked(session.send).mock.calls[0][0]).toContain('[Card closed]');
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Signed in');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');
