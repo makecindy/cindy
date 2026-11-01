@@ -31,6 +31,32 @@ describe('extractStep', () => {
     }
   });
 
+  describe('which steps are a sign-in', () => {
+    const page = (url: string, fields: NativeAxNode[], extra: NativeAxNode[] = []) =>
+      snapshot([node('0', 'AXWebArea', { url, frame: [0, 60, 1200, 840] }), ...fields, ...extra]);
+    const field = (label: string, extra: Partial<NativeAxNode> = {}) => node('0.1', 'AXTextField', { title: label, ...extra });
+
+    it('counts a password or a one-time code on any page, and an account only where the page says it is a sign-in', () => {
+      expect(extractStep(page('https://shop.example.com/pay', [field('Password', { secure: true })])).signIn).toBe(true);
+      expect(extractStep(page('https://shop.example.com/pay', [field('Verification code')])).signIn).toBe(true);
+      expect(extractStep(page('https://appstoreconnect.apple.com/login', [field('Email')])).signIn).toBe(true);
+      expect(extractStep(page('https://shop.example.com/pay', [field('Email')], [node('0.0', 'AXHeading', { title: 'Sign in to continue' })])).signIn).toBe(true);
+    });
+
+    it('leaves checkout and account-opening forms as forms', () => {
+      for (const label of ['Email for receipt', 'Bank account number', 'Accounting code']) {
+        expect(extractStep(page('https://shop.example.com/checkout', [field(label)])).signIn).toBeUndefined();
+      }
+    });
+
+    it('keeps a browser page whose address is unknown as an ordinary form', () => {
+      const noAddress = snapshot([node('0', 'AXWebArea', { frame: [0, 60, 1200, 840] }), field('Password', { secure: true })]);
+      expect(extractStep(noAddress).signIn).toBeUndefined();
+      // A native window has no page address to cover and no browser read tools to guard.
+      expect(extractStep(snapshot([field('Password', { secure: true })], { app: 'Notes', bundleId: 'com.example.notes' })).signIn).toBe(true);
+    });
+  });
+
   it('keeps every control of a native window, which has no page to wait for', () => {
     const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Email' })], { app: 'Notes', bundleId: 'com.example.notes' }));
     expect(step.shown).toHaveLength(1);

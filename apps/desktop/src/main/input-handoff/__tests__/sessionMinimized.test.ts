@@ -170,6 +170,23 @@ describe('a target window that is minimized', () => {
     expect(beside.raised).toEqual([]);
   });
 
+  it('restores a window that was renamed while it was read minimized, by the name it has now', async () => {
+    const { driver, raised } = browser();
+    const read = driver.snapshot.bind(driver);
+    let renamed = false;
+    driver.snapshot = async (pid, window) => {
+      const shot = await read(pid, window);
+      if (!renamed && 'nodes' in shot) {
+        renamed = true;
+        return { ...shot, window: { ...shot.window, title: 'App Store Connect — Sign in' } };
+      }
+      return shot;
+    };
+    const { session } = start(driver, { app: 'Google Chrome', windowTitle: 'App Store Connect' });
+    await session.start();
+    expect(raised).toEqual(['App Store Connect — Sign in']);
+  });
+
   it('refuses to guess among several windows when the pre-check was skipped', async () => {
     const { driver, raised } = browser();
     const { session, finished } = start(driver, { app: 'Google Chrome' });

@@ -60,7 +60,11 @@ const SKIPPED_SUBROLES = new Set([
 ]);
 const TEXT_ROLES = new Set(['AXTextField', 'AXTextArea', 'AXSearchField', 'AXComboBox', 'AXDateTimeArea']);
 const BUTTON_ROLES = new Set(['AXButton', 'AXLink', 'AXMenuButton', 'AXDisclosureTriangle', 'AXMenuItem']);
-const SIGN_IN_FIELDS = new Set<InputHandoffContentType>(['username', 'email', 'password', 'one-time-code']);
+/** A password or a one-time code is a sign-in on its own; an account or an email only when the page says it is one. */
+const SIGN_IN_SECRETS = new Set<InputHandoffContentType>(['password', 'one-time-code']);
+const SIGN_IN_ACCOUNTS = new Set<InputHandoffContentType>(['username', 'email']);
+const LOGIN_WORDS = /(sign ?in|log ?in|log ?on|登录|登入|登陆)/i;
+const LOGIN_ADDRESS = /(login|log-in|signin|sign-in|sso|auth|passport|accounts?\.)/i;
 const PRIMARY_LABEL =
   /^(next|continue|sign ?in|log ?in|login|submit|confirm|allow|authori[sz]e|accept|approve|ok|done|verify|send|proceed|下一步|继续|登录|登入|提交|确认|确定|允许|授权|同意|验证|完成|发送|进入)\b/i;
 
@@ -364,7 +368,18 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   }
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
   const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
-  const signIn = capped.some((control) => control.kind === 'text' && SIGN_IN_FIELDS.has(control.contentType));
+  const fieldTypes = capped.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
+  const labels = inScope.filter((node) => !TEXT_ROLES.has(node.role)).map((node) => textOf(node)).filter((text): text is string => !!text);
+  let addressSaysLogin = false;
+  try {
+    if (topWeb?.url) addressSaysLogin = LOGIN_ADDRESS.test(new URL(topWeb.url).host + new URL(topWeb.url).pathname);
+  } catch { /* an address that does not parse says nothing */ }
+  const looksLikeLogin = addressSaysLogin || labels.some((text) => LOGIN_WORDS.test(text));
+  // A browser page is covered by its address: without one it stays an ordinary form (whose answer is covered after it is typed).
+  const signIn =
+    (!browser || !!topWeb?.url) &&
+    (fieldTypes.some((type) => SIGN_IN_SECRETS.has(type)) ||
+      (looksLikeLogin && fieldTypes.some((type) => SIGN_IN_ACCOUNTS.has(type))));
   return {
     controls: capped,
     shown: deviceCode ? [] : ownerControls(capped),

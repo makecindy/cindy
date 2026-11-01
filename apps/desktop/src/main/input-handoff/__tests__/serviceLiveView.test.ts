@@ -48,8 +48,7 @@ describe('代输入 live view of the window', () => {
       windowId: 910,
       frame: [0, 0, 800, 600],
     });
-    // Once for the sign-in itself when it was asked for, once for the live view.
-    expect(h.desktop.raised).toEqual([10, 10]);
+    expect(h.desktop.raised).toEqual([10]);
     expect(await h.service.liveWindow('some-other-request')).toBeNull();
   });
 
@@ -58,7 +57,7 @@ describe('代输入 live view of the window', () => {
     const requestId = await startReady(off);
     expect(off.latest().liveView).toBeUndefined();
     expect(await off.service.liveWindow(requestId)).toBeNull();
-    expect(off.desktop.raised).toEqual([10]);
+    expect(off.desktop.raised).toEqual([]);
     const none = harness({ live: false });
     expect(await none.service.liveWindow(await startReady(none))).toBeNull();
     expect(none.latest().liveView).toBeUndefined();

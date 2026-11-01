@@ -454,7 +454,8 @@ export class InputHandoffSession {
       await this.useTarget(target);
       this.initial = target;
       if (target.minimized) await this.coverBeforeRestoring();
-      const restored = await this.restoreTarget(target);
+      // Reading while minimized may have updated the window's title: restore the window by what it is called now.
+      const restored = await this.restoreTarget(this.target ?? target);
       const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
         // A sign-in happens on the window itself, wherever the owner answers from.
@@ -1177,8 +1178,9 @@ export class InputHandoffSession {
   private async restoreTarget(target: HandoffTarget): Promise<boolean> {
     const driver = this.options.driver;
     if (!target.minimized || !driver.raise) return false;
-    await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    return true;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    // Restored only if it came back: a window that could not be found (it was renamed) is still minimized.
+    return !!raised && !('error' in raised);
   }
 
   /**
