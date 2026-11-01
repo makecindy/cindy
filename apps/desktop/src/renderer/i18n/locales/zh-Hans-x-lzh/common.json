@@ -10264,6 +10264,8 @@
     },
     "directMessage": {
       "sentTo": "已遣讯予 {{name}}",
+      "notDelivered": "未送达",
+      "queued": "排队中",
       "receivedFrom": "讯来自 {{name}}",
       "exchangeCount": "与 {{name}} 往来 {{count}} 则讯",
       "open": "览同僚间之言谈",

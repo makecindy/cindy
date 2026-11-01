@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeftRight, ChevronRight } from 'lucide-react';
+import { ArrowLeftRight, ChevronRight, CircleAlert, Clock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -64,6 +64,18 @@ function BotDirectMessageCardBody({ meta, sessionId }: { meta: BotDirectMessageM
         <BotAvatar bot={peer} size="xs" />
         <ArrowLeftRight size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
         <span className="truncate" title={label}>{label}</span>
+        {meta.deliveryStatus === 'failed' ? (
+          <span role="status" className="inline-flex shrink-0 items-center gap-1 text-[var(--text-danger)]">
+            <CircleAlert size={12} aria-hidden />
+            {t('bots.directMessage.notDelivered')}
+          </span>
+        ) : null}
+        {meta.deliveryStatus === 'queued' ? (
+          <span role="status" className="inline-flex shrink-0 items-center gap-1 text-[var(--text-tertiary)]">
+            <Clock size={12} aria-hidden />
+            {t('bots.directMessage.queued')}
+          </span>
+        ) : null}
         <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
       </button>
     </div>

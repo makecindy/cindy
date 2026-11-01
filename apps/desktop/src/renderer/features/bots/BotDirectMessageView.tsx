@@ -1,7 +1,7 @@
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, CircleAlert, LockKeyhole } from 'lucide-react';
+import { ArrowLeftRight, CircleAlert, Clock, LockKeyhole } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -181,6 +181,18 @@ export function BotDirectMessageView() {
                   >
                     {/* Teammate-authored text: rendered like chat, never with privileged links. */}
                     <MarkdownRenderer workingDir="" content={forwardedRequestDisplayText(message.content)} allowPrivilegedLinks={false} />
+                    {message.deliveryStatus === 'failed' ? (
+                      <span role="status" className="mt-1 inline-flex items-center gap-1 text-11 text-[var(--text-danger)]">
+                        <CircleAlert size={12} aria-hidden />
+                        {t('bots.directMessage.notDelivered')}
+                      </span>
+                    ) : null}
+                    {message.deliveryStatus === 'queued' ? (
+                      <span role="status" className="mt-1 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
+                        <Clock size={12} aria-hidden />
+                        {t('bots.directMessage.queued')}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 {ownSide ? <BotAvatar bot={sender} size="sm" /> : null}

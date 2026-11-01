@@ -10264,6 +10264,8 @@
     },
     "directMessage": {
       "sentTo": "{{name}}에게 메시지를 보냄",
+      "notDelivered": "전달되지 않음",
+      "queued": "대기열에 있음",
       "receivedFrom": "{{name}}의 메시지",
       "exchangeCount": "{{name}}와 주고받은 메시지 {{count}}개",
       "open": "동료 간 대화 보기",

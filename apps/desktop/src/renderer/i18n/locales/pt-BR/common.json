@@ -10390,6 +10390,8 @@
     },
     "directMessage": {
       "sentTo": "Mensagem enviada para {{name}}",
+      "notDelivered": "Não entregue",
+      "queued": "Na fila",
       "receivedFrom": "Mensagem de {{name}}",
       "exchangeCount": "{{count}} mensagens com {{name}}",
       "open": "Ver a conversa entre colegas",

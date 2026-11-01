@@ -8,6 +8,7 @@ export interface BotDirectMessageMeta {
   peerBotId: string;
   peerBotName: string;
   direction: 'sent' | 'received';
+  deliveryStatus?: 'queued' | 'delivered' | 'failed';
   sequence: number;
   preview: string;
 }
@@ -15,6 +16,7 @@ export interface BotDirectMessageMeta {
 export interface BotDirectMessageItem {
   id: string;
   sequence: number;
+  deliveryStatus?: 'queued' | 'delivered' | 'failed';
   senderBotId: string;
   senderBotName: string;
   recipientBotId: string;
@@ -57,6 +59,8 @@ export function readBotDirectMessageMeta(value: unknown): BotDirectMessageMeta |
   if (typeof raw.peerBotId !== 'string' || !raw.peerBotId) return null;
   if (typeof raw.peerBotName !== 'string') return null;
   if (raw.direction !== 'sent' && raw.direction !== 'received') return null;
+  if (raw.deliveryStatus !== undefined && raw.deliveryStatus !== 'queued'
+    && raw.deliveryStatus !== 'delivered' && raw.deliveryStatus !== 'failed') return null;
   if (typeof raw.sequence !== 'number' || !Number.isInteger(raw.sequence) || raw.sequence < 1) {
     return null;
   }
@@ -68,6 +72,7 @@ export function readBotDirectMessageMeta(value: unknown): BotDirectMessageMeta |
     peerBotId: raw.peerBotId,
     peerBotName: raw.peerBotName,
     direction: raw.direction,
+    ...(raw.deliveryStatus === undefined ? {} : { deliveryStatus: raw.deliveryStatus }),
     sequence: raw.sequence,
     preview: raw.preview,
   };

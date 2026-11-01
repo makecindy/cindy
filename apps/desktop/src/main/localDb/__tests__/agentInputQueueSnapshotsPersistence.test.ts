@@ -188,6 +188,39 @@ describe('agent input queue snapshot durability boundary', () => {
     await expect(flushPromise).resolves.toBeUndefined();
   });
 
+  it('seals a discarded Bot DM client id before the queue snapshot forgets it', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, client_id TEXT NOT NULL, role TEXT NOT NULL,
+        content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT,
+        created_at INTEGER NOT NULL, rewind_at INTEGER,
+        UNIQUE(session_id, client_id)
+      );
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+      INSERT INTO sessions VALUES ('bot-dm-queue', NULL);
+    `);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
+    const item = queued('private reply', 'bot-dm:thread:message');
+    item.durableDelivery = true;
+    try {
+      await saveAgentInputQueueSnapshot('bot-dm-queue', [item]);
+      await expect(loadAgentInputQueueSnapshot('bot-dm-queue')).resolves.toMatchObject([
+        { clientId: item.clientId, durableDelivery: true },
+      ]);
+
+      await expect(saveCancelledInputDelivery('bot-dm-queue', item.clientId)).resolves.toBe(true);
+      await saveAgentInputQueueSnapshot('bot-dm-queue', []);
+
+      await expect(loadAgentInputQueueSnapshot('bot-dm-queue')).resolves.toEqual([]);
+      await expect(readInputDeliveryReceipts('bot-dm-queue', [item.clientId])).resolves.toEqual([
+        { clientId: item.clientId, state: 'removed' },
+      ]);
+      expect(hasInputDeliveryCancellation('bot-dm-queue', item.clientId)).toBe(true);
+    } finally { sqlite.close(); }
+  });
+
   it('exposes a failed write to the durable waiter while allowing a later retry', async () => {
     const failure = new Error('db unavailable');
     let attempt = 0;
@@ -367,15 +400,31 @@ describe('agent input queue snapshot durability boundary', () => {
   });
   it.each(['user', 'rewound-user', 'message_tombstone', 'absent'])('only confirms cancellation when its durable namespace is sealed: %s', async (existing) => {
     const sqlite = new Database(':memory:');
-    sqlite.exec('CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, content TEXT, rewind_at INTEGER, UNIQUE(session_id, client_id))');
+    sqlite.exec(`CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_use_id TEXT,
+      agent_meta TEXT,
+      agent_kind TEXT,
+      created_at INTEGER NOT NULL,
+      rewind_at INTEGER,
+      UNIQUE(session_id, client_id)
+    )`);
     const sid = `cancel-conflict-${existing}`;
     const cid = 'same-client-id';
-    if (existing !== 'absent') sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)')
-      .run(sid, cid, existing === 'rewound-user' ? 'user' : existing, 'original', existing === 'rewound-user' ? 1 : null);
+    if (existing !== 'absent') sqlite.prepare(`INSERT INTO messages
+      (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(`row-${existing}`, cid, sid, existing === 'rewound-user' ? 'user' : existing, 'original', 1,
+        existing === 'rewound-user' ? 1 : null);
     mocks.getDbClient.mockReturnValue({ drizzle: {
       insert: () => ({ values: (row: Record<string, unknown>) => ({ onConflictDoNothing: async () => {
-        sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING')
-          .run(row.sessionId, row.clientId, row.role, row.content, row.rewindAt);
+        sqlite.prepare(`INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT DO NOTHING`)
+          .run(row.id, row.clientId, row.sessionId, row.role, row.content, row.createdAt, row.rewindAt);
       } }) }),
       select: () => ({ from: () => ({ where: async () => sqlite.prepare('SELECT role FROM messages WHERE session_id = ? AND client_id = ?').all(sid, cid) }) }),
     } });

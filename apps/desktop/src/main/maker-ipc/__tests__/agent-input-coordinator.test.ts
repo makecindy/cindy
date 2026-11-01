@@ -14428,6 +14428,51 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     );
   });
 
+  it('settles a Bot DM whose active turn is superseded before acceptance', async () => {
+    const h = createHarness();
+    const sid = 'stale-active-bot-dm';
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { releasePersist = resolve; });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('bot-dm:thread:message', 'private message', { durableDelivery: true }));
+    await flush();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+    void h.coordinator.steer(sid, makeItem('q-steer', 'continue the task'));
+    await flush();
+    releasePersist();
+    await flush();
+
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'bot-dm:thread:message' }),
+    );
+  });
+
+  it('does not settle a Bot DM requeued by Stop keepQueue when the old active turn returns', async () => {
+    const h = createHarness();
+    const sid = 'stale-active-bot-dm-requeued';
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { releasePersist = resolve; });
+      return {};
+    });
+    const item = makeItem('bot-dm:thread:kept', 'private message', { durableDelivery: true });
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+    h.coordinator.stop(sid, { keepQueue: true });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toContainEqual(expect.objectContaining({ clientId: item.clientId }));
+    releasePersist();
+    await flush();
+
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: item.clientId }));
+    expect(h.coordinator.getProjection(sid).pendingQueue).toContainEqual(expect.objectContaining({ clientId: item.clientId }));
+  });
+
   it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
     // 定时器 fire 那一刻就从 map 里摘掉了,此后 autoRetryLastError 还要 await 读库判产出。
     // 会话在那段窗口里关掉时 cancelScheduledAutoResume 已经无从取消,而 onSessionClosed
