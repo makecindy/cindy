@@ -6289,6 +6289,8 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(typeof incomingMeta?.replyToClientId === 'string' && incomingMeta.replyToClientId
+              ? { replyToClientId: incomingMeta.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
@@ -19338,6 +19340,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(typeof m.agentMeta?.replyToClientId === 'string' && m.agentMeta.replyToClientId
+          ? { replyToClientId: m.agentMeta.replyToClientId } : {}),
         ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {

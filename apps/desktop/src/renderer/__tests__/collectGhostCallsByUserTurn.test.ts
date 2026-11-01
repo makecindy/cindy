@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
 
 const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({ clientId, role: 'user', content: clientId, isStreaming: false, ...extra }) as ChatMessage;
@@ -17,7 +18,7 @@ const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =
 const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__ghost_call'): ChatMessage =>
   ({
     clientId,
-    role: 'assistant',
+    role: 'tool_use',
     content: '',
     isStreaming: false,
     toolName,
@@ -25,6 +26,30 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
   }) as ChatMessage;
 
 describe('collectGhostCallsByUserTurn', () => {
+  it.each(['live', 'history'] as const)('preserves tool ownership through the %s production projection', (source) => {
+    const data = { toolUseId: 'tool-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } };
+    const agentMeta = { replyToClientId: 'u1' };
+    const calls = source === 'live'
+      ? handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [] }, {
+          sessionId: 's1', type: 'tool_use', persistId: 'call', data, agentMeta,
+        }).messages
+      : makerChatStore.__mapServerMessagesForTest([{
+          id: 'tool-row', sessionId: 's1', clientId: 'call', role: 'tool_use',
+          content: data, toolUseId: 'tool-1', agentMeta,
+          createdAt: '2026-01-01T00:00:03.000Z',
+        }]);
+    const users = [
+      user('u0', { createdAt: '2026-01-01T00:00:00.000Z' }),
+      user('u1', { createdAt: '2026-01-01T00:00:01.000Z' }),
+      user('u2', { createdAt: '2026-01-01T00:00:02.000Z' }),
+    ];
+    expect([...collectGhostCallsByUserTurn([...users, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    // A known owner outside the loaded window must not fall back to u0 or u2.
+    expect(collectGhostCallsByUserTurn([...users.filter(m => m.clientId !== 'u1'), ...calls]).size)
+      .toBe(0);
+  });
+
   it('keeps explicit ownership across display reordering and unloaded inputs', () => {
     const call = { ...ghostCall('t1', 'art'), replyToClientId: 'u1' };
     const map = collectGhostCallsByUserTurn([user('u1'), user('u2'), call]);
