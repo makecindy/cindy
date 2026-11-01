@@ -208,6 +208,8 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
         primary: true,
         onClick: () => {
           setError(null);
+          // Working on the window is answering: take the card, so other devices show it as being handled.
+          claimQuietly();
           void window.electronAPI.maker
             .raiseInputHandoff(snapshot.requestId)
             .then((raised) => {
@@ -215,7 +217,7 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
             })
             .catch(() => setError(t('inputHandoff.error.raise')));
         },
-        ...(liveView ? { element: <LiveViewButton deviceId={liveView} requestId={snapshot.requestId} /> } : {}),
+        ...(liveView ? { element: <LiveViewButton deviceId={liveView} requestId={snapshot.requestId} onBeforeOpen={claimQuietly} /> } : {}),
       },
     ];
   } else if (snapshot.phase === 'ready' && dialogContent) {
@@ -511,11 +513,27 @@ function useLiveViewOpener(deviceId: string | null, requestId: string): () => vo
   };
 }
 
-function LiveViewButton({ deviceId, requestId }: { deviceId: string; requestId: string }) {
+function LiveViewButton({
+  deviceId,
+  requestId,
+  onBeforeOpen,
+}: {
+  deviceId: string;
+  requestId: string;
+  onBeforeOpen: () => void;
+}) {
   const { t } = useTranslation();
   const open = useLiveViewOpener(deviceId, requestId);
   return (
-    <Button size="sm" variant="primary" tone="default" onClick={open}>
+    <Button
+      size="sm"
+      variant="primary"
+      tone="default"
+      onClick={() => {
+        onBeforeOpen();
+        open();
+      }}
+    >
       {t('inputHandoff.action.openRemoteDesktop')}
     </Button>
   );

@@ -415,6 +415,7 @@ describe('InputHandoffCard', () => {
       expect(screen.queryByRole('button', { name: 'inputHandoff.action.fill' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openWindow' }));
       await waitFor(() => expect(raise).toHaveBeenCalledWith('req1'));
+      expect(mocks.resolve).toHaveBeenCalledWith('req1', expect.objectContaining({ action: 'claim', expectedRevision: 4 }));
     });
 
     it('opens the live view from another computer, and looks the same otherwise', async () => {
@@ -425,6 +426,8 @@ describe('InputHandoffCard', () => {
       expect(screen.queryByRole('button', { name: 'inputHandoff.action.liveView' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openRemoteDesktop' }));
       await waitFor(() => expect(mocks.openRemoteDesktop).toHaveBeenCalledWith({ deviceId: 'mac', name: 'Studio', handoff: 'req1' }));
+      // Working on the window takes the card, so other devices show it as being handled.
+      expect(mocks.resolve).toHaveBeenCalledWith('req1', expect.objectContaining({ action: 'claim', expectedRevision: 4 }));
     });
 
     it('lets the owner say when, if the page could not be read', () => {

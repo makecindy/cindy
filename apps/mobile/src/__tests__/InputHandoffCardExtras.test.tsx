@@ -154,12 +154,15 @@ function mount(snapshot: InputHandoffSnapshot) {
   const root = createRoot(container);
   roots.push(root);
   const onDecision = vi.fn();
+  const onQuietDecision = vi.fn();
   const render = (next: InputHandoffSnapshot) =>
     act(() => {
-      root.render(createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision }));
+      root.render(
+        createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision, onQuietDecision }),
+      );
     });
   render(snapshot);
-  return { container, onDecision, render };
+  return { container, onDecision, onQuietDecision, render };
 }
 const buttons = (container: Element) => [...container.querySelectorAll("button")].map((b) => b.textContent);
 const press = async (container: Element, label: string) => {
@@ -238,7 +241,7 @@ it("opens a live view of just this window on the computer running the task", asy
 });
 
 it("sends a sign-in to the live view, and keeps the form when there is none", async () => {
-  const { container } = mount(step({ directSignIn: true, liveView: true }));
+  const { container, onQuietDecision } = mount(step({ directSignIn: true, liveView: true }));
   expect(container.textContent).toContain("interaction.inputHandoff.directSignIn.hint");
   expect(buttons(container)).not.toContain("interaction.inputHandoff.action.fill");
   await press(container, "interaction.inputHandoff.action.openRemoteDesktop");
@@ -246,6 +249,8 @@ it("sends a sign-in to the live view, and keeps the form when there is none", as
     pathname: "/devices/desktop/[deviceId]",
     params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
   });
+  // Working on the window takes the card, so other devices show it as being handled.
+  expect(onQuietDecision).toHaveBeenCalledWith(expect.objectContaining({ action: "claim", expectedRevision: 2 }));
   await press(container, "interaction.inputHandoff.action.useForm");
   expect(buttons(container)).toContain("interaction.inputHandoff.action.fill");
   const unread = mount(step({ directSignIn: true, liveView: true, picture: true, controls: [] }));

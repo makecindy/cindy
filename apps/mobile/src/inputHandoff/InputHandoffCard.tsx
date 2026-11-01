@@ -193,6 +193,13 @@ export function InputHandoffCard({
     snapshot.liveView && !snapshot.terminal
       ? () => {
           setSheetWanted(false);
+          // Working on the window is answering: take the card, so other devices show it as being handled.
+          if (!snapshot.holder)
+            onQuietDecision?.({
+              kind: "input_handoff",
+              action: "claim",
+              expectedRevision: snapshot.revision,
+            });
           push({
             pathname: "/devices/desktop/[deviceId]",
             params: {
