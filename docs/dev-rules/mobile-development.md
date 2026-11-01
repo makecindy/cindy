@@ -110,6 +110,23 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 设备和端口，步骤、验证与收尾见该手册的
 [Parallel devices](../../apps/mobile/docs/simulator-debugging.md#parallel-devices-another-task-owns-8081)。
 
+### 打包时的区域清单校验
+
+CN / Global 的生产 bundle 使用 `config/endpoint*.json` 派生本区与对端清单地址。
+本地 Android / iOS 构建在生成子进程环境后校验；Expo export / export:embed
+（包括 EAS / OTA 的 bundle 生成）在 Metro 的生产转换入口再次校验最终环境。
+该入口按实际 bundle 请求的 `dev: false` 判定，不受 runner 残留 `NODE_ENV` 影响：
+两个地址必须是非空、无凭据的 HTTPS URL，规范化后不同，且与所选区域的仓内清单一致。
+发现错配会中止，不将 runner 的残留地址静默打进正式 bundle。
+
+Metro 转换缓存按构建区域和两个清单地址的原始值摘要隔离，切换区域或修正地址后不复用
+旧的内联结果；同配置仍可复用缓存。生产打包进程初始化后若这些值又变化，会要求重启
+Metro，避免主进程校验的是新值、缓存或工作进程却仍使用旧值。摘要不会回显地址原文。
+
+开发 Metro 与 CindyDev 保留已有的自定义端点行为。正式构建需要自建清单时，应修改
+仓内区域配置，不用 shell / `.env` 覆盖；校验错误只提示变量名，不回显环境变量值。
+这些检查不增加 Expo `extra` 字段，也不改变原生身份；它们不能替代最终产物与真机验收。
+
 ## 分层验证
 
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
