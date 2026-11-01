@@ -1275,7 +1275,7 @@ const messages = {
     "browserTitle": "Continue no navegador",
     "browserSubtitle": "Regressará automaticamente à Cindy.",
     "working": "A processar…",
-    "configTitle": "Configuração de sessão incompleta",
+    "configTitle": "Configuração de acesso incompleta",
     "accountDeletionPendingTitle": "Eliminação da conta agendada",
     "accountDeletionProcessingTitle": "Eliminação da conta em curso",
     "accountDeletionCompletedTitle": "Conta eliminada",
