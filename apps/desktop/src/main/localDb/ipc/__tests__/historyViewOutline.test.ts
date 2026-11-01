@@ -35,11 +35,13 @@ function legacyStamp(content: string | null): string | null {
 }
 
 describe('SQLite history outline', () => {
-  it.each(['mcp__other__ghost_call', 'mcp:other:ghost_call', 'ghost_call'])(
+  it.each(['mcp__other__ghost_call', 'mcp:other:ghost_call', 'ghost_call', 'cindy_mcp_call_tool'])(
     'omits plugin attribution for another server tool %s', (toolName) => {
       // #8296 review, unit: real SQLite outline must not retain foreign plugin facts.
+      const input = { ghost_id: 'art', namespace: 'acme' };
       const content = outline('tool_use', { toolName, toolUseId: 't',
-        input: { ghost_id: 'art', namespace: 'acme' } });
+        input: toolName === 'cindy_mcp_call_tool'
+          ? { server: 'other', tool: 'ghost_call', args: input } : input });
       const call = withHistoryArtifacts({ id: 'call', clientId: 'call', role: 'tool_use', content,
         createdAt: '2026-01-01T00:00:01Z', agentMeta: { replyToClientId: 'user' } });
       expect(content.input).not.toHaveProperty('ghost_id');
@@ -50,12 +52,19 @@ describe('SQLite history outline', () => {
       expect(historyWorkSummaries(items).flatMap(summary => summary.ghostCalls ?? [])).toEqual([]);
     },
   );
-  it.each([undefined, null, 'acme'])('keeps folded plugin ownership with namespace=%s through SQLite outlining', (namespace) => {
+  it.each([
+    ['native', undefined], ['native', null], ['native', 'acme'],
+    ['cindy', undefined], ['cindy', null], ['cindy', 'acme'],
+    ['cindy_ghosts', undefined], ['cindy_ghosts', null], ['cindy_ghosts', 'acme'],
+  ] as const)('keeps folded plugin ownership for %s with namespace=%s through SQLite outlining', (gateway, namespace) => {
     // #8296 review, unit: lazy history never hydrates the hidden call. Exercise
     // the SQL outline and grouping, including absent versus explicit root scope.
     const scope = namespace === undefined ? {} : { namespace };
-    const content = outline('tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 't',
-      input: { ghost_id: 'art', ...scope, tool: 'run', args: { secret: 'private arguments' } } });
+    const input = { ghost_id: 'art', ...scope, tool: 'run', args: { secret: 'private arguments' } };
+    const content = outline('tool_use', gateway === 'native'
+      ? { toolName: 'mcp__cindy__ghost_call', toolUseId: 't', input }
+      : { toolName: 'cindy_mcp_call_tool', toolUseId: 't',
+        input: { server: gateway, tool: 'ghost_call', args: input } });
     const call = withHistoryArtifacts({ id: 'call', clientId: 'call', role: 'tool_use', content,
       createdAt: '2026-01-01T00:00:01Z', agentMeta: { replyToClientId: 'user', uuid: 'sdk' } });
     const items = projectHistoryView([call, { id: 'result', clientId: 'result', role: 'tool_result',
