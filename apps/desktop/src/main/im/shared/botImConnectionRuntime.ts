@@ -15,6 +15,8 @@
  * 这里不 import host.ts, 避免把 IM 子系统拽进单测收集期。
  */
 
+import path from 'node:path';
+
 import { BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
 import type { DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
@@ -41,6 +43,7 @@ import {
   type BotImConnectionView,
   type BotImFeishuService,
   type BotImGuestAccessUpdate,
+  type BotImConnectionLanesPayload,
 } from '../../../shared/botImConnection';
 import {
   addBotImConnectionRecord,
@@ -631,6 +634,12 @@ export async function setBotImConnectionGuestAccessForSettings(
       .filter((project) => !project.deviceId)
       .find((project) => linkedProjectDirectoryKey(project.path) === linkedProjectDirectoryKey(projectPath));
     if (!linked) throwIpcError('PRECONDITION_FAILED', 'PROJECT_NOT_LINKED');
+    // A project that contains Cindy's own data would expose every Bot Home and
+    // every other guest's memory to this guest.
+    const relative = path.relative(path.resolve(projectPath), path.resolve(ownerScopedUserDataPath()));
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      throwIpcError('PRECONDITION_FAILED', 'PROJECT_CONTAINS_APP_DATA');
+    }
   }
   let updated: BotImConnectionRecord | null;
   try {
@@ -644,9 +653,47 @@ export async function setBotImConnectionGuestAccessForSettings(
   if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
   const live = instances.get(record.id);
   if (live) live.record = updated;
+  await restartGuestLanesAfterAccessChange(record.id, record, updated, update);
   log.info(`bot im connection ${record.id}: guest access updated (bindings=${Object.keys(updated.guestAccess?.bindings ?? {}).length}, unbound=${updated.guestAccess?.unbound ?? 'shared'})`);
   broadcastChanged();
   return buildBotImConnectionListPayload();
+}
+
+/**
+ * A live guest runtime keeps its working directory, memory snapshot and
+ * resumed history until it restarts, so every lane whose access changed gets a
+ * clean restart (same task, fresh context). Best effort: a failure is logged,
+ * and the next start re-resolves the binding anyway.
+ */
+async function restartGuestLanesAfterAccessChange(
+  id: string,
+  before: BotImConnectionRecord,
+  after: BotImConnectionRecord,
+  update: BotImGuestAccessUpdate,
+): Promise<void> {
+  const bound = (record: BotImConnectionRecord, guestId: string) =>
+    record.guestAccess?.bindings && Object.hasOwn(record.guestAccess.bindings, guestId)
+      ? record.guestAccess.bindings[guestId].projectPath : null;
+  const policyChanged = (before.guestAccess?.unbound ?? 'shared') !== (after.guestAccess?.unbound ?? 'shared');
+  let lanes: BotImConnectionLanesPayload['lanes'];
+  try {
+    lanes = (await listBotImConnectionLanesForSettings(id)).lanes;
+  } catch (err) {
+    log.warn(`bot im connection ${id}: guest lanes unavailable after access change: ${String(err)}`);
+    return;
+  }
+  for (const lane of lanes) {
+    if (lane.kind !== 'guest-dm' || !lane.chatId) continue;
+    const changed = update.binding?.guestId === lane.chatId
+      ? bound(before, lane.chatId) !== bound(after, lane.chatId)
+      : policyChanged && bound(after, lane.chatId) === null;
+    if (!changed) continue;
+    try {
+      await resetBotImConnectionLaneForSettings(id, lane.sessionId);
+    } catch (err) {
+      log.warn(`bot im connection ${id}: guest lane restart failed: ${String(err)}`);
+    }
+  }
 }
 
 export function parseBotImGuestAccessUpdate(payload: unknown): BotImGuestAccessUpdate {

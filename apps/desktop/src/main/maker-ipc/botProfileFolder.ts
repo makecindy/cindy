@@ -153,13 +153,14 @@ export function botProfileMemoryDir(userDataDir: string, botId: string): string 
 }
 
 /**
- * Memory of one guest bound to its own project. It sits beside, never inside,
- * `memories/`, so the owner's index and nightly learning never read it. The
- * directory name is a digest: guest ids come from the IM platform.
+ * Memory of one guest bound to its own project. It lives outside the Bot Home:
+ * the owner Chat and unbound guests are told about the Home and work next to
+ * it, so nothing of a bound guest may sit there. The directory name is a
+ * digest because guest ids come from the IM platform.
  */
 export function botGuestMemoryDir(userDataDir: string, botId: string, channel: string, guestId: string): string {
   const digest = createHash('sha256').update(JSON.stringify([channel, guestId])).digest('hex').slice(0, 32);
-  return path.join(botProfileDir(userDataDir, botId), 'guest-memories', digest);
+  return path.join(userDataDir, 'bot-guest-memories', botDirName(botId), digest);
 }
 
 /**

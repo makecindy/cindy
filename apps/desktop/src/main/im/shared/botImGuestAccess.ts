@@ -17,7 +17,11 @@ import { stat } from 'node:fs/promises';
 
 import { buildBotGuestMemoryScopeKey } from '@cindy/maker-core';
 
-import type { BotImConnectionRecord, BotImUnboundGuestPolicy } from '../../../shared/botImConnection.js';
+import {
+  BOT_IM_CHANNELS,
+  type BotImConnectionRecord,
+  type BotImUnboundGuestPolicy,
+} from '../../../shared/botImConnection.js';
 
 export interface GuestDmRoute {
   channel: string;
@@ -25,15 +29,29 @@ export interface GuestDmRoute {
   guestId: string;
 }
 
-/** Inverse of `companionLaneRouteKey` for the `guest-dm` lane only. */
-export function parseGuestDmRouteKey(routeKey: string | null | undefined): GuestDmRoute | null {
-  if (!routeKey) return null;
-  const match = /^im:([a-z]+):(.+):dm:([^:]+)$/.exec(routeKey);
-  if (!match) return null;
-  const [, channel, botContextId, guestId] = match;
-  // A group key never contains `:dm:`; a botContextId never ends with a group marker.
-  if (/:g:/.test(`:${botContextId}:`)) return null;
-  return { channel, botContextId, guestId };
+/**
+ * Cheap pre-check: could this be a guest private-chat lane? Exact parsing needs
+ * the connection list (`matchGuestDmRoute`), because platform user ids may
+ * themselves contain `:`.
+ */
+export function parseGuestDmRouteKey(routeKey: string | null | undefined): boolean {
+  return !!routeKey && routeKey.startsWith('im:') && routeKey.includes(':dm:');
+}
+
+/** Match a lane key against the bot's connections by their exact prefix. */
+export function matchGuestDmRoute(
+  connections: readonly BotImConnectionRecord[],
+  routeKey: string,
+): { connection: BotImConnectionRecord; route: GuestDmRoute } | null {
+  for (const connection of connections) {
+    if (!connection.botContextId) continue;
+    const prefix = `im:${connection.channel}:${connection.botContextId}:dm:`;
+    if (!routeKey.startsWith(prefix)) continue;
+    const guestId = routeKey.slice(prefix.length);
+    if (!guestId) continue;
+    return { connection, route: { channel: connection.channel, botContextId: connection.botContextId, guestId } };
+  }
+  return null;
 }
 
 export type GuestLaneAccess =
@@ -57,24 +75,24 @@ async function isExistingDirectory(dir: string): Promise<boolean> {
   return stat(dir).then((value) => value.isDirectory(), () => false);
 }
 
-export function findGuestConnection(
-  connections: readonly BotImConnectionRecord[],
-  route: GuestDmRoute,
-): BotImConnectionRecord | null {
-  return connections.find(
-    (record) => record.channel === route.channel && record.botContextId === route.botContextId,
-  ) ?? null;
-}
-
 export async function resolveGuestLaneAccess(
   botId: string,
   routeKey: string | null | undefined,
   deps: GuestLaneAccessDeps,
 ): Promise<GuestLaneAccess> {
-  const route = parseGuestDmRouteKey(routeKey);
-  if (!route) return { kind: 'shared' };
-  const connection = findGuestConnection(deps.listConnections(botId), route);
-  const access = connection?.guestAccess;
+  if (!routeKey || !parseGuestDmRouteKey(routeKey)) return { kind: 'shared' };
+  const matched = matchGuestDmRoute(deps.listConnections(botId), routeKey);
+  // A guest lane that matches none of the bot's connections (removed, or a key
+  // we cannot read) fails closed instead of getting the shared Home.
+  if (!matched) {
+    // Channels without connection records (personal WeChat …) keep their own
+    // routing; isolation applies to teammate-owned connections only.
+    const channel = routeKey.slice('im:'.length).split(':', 1)[0];
+    if (!(BOT_IM_CHANNELS as readonly string[]).includes(channel)) return { kind: 'shared' };
+    return { kind: 'refused', route: { channel: '', botContextId: '', guestId: '' }, reason: 'unbound' };
+  }
+  const { connection, route } = matched;
+  const access = connection.guestAccess;
   const binding = access?.bindings && Object.hasOwn(access.bindings, route.guestId)
     ? access.bindings[route.guestId]
     : undefined;

@@ -46,7 +46,8 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
   it('treats a guest-DM channel lane the same way', async () => {
     seed('channel', 'im:telegram:777:dm:555');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
-    const snapshot = await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+    // An unbound guest under the default 'shared' policy (#8359).
+    const snapshot = await hydrateBotProfileRuntime(opts, { resolveGuestAccess: async () => ({ kind: 'shared' }) }, { persistSnapshot: false });
     expect(snapshot?.botId).toBe('bot');
     expect(prompt(opts)).toContain('说话简短直接，群里少说话。');
   });

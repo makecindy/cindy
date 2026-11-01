@@ -26,6 +26,12 @@ import {
 
 const NO_PROJECT = '__none__';
 
+/** Display-side match only; main re-checks with the platform path rules. */
+function sameProjectPath(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/[\\/]+$/, '').toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
 function projectFolderName(projectPath: string): string {
   return projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
 }
@@ -129,7 +135,9 @@ export function BotChannelGuestAccess({ api, view, botId, botName, onApplied }: 
       ) : null}
       {rows.map((row) => {
         const boundPath = Object.hasOwn(bindings, row.guestId) ? bindings[row.guestId].projectPath : null;
-        const stale = boundPath !== null && !options.some((option) => option.value === boundPath);
+        const matching = boundPath === null ? undefined
+          : options.find((option) => sameProjectPath(option.value, boundPath));
+        const stale = boundPath !== null && !matching;
         const label = row.name || row.guestId;
         return (
           <div key={row.guestId} className="flex items-center gap-3">
@@ -141,7 +149,7 @@ export function BotChannelGuestAccess({ api, view, botId, botName, onApplied }: 
             </div>
             <Select
               label={t('bots.channels.guests.projectLabel', { guest: label })}
-              value={boundPath ?? NO_PROJECT}
+              value={matching?.value ?? boundPath ?? NO_PROJECT}
               disabled={saving}
               truncateOptions
               className="w-44 shrink-0"

@@ -52,6 +52,15 @@ export class BotPlanWorkDirUnavailableError extends Error {
   }
 }
 
+/** The IM runner reads attachments and reply images relative to the stored row. */
+async function persistLaneWorkingDir(sessionId: string, workingDir: string): Promise<void> {
+  const db = getDbClient().drizzle;
+  const [row] = await db.select({ workingDir: sessions.workingDir }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (row && row.workingDir !== workingDir) {
+    await db.update(sessions).set({ workingDir }).where(eq(sessions.id, sessionId));
+  }
+}
+
 async function isExistingDirectory(dir: string): Promise<boolean> {
   try {
     return (await stat(dir)).isDirectory();
@@ -136,6 +145,9 @@ export async function prepareBotWorkspaceRuntime(
     const guest = await resolveGuestAccess(botId, link[0].routeKey);
     if (guest.kind === 'refused') throw new BotGuestAccessRefusedError(guest.reason);
     if (guest.kind === 'bound') {
+      // The IM runner resolves attachments and reply images from the stored
+      // row, so the row must point at the project too, not at the Home.
+      await persistLaneWorkingDir(sessionId, guest.projectPath);
       opts.workingDir = guest.projectPath;
       opts.workspaceKind = 'project';
       opts.remoteHostId = undefined;
@@ -147,6 +159,11 @@ export async function prepareBotWorkspaceRuntime(
   const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
 
   const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
+  // An unbound guest lane that used to be bound must not keep its project as
+  // the runner's file root.
+  if (link[0]?.role === 'channel' && parseGuestDmRouteKey(link[0].routeKey)) {
+    await persistLaneWorkingDir(sessionId, workingDir);
+  }
   opts.workingDir = workingDir;
   opts.workspaceKind = 'dialogue';
   opts.remoteHostId = undefined;

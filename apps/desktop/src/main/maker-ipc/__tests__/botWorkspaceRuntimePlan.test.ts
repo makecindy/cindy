@@ -106,11 +106,15 @@ describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
         role TEXT NOT NULL, route_key TEXT, created_at INTEGER, archived_at INTEGER
       );
       CREATE TABLE bot_group_plans (id TEXT PRIMARY KEY, group_id TEXT, work_dir TEXT);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT);
+      INSERT INTO sessions VALUES ('bound', '/owner-root/bots/mimi/workspace'), ('stale', '/work/unlinked');
       INSERT INTO bot_session_links (id, bot_id, session_id, role, route_key) VALUES
         ('a', 'mimi', 'bound', 'channel', 'im:telegram:777:dm:42'),
         ('b', 'mimi', 'stale', 'channel', 'im:telegram:777:dm:43'),
         ('c', 'mimi', 'stranger', 'channel', 'im:telegram:777:dm:44'),
-        ('d', 'mimi', 'tg-group', 'channel', 'im:telegram:777:g:-100');
+        ('d', 'mimi', 'tg-group', 'channel', 'im:telegram:777:g:-100'),
+        ('e', 'mimi', 'colon-id', 'channel', 'im:telegram:777:dm:$:LWCP_v1:$x'),
+        ('f', 'mimi', 'unknown-connection', 'channel', 'im:telegram:999:dm:42');
     `);
   });
 
@@ -120,10 +124,14 @@ describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
     const o = opts('bound');
     await prepareBotWorkspaceRuntime(o, deps);
     expect(o).toMatchObject({ workingDir: '/work/client-a', workspaceKind: 'project', remoteHostId: undefined });
+    // The IM runner's file roots come from the stored row.
+    expect(h.sqlite!.prepare("SELECT working_dir FROM sessions WHERE id = 'bound'").pluck().get()).toBe('/work/client-a');
   });
 
   it('refuses unbound guests and stale bindings instead of opening the Home', async () => {
-    for (const [id, reason] of [['stranger', 'unbound'], ['stale', 'project-unavailable']] as const) {
+    // Ids containing `:` and lanes of an unknown connection must not slip through as shared.
+    for (const [id, reason] of [['stranger', 'unbound'], ['stale', 'project-unavailable'],
+      ['colon-id', 'unbound'], ['unknown-connection', 'unbound']] as const) {
       const o = opts(id);
       await expect(prepareBotWorkspaceRuntime(o, deps)).rejects.toMatchObject({ code: 'BOT_GUEST_ACCESS_REFUSED', reason });
       expect(o.workingDir).toBe('/somewhere/else');
