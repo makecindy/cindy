@@ -8244,7 +8244,8 @@
       "dialog": {
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
-        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다."
+        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다.",
+        "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동료가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
       },
       "fields": {
         "name": "표시 이름",
@@ -12672,7 +12673,40 @@
         "unavailable-route": "{{plugin}}이(가) 고른 모델을 쓸 수 없어 이 작업은"
       }
     },
-    "teammateProcess": {"record":"작업 내역","operations":"작업 기록","elapsed":"처리 중 {{duration}}","took":"소요 시간 {{duration}}","processing":"처리 중","worked":"작업 내역","thinking":"생각 중","thought":"생각함","failed_other":"호출 {{count}}회 실패","separator":" · ","actions":{"running":{"read":"파일 확인 중","edit":"파일 수정 중","search":"검색 중","web":"웹 확인 중","command":"명령 실행 중","tools":"도구 사용 중","delegate":"작업 위임 중","plan":"계획 정리 중"},"done":{"read":"파일 확인함","edit":"파일 수정함","search":"검색함","web":"웹 확인함","command":"명령 실행함","tools":"도구 사용함","delegate":"작업 위임함","plan":"계획 정리함"}}},
+    "teammateProcess": {
+      "record": "작업 내역",
+      "operations": "작업 기록",
+      "elapsed": "처리 중 {{duration}}",
+      "took": "소요 시간 {{duration}}",
+      "processing": "처리 중",
+      "worked": "작업 내역",
+      "thinking": "생각 중",
+      "thought": "생각함",
+      "failed_other": "호출 {{count}}회 실패",
+      "separator": " · ",
+      "actions": {
+        "running": {
+          "read": "파일 확인 중",
+          "edit": "파일 수정 중",
+          "search": "검색 중",
+          "web": "웹 확인 중",
+          "command": "명령 실행 중",
+          "tools": "도구 사용 중",
+          "delegate": "작업 위임 중",
+          "plan": "계획 정리 중"
+        },
+        "done": {
+          "read": "파일 확인함",
+          "edit": "파일 수정함",
+          "search": "검색함",
+          "web": "웹 확인함",
+          "command": "명령 실행함",
+          "tools": "도구 사용함",
+          "delegate": "작업 위임함",
+          "plan": "계획 정리함"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "이미지 전달 완료",
       "failed": "이미지 전달에 실패했습니다. 기존 이미지 전송을 다시 시도할 수 있습니다.",
@@ -18744,5 +18778,32 @@
     "unavailable": "이 빌드에는 보고서 업로드 대상이 설정되어 있지 않습니다. 로컬 파일을 열어 지원 담당자에게 공유할 수 있습니다.",
     "consent": "설정에서 개인정보 처리방침에 동의한 후 제출하세요. 로컬 파일은 보관되어 있습니다.",
     "failed": "작업이 완료되지 않았습니다. 다시 시도하거나 로컬 파일을 확인하세요."
+  },
+  "attachmentPreview": {
+    "more": "추가 작업",
+    "retry": "다시 시도",
+    "image": "이미지",
+    "video": "동영상",
+    "file": "파일",
+    "close": "닫기",
+    "reset": "보기 초기화",
+    "open": "미리보기 열기",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "fit": "창에 맞추기",
+    "actualSize": "실제 크기(1:1)",
+    "save": "원본 저장",
+    "share": "공유",
+    "previous": "이전 첨부 파일",
+    "next": "다음 첨부 파일",
+    "password": "PDF 암호 입력",
+    "find": "문서에서 찾기",
+    "matches": "일치하는 페이지 {{count}}개",
+    "previousPage": "이전 페이지",
+    "nextPage": "다음 페이지",
+    "source": "소스 보기",
+    "rendered": "문서 보기",
+    "wrap": "자동 줄 바꿈",
+    "lineNumbers": "줄 번호"
   }
 }

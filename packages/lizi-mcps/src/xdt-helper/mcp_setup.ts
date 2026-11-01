@@ -15,7 +15,7 @@ export function registerMcpSetupTool(
 ): void {
   registry.register({
     name: 'request_mcp_setup', category: 'auth',
-    description: 'Open the existing MCP Settings form inside this task on the local Cindy Desktop. Suggest only a public name, URL and HTTP/SSE transport. The owner enters credentials in the form; never request or pass credentials in conversation, tools or files. Wait for the tool result: it returns only saved/serverId or cancelled. Saving uses the same behavior as Settings, including when new tools become available.',
+    description: 'Open the existing MCP Settings form inside this task on the local Cindy Desktop. Suggest only a public name, URL and HTTP/SSE transport. The owner enters credentials in the form; never request or pass credentials in conversation, tools or files. Wait for the tool result: it returns only saved/serverId or cancelled. Saving uses the same behavior as Settings, including when new tools become available: a teammate gets them in this same chat on its next turn, so never suggest a new task for that.',
     inputShape: {
       name: z.string().trim().min(1).max(60).optional(),
       url: z.string().url().max(2048).refine(value => {

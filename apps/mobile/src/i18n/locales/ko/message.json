@@ -450,5 +450,32 @@
       "provider": "API 제공자",
       "unknown": "경로 미기록"
     }
+  },
+  "attachmentPreview": {
+    "more": "추가 작업",
+    "retry": "다시 시도",
+    "image": "이미지",
+    "video": "동영상",
+    "file": "파일",
+    "close": "닫기",
+    "reset": "보기 초기화",
+    "open": "미리보기 열기",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "fit": "창에 맞추기",
+    "actualSize": "실제 크기(1:1)",
+    "save": "원본 저장",
+    "share": "공유",
+    "previous": "이전 첨부 파일",
+    "next": "다음 첨부 파일",
+    "password": "PDF 암호 입력",
+    "find": "문서에서 찾기",
+    "matches": "일치하는 페이지 {{count}}개",
+    "previousPage": "이전 페이지",
+    "nextPage": "다음 페이지",
+    "redo": "다시 실행",
+    "wrap": "자동 줄 바꿈",
+    "lineNumbers": "줄 번호",
+    "rendered": "문서 보기"
   }
 }

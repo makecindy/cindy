@@ -119,6 +119,9 @@
     "unavailable": "Aún no puedo recibir acciones",
     "noCompanions": "Aún no hay compañeros",
     "noTasks": "Aún no hay tareas",
-    "retry": "No se pudo cargar todo. Toca para volver a intentarlo."
+    "retry": "No se pudo cargar todo. Toca para volver a intentarlo.",
+    "noMatches": "No hay destinos coincidentes",
+    "clearSearch": "Borrar búsqueda",
+    "loadingDevices": "Cargando ordenadores…"
   }
 }

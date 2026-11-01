@@ -7,6 +7,13 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+vi.mock('@/components/chat/PreviewChrome', () => ({
+  PreviewFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PreviewButton: ({ children, onClick }: { children: React.ReactNode; onClick: () => void }) => (
+    <button onClick={onClick}>{children}</button>
+  ),
+}));
+
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn() }),
 }));
@@ -18,6 +25,12 @@ vi.mock('../UnrenderablePlaceholder', () => ({
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
   getDocument: vi.fn(),
+  TextLayer: class {
+    render() {
+      return Promise.resolve();
+    }
+    cancel() {}
+  },
 }));
 
 import * as pdfjs from 'pdfjs-dist';
@@ -130,6 +143,7 @@ describe('PdfPreview lazy page rendering', () => {
   it('keeps mixed-width pages left-aligned while rendering only nearby pages', async () => {
     const widths = [3000, 918, 3000];
     const pages = widths.map((width) => ({
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width, height: 1188 })),
       render: vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() })),
     }));
@@ -167,7 +181,7 @@ describe('PdfPreview lazy page rendering', () => {
       });
       await waitFor(() => expect(pageNodes[index].dataset.pdfPagePlaceholder).toBeUndefined());
       expect(pageNodes[index].style.width).toBe(`${widths[index]}px`);
-      expect(pdf.getPage).toHaveBeenCalledTimes(index + 1);
+      expect(pdf.getPage).toHaveBeenCalledTimes(index + 2);
       expect(pdf.getPage).toHaveBeenLastCalledWith(index + 1);
       expect(container.querySelectorAll('[data-pdf-page] canvas')).toHaveLength(1);
     }
@@ -175,6 +189,7 @@ describe('PdfPreview lazy page rendering', () => {
 
   it('observes any intersection and restores huge pages after leaving the viewport', async () => {
     const page = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 15_000, height: 15_000 })),
       render: vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() })),
     };
@@ -232,6 +247,7 @@ describe('PdfPreview lazy page rendering', () => {
     const renderDeferred = makeDeferred<void>();
     const renderTask = { cancel: vi.fn(), promise: renderDeferred.promise };
     const page = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 918, height: 1188 })),
       render: vi.fn(() => renderTask),
     };
@@ -277,6 +293,7 @@ describe('PdfPreview lazy page rendering', () => {
     const renderDeferred = makeDeferred<void>();
     const renderTask = { cancel: vi.fn(), promise: renderDeferred.promise };
     const page = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 918, height: 1188 })),
       render: vi.fn(() => renderTask),
     };
@@ -317,10 +334,12 @@ describe('PdfPreview lazy page rendering', () => {
 
   it('ignores queued observer callbacks from a replaced document', async () => {
     const oldPage = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 918, height: 1188 })),
       render: vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() })),
     };
     const nextPage = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 918, height: 1188 })),
       render: vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() })),
     };
@@ -379,6 +398,7 @@ describe('PdfPreview lazy page rendering', () => {
       promise: renderDeferred.promise,
     };
     const page = {
+      getTextContent: vi.fn(async () => ({ items: [] })),
       getViewport: vi.fn(() => ({ width: 918, height: 1188 })),
       render: vi.fn(() => renderTask),
     };

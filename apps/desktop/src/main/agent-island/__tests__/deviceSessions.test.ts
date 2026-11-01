@@ -6,7 +6,7 @@ import {
 } from '../../../shared/agentIsland.js';
 import {
   acknowledgeAgentIslandSessionRead,
-  AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
+  AGENT_ISLAND_COMPLETED_RETENTION_MS,
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
   createAgentIslandState,
@@ -267,7 +267,7 @@ describe('Agent Island device sessions', () => {
   it('does not prune expired remote tasks or mirror local app-badge attention onto them', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('completed')], 1_000);
-    const later = 1_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1;
+    const later = 1_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1;
 
     pruneAgentIslandSessions(state, later);
     expect(state.sessions.has('remote-1')).toBe(true);

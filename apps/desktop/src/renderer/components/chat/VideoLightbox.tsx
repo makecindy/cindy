@@ -1,3 +1,5 @@
+import { usePreviewFocusReturn } from './PreviewChrome';
+import { AttachmentCollectionPreview, useOpeningCollection } from './AttachmentCollection';
 /**
  * VideoLightbox
  * ---------------------------------------------------------------------------
@@ -30,15 +32,41 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
+import { PreviewHeader, PreviewFooter } from './PreviewChrome';
+import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 interface VideoLightboxProps {
   src: string;
-  onClose: () => void;
+  filename?: string;
+  kind?: 'video' | 'audio';
+  initialTime?: number;
+  onClose: (time?: number) => void;
 }
 
-export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
+export function VideoLightbox(props: VideoLightboxProps) {
+  const items = useOpeningCollection(props.src);
+  return items ? (
+    <AttachmentCollectionPreview
+      items={items}
+      source={props.src}
+      onClose={props.onClose}
+      initial={<VideoLightboxContent {...props} />}
+    />
+  ) : (
+    <VideoLightboxContent {...props} />
+  );
+}
+
+function VideoLightboxContent({
+  src,
+  filename,
+  kind = 'video',
+  initialTime = 0, onClose }: VideoLightboxProps) {
+  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
+  const Media = kind === 'audio' ? 'audio' : 'video';
   const [isVisible, setIsVisible] = useState(false);
+  const [failed, setFailed] = useState(false);
   const isClosingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
@@ -47,8 +75,10 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
+    videoRef.current?.pause();
+    const time = videoRef.current?.currentTime;
     setIsVisible(false);
-    setTimeout(() => onClose(), 200);
+    setTimeout(() => onClose(time), 200);
   }, [onClose]);
 
   // 全局媒体互斥:lightbox autoPlay 起播时 bus 会自动 pause 其它正在
@@ -66,7 +96,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented || e.key !== 'Escape' || document.fullscreenElement) return;
       if (performance.now() - lastMenuCloseAt.current < 150) return;
       handleClose();
     };
@@ -112,6 +142,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
     // 前的元素(ChatVideoView 键盘路径 = 预览触发器,与 onClose 里的显式
     // 恢复指向同一元素)。
     <FocusScope
+      onUnmountAutoFocus={restorePreviewFocus}
       asChild
       trapped
       loop
@@ -125,7 +156,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
+        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -136,8 +167,9 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
     >
       <button
         type="button"
-        aria-label={t('chat.lightbox.close')}
-        style={{
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{
           position: 'absolute',
           inset: 0,
           border: 0,
@@ -150,20 +182,55 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
           handleClose();
         }}
       />
-      {/* biome-ignore lint/a11y/useMediaCaption: user-provided local videos do not include caption tracks. */}
-      <video
-        ref={videoRef}
+        <PreviewHeader
+          name={filename ?? previewSourceName(src, t('attachmentPreview.video'))}
+          onClose={handleClose}
+          onMenuClose={() => {
+            lastMenuCloseAt.current = performance.now();
+          }}
+          onSave={
+            /^(https?|cindy-remote-media|cindy-media|xdt-video|xdt-file|xdt-audio):/.test(src)
+              ? () => {
+                  void window.electronAPI
+                    .saveMediaAs({ url: src.replace('xdt-audio:', 'xdt-file:') })
+                    .catch(() => toast.error(t('chat.userMessage.attachmentSaveFailed')));
+                }
+              : undefined
+          }
+          menu={
+            canRevealInFolder ? (
+              <>
+                <DropdownMenuItem onClick={handleCopyVideo}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  {t('chat.media.copyVideo')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleRevealInFolder}>
+                  <FolderOpen className="mr-2 h-4 w-4" />
+                  {t('chat.media.revealVideo')}
+                </DropdownMenuItem>
+              </>
+            ) : undefined
+          }
+        />
+        {/* biome-ignore lint/a11y/useMediaCaption: user-provided local videos do not include caption tracks. */}
+      <Media
+          ref={videoRef}
         src={src}
         controls
         autoPlay
         loop
-        preload="auto"
-        // controls 视频在 Chromium 本就在 Tab 序里;显式写出是为了 jsdom 单测
+        preload="metadata"
+          playsInline
+          onLoadedMetadata={() => {
+            if (videoRef.current) videoRef.current.currentTime = initialTime;
+          }}
+          // controls 视频在 Chromium 本就在 Tab 序里;显式写出是为了 jsdom 单测
         // (jsdom 只认带 tabindex 的元素可聚焦,焦点进入 lightbox 的断言依赖它)。
         tabIndex={0}
         style={{
-          maxWidth: 'calc(100vw - 80px)',
-          maxHeight: 'calc(100vh - 80px)',
+            width: kind === 'audio' ? 'min(640px, 90vw)' : 'calc(100vw - 80px)',
+            maxWidth: 'calc(100vw - 80px)',
+          maxHeight: 'calc(100vh - 160px)',
           objectFit: 'contain',
           cursor: 'default',
           position: 'relative',
@@ -182,11 +249,29 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
         onError={() => {
           // Playback errors also include blocked sources, offline devices and
           // unsupported codecs; they do not prove that a file was deleted.
-          toast.warning(t('chat.media.videoUnavailable'));
-          handleClose();
+            setFailed(true);
         }}
       />
-      {canRevealInFolder ? (
+        {failed ? (
+          <PreviewFooter>
+            <span className="text-sm text-[var(--text-secondary)]">
+              {t('chat.media.videoUnavailable')}
+            </span>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--border-default)] px-4 py-2 text-sm"
+              onClick={() => {
+                setFailed(false);
+                videoRef.current?.load();
+              }}
+            >
+              {t('attachmentPreview.retry')}
+            </button>
+          </PreviewFooter>
+        ) : (
+          <PreviewFooter collectionOnly />
+        )}
+        {canRevealInFolder ? (
         <DropdownMenu
           modal={!portalContainer}
           open={menuPos !== null}

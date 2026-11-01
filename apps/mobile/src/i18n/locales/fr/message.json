@@ -451,5 +451,32 @@
       "provider": "Fournisseur d’API",
       "unknown": "Canal non enregistré"
     }
+  },
+  "attachmentPreview": {
+    "more": "Autres actions",
+    "retry": "Réessayer",
+    "image": "Image",
+    "video": "Vidéo",
+    "file": "Fichier",
+    "close": "Fermer",
+    "reset": "Réinitialiser la vue",
+    "open": "Ouvrir l’aperçu",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à la fenêtre",
+    "actualSize": "Taille réelle (1:1)",
+    "save": "Enregistrer l’original",
+    "share": "Partager",
+    "previous": "Pièce jointe précédente",
+    "next": "Pièce jointe suivante",
+    "password": "Saisir le mot de passe du PDF",
+    "find": "Rechercher dans le document",
+    "matches": "{{count}} pages correspondantes",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "redo": "Rétablir",
+    "wrap": "Retour à la ligne",
+    "lineNumbers": "Numéros de ligne",
+    "rendered": "Afficher le document"
   }
 }

@@ -8287,7 +8287,8 @@
       "dialog": {
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
-        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected."
+        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
+        "teammateDesc": "Remote http / sse MCP only. After saving, your teammate adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {
         "name": "Display name",
@@ -12724,7 +12725,41 @@
         "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses"
       }
     },
-    "teammateProcess": {"record":"Activity","operations":"Activity log","elapsed":"Working for {{duration}}","took":"Took {{duration}}","processing":"Working","worked":"Activity","thinking":"Thinking","thought":"Thought","failed_one":"{{count}} call failed","failed_other":"{{count}} calls failed","separator":", ","actions":{"running":{"read":"Reading files","edit":"Editing files","search":"Searching","web":"Browsing the web","command":"Running commands","tools":"Using tools","delegate":"Delegating work","plan":"Updating the plan"},"done":{"read":"Read files","edit":"Edited files","search":"Searched","web":"Browsed the web","command":"Ran commands","tools":"Used tools","delegate":"Delegated work","plan":"Updated the plan"}}},
+    "teammateProcess": {
+      "record": "Activity",
+      "operations": "Activity log",
+      "elapsed": "Working for {{duration}}",
+      "took": "Took {{duration}}",
+      "processing": "Working",
+      "worked": "Activity",
+      "thinking": "Thinking",
+      "thought": "Thought",
+      "failed_one": "{{count}} call failed",
+      "failed_other": "{{count}} calls failed",
+      "separator": ", ",
+      "actions": {
+        "running": {
+          "read": "Reading files",
+          "edit": "Editing files",
+          "search": "Searching",
+          "web": "Browsing the web",
+          "command": "Running commands",
+          "tools": "Using tools",
+          "delegate": "Delegating work",
+          "plan": "Updating the plan"
+        },
+        "done": {
+          "read": "Read files",
+          "edit": "Edited files",
+          "search": "Searched",
+          "web": "Browsed the web",
+          "command": "Ran commands",
+          "tools": "Used tools",
+          "delegate": "Delegated work",
+          "plan": "Updated the plan"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "Image delivered",
       "failed": "Image delivery failed. Retry transferring the existing image.",
@@ -18815,5 +18850,32 @@
     "unavailable": "This build has no report upload destination. Open the local files to share them with support.",
     "consent": "Accept the privacy policy in Settings before submitting. Your local files are preserved.",
     "failed": "The operation did not finish. Retry or open the local files."
+  },
+  "attachmentPreview": {
+    "more": "More actions",
+    "retry": "Retry",
+    "image": "Image",
+    "video": "Video",
+    "file": "File",
+    "close": "Close",
+    "reset": "Reset view",
+    "open": "Open preview",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to window",
+    "actualSize": "Actual size (1:1)",
+    "save": "Save original",
+    "share": "Share",
+    "previous": "Previous attachment",
+    "next": "Next attachment",
+    "password": "Enter the PDF password",
+    "find": "Find in document",
+    "matches": "{{count}} matching pages",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "source": "View source",
+    "rendered": "View document",
+    "wrap": "Wrap lines",
+    "lineNumbers": "Line numbers"
   }
 }

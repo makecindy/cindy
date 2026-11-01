@@ -167,6 +167,9 @@ export interface PlaintextEditorProps {
   /** Read-only mode. Toggled at runtime via Compartment.reconfigure,
    *  不重建 EditorView,scrollTop 自然保留。 */
   readOnly?: boolean;
+  /** Optional reading controls; undefined preserves the editor defaults. */
+  wordWrap?: boolean;
+  showLineNumbers?: boolean;
   /** Forwarded to the outer wrapper. */
   className?: string;
   /** highlight.js-style language alias ('python', 'json', 'typescript', ...).
@@ -1070,6 +1073,8 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       initialValue,
       onChange,
       readOnly = false,
+      wordWrap,
+      showLineNumbers,
       className,
       language,
       initialScrollTop,
@@ -1135,6 +1140,8 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
     // readOnly 用 Compartment 包起来,让 preview↔edit 可以 reconfigure 而不
     // remount。否则父组件靠 key 切换 readOnly 会让 CodeMirror 整个销毁重建,
     // 滚动位置会被重置回顶部 —— 用户拖到下面点编辑就会"跳回顶上"。
+    const wrapCompartment = useRef(new Compartment()).current;
+    const lineNumbersCompartment = useRef(new Compartment()).current;
     const editableCompartment = useRef(new Compartment()).current;
     const tableLabelsCompartment = useRef(new Compartment()).current;
     const mermaidLocaleCompartment = useRef(new Compartment()).current;
@@ -1306,8 +1313,10 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       const extensions = [
         history(),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
-        ...(initialConfig.skipWrap ? [] : [EditorView.lineWrapping]),
-        ...(initialConfig.useCodeChrome ? [lineNumbers()] : []),
+        wrapCompartment.of(initialConfig.skipWrap || wordWrap === false ? [] : EditorView.lineWrapping,
+        ),
+        lineNumbersCompartment.of(
+          (showLineNumbers ?? initialConfig.useCodeChrome) ? lineNumbers() : []),
         ...highlightExtensions,
         ...(initialConfig.isMarkdown
           ? [
@@ -1516,6 +1525,19 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         effects: editableCompartment.reconfigure(EditorView.editable.of(!readOnly)),
       });
     }, [readOnly, editableCompartment]);
+
+    useEffect(() => {
+      cmViewRef.current?.dispatch({
+        effects: [
+          wrapCompartment.reconfigure(
+            wordWrap === false || initialConfigRef.current?.skipWrap ? [] : EditorView.lineWrapping,
+          ),
+          lineNumbersCompartment.reconfigure(
+            (showLineNumbers ?? initialConfigRef.current?.useCodeChrome) ? lineNumbers() : [],
+          ),
+        ],
+      });
+    }, [wordWrap, showLineNumbers, wrapCompartment, lineNumbersCompartment]);
 
     return (
       // select-text:globals.css 全局禁了文本选中,CodeMirror 内部的 .cm-scroller /

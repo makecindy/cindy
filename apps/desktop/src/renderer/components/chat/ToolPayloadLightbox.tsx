@@ -1,3 +1,5 @@
+import { PreviewHeader, PreviewButton } from './PreviewChrome';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
@@ -297,7 +299,8 @@ export function ToolPayloadLightbox({
     >
       <button
         type="button"
-        aria-label={t('chat.lightbox.close')}
+        tabIndex={-1}
+        aria-hidden="true"
         style={{
           position: 'absolute',
           inset: 0,
@@ -311,111 +314,38 @@ export function ToolPayloadLightbox({
       <div
         data-tool-payload-lightbox-card
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-xl',
+          'cursor-auto flex flex-col overflow-hidden pt-16',
           'border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
         style={{
-          width: '80vw',
-          height: '80vh',
-          maxWidth: '1600px',
-          maxHeight: '1200px',
+          width: '100vw',
+          height: '100vh',
           position: 'relative',
           zIndex: 1,
         }}
       >
-        {/* Toolbar */}
-        <div
-          className={cn(
-            'flex items-center justify-between',
-            'h-14 shrink-0 px-5',
-            'border-b border-[var(--msg-tool-card-border)]',
-          )}
-        >
-          <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-              <button
-                type="button"
-                onClick={copyTitle}
-                className={cn(
-                  'flex items-center gap-2 min-w-0',
-                  'rounded-full px-1 -mx-1 py-0.5',
-                  CHAT_FOCUS_CLASS,
-                  'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                  'text-left cursor-pointer',
-                )}
-              >
-                {singleDiffFile ? (
-                  <FileTypeIcon name={singleDiffFile.filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                ) : (
-                  <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                )}
-                <span
-                  className={cn(
-                    'font-semibold text-14',
-                    'text-[var(--msg-tool-card-text)]',
-                    'truncate',
-                  )}
-                >
-                  {displayName}
-                </span>
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
+        <PreviewHeader
+          name={displayName}
+          onClose={handleClose}
+          actions={
+            <PreviewButton label={t('chat.lightbox.copyContent')} onClick={copyContent}>
+              <Copy className="h-4 w-4" />
+            </PreviewButton>
+          }
+          menu={
+            <>
+              <DropdownMenuItem onClick={copyTitle}>
               {payload.kind === 'diff'
                 ? t('chat.lightbox.clickToCopyPath')
                 : t('chat.lightbox.clickToCopy')}
-            </Tooltip.Content>
-          </Tooltip.Root>
-
-          <div className="flex items-center gap-1">
-            {payload.kind === 'diff' && singleDiffFile && (
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
-                  <button
-                    type="button"
-                    onClick={showInFolder}
-                    className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                    aria-label={revealLabel}
-                  >
-                    {remoteFile ? (
-                      <Download size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                    ) : (
-                      <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                    )}
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Content>{revealLabel}</Tooltip.Content>
-              </Tooltip.Root>
-            )}
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={copyContent}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.copyContent')}
-                >
-                  <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.copyContent')}</Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.close')}
-                >
-                  <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.close')}</Tooltip.Content>
-            </Tooltip.Root>
-          </div>
-        </div>
+            </DropdownMenuItem>
+            {payload.kind === 'diff' && singleDiffFile ? (
+                <DropdownMenuItem onClick={showInFolder}>{revealLabel}</DropdownMenuItem>
+              ) : null}
+            </>
+          }
+        />
 
         {/* Body */}
         <div

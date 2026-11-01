@@ -5,7 +5,7 @@
  * 与 chatVideoView.test.ts 对位,覆盖 review 指出的"image/model 路径同样
  * 没有把焦点移进 lightbox"的一半:不 mock ImageLightbox / ModelLightbox,
  * 用真实组件断言键盘打开后焦点进入弹窗(FocusScope 挂载焦点)、Esc 延迟
- * 关闭后回到预览触发器。图片路径同时保留 gallery 定位标记的既有断言。
+ * 关闭后回到预览触发器。图片路径同时保留集合入口的键盘断言。
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,8 +28,8 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () => {
   // ModelLightbox's 2026-06 scheme regression: the custom element reports a
-  // parse/load error, but its poster must stay usable and the user gets a
-  // toast. Existing focus tests never dispatch that event. Reuse the real
+  // parse/load error, but its poster must stay usable and the user gets an
+  // inline error with retry. Existing focus tests never dispatch that event. Reuse the real
   // lightbox unit harness, with fake time to detect delayed unwanted closure.
   it('reports a model load error and keeps the preview open', async () => {
     vi.useFakeTimers();
@@ -42,7 +42,9 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
       fireEvent.error(viewer);
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
+    expect(screen.getByText('chat.media.modelLoadFailed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'attachmentPreview.retry' })).toBeTruthy();
+    expect(toast.error).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(viewer.isConnected).toBe(true);
     expect(viewer.getAttribute('src')).toBe(url);
@@ -61,9 +63,6 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: 'Enter' });
-    // 注:gallery 定位标记(data-gallery-active)是瞬时信号——真实
-    // ImageLightbox 挂载后立即清掉(见其 mount effect),这里断不到;它的
-    // 设置路径由 chatImageView.test.ts 的 mock 用例覆盖。
     // 真实 ImageLightbox:portal 内出现 alt="" 的大图(触发器缩略图 alt 是
     // 文件名,不会撞)。
     const lightboxImg = document.body.querySelector('img[alt=""]');

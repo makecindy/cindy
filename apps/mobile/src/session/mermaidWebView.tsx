@@ -17,6 +17,7 @@ const EXPORT_TMP_DIR_NAME = 'mermaid-export';
 export interface MermaidDiagramWebViewHandle {
   /** 把当前已渲染的 SVG 光栅化为 PNG(纯 base64,无 data: 前缀);未渲染/失败 reject。 */
   exportPng(): Promise<string>;
+  zoom(factor: number | "fit"): void;
 }
 
 interface PendingExport {
@@ -58,12 +59,14 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   const [width, setWidth] = useState(0);
   const cacheKey = JSON.stringify(['mermaid', source, mode, colors.surfaceChip, colors.textPrimary,
     colors.textSecondary, colors.textTertiary, width, height]);
-  const [snapshot, setSnapshot] = useState<{ runtime: typeof runtime; key: string; uri: string } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ runtime: typeof runtime; key: string; uri: string;
+  } | null>(null);
   const [failedKey, setFailedKey] = useState<string | null>(null);
-  const cachedPreview = useMemo(() => previewEnabled ? runtime?.get(cacheKey) : undefined,
+  const cachedPreview = useMemo(() => (previewEnabled ? runtime?.get(cacheKey) : undefined),
     [cacheKey, previewEnabled, runtime]);
   const preview = previewEnabled && failedKey !== cacheKey
-    ? (snapshot?.runtime === runtime && snapshot?.key === cacheKey ? snapshot.uri : cachedPreview) : undefined;
+    ? snapshot?.runtime === runtime && snapshot?.key === cacheKey ? snapshot.uri : cachedPreview
+      : undefined;
   const mountWebView = useDeferredRichContent(active && !preview && (!previewEnabled || width > 0), cacheKey, previewEnabled);
   const currentKeyRef = useRef(cacheKey);
   currentKeyRef.current = active ? cacheKey : '';
@@ -78,7 +81,12 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   }, [mountWebView]);
 
   useImperativeHandle(ref, () => ({
-    exportPng() {
+      zoom(factor) {
+        webViewRef.current?.injectJavaScript(
+          `(function(){var r=document.getElementById('root');if(!r)return;var s=${factor == "fit" ? "1" : `(Number(r.dataset.previewScale)||1)*${factor}`};s=Math.max(.5,Math.min(5,s));r.dataset.previewScale=String(s);r.style.width=(innerWidth*s)+'px';r.style.minHeight=(innerHeight*s)+'px';var svg=r.querySelector('svg');if(svg)svg.style.setProperty('height',(innerHeight*s-24)+'px','important');if(s===1)window.scrollTo(0,0);})();true;`,
+        );
+      },
+      exportPng() {
       return new Promise<string>((resolve, reject) => {
         const webView = webViewRef.current;
         if (!webView) {
@@ -181,12 +189,15 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
       testID={testID}
       onLayout={previewEnabled ? (event) => setWidth(Math.round(event.nativeEvent.layout.width)) : undefined}
     >
-      {active && preview ? <Image
+      {active && preview ? (
+        <Image
         source={{ uri: preview }}
         resizeMode="contain"
         style={styles.preview}
         onError={() => { runtime?.delete(cacheKey); setFailedKey(cacheKey); }}
-      /> : mountWebView ? <WebView
+      />
+      ) : mountWebView ? (
+        <WebView
         key={cacheKey}
         automaticallyAdjustContentInsets={false}
         javaScriptEnabled
@@ -201,7 +212,8 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
           baseUrl: 'https://xdt-maker-mobile.local',
         }}
         style={styles.webView}
-      /> : null}
+      />
+      ) : null}
     </View>
   );
 });

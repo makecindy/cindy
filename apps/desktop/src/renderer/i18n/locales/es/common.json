@@ -8354,7 +8354,8 @@
       "dialog": {
         "createTitle": "Agregar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Solo MCP remoto http / sse. Las nuevas sesiones podrán usarlo después de guardar; las sesiones en curso no se verán afectadas."
+        "desc": "Solo MCP remoto http / sse. Las nuevas sesiones podrán usarlo después de guardar; las sesiones en curso no se verán afectadas.",
+        "teammateDesc": "Solo MCP remoto http / sse. Después de guardar, tu compañero lo añade a sus herramientas y puede usarlo desde el siguiente mensaje de esta conversación, sin necesidad de una nueva sesión."
       },
       "fields": {
         "name": "Nombre para mostrar",
@@ -8655,10 +8656,10 @@
     "chooseMethod": "Elige cómo iniciar sesión",
     "emailCode": "Iniciar sesión con un código por correo",
     "orgDetected": "{{email}} pertenece a \"{{org}}\"",
-    "enterpriseLogin": "Iniciar sesión con tu cuenta de trabajo",
-    "enterpriseVia": "Inicio de sesión único mediante {{name}}",
-    "personalLogin": "Iniciar sesión con una cuenta personal",
-    "personalDesc": "Enviar un código de verificación a tu correo",
+    "enterpriseLogin": "Con tu cuenta de trabajo",
+    "enterpriseVia": "SSO mediante {{name}}",
+    "personalLogin": "Con una cuenta personal",
+    "personalDesc": "Recibir un código por correo",
     "ssoRequired": "Esta organización requiere iniciar sesión con SSO",
     "ssoEntry": "Iniciar sesión con SSO empresarial",
     "localModeEntry": "Omitir inicio de sesión",
@@ -8708,11 +8709,11 @@
     },
     "sendCode": "Enviar código",
     "completeSignIn": "Completar inicio de sesión",
-    "preparing": "Conectando con el servicio de inicio de sesión",
+    "preparing": "Preparando el inicio de sesión",
     "preparingSubtitle": "Cargando los métodos disponibles para esta región",
-    "unavailable": "El inicio de sesión no está disponible temporalmente",
+    "unavailable": "Inicio de sesión no disponible ahora",
     "retry": "Reintentar",
-    "browserWaiting": "Completa la verificación en tu navegador",
+    "browserWaiting": "Continúa en tu navegador",
     "browserCallback": {
       "successTitle": "Sesión iniciada",
       "successBody": "Iniciaste sesión. Ya puedes cerrar esta página.",
@@ -19019,5 +19020,32 @@
     "unavailable": "Esta compilación no tiene un destino para subir informes. Abre los archivos locales para compartirlos con soporte.",
     "consent": "Acepta la política de privacidad en Configuración antes de enviar. Tus archivos locales se conservan.",
     "failed": "La operación no finalizó. Vuelve a intentarlo o abre los archivos locales."
+  },
+  "attachmentPreview": {
+    "more": "Más acciones",
+    "retry": "Reintentar",
+    "image": "Imagen",
+    "video": "Vídeo",
+    "file": "Archivo",
+    "close": "Cerrar",
+    "reset": "Restablecer vista",
+    "open": "Abrir vista previa",
+    "zoomIn": "Acercar",
+    "zoomOut": "Alejar",
+    "fit": "Ajustar a la ventana",
+    "actualSize": "Tamaño real (1:1)",
+    "save": "Guardar original",
+    "share": "Compartir",
+    "previous": "Adjunto anterior",
+    "next": "Adjunto siguiente",
+    "password": "Introduce la contraseña del PDF",
+    "find": "Buscar en el documento",
+    "matches": "{{count}} páginas coincidentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "source": "Ver fuente",
+    "rendered": "Ver documento",
+    "wrap": "Ajustar líneas",
+    "lineNumbers": "Números de línea"
   }
 }

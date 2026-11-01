@@ -119,6 +119,14 @@ export interface RoutineEngineDeps {
   onError(error: unknown): void;
 }
 
+/** Only one-shot triggers, all of them consumed, and no run queued or running: nothing can fire it again. */
+function oneShotsConsumed(state: RoutineState, routine: Routine): boolean {
+  return routine.triggers.length > 0
+    && routine.triggers.every(trigger => trigger.kind === "once")
+    && !Object.keys(state.next).some(key => key.startsWith(`${routine.id}:`))
+    && !state.runs.some(run => run.routineId === routine.id && (run.status === "queued" || run.status === "running"));
+}
+
 /** Serial durable admission with one execution lane per routine; unrelated Bots stay independent. */
 export class RoutineEngine {
   private state: RoutineState = {
@@ -187,6 +195,20 @@ export class RoutineEngine {
         run.status = "interrupted";
         run.finishedAt = this.deps.now();
       }
+    }
+    // Repair one-shots that already fired before completion disabled them: they stay enabled but
+    // nothing can fire them again. Needs a delivered success as the latest run so an unfired or
+    // never-run one-shot (for example one resumed after its time passed) and a one-shot whose
+    // last attempt failed are left alone, as are suspended Bots.
+    for (const routine of this.state.routines) {
+      if (!routine.enabled || routine.builtin || this.blockedBots.has(routine.botId)) continue;
+      if (!oneShotsConsumed(this.state, routine)) continue;
+      // The latest attempt decides: an older success must not hide a later failed or interrupted run.
+      const latest = this.state.runs.findLast(run => run.routineId === routine.id);
+      if (latest?.status !== "success" || latest.delivery?.status === "failed") continue;
+      routine.enabled = false;
+      routine.revision += 1;
+      routine.updatedAt = this.deps.now();
     }
     await this.deps.save(this.state);
     this.stopped = false;
@@ -736,8 +758,14 @@ export class RoutineEngine {
             : result.skipped ? "skipped" : "success",
         finishedAt,
       });
-      if (result.disableRoutine && !aborted && !result.error) {
-        const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+      // A one-shot routine is finished only when nothing is left to fire (see oneShotsConsumed)
+      // and this run succeeded without a failed delivery.
+      const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+      const oneShotFinished = run.status === "success"
+        && result.delivery?.status !== "failed"
+        && !!routine && oneShotsConsumed(state, routine);
+      const disable = result.disableRoutine || oneShotFinished;
+      if (disable && !aborted && !result.error) {
         // A late result must not overwrite a newer user edit or cancel itself.
         if (routine) {
           routine.enabled = false;

@@ -8244,7 +8244,8 @@
       "dialog": {
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
-        "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。"
+        "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
         "name": "顯示名稱",
@@ -12672,7 +12673,40 @@
         "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用"
       }
     },
-    "teammateProcess": {"record":"處理紀錄","operations":"操作記錄","elapsed":"已處理 {{duration}}","took":"用時 {{duration}}","processing":"正在處理","worked":"處理紀錄","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次呼叫失敗","separator":"、","actions":{"running":{"read":"正在檢視檔案","edit":"正在編輯檔案","search":"正在尋找內容","web":"正在查閱網頁","command":"正在執行指令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理計畫"},"done":{"read":"檢視了檔案","edit":"編輯了檔案","search":"尋找了內容","web":"查閱了網頁","command":"執行了指令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了計畫"}}},
+    "teammateProcess": {
+      "record": "處理紀錄",
+      "operations": "操作記錄",
+      "elapsed": "已處理 {{duration}}",
+      "took": "用時 {{duration}}",
+      "processing": "正在處理",
+      "worked": "處理紀錄",
+      "thinking": "正在思考",
+      "thought": "已思考",
+      "failed_other": "{{count}} 次呼叫失敗",
+      "separator": "、",
+      "actions": {
+        "running": {
+          "read": "正在檢視檔案",
+          "edit": "正在編輯檔案",
+          "search": "正在尋找內容",
+          "web": "正在查閱網頁",
+          "command": "正在執行指令",
+          "tools": "正在使用工具",
+          "delegate": "正在委派工作",
+          "plan": "正在整理計畫"
+        },
+        "done": {
+          "read": "檢視了檔案",
+          "edit": "編輯了檔案",
+          "search": "尋找了內容",
+          "web": "查閱了網頁",
+          "command": "執行了指令",
+          "tools": "使用了工具",
+          "delegate": "委派了工作",
+          "plan": "整理了計畫"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "圖片已交付",
       "failed": "圖片交付失敗，可重試傳輸已有圖片。",
@@ -18744,5 +18778,32 @@
     "unavailable": "目前版本未設定報告上傳位址。可開啟本機檔案，交給支援人員。",
     "consent": "請先在設定中同意隱私權政策，再提交報告。本機檔案已保留。",
     "failed": "操作未完成，請重試或查看本機檔案。"
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重試",
+    "image": "圖片",
+    "video": "影片",
+    "file": "檔案",
+    "close": "關閉",
+    "reset": "重設視角",
+    "open": "開啟預覽",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "fit": "符合視窗",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "儲存原件",
+    "share": "分享",
+    "previous": "上一個附件",
+    "next": "下一個附件",
+    "password": "輸入 PDF 密碼",
+    "find": "在文件中尋找",
+    "matches": "{{count}} 頁符合",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "source": "檢視原始碼",
+    "rendered": "查看文件",
+    "wrap": "自動換行",
+    "lineNumbers": "行號"
   }
 }

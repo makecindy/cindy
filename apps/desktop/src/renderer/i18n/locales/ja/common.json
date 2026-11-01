@@ -8244,7 +8244,8 @@
       "dialog": {
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
-        "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しいセッションから呼び出せます。実行中のセッションには影響しません。"
+        "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しいセッションから呼び出せます。実行中のセッションには影響しません。",
+        "teammateDesc": "リモート http / sse 型の MCP のみ対応。保存すると仲間が自分のツールに追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
       },
       "fields": {
         "name": "表示名",
@@ -12672,7 +12673,40 @@
         "unavailable-route": "{{plugin}} が選んだモデルは使えないため、このタスクは"
       }
     },
-    "teammateProcess": {"record":"作業履歴","operations":"操作履歴","elapsed":"処理中 {{duration}}","took":"所要時間 {{duration}}","processing":"処理中","worked":"作業履歴","thinking":"考えています","thought":"考えました","failed_other":"{{count}} 件の呼び出しに失敗","separator":"・","actions":{"running":{"read":"ファイルを確認しています","edit":"ファイルを編集しています","search":"検索しています","web":"ウェブを調べています","command":"コマンドを実行しています","tools":"ツールを使用しています","delegate":"作業を依頼しています","plan":"計画を更新しています"},"done":{"read":"ファイルを確認しました","edit":"ファイルを編集しました","search":"検索しました","web":"ウェブを調べました","command":"コマンドを実行しました","tools":"ツールを使用しました","delegate":"作業を依頼しました","plan":"計画を更新しました"}}},
+    "teammateProcess": {
+      "record": "作業履歴",
+      "operations": "操作履歴",
+      "elapsed": "処理中 {{duration}}",
+      "took": "所要時間 {{duration}}",
+      "processing": "処理中",
+      "worked": "作業履歴",
+      "thinking": "考えています",
+      "thought": "考えました",
+      "failed_other": "{{count}} 件の呼び出しに失敗",
+      "separator": "・",
+      "actions": {
+        "running": {
+          "read": "ファイルを確認しています",
+          "edit": "ファイルを編集しています",
+          "search": "検索しています",
+          "web": "ウェブを調べています",
+          "command": "コマンドを実行しています",
+          "tools": "ツールを使用しています",
+          "delegate": "作業を依頼しています",
+          "plan": "計画を更新しています"
+        },
+        "done": {
+          "read": "ファイルを確認しました",
+          "edit": "ファイルを編集しました",
+          "search": "検索しました",
+          "web": "ウェブを調べました",
+          "command": "コマンドを実行しました",
+          "tools": "ツールを使用しました",
+          "delegate": "作業を依頼しました",
+          "plan": "計画を更新しました"
+        }
+      }
+    },
     "imageDelivery": {
       "stored": "画像を受け取りました",
       "failed": "画像の転送に失敗しました。既存の画像の転送を再試行できます。",
@@ -18744,5 +18778,32 @@
     "unavailable": "このビルドにはレポートの送信先が設定されていません。ローカルファイルを開いてサポートに共有できます。",
     "consent": "設定でプライバシーポリシーに同意してから送信してください。ローカルファイルは保持されています。",
     "failed": "操作が完了しませんでした。再試行するか、ローカルファイルを確認してください。"
+  },
+  "attachmentPreview": {
+    "more": "その他の操作",
+    "retry": "再試行",
+    "image": "画像",
+    "video": "動画",
+    "file": "ファイル",
+    "close": "閉じる",
+    "reset": "表示をリセット",
+    "open": "プレビューを開く",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "fit": "ウィンドウに合わせる",
+    "actualSize": "実際のサイズ（1:1）",
+    "save": "元のファイルを保存",
+    "share": "共有",
+    "previous": "前の添付ファイル",
+    "next": "次の添付ファイル",
+    "password": "PDF のパスワードを入力",
+    "find": "文書内を検索",
+    "matches": "一致するページ：{{count}}",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "source": "ソースを表示",
+    "rendered": "文書を表示",
+    "wrap": "行の折り返し",
+    "lineNumbers": "行番号"
   }
 }

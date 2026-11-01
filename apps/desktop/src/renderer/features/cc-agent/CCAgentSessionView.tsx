@@ -5312,7 +5312,7 @@ function CCAgentSessionContent({
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
-      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} /> : null}
+      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}

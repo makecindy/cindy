@@ -128,7 +128,7 @@ function transformMathInText(text: string, preserveLineCount: boolean): string {
     const kind = text[open + 1];
     if (kind !== '(' && kind !== '[') {
       // 普通反斜杠(LaTeX 命令等),跳过继续扫
-      scan = open + 1;
+      scan = open + 2;
       continue;
     }
     const protectedEnd = inProtectedRange(open);
@@ -143,7 +143,14 @@ function transformMathInText(text: string, preserveLineCount: boolean): string {
       continue;
     }
     const closer = isDisplay ? '\\]' : '\\)';
-    const close = text.indexOf(closer, open + 2);
+    let close = -1;
+    let probe = open + 2;
+    while (probe < text.length) {
+      const slash = text.indexOf('\\', probe);
+      if (slash === -1) break;
+      if (text.startsWith(closer, slash)) { close = slash; break; }
+      probe = slash + 2; // Skip escaped backslashes, including \\) / \\].
+    }
     if (close === -1) {
       if (isDisplay) noBracketCloser = true;
       else noParenCloser = true;
@@ -333,7 +340,7 @@ const SUBSCRIPT_MAP: Record<string, string> = {
   '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆',
   '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍',
   ')': '₎', a: 'ₐ', e: 'ₑ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', m: 'ₘ', n: 'ₙ',
-  o: 'ₒ', p: 'ₚ', t: 'ₜ', x: 'ₓ',
+  h: 'ₕ', l: 'ₗ', o: 'ₒ', p: 'ₚ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ',
 };
 
 /** 整串字符都能映射时返回映射结果,否则 null(混排会破坏可读性,整体回退)。 */
@@ -368,29 +375,125 @@ function readScriptArg(source: string, from: number): [string, number] {
 }
 
 /**
+ * Read structural commands before stripping command names/grouping braces.
+ * A flat-brace regexp cannot match e.g. \frac{2\sqrt{3}}{3}. Index balanced
+ * groups once, including escaped braces, so malformed streaming input does not
+ * repeatedly scan to EOF. Bound recursion for untrusted/deeply nested input.
+ */
+const LATEX_ACCENTS: Record<string, string> = {
+  dot: '\u0307', ddot: '\u0308', hat: '\u0302', widehat: '\u0302',
+  bar: '\u0305', overline: '\u0305', vec: '\u20d7', tilde: '\u0303', widetilde: '\u0303',
+};
+
+function replaceLatexStructures(source: string, depth: number): string {
+  if (depth >= 32) return source;
+  const groupEnds = new Map<number, number>();
+  const braces: number[] = [];
+  const brackets: number[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === '\\') { i += 1; continue; }
+    if (source[i] === '{') braces.push(i);
+    else if (source[i] === '[') brackets.push(i);
+    else if (source[i] === '}' || source[i] === ']') {
+      const open = (source[i] === '}' ? braces : brackets).pop();
+      if (open != null) groupEnds.set(open, i);
+    }
+  }
+  type Argument = { text: string; end: number };
+  const commandRanges = new Map<string, Argument>();
+  const skipSpace = (from: number) => {
+    while (from < source.length && /\s/.test(source[from])) from += 1;
+    return from;
+  };
+  const readArg = (from: number, nesting: number): Argument | null => {
+    const start = skipSpace(from);
+    if (start === source.length || source[start] === '}') return null;
+    if (source[start] === '{') {
+      const end = groupEnds.get(start);
+      return end == null ? null : {
+        text: source.slice(start + 1, end), end: end + 1,
+      };
+    }
+    // A single TeX token can itself take arguments: \frac\sqrt{3}2.
+    if (source[start] === '\\') return readCommand(start, nesting + 1, true);
+    const token = String.fromCodePoint(source.codePointAt(start)!);
+    return { text: token, end: start + token.length };
+  };
+  // Keep an atomic operand's TeX boundary until flattenLatex has mapped its
+  // commands: √{\alpha}x must not become the unknown command \alphax.
+  const operand = (text: string) => Array.from(flattenLatex(text)).length === 1 ? `{${text}}` : `(${text})`;
+  const readCommand = (start: number, nesting: number, scanOnly = false): Argument => {
+    const rangeKey = `${start}:${nesting}`;
+    const cached = scanOnly ? commandRanges.get(rangeKey) : undefined;
+    if (cached) return cached;
+    const remember = (range: Argument) => {
+      if (scanOnly) commandRanges.set(rangeKey, range);
+      return range;
+    };
+    let end = start + 1;
+    while (end < source.length && /[a-zA-Z]/.test(source[end])) end += 1;
+    if (end === start + 1) end = Math.min(source.length, end + 1);
+    const raw = { text: source.slice(start, end), end };
+    const name = source.slice(start + 1, end);
+    const fraction = name === 'frac' || name === 'dfrac' || name === 'tfrac';
+    if (nesting >= 32 || (!fraction && name !== 'sqrt' && !LATEX_ACCENTS[name])) return remember(raw);
+    let rootIndexSource: string | undefined;
+    const indexStart = skipSpace(end);
+    if (name === 'sqrt' && source[indexStart] === '[') {
+      const indexEnd = groupEnds.get(indexStart);
+      if (indexEnd == null) return remember(raw);
+      rootIndexSource = source.slice(indexStart + 1, indexEnd);
+      end = indexEnd + 1;
+    }
+    const first = readArg(end, nesting);
+    if (!first) return remember(raw);
+    const second = fraction ? readArg(first.end, nesting) : null;
+    if (fraction && !second) return remember(raw);
+    const resultEnd = second?.end ?? first.end;
+    // Locate every argument before rendering any of them. A malformed frac
+    // otherwise renders its numerator, then returns only the command token,
+    // causing the outer scan to render the same subtree again. Cache lexical
+    // scans too, so nested unbraced commands cannot multiply this work.
+    if (scanOnly) return remember({ text: source.slice(start, resultEnd), end: resultEnd });
+    const body = replaceLatexStructures(first.text, nesting + 1);
+    let text: string;
+    if (second) {
+      text = `${operand(body)}/${operand(replaceLatexStructures(second.text, nesting + 1))}`;
+    } else if (name === 'sqrt') {
+      const rootIndex = rootIndexSource === undefined ? undefined
+        : flattenLatex(replaceLatexStructures(rootIndexSource, nesting + 1));
+      const root = rootIndex === undefined ? '√' : rootIndex === '3' ? '∛' : rootIndex === '4' ? '∜' : `√[${rootIndex}]`;
+      text = `${root}${operand(body)}`;
+    } else {
+      const symbol = flattenLatex(body);
+      text = Array.from(symbol).length === 1 ? symbol + LATEX_ACCENTS[name] : `${name}(${body})`;
+    }
+    // Preserve postfix scripts and implicit products: (a/b)² and (a/b)c.
+    // Without the parentheses both can be misread as part of the denominator.
+    const next = source[skipSpace(resultEnd)] ?? '';
+    if ((fraction && /[a-zA-Z0-9\\(^_]/.test(next)) || (name === 'sqrt' && /[\^_]/.test(next))) text = `(${text})`;
+    return { text, end: resultEnd };
+  };
+  let out = '';
+  for (let i = 0; i < source.length;) {
+    if (source[i] !== '\\') { out += source[i]; i += 1; continue; }
+    const command = readCommand(i, depth);
+    out += command.text;
+    i = command.end;
+  }
+  return out;
+}
+
+/**
  * LaTeX 片段 → Unicode 文本近似。转换尽力而为:认识的命令做映射,不认识的
  * 命令保留其字面参数,永不抛错。
  */
 export function latexToUnicodeApproximation(latex: string): string {
+  return flattenLatex(replaceLatexStructures(latex, 0));
+}
+
+function flattenLatex(latex: string): string {
   let s = latex;
-
-  // \frac{a}{b} → a/b(嵌套 frac 由内向外多轮收敛,轮数封顶防御性设置)
-  const FRAC_RE = /\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g;
-  for (let round = 0; round < 5 && /\\[dt]?frac/.test(s); round++) {
-    s = s.replace(FRAC_RE, (_m, num: string, den: string) => {
-      const n = num.trim();
-      const d = den.trim();
-      const wrapNum = /[+\-\s]/.test(n) ? `(${n})` : n;
-      const wrapDen = /[+\-\s]/.test(d) ? `(${d})` : d;
-      return `${wrapNum}/${wrapDen}`;
-    });
-  }
-
-  // \sqrt{x} / \sqrt x → √(x) / √x
-  s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, (_m, body: string) =>
-    body.trim().length > 1 ? `√(${body.trim()})` : `√${body.trim()}`,
-  );
-  s = s.replace(/\\sqrt\s*([a-zA-Z0-9])/g, '√$1');
 
   // 样式包装:\text{...} / \mathbf{...} 等 → 内容本体
   s = s.replace(/\\([a-zA-Z]+)\s*\{([^{}]*)\}/g, (m, cmd: string, body: string) =>
@@ -400,6 +503,9 @@ export function latexToUnicodeApproximation(latex: string): string {
   // \left / \right / \big 系列定界符修饰:丢弃修饰保定界符
   s = s.replace(/\\(?:left|right|[bB]igg?[lr]?)\s*/g, '');
 
+  // TeX spacing commands are layout, not literal backslashes or punctuation.
+  s = s.replace(/\\!/g, '').replace(/\\(?:[,;: ]|quad\b|qquad\b)/g, ' ');
+
   // 命令映射:符号表 → Unicode;函数名 → 字面;未知命令 → 去掉反斜杠保留名字
   s = s.replace(/\\([a-zA-Z]+)/g, (_m, name: string) => {
     const symbol = LATEX_SYMBOL_MAP[name];
@@ -407,8 +513,6 @@ export function latexToUnicodeApproximation(latex: string): string {
     if (LATEX_FUNCTION_NAMES.has(name)) return name;
     return name;
   });
-  // 转义标点:\{ \} \$ \% \& \# \_ → 字面
-  s = s.replace(/\\([{}$%&#_])/g, '$1');
 
   // 上下标:整参数能映射成 Unicode sup/sub 就映射,否则退化成 ^(...) / _(...)
   const applyScripts = (input: string, marker: '^' | '_', map: Record<string, string>): string => {
@@ -416,6 +520,12 @@ export function latexToUnicodeApproximation(latex: string): string {
     let i = 0;
     while (i < input.length) {
       const ch = input[i];
+      // Escaped markers are literal text, not a script opener.
+      if (ch === '\\' && /[{}$%&#_^]/.test(input[i + 1] ?? '')) {
+        out += input.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
       if (ch !== marker) {
         out += ch;
         i += 1;
@@ -437,8 +547,9 @@ export function latexToUnicodeApproximation(latex: string): string {
   s = applyScripts(s, '^', SUPERSCRIPT_MAP);
   s = applyScripts(s, '_', SUBSCRIPT_MAP);
 
-  // 残余花括号是分组语法,展示时无意义
-  s = s.replace(/[{}]/g, '');
+  // Remove grouping braces while retaining explicitly escaped literal braces
+  // and markers. Unescaping earlier would erase \{x\} or reinterpret \_1.
+  s = s.replace(/\\([{}$%&#_^])|[{}]/g, (_m, literal: string | undefined) => literal ?? '');
 
   // LaTeX 源码里的多空格无语义,折叠成单空格
   return s.replace(/[ \t]+/g, ' ').trim();

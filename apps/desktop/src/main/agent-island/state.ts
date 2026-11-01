@@ -72,9 +72,12 @@ export const AGENT_ISLAND_TOOL_DETAIL_LINGER_MS = 2_000;
 export const AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS = 1_600;
 export const AGENT_ISLAND_FOCUS_VERIFY_TIMEOUT_MS = 1_500;
 const AGENT_ISLAND_FOCUS_NAVIGATION_TIMEOUT_MS = 60_000;
-// 未读的 completed / error 在**灵动岛浮窗**里驻留的上限;超过后即便用户没 ack,
-// 也不再占用展开列表。岛 state 会按 TTL prune;远程绿/红点改订独立的
-// remoteUnreadTerminals 账本,不跟完整会话(含活动文本)一起留下。
+// 已完成条目在**灵动岛浮窗**里的最长保留期。超过一天后无论是否未读、是否正悬停
+// 展开,都不再展示;会话本身在侧栏 / 远程账本里的状态不受影响。岛 state 会按 TTL
+// prune;远程绿/红点改订独立的 remoteUnreadTerminals 账本,不跟完整会话(含活动文本)
+// 一起留下。
+export const AGENT_ISLAND_COMPLETED_RETENTION_MS = 24 * 60 * 60 * 1_000;
+// 未读 error 条目在灵动岛列表里驻留的上限;超过后即便用户没 ack 也 prune 掉。
 export const AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS = 4 * 60 * 60 * 1_000;
 const AGENT_ISLAND_COMPACT_CURRENT_MIN_DWELL_MS = 1_200;
 const AGENT_ISLAND_MEASURED_HEIGHT_MAX = 2_000;
@@ -162,6 +165,8 @@ interface AgentIslandSessionState {
   errorUntil: number | null;
   /** Whether this terminal error belongs to a flow that deliberately emits a paired done. */
   completionAllowedAfterTerminalError: boolean;
+  /** First time this session was seen completed; drives the one-day island retention. */
+  completedAt: number | null;
   revealUntil: number | null;
   visibleInteractionSuppressedUntil: number | null;
   interactionRevealDismissed: boolean;
@@ -856,6 +861,7 @@ export function applyAgentIslandEvent(
     clearAssistantStream(session);
     session.running = false;
     session.phase = 'error';
+    session.completedAt = null;
     session.interactionKind = undefined;
     session.pendingInteractionIds.clear();
     clearPendingInteractionMetadata(session);
@@ -1765,6 +1771,7 @@ export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number):
       session.toolDetailUntil,
       session.messagePreview?.until,
       unreadIslandTtlAt(session),
+      completedRetentionDeadlineAt(session),
     ]) {
       if (value && value > now && (next === null || value < next)) {
         next = value;
@@ -1905,6 +1912,7 @@ function markSessionRunning(
   session.completionNotification = undefined;
   session.running = true;
   session.completedUntil = null;
+  session.completedAt = null;
   session.errorUntil = null;
   session.completionAllowedAfterTerminalError = false;
   session.revealUntil = null;
@@ -1935,6 +1943,7 @@ function completeAgentIslandSession(
   // 旧卡被真正的完成替换才换身份;失败 turn 的收尾记账 done / 重复 done 保留同一张
   // 卡,不得驱逐被点击的那张(review P1)。
   if (session.phase !== 'completed') replaceAgentIslandCard(session, now);
+  if (session.phase !== 'completed') session.completedAt = now;
   session.phase = 'completed';
   session.completionNotification = options.suppressAttention ? 'silent' : undefined;
   session.interactionKind = undefined;
@@ -2730,6 +2739,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     completedUntil: null,
     errorUntil: null,
     completionAllowedAfterTerminalError: false,
+    completedAt: null,
     revealUntil: null,
     visibleInteractionSuppressedUntil: null,
     interactionRevealDismissed: false,
@@ -2930,7 +2940,33 @@ function clearRemoteUnreadTerminal(state: AgentIslandState, sessionId: string): 
 
 function unreadIslandTtlAt(session: AgentIslandSessionState): number | null {
   if (!isUnreadTerminalLedger(session)) return null;
+  return terminalRetentionAt(session);
+}
+
+/** 终态条目在岛面的保留截止时刻。完成按首次完成时间算一天,报错沿用短 TTL。 */
+function terminalRetentionAt(session: AgentIslandSessionState): number {
+  const completedDeadline = completedRetentionDeadlineAt(session);
+  if (completedDeadline !== null) return completedDeadline;
   return session.lastActivityAt + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+}
+
+/** 群聊 / 伙伴对话卡片不是任务完成态,不受「完成保留一天」规则约束。 */
+function isRetentionScopedCompletedSession(session: AgentIslandSessionState): boolean {
+  return !session.groupChat && !session.companionChat && session.phase === 'completed';
+}
+
+/**
+ * 完成条目的保留截止时刻。已读卡片也要走这个截止刷新:否则用户停在岛内时
+ * preserveExpiredTransient 会一直留着卡片,却没有事件触发第二天的 prune。
+ */
+function completedRetentionDeadlineAt(session: AgentIslandSessionState): number | null {
+  if (!isRetentionScopedCompletedSession(session)) return null;
+  return (session.completedAt ?? session.lastActivityAt) + AGENT_ISLAND_COMPLETED_RETENTION_MS;
+}
+
+function isCompletedSessionExpired(session: AgentIslandSessionState, now: number): boolean {
+  const deadline = completedRetentionDeadlineAt(session);
+  return deadline !== null && now >= deadline;
 }
 
 function toRemoteUnreadSnapshot(unread: AgentIslandRemoteUnreadTerminal): AgentIslandSessionSnapshot {
@@ -2954,11 +2990,13 @@ function toRemoteUnreadSnapshot(unread: AgentIslandRemoteUnreadTerminal): AgentI
 }
 
 function isUnreadTerminalWithinIslandTtl(session: AgentIslandSessionState, now: number): boolean {
-  return isUnreadTerminalLedger(session)
-    && now - session.lastActivityAt < AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS;
+  return isUnreadTerminalLedger(session) && now < terminalRetentionAt(session);
 }
 
 function isSessionVisible(session: AgentIslandSessionState, now: number, preserveExpiredTransient = false): boolean {
+  // 完成超过一天的条目不再展示;这一条压过悬停展开与 preserveExpiredTransient,
+  // 避免旧完成卡片被用户一悬停就重新捞回岛面。
+  if (isCompletedSessionExpired(session, now)) return false;
   if (session.groupChat) return true;
   if (session.companionChat?.unread) return true;
   if (session.pendingInteractionIds.size > 0) return true;

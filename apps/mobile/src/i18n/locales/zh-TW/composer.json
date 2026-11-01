@@ -119,6 +119,9 @@
     "unavailable": "暫時無法接收分享",
     "noCompanions": "還沒有夥伴",
     "noTasks": "還沒有任務",
-    "retry": "部分內容未能讀取，點此重試。"
+    "retry": "部分內容未能讀取，點此重試。",
+    "noMatches": "沒有符合的去向",
+    "clearSearch": "清除搜尋",
+    "loadingDevices": "正在讀取電腦…"
   }
 }

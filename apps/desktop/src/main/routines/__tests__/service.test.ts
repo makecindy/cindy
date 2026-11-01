@@ -464,6 +464,144 @@ it('disables a previously exhausted import without dispatching, while ordinary m
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   expect(mock.storage.insert).not.toHaveBeenCalled();
 });
+it('disables a one-shot reminder after it fires and is delivered, leaving no pending time', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success');
+  expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+  expect(mock.save.mock.calls.at(-1)![0].next).toEqual({});
+});
+
+it('keeps a one-shot reminder enabled when it is run by hand before its time', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 3_600_000 }],
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success'));
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a one-shot reminder enabled when its fire fails, so the time is not lost', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  mock.scheduler.runNow.mockRejectedValueOnce(new Error('boom'));
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('failed');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a one-shot reminder enabled when its delivery fails', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  mock.deliverResult.mockRejectedValueOnce(new Error('offline'));
+  const routine = await routineTools.save('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1_000);
+  const [run] = await routineTools.history('bot', routine.id);
+  expect(run!.status).toBe('success');
+  expect(run!.delivery?.status).toBe('failed');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+});
+
+it('keeps a second one-shot queued behind a running fire, then runs it before disabling', async () => {
+  vi.useFakeTimers();
+  await getRoutineEngine();
+  let finishFirst!: () => void;
+  mock.scheduler.runNow.mockImplementationOnce(() => new Promise(resolve => { finishFirst = () => resolve({ runId: 'execution' }); }));
+  const routine = await routineTools.save('bot', {
+    name: 'Two reminders', prompt: 'Remind me', enabled: true,
+    triggers: [
+      { id: 'first', kind: 'once', at: Date.now() + 1_000 },
+      { id: 'second', kind: 'once', at: Date.now() + 3_000 },
+    ],
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.advanceTimersByTimeAsync(2_000);
+  finishFirst();
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  const history = await routineTools.history('bot', routine.id);
+  expect(history.map(run => run.status)).toEqual(['success', 'success']);
+  expect(mock.scheduler.runNow).toHaveBeenCalledTimes(2);
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+});
+
+it('disables a one-shot imported direct reminder after its fire succeeds', async () => {
+  vi.useFakeTimers();
+  configureRoutineHost({
+    getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    prepareImportedAutomation: async (_root, _routine, runId) => ({ runId, prompt: '', direct: 'Reminder' }),
+    finishImportedAutomation: vi.fn(async () => false),
+  });
+  await getRoutineEngine();
+  const routine = await routineTools.save('bot', {
+    name: 'Imported once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 2_000 }],
+  });
+  for (let i = 0; i < 10 && (await routineTools.list('bot'))[0]!.enabled; i++) await vi.advanceTimersByTimeAsync(1_000);
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success');
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(false);
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+});
+
+it('disables a one-shot that already fired before the fix when the engine starts', async () => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.put('bot', {
+    name: 'Once', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  saved.next = {};
+  saved.runs = [{ id: 'fired', routineId: routine.id, revision: routine.revision, triggerIds: ['once'], events: [], status: 'success', createdAt: 1, finishedAt: 2 }];
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  const restored = await getRoutineEngine();
+  expect(restored.list('bot')[0]!.enabled).toBe(false);
+  expect(mock.save.mock.calls.at(-1)![0].routines[0]!.enabled).toBe(false);
+});
+
+it('leaves an unfired, never-run or last-failed one-shot enabled when the engine starts', async () => {
+  const engine = await getRoutineEngine();
+  const unfired = await engine.put('bot', {
+    name: 'Unfired', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const neverRun = await engine.put('bot', {
+    name: 'Never run', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const lastFailed = await engine.put('bot', {
+    name: 'Last failed', prompt: 'Remind me', enabled: true,
+    triggers: [{ id: 'once', kind: 'once', at: Date.now() + 60_000 }],
+  });
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  delete saved.next[`${neverRun.id}:once`];
+  delete saved.next[`${lastFailed.id}:once`];
+  saved.runs = [
+    { id: 'early', routineId: unfired.id, revision: unfired.revision, triggerIds: ['manual'], events: [], status: 'success', createdAt: 1, finishedAt: 2 },
+    { id: 'older-success', routineId: lastFailed.id, revision: lastFailed.revision, triggerIds: ['once'], events: [], status: 'success', createdAt: 3, finishedAt: 4 },
+    { id: 'later-failure', routineId: lastFailed.id, revision: lastFailed.revision, triggerIds: ['once'], events: [], status: 'failed', createdAt: 5, finishedAt: 6 },
+  ];
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  const restored = await getRoutineEngine();
+  expect(restored.list('bot').map(routine => routine.enabled)).toEqual([true, true, true]);
+});
+
 it('keeps an unclassified teammate reminder audible when quiet is omitted', async () => {
   const reminder = await routineTools.save('bot', {
     name: 'Reminder', prompt: 'Remind me to rest', enabled: true,

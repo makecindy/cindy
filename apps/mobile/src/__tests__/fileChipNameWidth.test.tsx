@@ -171,3 +171,5 @@ describe('file chip names keep their width when the chip is content-sized (#5875
     }
   });
 });
+
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));

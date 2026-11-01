@@ -475,7 +475,7 @@ describe('MakerScheduleRunner model selection', () => {
       const acceptedClientId = mocks.createMessage.mock.calls[0][1].clientId;
       expect(acceptedClientId).toEqual(expect.any(String));
       expect(mocks.rewindPersistedUserMessageAfterClear)
-        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId);
+        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId, { discard: true });
     });
 
     // Merge regression, unit: a legacy remote default must not mask an explicit
