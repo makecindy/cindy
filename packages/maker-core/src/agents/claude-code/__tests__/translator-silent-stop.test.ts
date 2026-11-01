@@ -328,6 +328,40 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(doneSilentStopFlag(events)).toBeUndefined();
   });
 
+  /**
+   * #8240 regression / unit: exercise the production Claude translator. Existing visible-text
+   * coverage used a zero-tool turn, while the `toolUses > 0` exception still marked this shape
+   * silent. The minimal failure input is a tool call, visible assistant text, then only a
+   * redacted_thinking block before end_turn; already-delivered text must prevent auto-resume.
+   */
+  it('does NOT mark a tool turn silent after visible text and trailing redacted thinking', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'text', text: '已经完成并给出结果。' }] } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'redacted_thinking', data: 'opaque' }] } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+    expect(events.some((event) => event.type === 'text' && (event.data as { text?: string }).text === '已经完成并给出结果。')).toBe(true);
+  });
+
   it('treats unknown assistant blocks as substance instead of auto-resuming them', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
