@@ -8,6 +8,7 @@ const harness = vi.hoisted(() => {
     permissionCheck: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
     beforeRequest: ReturnType<typeof vi.fn>;
+    headersReceived: ReturnType<typeof vi.fn>;
     protocolHandle: ReturnType<typeof vi.fn>;
     protocolHandler?: (request: Request) => Promise<Response>;
     downloadHandler?: (event: { preventDefault(): void }) => void;
@@ -34,6 +35,7 @@ const harness = vi.hoisted(() => {
           if (event === 'will-download') created.downloadHandler = handler;
         }),
         beforeRequest: vi.fn(),
+        headersReceived: vi.fn(),
         fetch: vi.fn(async (url: string, options: RequestInit) => created.protocolHandler
           ? created.protocolHandler(new Request(url, options)) : new Response(null, { status: 404 })),
         protocolHandle: vi.fn(
@@ -46,7 +48,7 @@ const harness = vi.hoisted(() => {
         setPermissionRequestHandler: created.permissionRequest,
         setPermissionCheckHandler: created.permissionCheck,
         on: created.on,
-        webRequest: { onBeforeRequest: created.beforeRequest },
+        webRequest: { onBeforeRequest: created.beforeRequest, onHeadersReceived: created.headersReceived },
         protocol: { handle: created.protocolHandle },
         fetch: created.fetch,
       };
@@ -112,6 +114,8 @@ import type {
   GhostMediaModelsResult,
   InstalledGhost,
 } from '../../../../shared/ghost';
+vi.mock('../../../i18n.js', () => ({ t: () => 'Play video' }));
+
 import { GhostConnectionManager } from '../../ghostConnections.js';
 import { GhostOauthAccountManager } from '../../ghostOauthAccounts.js';
 import { handleGhostConnectionsRequest } from '../ghostConnectionsEndpoint.js';
@@ -614,6 +618,46 @@ describe('electronSandboxAdapter owner partition', () => {
     ] as const) {
       expect(isCancelled(url, resourceType), `${resourceType} ${url}`).toBe(true);
     }
+  });
+
+  // #8128: production session/protocol admission; old coverage only tested images/loopback.
+  // Minimum failure: a remote player fetching /wake, or an unapproved historical declaration.
+  // Tier: unit, real registered callbacks with an in-memory Electron session.
+  it('requires explicit video approval and isolates player requests from plugin capabilities', async () => {
+    const unapproved = ghost('video-unapproved');
+    unapproved.manifest.videoPlayers = ['bilibili'];
+    ensureGhostProtocolRegistered(unapproved);
+    const denied = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:video-unapproved'))!;
+    expect((await denied.protocolHandler!(new Request('cindy-ghost://video-unapproved/__video_player__/bilibili?aid=1'))).status).toBe(403);
+    expect(denied.headersReceived).not.toHaveBeenCalled();
+    const approved = ghost('video-approved');
+    approved.manifest.videoPlayers = ['bilibili']; approved.videoPlayerApprovals = ['bilibili'];
+    ensureGhostProtocolRegistered(approved);
+    const registered = harness.sessions.get(approvedPartition('cindy-ghost-owner:cloud:opaque-owner-a:video-approved'))!;
+    const prefix = 'cindy-ghost://video-approved/';
+    const wrapper = { url: prefix + '__video_player__/bilibili?aid=1', parent: { url: prefix + 'panel.html', parent: null } };
+    const player = { url: 'https://player.bilibili.com/player.html?aid=1&page=1&autoplay=0', parent: wrapper };
+    const request = registered.beforeRequest.mock.calls[0][0];
+    const check = (url: string, resourceType: string, frame = player, webContentsId = 42) => {
+      const result = vi.fn(); request({ url, resourceType, frame, webContentsId }, result); return result.mock.calls[0][0].cancel;
+    };
+    harness.contents.set(42, { session: registered.session!, isDestroyed: () => false, executeJavaScript: vi.fn(), getType: () => 'webview' } as never);
+    expect(check(player.url, 'subFrame')).toBe(false);
+    expect(check('https://api.bilibili.com/x/player/v2', 'xhr')).toBe(false);
+    expect(check(prefix + 'wake', 'xhr')).toBe(true);
+    expect(check('https://evil.example/steal', 'image')).toBe(true);
+    expect(check(player.url.replace('autoplay=0', 'autoplay=1'), 'subFrame')).toBe(true);
+    expect(check(player.url, 'subFrame', player, 999)).toBe(true);
+    const document = await registered.protocolHandler!(new Request(wrapper.url));
+    expect(document.status).toBe(200);
+    expect(document.headers.get('content-security-policy')).toContain('frame-src https://player.bilibili.com');
+    expect(await document.text()).not.toContain('<iframe');
+    const callback = vi.fn();
+    registered.headersReceived.mock.calls[0][0]({url: player.url, responseHeaders: {'Content-Security-Policy':['original-policy']}}, callback);
+    expect(callback.mock.calls[0][0].responseHeaders['Content-Security-Policy']).toEqual(['original-policy', expect.stringContaining('sandbox allow-scripts allow-same-origin')]);
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    expect(check(player.url, 'subFrame')).toBe(true);
+    expect((await registered.protocolHandler!(new Request(wrapper.url))).status).toBe(403);
   });
 
   it('回环嵌入插件:面板子帧及其同端口请求放行,面板自身与其它端口仍拒绝', async () => {

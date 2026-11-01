@@ -3023,6 +3023,7 @@ export class GhostManager {
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+          ...(receipt.videoPlayerApprovals ? { videoPlayerApprovals: receipt.videoPlayerApprovals } : {}),
           ...approvedControlPointsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
@@ -3975,6 +3976,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      videoPlayerApprovals?: string[];
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
@@ -4007,6 +4009,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      videoPlayerApprovals?: string[];
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
@@ -4186,6 +4189,7 @@ export class GhostManager {
           ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
+          videoPlayerApprovals: opts?.videoPlayerApprovals?.filter(p => p === 'bilibili' && Array.isArray(approvedManifest.videoPlayers) && approvedManifest.videoPlayers.includes(p)),
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           trust,
@@ -4315,6 +4319,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      videoPlayerApprovals?: string[];
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
@@ -4344,6 +4349,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      videoPlayerApprovals?: string[];
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
@@ -4627,6 +4633,7 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...((opts.delegationCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.delegationCapabilityApproved === true)) &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        videoPlayerApprovals: [...new Set([...(opts.videoPlayerApprovals ?? []), ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.videoPlayerApprovals ?? [] : [])])].filter(p => p === 'bilibili' && Array.isArray(approvedManifest.videoPlayers) && approvedManifest.videoPlayers.includes(p)),
         // 已批准节点随同一实例延续(仍声明的才保留，receipt 构造时按新 manifest 过滤)；
         // 本次确认新显示的节点并入。换源归档(archiveId)不继承旧批准。
         approvedControlPoints: [
@@ -5047,6 +5054,7 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true ? { taskCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.targetCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
+        videoPlayerApprovals: (current.state === 'approved' ? current.receipt.videoPlayerApprovals ?? [] : []).filter(p => Array.isArray(approvedManifest.videoPlayers) && approvedManifest.videoPlayers.includes(p)),
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点视为已随版本批准。

@@ -334,3 +334,10 @@ MCP 请求钩子。此身份要求来自 YouTube 官方文档，不伪装成第�
 pnpm --filter desktop exec vitest run src/main/__tests__/webview-security.test.ts src/main/security/__tests__/csp.test.ts
 pnpm --filter desktop typecheck
 ```
+
+
+### 插件官方视频嵌入（#8128，尚未发布）
+
+显式 videoPlayers 声明与独立批准后，仅 Host 播放器文档可嵌入官方播放器。
+普通插件页与主 Renderer CSP 不变。作者接口、精确资源域、安全与存量兼容边界见
+[官方视频嵌入契约](../plugin-video-embedding.md)。

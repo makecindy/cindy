@@ -1037,6 +1037,8 @@ export interface GhostManifest {
   library?: true;
   /** Encrypted opaque exchange with this plugin on same-account desktops. */
   deviceSync?: true;
+  /** Official video providers embedded through the Host player document. */
+  videoPlayers?: string[];
   sessionContext?: true;
   pick?: true;
   workspace?: true;
@@ -1239,6 +1241,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'confirm',
   'fs',
   'library',
+  'videoPlayers',
   'deviceSync',
   'sessionContext',
   'pick',
@@ -1394,6 +1397,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
+  if (raw.videoPlayers !== undefined && (!Array.isArray(raw.videoPlayers) || raw.videoPlayers.length > 8 || !raw.videoPlayers.every(p => typeof p === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(p)) || new Set(raw.videoPlayers).size !== raw.videoPlayers.length)) {
+    return { ok: false, reason: 'videoPlayers must be a unique list of up to 8 provider identifiers' };
+  }
   if (raw.mail !== undefined && raw.mail !== true) return { ok: false, reason: 'mail 出现时必须是 true' };
   // Keep this shape aligned with maker-shared's runtime reader parser.
   const reader = raw.mailReader as Record<string, unknown> | undefined;
@@ -3887,6 +3893,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     manifest: {
       ...prepared.unknownV3Fields,
       ...(mcpApps !== undefined ? { mcpApps } : {}),
+      ...(raw.videoPlayers !== undefined ? { videoPlayers: raw.videoPlayers as string[] } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
       name: raw.name,

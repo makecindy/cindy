@@ -1,3 +1,5 @@
+import { t } from '../../i18n.js';
+import { VIDEO_PLAYER_PATH, VIDEO_PLAYER_SCRIPT_PATH, VIDEO_PLAYER_SCRIPT, VIDEO_PLAYER_ORIGIN, VIDEO_RESPONSE_CSP, VIDEO_PERMISSIONS_POLICY, videoPlayerDocument, videoRequestDecision, isOfficialVideoUrl } from './pluginVideoPlayer.js';
 import { BrowserWindow, session, webContents, type CustomScheme } from 'electron';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -500,7 +502,7 @@ function registerGhostProtocol(
   ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on('will-download', (event) => event.preventDefault());
-  // 分区级网络闸：默认只放行自己协议同 id 下的资源；唯一外部例外是
+  // 分区级网络闸：默认只放行自己协议同 id 下的资源；普通页面的外部例外是
   // 任意插件页面发出的 HTTPS image 请求（<img> 与 CSS 图片共用该资源类型）。
   // HTTP 图片、XHR/fetch、脚本、样式、字体、媒体、WebSocket 与其它协议继续拒绝。
   const selfPrefix = `${SCHEME}://${ghostId}/`;
@@ -508,8 +510,15 @@ function registerGhostProtocol(
   // 提供的页面装进 <iframe>;该子帧内的请求只许回到同一主机:端口(含 WebSocket)。
   // 面板页自身发出的回环 fetch/XHR 仍被拒;顶层导航到回环地址仍被拒。
   const loopbackEmbed = ghostPanelLoopbackEmbedAllowed(ghost.manifest);
+  // 已确认的视频文档单独按真实帧祖先授权，不继承普通页面的外部图片例外。
+  const videoEnabled = ghost.approval?.state === 'approved' && ghost.enabled && Array.isArray(ghost.manifest.videoPlayers) && ghost.manifest.videoPlayers.includes('bilibili') && ghost.videoPlayerApprovals?.includes('bilibili') === true;
   const htmlCsp = loopbackEmbed ? `${GHOST_HTML_CSP}; ${GHOST_LOOPBACK_FRAME_CSP}` : GHOST_HTML_CSP;
   ses.webRequest.onBeforeRequest((details, callback) => {
+    if (videoEnabled) {
+      const contents = details.webContentsId ? webContents.fromId(details.webContentsId) : null;
+      const decision = videoRequestDecision(details, selfPrefix, isRegistrationCurrent(), contents?.getType() === 'webview');
+      if (decision !== null) { callback({ cancel: !decision }); return; }
+    }
     let allowed = details.url.startsWith(selfPrefix);
     if (!allowed && isGhostProtocolOwnerActive(owner) && details.resourceType === 'image') {
       try {
@@ -523,6 +532,18 @@ function registerGhostProtocol(
     }
     callback({ cancel: !allowed });
   });
+  if (videoEnabled) {
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      if (!isOfficialVideoUrl(details.url)) { callback({}); return; }
+      if (!isRegistrationCurrent()) { callback({ cancel: true }); return; }
+      const headers = { ...details.responseHeaders };
+      const cspKey = Object.keys(headers).find(key => key.toLowerCase() === 'content-security-policy') ?? 'Content-Security-Policy';
+      headers[cspKey] = [...(headers[cspKey] ?? []), VIDEO_RESPONSE_CSP];
+      const policyKey = Object.keys(headers).find(key => key.toLowerCase() === 'permissions-policy') ?? 'Permissions-Policy';
+      headers[policyKey] = [VIDEO_PERMISSIONS_POLICY];
+      callback({ responseHeaders: headers });
+    });
+  }
   const handleRequest = async (request: Request): Promise<Response> => {
     try {
       // owner B 提交后，owner A 的旧 guest 仍可能短暂存活并新发请求。
@@ -537,6 +558,20 @@ function registerGhostProtocol(
       const url = new URL(request.url);
       // 分区专属通道只认自己的 id,其它 host 一律 403(结构隔离的最后一道断言)。
       if (url.host !== ghostId) return new Response(null, { status: 403 });
+      if (url.pathname === VIDEO_PLAYER_PATH || url.pathname === VIDEO_PLAYER_SCRIPT_PATH) {
+        if (!videoEnabled) return new Response(null, { status: 403 });
+        if (request.method !== 'GET') return new Response(null, { status: 405 });
+        const script = url.pathname === VIDEO_PLAYER_SCRIPT_PATH;
+        const body = script ? VIDEO_PLAYER_SCRIPT : videoPlayerDocument(url.searchParams, t('richAnswer.playVideo'));
+        if (!body) return new Response(null, { status: 400 });
+        return new Response(body, { headers: {
+          'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Content-Security-Policy': GHOST_HTML_CSP + "; frame-src " + VIDEO_PLAYER_ORIGIN + "; object-src 'none'; base-uri 'none'; form-action 'none'",
+          'Permissions-Policy': VIDEO_PERMISSIONS_POLICY,
+        } });
+      }
+
       // ── 意识面板供图接待员─────────────────────────────────────────
       // /media/<指纹>.<ext>:面板取自家产物。指纹只当查账钥匙(不拼路径),
       // 账本验归属(出生自本意识或挂本意识画廊),通过才从字节仓读——

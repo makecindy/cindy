@@ -1104,3 +1104,10 @@ UNSUPPORTED_CAPABILITY，不降级为普通消息或另建任务。旧 Host 无�
 Main 从当前接受的输入、原批准和持久回执读取 scope，交给现有 Auto 审核投影；
 不伪造主人原话，不提升伙伴权限，不新增团队，Core 不包含业务插件流程。
 作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。
+
+
+### 插件官方视频嵌入（#8128，尚未发布）
+
+显式 videoPlayers 声明与独立批准后，仅 Host 播放器文档可嵌入官方播放器。
+普通插件页与主 Renderer CSP 不变。作者接口、精确资源域、安全与存量兼容边界见
+[官方视频嵌入契约](../plugin-video-embedding.md)。

@@ -527,6 +527,31 @@ describe('hashApprovedSkillContent · item.dir 路径段校验', () => {
 });
 
 describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => {
+  // #8128, unit: real install/receipt/update path; consent-only tests cannot prove persistence.
+  it('persists video approval only while the provider remains declared', async () => {
+    const declaration = { ...goodManifest(), videoPlayers: ['bilibili'] };
+    const pkg = await makeCindy('video.cindy', declaration, { 'main.js': '// plugin' });
+    await manager.install(pkg, { videoPlayerApprovals: ['bilibili', 'unknown'] });
+    expect(manager.list()[0].videoPlayerApprovals).toEqual(['bilibili']);
+    for (const [version, providers, expected] of [
+      ['1.0.1', ['bilibili'], ['bilibili']],
+      ['1.0.2', [], []],
+      ['1.0.3', ['bilibili'], []],
+    ] as const) {
+      const current = manager.list()[0];
+      const update = await makeCindy('video-' + version + '.cindy', { ...declaration, version, videoPlayers: providers }, { 'main.js': '// update' });
+      const result = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(current.approval) });
+      expect(result).toHaveProperty('ghost.videoPlayerApprovals', expected);
+      expect(manager.list()[0]).toMatchObject({ enabled: true, videoPlayerApprovals: expected });
+    }
+  });
+  it.each([null, { future: true }, ['bilibili'], 'bilibili'])('preserves historical video declarations %j without granting access', async videoPlayers => {
+    await writeLegacyInstall('hello', { ...goodManifest(), videoPlayers });
+    await manager.migrateLegacyApprovalsOnce();
+    expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(manager.list()[0].videoPlayerApprovals).toBeUndefined();
+  });
+
   it.each([null, 'acme'] as const)('binds task approval to the selected instance %s', async (namespace) => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true } };
     const pkg = await makeCindy('tasks.cindy', manifest, { 'main.js': '// plugin' });
