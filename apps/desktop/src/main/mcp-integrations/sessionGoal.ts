@@ -6,7 +6,7 @@ import {
   GoalUpdateSupersededError,
   type GoalController,
 } from '../goal-host/controller.js';
-import { assertTaskActionCurrent, captureTaskActionSyncGuard, isTaskActionRevoked } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard, isTaskActionRevoked, taskActionGoalSnapshot } from '../maker-ipc/taskActionAuthorization.js';
 
 /** Reuse GoalController edits and its persistence/broadcast lifecycle without dispatching user input. */
 export function createSessionGoalCallbacks(deps: {
@@ -17,7 +17,8 @@ export function createSessionGoalCallbacks(deps: {
   const run = async (context: LiziMcpSessionContext, objective?: string) => {
     if (!context.sessionId) return { ok: false as const, errorCode: 'NO_SESSION_CONTEXT', message: '当前调用没有绑定 Cindy 任务。' };
     const sessionId = context.sessionId;
-    const actionGuard = objective === undefined ? undefined : captureTaskActionSyncGuard();
+    const actionGuard = objective === undefined ? undefined : captureTaskActionSyncGuard({ allowInputCompletion: true });
+    const expectedGoal = objective === undefined ? undefined : taskActionGoalSnapshot();
     const assertSessionCurrent = () => {
       if (!deps.isCurrentSession(context)) throw new GoalControllerDisposedError();
     };
@@ -37,7 +38,7 @@ export function createSessionGoalCallbacks(deps: {
         };
         const goal = objective === undefined
           ? await controller.getStatus(sessionId)
-          : await controller.updateGoal(sessionId, { objective }, assertMutationCurrent);
+          : await controller.updateGoal(sessionId, { objective }, assertMutationCurrent, expectedGoal);
         await assertCurrent();
         actionGuard?.();
         assertSessionCurrent();

@@ -387,6 +387,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     authorizeAction: createDesktopTaskActionAuthorizer({
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
       capturePermissionRequest: captureTaskActionPermissionRequest,
+      getGoal: async (sessionId) => {
+        const controller = getGoalController();
+        if (!controller) throw new Error('HOST_NOT_READY');
+        const goal = await controller.getStatus(sessionId);
+        return goal ? { status: goal.status, objective: goal.objective } : null;
+      },
       getSessionWorkDir: resolveHookSessionWorkDir,
       getScheduleDefinition: async (id, hookInstallation, device) => {
         let schedule: Schedule | null;

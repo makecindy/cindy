@@ -10,6 +10,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AutoReviewDecision, PermissionMode, SendOrigin } from '@cindy/maker-core';
 import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
+import { GoalController } from '../../goal-host/controller.js';
+import type { GoalState, SessionLike } from '../../goal-host/types.js';
+import { createSessionGoalCallbacks } from '../../mcp-integrations/sessionGoal.js';
 import { withToolCallAuthority } from '../../../../../../packages/lizi-mcps/src/tool-call-authority.js';
 import { createOrcaMcpServer } from '../../../../../../packages/lizi-mcps/src/orca/server.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -28,6 +31,7 @@ import {
   captureTaskActionSyncGuard,
   captureTaskActionGuard,
   captureTaskActionDeliveryGuard,
+  taskActionGoalSnapshot,
   isTaskActionRevoked,
 } from '../taskActionAuthorization.js';
 
@@ -281,6 +285,7 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     },
     orcaSenderSessionId: undefined as string | undefined,
     key: 'owner-request',
+    isInputCompleted: undefined as undefined | (() => boolean),
     ownerInput: kind === 'private',
     ownerContinuation: false,
     automatic: kind !== 'private',
@@ -311,10 +316,13 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
   const routines = new Map<string, { enabled: boolean; revision: number; prompt?: string; preRunCommand?: string }>();
   const schedules = new Map<string, TaskActionScheduleDefinition>();
   const workDirs = new Map([['companion', '/companion']]);
+  let goal: { status: 'active' | 'paused' | 'blocked' | 'usageLimited'; objective: string } | null = null;
+  const getGoal = vi.fn(async () => goal ? { ...goal } : null);
   const getScheduleDefinition = vi.fn(async (id: string) => structuredClone(schedules.get(id) ?? null));
   const authorize = createDesktopTaskActionAuthorizer({
     input: () => ({ ...activeInput }), confirm, getSession,
     capturePermissionRequest,
+    getGoal,
     getScheduleDefinition,
     getSessionWorkDir: async id => workDirs.get(id),
     captureRoutine: async (_botId, id, forExecution) => {
@@ -331,7 +339,8 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     },
   });
   return { authorize, confirm, activeInput, caller, rows, runtime, getSession,
-    permissionRequest, capturePermissionRequest, routines, schedules, workDirs, getScheduleDefinition };
+    permissionRequest, capturePermissionRequest, routines, schedules, workDirs, getScheduleDefinition, getGoal,
+    setGoal: (value: typeof goal) => { goal = value; } };
 }
 const ownerWrites = [
   ['cindy_helper', 'start_session_task'],
@@ -513,6 +522,127 @@ describe('Owner-delegated scheduled task actions', () => {
     const result = await withToolCallAuthority(h.authorize, scheduledSend(), effect);
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+});
+
+// Review #8362 r4436235377 / teammate-authority.md: autonomous Goal edits that
+// resume execution need the same risk confirmation as explicit Resume. Existing
+// owner-write coverage omitted paused Goal state and confirmation replacement.
+describe('Autonomous Goal edits', () => {
+  function goalFixture(status: 'active' | 'paused' | 'blocked' | 'usageLimited' = 'paused') {
+    const h = desktopFixture('automatic');
+    h.activeInput.permission = { permissionMode: 'bypassPermissions', planModeEnabled: false, isCurrent: () => true };
+    h.setGoal({ status, objective: 'old objective' });
+    return h;
+  }
+  const edit = (objective = 'new objective') => ({ ...call('update_goal'), args: { objective } });
+
+  // r4436295232: the real authorizer/callback/controller must preserve an admitted
+  // resume across completion, but not new input or revocation. Unit, memory only.
+  it.each(['owner', 'autonomous'] as const)('preserves a deferred %s Goal resume only across its originating input completion', async principal => {
+    const h = goalFixture();
+    h.activeInput.ownerInput = principal === 'owner';
+    let running = true;
+    let completed = false;
+    h.activeInput.isInputCompleted = () => completed;
+    let goal: GoalState = { sessionId: 'companion', objective: 'old objective', status: 'paused',
+      budgetTokens: null, maxTurns: null, noProgressLimit: null, turnsUsed: 0, tokensUsed: 0,
+      noProgressStreak: 0, usageResetAt: null, lastReason: null, agentKind: 'codex', startedAt: 1, updatedAt: 1 };
+    h.getGoal.mockImplementation(async () => ({ status: goal.status as 'paused' | 'active', objective: goal.objective }));
+    const send = vi.fn<SessionLike['send']>(async (_message, opts) => { opts?.onDispatching?.(); return { accepted: true }; });
+    const session = { id: 'companion', agentKind: 'codex' as const, send,
+      isTurnRunning: () => running, onEvent: () => () => {}, abort: async () => {} };
+    const controller = new GoalController({
+      storage: { get: async () => ({ ...goal }), upsert: async state => { goal = state; },
+        update: async (_id, patch) => (goal = { ...goal, ...patch }), clear: async () => {},
+        listActive: async () => [], listUsageLimited: async () => [] },
+      getSession: () => session, ensureSession: async () => session, isSessionInTurn: () => false,
+      stopActiveGoalTurn: () => {}, emitStatus: () => {},
+      getDefaults: () => ({ maxTurns: null, budgetTokens: null, noProgressLimit: null }),
+      logger: { info: () => {}, warn: () => {}, error: () => {} }, continuationDebounceMs: 0,
+    });
+    const callbacks = createSessionGoalCallbacks({ getController: () => controller,
+      isCurrentSession: () => true, withAccess: async (_id, operation) => operation(async () => {}) });
+    try {
+      expect(await withToolCallAuthority(h.authorize, edit(),
+        () => callbacks.update({ sessionId: 'companion', agentKind: 'codex', workingDir: '/fixture' }, 'new objective')))
+        .toMatchObject({ ok: true, goal: { status: 'paused', objective: 'new objective' } });
+      expect(send).not.toHaveBeenCalled();
+      // The coordinator has cleared the originating input, with no replacement.
+      completed = true;
+      running = false;
+      h.activeInput.key = 'idle';
+      await controller.maybeContinueActiveGoal('companion');
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(goal.status).toBe('active');
+      expect(send.mock.calls[0]?.[0]).toMatchObject({ content: expect.stringContaining('new objective') });
+      expect(h.confirm).toHaveBeenCalledTimes(principal === 'owner' ? 0 : 1);
+    } finally { await controller.dispose(); }
+  });
+
+  it.each(['replacement', 'permission', 'account', 'boundary'] as const)('expires an idle Goal continuation after %s changes', async changed => {
+    const h = goalFixture();
+    let completed = false;
+    let permissionCurrent = true;
+    h.activeInput.isInputCompleted = () => completed;
+    h.activeInput.permission!.isCurrent = () => permissionCurrent;
+    const guard = await withToolCallAuthority(h.authorize, edit(), async () =>
+      captureTaskActionSyncGuard({ allowInputCompletion: true })!);
+    completed = true;
+    h.activeInput.key = 'idle';
+    expect(guard).not.toThrow();
+    if (changed === 'replacement') completed = false; // retained coordinator revision changed
+    if (changed === 'permission') permissionCurrent = false;
+    if (changed === 'account') hostFacts.getDb.mockReturnValue({});
+    if (changed === 'boundary') h.activeInput.boundary = 'new-runtime';
+    expect(guard).toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  it.each(['paused', 'blocked', 'usageLimited'] as const)('does not resume an autonomous %s Goal without confirmation', async status => {
+    const h = goalFixture(status);
+    h.confirm.mockResolvedValue(false);
+    const effect = vi.fn(async () => 'edited');
+    expect(await withToolCallAuthority(h.authorize, edit(), effect)).toMatchObject({ isError: true });
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledExactlyOnceWith('companion', 'update_goal', edit().args, {
+      server: 'cindy_helper', risk: 'resume', details: { goal: { status, objective: 'old objective' } },
+    });
+  });
+
+  it('carries the confirmed Goal snapshot into the admitted edit', async () => {
+    const h = goalFixture();
+    expect(await withToolCallAuthority(h.authorize, edit(), async () => taskActionGoalSnapshot()))
+      .toEqual({ status: 'paused', objective: 'old objective' });
+    expect(h.confirm).toHaveBeenCalledOnce();
+  });
+
+  it.each(['active', 'unchanged', 'owner', 'entrusted'] as const)('keeps %s Goal edits on the ordinary permission flow', async kind => {
+    const h = goalFixture(kind === 'active' ? 'active' : 'paused');
+    if (kind === 'owner') h.activeInput.ownerInput = true;
+    if (kind === 'entrusted') h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', runId: 'run', scheduleId: 'routine-user' });
+    expect(await withToolCallAuthority(h.authorize, edit(kind === 'unchanged' ? 'old objective' : undefined), async () => 'edited')).toBe('edited');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(['status', 'objective'] as const)('expires a confirmation when the Goal %s changes', async changed => {
+    const h = goalFixture();
+    h.confirm.mockImplementation(async () => {
+      h.setGoal({ status: changed === 'status' ? 'active' : 'paused',
+        objective: changed === 'objective' ? 'owner edit' : 'old objective' });
+      return true;
+    });
+    const effect = vi.fn(async () => 'edited');
+    expect(await withToolCallAuthority(h.authorize, edit(), effect)).toMatchObject({ isError: true });
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  it('does not infer a safe edit when the Goal snapshot is unavailable', async () => {
+    const h = goalFixture();
+    h.getGoal.mockRejectedValueOnce(new Error('HOST_NOT_READY'));
+    const effect = vi.fn(async () => 'edited');
+    expect(await withToolCallAuthority(h.authorize, edit(), effect)).toMatchObject({ isError: true });
     expect(effect).not.toHaveBeenCalled();
     expect(h.confirm).not.toHaveBeenCalled();
   });

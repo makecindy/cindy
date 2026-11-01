@@ -530,6 +530,48 @@ describe('GoalController', () => {
   });
 
   // ── setGoal / updateGoal ──
+  // Review r4436235377: an active admission must not turn into an unconfirmed
+  // paused-goal resume during controller waits. Unit: real callback/controller,
+  // captured Host scope, in-memory state replacement; earlier tests lacked this race.
+  it.each(['status', 'objective', 'new-goal', 'absent'] as const)('checks the Goal admission snapshot after storage waits: %s', async changed => {
+    const snapshot = changed === 'new-goal' || changed === 'absent' ? null : { status: 'active' as const, objective: 'old objective' };
+    const authorize = createTaskActionAuthorizer({
+      capture: async () => ({ key: 'edit', ownerInput: true, delegated: true, goal: snapshot,
+        assertCurrent: async () => {}, assertCurrentSync: () => {} }),
+      confirm: async () => true,
+    });
+    const callbacks = createSessionGoalCallbacks({
+      getController: () => h.controller, isCurrentSession: () => true,
+      withAccess: async (_id, operation) => operation(async () => {}),
+    });
+    try {
+      if (changed !== 'absent') await h.storage.upsert(seededGoal({ status: changed === 'status' ? 'paused' : 'active',
+        objective: changed === 'objective' ? 'owner edit' : 'old objective' }));
+      const result = await withToolCallAuthority(authorize, { sessionId: 's1', server: 'cindy_helper',
+        tool: 'update_goal', args: { objective: 'new objective' } },
+      () => callbacks.update({ sessionId: 's1', agentKind: 'codex', workingDir: '/fixture' }, 'new objective'));
+      expect(result).toMatchObject({ ok: false, errorCode: changed === 'absent' ? 'GOAL_NOT_FOUND' : 'PRECONDITION_FAILED' });
+      expect((await h.storage.get('s1'))?.objective).not.toBe('new objective');
+      expect(h.session.sends).toHaveLength(0);
+      expect(h.userMessages).toHaveLength(0);
+    } finally { await h.controller.dispose(); }
+  });
+
+  it('keeps the confirmed Goal snapshot bound while its Resume waits for idle', async () => {
+    try {
+      await h.storage.upsert(seededGoal({ status: 'paused' }));
+      h.session.running = true;
+      await h.controller.updateGoal('s1', { objective: 'new objective' }, () => {},
+        { status: 'paused', objective: 'old objective' });
+      await h.storage.update('s1', { objective: 'owner edit' });
+      h.session.running = false;
+      await h.controller.maybeContinueActiveGoal('s1');
+      await tick();
+      expect(h.session.sends).toHaveLength(0);
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'paused', objective: 'owner edit' });
+    } finally { await h.controller.dispose(); }
+  });
+
   // PR #8362 review r4436193423 / teammate-authority.md: admission must remain
   // valid at delayed goal commits and resumes. Earlier callback tests never revoke
   // a real task-action grant inside controller waits. Unit, in-memory boundaries.

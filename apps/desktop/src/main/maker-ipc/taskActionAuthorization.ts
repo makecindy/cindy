@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
 import type { Schedule, ScheduleMutationGuard } from '@cindy/maker-scheduler';
+import type { MobileGoalStatusPayload } from '@cindy/maker-shared';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 type Call = Parameters<ToolCallAuthorizer>[0];
@@ -70,12 +71,16 @@ export interface TaskActionScope {
   routine?: { botId: string; id: string; revision: number };
   /** Complete persisted schedule captured for an approved command/resume action. */
   scheduleGuard?: ScheduleMutationGuard;
+  /** Host goal state bound to an autonomous objective edit. */
+  goal?: Pick<MobileGoalStatusPayload, 'status' | 'objective'> | null;
   /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
   delegated: boolean;
   /** Rechecked at mutation; includes account, target and delegation revocation. */
   assertCurrent(): Promise<void>;
   /** Host generation check for existing synchronous commit/pre-send callbacks. */
   assertCurrentSync?(): void;
+  /** An admitted Goal resume may outlive normal completion of its originating input. */
+  assertContinuationCurrentSync?(): void;
   /** Queued delivery outlives the admitting turn: real revocation only, no live turn facts. */
   assertDeliveryCurrent?(): Promise<void>;
 }
@@ -87,8 +92,10 @@ interface ActionContext {
   principal?: TaskActionPrincipal;
   routine?: TaskActionScope['routine'];
   scheduleGuard?: ScheduleMutationGuard;
+  goal?: TaskActionScope['goal'];
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
+  assertContinuationCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
 }
 const actionContext = new AsyncLocalStorage<ActionContext>();
@@ -177,10 +184,13 @@ export function taskActionCreatesFullAccessTask(call: Pick<Call, 'server' | 'too
 
 /** A small, explicit risk list. Everything else follows the task's normal permissions. */
 export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
-  facts?: { routineEnabled?: boolean; routinePrompt?: string; routineBuiltin?: boolean; routinePreRunCommand?: string; schedule?: TaskActionScheduleDefinition | null }): TaskActionRisk | undefined {
+  facts?: { routineEnabled?: boolean; routinePrompt?: string; routineBuiltin?: boolean; routinePreRunCommand?: string; schedule?: TaskActionScheduleDefinition | null; goal?: TaskActionScope['goal'] }): TaskActionRisk | undefined {
   const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
     ? call.args as Record<string, unknown> : {};
   if (taskActionCreatesFullAccessTask(call)) return 'command';
+  if (call.server === 'cindy_helper' && call.tool === 'update_goal' && facts?.goal &&
+    ['paused', 'blocked', 'usageLimited'].includes(facts.goal.status) &&
+    typeof args.objective === 'string' && args.objective.trim() !== facts.goal.objective) return 'resume';
   // The local scheduler is a trusted MCP, but its script runner bypasses the
   // harness's shell approval. Classify the command effect, not all scheduler writes.
   if ((call.server === 'cindy_helper' || call.server === 'cindy_scheduler') &&
@@ -287,8 +297,10 @@ export async function admitTaskAction(
           principal: scope.principal,
           routine: scope.routine,
           ...(scope.scheduleGuard ? { scheduleGuard: scope.scheduleGuard } : {}),
+          ...(scope.goal !== undefined ? { goal: scope.goal } : {}),
           assertCurrent: scope.assertCurrent,
           assertCurrentSync: scope.assertCurrentSync,
+          assertContinuationCurrentSync: scope.assertContinuationCurrentSync,
           assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
         },
         operation,
@@ -363,6 +375,11 @@ export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
   return actionContext.getStore()?.assertCurrent;
 }
 
+/** Only Host admission supplies this precondition; tool arguments cannot set it. */
+export function taskActionGoalSnapshot(): TaskActionScope['goal'] {
+  return actionContext.getStore()?.goal;
+}
+
 export class TaskActionAuthorizationError extends Error {
   readonly code = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
   constructor() {
@@ -390,12 +407,14 @@ export function isTaskActionRevoked(error: unknown): boolean {
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */
-export function captureTaskActionSyncGuard(): (() => void) | undefined {
+export function captureTaskActionSyncGuard(opts?: { allowInputCompletion?: boolean }): (() => void) | undefined {
   const current = actionContext.getStore();
   if (!current) return undefined;
   return () => {
-    if (!current.assertCurrentSync) throw new TaskActionAuthorizationError();
-    current.assertCurrentSync();
+    const guard = opts?.allowInputCompletion
+      ? current.assertContinuationCurrentSync ?? current.assertCurrentSync : current.assertCurrentSync;
+    if (!guard) throw new TaskActionAuthorizationError();
+    guard();
   };
 }
 

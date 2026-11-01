@@ -86,6 +86,46 @@ const mocks = vi.hoisted(() => {
 });
 
 describe('task action dispatch authorization', () => {
+  it('invalidates completion proof when a replacement is queued then cancelled', async () => {
+    const h = createHarness(), sid = 'goal-edit-queued-replacement';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('first', 'Edit the goal'));
+    await flush();
+    const completed = h.coordinator.captureInputCompletionGuard(sid)!;
+    h.coordinator.enqueue(sid, makeItem('second', 'Replacement input'));
+    h.coordinator.remove(sid, 'second');
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(completed()).toBe(false);
+  });
+
+  // #8362 r4436295232: completion proof must survive normal done, but not a
+  // replacement that also finished or Stop. Real coordinator, unit memory harness.
+  it.each(['replacement', 'stop'] as const)('invalidates input completion proof after %s', async changed => {
+    const h = createHarness(), sid = 'goal-edit-completion';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('first', 'Edit the goal'));
+    await flush();
+    const completed = h.coordinator.captureInputCompletionGuard(sid)!;
+    expect(completed()).toBe(false);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(completed()).toBe(true);
+    if (changed === 'replacement') {
+      h.coordinator.enqueue(sid, makeItem('second', 'Replacement input'));
+      await flush();
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+    } else {
+      h.coordinator.stop(sid);
+      await flush();
+    }
+    expect(completed()).toBe(false);
+  });
+
   // Unit regression through the production coordinator: revocation/restore cannot
   // deliver an automatic message, while the following owner input still runs.
   // teammate-authority.md「延迟投递只认真实撤权」: the revoked item settles before the

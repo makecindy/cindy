@@ -453,7 +453,8 @@ export class GoalController {
    */
   private readonly deferredManualResumeContexts = new Map<
     string,
-    { boundary: TurnAccumulator; usageResetAt: number | null; assertCurrent?: () => void }
+    { boundary: TurnAccumulator; usageResetAt: number | null; assertCurrent?: () => void;
+      expectedGoal?: Pick<GoalState, 'status' | 'objective'> }
   >();
   /**
    * 连续以"上游没容量"收尾的轮数,按 sessionId。
@@ -771,7 +772,10 @@ export class GoalController {
     return (await this.deps.storage.get(sessionId)) ?? createdState;
   }
 
-  async updateGoal(sessionId: string, patch: GoalUpdatePatch, assertCurrent?: () => void): Promise<GoalState | null> {
+  async updateGoal(
+    sessionId: string, patch: GoalUpdatePatch, assertCurrent?: () => void,
+    expectedGoal?: Pick<GoalState, 'status' | 'objective'> | null,
+  ): Promise<GoalState | null> {
     if (this.disposed || this.disposing) return null;
     assertCurrent?.();
     const normalized = normalizeGoalUpdatePatch(patch);
@@ -867,6 +871,9 @@ export class GoalController {
       const state = await this.deps.storage.get(sessionId);
       assertCurrent?.();
       if (entryChanged()) return reconcileLifecycleChange();
+      if (expectedGoal !== undefined && (expectedGoal === null ? state !== null : !state ||
+        state.status !== expectedGoal.status || state.objective !== expectedGoal.objective))
+        throw new GoalUpdateSupersededError();
       if (!state) return null;
       objectiveChanged =
         normalized.objective != null && normalized.objective !== state.objective;
@@ -995,7 +1002,9 @@ export class GoalController {
         objectiveChanged &&
         (changed.status === 'paused' || changed.status === 'blocked' || changed.status === 'usageLimited')
       ) {
-        await this.resumeGoal(sessionId, { assertCurrent });
+        if (expectedGoal && changed.status !== expectedGoal.status) throw new GoalUpdateSupersededError();
+        await this.resumeGoal(sessionId, { assertCurrent,
+          ...(expectedGoal ? { expectedGoal: { status: changed.status, objective: changed.objective } } : {}) });
         return reconcileLifecycleChange();
       }
       this.emit(next, state.status);
@@ -1218,7 +1227,8 @@ export class GoalController {
    * (与 setGoal 全清零相反),重挂 listener,空闲则立即续一轮。终态(complete/budgetLimited)
    * /已 active 不处理。
    */
-  async resumeGoal(sessionId: string, opts?: { auto?: boolean; assertCurrent?: () => void }): Promise<void> {
+  async resumeGoal(sessionId: string, opts?: { auto?: boolean; assertCurrent?: () => void;
+    expectedGoal?: Pick<GoalState, 'status' | 'objective'> }): Promise<void> {
     if (this.disposed || this.disposing) return;
     opts?.assertCurrent?.();
     let existingBoundary = this.turns.get(sessionId);
@@ -1230,6 +1240,8 @@ export class GoalController {
       // Stop 持久化失败时保留 fail-closed 边界；读取失败也不能据此放行恢复。
       state = await this.deps.storage.get(sessionId);
       opts?.assertCurrent?.();
+      if (opts?.expectedGoal && (state?.status !== opts.expectedGoal.status ||
+        state.objective !== opts.expectedGoal.objective)) throw new GoalUpdateSupersededError();
       if (this.turns.get(sessionId) !== existingBoundary) return;
       if (
         !state ||
@@ -1239,7 +1251,7 @@ export class GoalController {
         return;
       }
       if (this.isBusy(sessionId)) {
-        this.deferManualResumeUntilIdle(sessionId, existingBoundary, state, opts?.assertCurrent);
+        this.deferManualResumeUntilIdle(sessionId, existingBoundary, state, opts?.assertCurrent, opts?.expectedGoal);
         return;
       }
       this.turns.delete(sessionId);
@@ -1251,6 +1263,8 @@ export class GoalController {
     const assertResumeCurrent = () => {
       try {
         opts?.assertCurrent?.();
+        if (opts?.expectedGoal && (state?.status !== opts.expectedGoal.status ||
+          state.objective !== opts.expectedGoal.objective)) throw new GoalUpdateSupersededError();
       } catch (error) {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
@@ -1286,7 +1300,7 @@ export class GoalController {
       return;
     }
     if (!opts?.auto && this.isBusy(sessionId)) {
-      this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state, opts?.assertCurrent);
+      this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state, opts?.assertCurrent, opts?.expectedGoal);
       return;
     }
     if (!opts?.auto) this.claimDeferredManualResume(sessionId, lookupBoundary);
@@ -1328,7 +1342,7 @@ export class GoalController {
         throw new GoalSessionRestoreError();
       }
       if (!opts?.auto && this.isBusy(sessionId)) {
-        this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state, opts?.assertCurrent);
+        this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state, opts?.assertCurrent, opts?.expectedGoal);
         return;
       }
     }
@@ -2217,6 +2231,7 @@ export class GoalController {
     boundary: TurnAccumulator,
     state: Pick<GoalState, 'status' | 'usageResetAt'>,
     assertCurrent?: () => void,
+    expectedGoal?: Pick<GoalState, 'status' | 'objective'>,
   ): void {
     if (this.turns.get(sessionId) !== boundary) return;
     let deferredBoundary = boundary;
@@ -2234,6 +2249,7 @@ export class GoalController {
       boundary: deferredBoundary,
       usageResetAt: state.status === 'usageLimited' ? state.usageResetAt : null,
       assertCurrent,
+      expectedGoal,
     });
     // busy 可能只来自一个尚未 dispatch 的旧 Goal fire；上面的 stopSession 已同步
     // 取消它，不会再有 turn terminal 触发 idle observer。此时主动排一次即可。
@@ -2276,8 +2292,8 @@ export class GoalController {
     const timer = setTimeout(() => {
       this.deferredManualResumeTimers.delete(sessionId);
       if (!this.deferredManualResumes.has(sessionId)) return;
-      const assertCurrent = this.deferredManualResumeContexts.get(sessionId)?.assertCurrent;
-      void this.resumeGoal(sessionId, { assertCurrent }).catch((error) => {
+      const context = this.deferredManualResumeContexts.get(sessionId);
+      void this.resumeGoal(sessionId, { assertCurrent: context?.assertCurrent, expectedGoal: context?.expectedGoal }).catch((error) => {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         this.deps.logger.warn('[goal] deferred manual resume failed', {
           sessionId,

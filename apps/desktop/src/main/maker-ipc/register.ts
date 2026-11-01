@@ -5022,6 +5022,7 @@ export function getTaskActionInputState(sessionId: string) {
   const session = getMakerIfReady()?.getSession(sessionId);
   return {
     key: JSON.stringify(input),
+    isInputCompleted: agentInputCoordinatorHolder?.captureInputCompletionGuard(sessionId),
     // Reuse the live permission/Plan generation guard; the DB can lag a mode change.
     permission: resolveGhostFsSessionSnapshot(
       (id) => getMakerIfReady()?.getSession(id), sessionId, session?.instanceId,
