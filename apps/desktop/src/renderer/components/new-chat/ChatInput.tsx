@@ -2065,6 +2065,7 @@ export function ChatInput({
   // 「有没有已连接来源」。vendorKey 锁定时直接信任;否则按 capabilities 反推
   // (按 availableModels 归类,不靠 id 前缀猜)。
   const currentModelAgentKind: AgentKind | null = useMemo(() => {
+    if (runtimeAgentKind) return runtimeAgentKind;
     if (runtimeEffective || composerSelection.pending) return composerSelection.display.agentKind;
     if (agentKind) return agentKind;
     if ((ccCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
@@ -9928,13 +9929,15 @@ export function ChatInput({
                     }}
                     modelMemory={modelMemory}
                     vendorKey={
-                      runtimeAgentKind === 'codex'
-                        ? 'codex'
-                        : runtimeAgentKind === 'pi'
-                          ? 'pi'
-                          : runtimeAgentKind === 'claude-code'
-                            ? 'cc'
-                            : vendorKey
+                      runtimeAgentKind === 'hermes'
+                        ? 'hermes'
+                        : runtimeAgentKind === 'codex'
+                          ? 'codex'
+                          : runtimeAgentKind === 'pi'
+                            ? 'pi'
+                            : runtimeAgentKind === 'claude-code'
+                              ? 'cc'
+                              : vendorKey
                     }
                     // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
                     // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent

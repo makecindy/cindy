@@ -4969,7 +4969,7 @@ export function ModelSelector({
       thinkingEnabled={thinkingEnabled}
       onThinkingChange={onThinkingChange}
       modelMemory={modelMemory}
-      vendorKey={vendorKey}
+      vendorKey={agentIdentity?.vendorKey ?? vendorKey}
       deviceId={deviceId}
       {...(remoteAgent ? { remoteAgent } : {})}
       excludeSubscriptionDirect={excludeSubscriptionDirect}

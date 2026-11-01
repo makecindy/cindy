@@ -10,6 +10,24 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Defect Fix: Hermes model picker selection and runtime projection sync (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/renderer/components/new-chat/ChatInput.tsx` (+3 lines): added `if (runtimeAgentKind) return runtimeAgentKind;` in `currentModelAgentKind` memo to prevent falling back to Claude Code when selecting models, and included `runtimeAgentKind === 'hermes' ? 'hermes' :` in the `vendorKey` selector prop so Hermes's identity is passed down rather than resolving to `undefined`.
+2. `apps/desktop/src/renderer/components/new-chat/ModelSelector.tsx` (+1 line): updated `vendorKey` prop passed to `ModelSelectorContentView` to use `agentIdentity?.vendorKey ?? vendorKey`.
+3. `apps/desktop/src/main/maker-ipc/register.ts` (+4 lines): in `handleSetModel` for Hermes, added `recordUserSessionRuntimeMutation(sessionId)` for user-initiated changes and `await broadcastSessionRuntimeProjection(sessionId)` to ensure the active session projection is synchronized with renderer stores.
+4. Repaired session `03b0a1a5-3d4f-44e8-bd53-6b6584fff191` in local SQLite DB by resetting corrupted `model = 'xai/grok-4.6'` to `'hermes-default'` (backed up to `cindy-local-v1.db.bak-2026-11-01-retry` first).
+
+**Mutation checks (2):**
+- In `apps/desktop/src/renderer/components/new-chat/ChatInput.tsx`, omitting `runtimeAgentKind === 'hermes' ? 'hermes'` drops `vendorKey` to `undefined` for Hermes sessions when `vendorKey` prop is unset.
+- In `apps/desktop/src/main/maker-ipc/register.ts`, omitting `broadcastSessionRuntimeProjection` fails to notify renderer runtime projection subscribers when Hermes models are switched.
+
+**Not claimed:** not yet re-clicked by the owner in the running desktop app (dev app restarted in background for verification).
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `pnpm typecheck` passed (`EXIT=0`); parallel `pnpm test:unit:related` hit the known `apps/desktop unit` SIGSEGV flake; reran serial with `node scripts/test-workspaces.mjs --tier unit --related --workspace-concurrency=1` (`EXIT=0`); `pnpm check:test-hygiene` passed (`EXIT=0`).
+
+---
+
 ## 2026-11-01 — Phase 2: ROADMAP 2.5b-1, context-window guard warning UI and routed "summarise and continue" action (`unit-tested`)
 
 **Outcome:**

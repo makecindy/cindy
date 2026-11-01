@@ -22653,7 +22653,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
             throw error;
           }
+          if (internalOptions.source === 'user') {
+            recordUserSessionRuntimeMutation(sessionId);
+          }
           broadcastSessionPatched(sessionId, { model: nextModel });
+          await broadcastSessionRuntimeProjection(sessionId).catch(() => undefined);
           return { deferred: false, superseded: false };
         }
       }
