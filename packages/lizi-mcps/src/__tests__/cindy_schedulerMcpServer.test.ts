@@ -374,6 +374,34 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('a new check does not start a model unless the caller says the model detects changes', async () => {
+    const check = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_create', args: { ...baseCreate, name: 'ci-check', silentWhenIdle: true } as unknown as Record<string, unknown> },
+    });
+    const checkEnv = parseToolResult(check as { content: unknown[]; isError?: boolean });
+    expect(checkEnv.isError).toBe(false);
+    if (!checkEnv.envelope.ok) throw new Error('unreachable');
+    expect(checkEnv.envelope.data).toMatchObject({ silentWhenIdle: true, programChangeGate: true });
+
+    const research = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_create', args: { ...baseCreate, name: 'radar', silentWhenIdle: true, modelDetectsChange: true } as unknown as Record<string, unknown> },
+    });
+    const researchEnv = parseToolResult(research as { content: unknown[]; isError?: boolean });
+    expect(researchEnv.isError).toBe(false);
+    if (!researchEnv.envelope.ok) throw new Error('unreachable');
+    expect(researchEnv.envelope.data).toMatchObject({ silentWhenIdle: true, programChangeGate: false });
+
+    const reminder = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+    });
+    const reminderEnv = parseToolResult(reminder as { content: unknown[]; isError?: boolean });
+    if (!reminderEnv.envelope.ok) throw new Error('unreachable');
+    expect((reminderEnv.envelope.data as Schedule).programChangeGate).not.toBe(true);
+  });
+
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',
@@ -1181,6 +1209,21 @@ describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
     const res = await registry.call('schedule_update', { id: 'sch-1', ...extra });
     return JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; code?: string };
   }
+
+  it('modelDetectsChange false opens the program gate and does not leak the tool flag', async () => {
+    const { updated, registry } = setup();
+    const env = await callUpdate(registry, { modelDetectsChange: false });
+    expect(env.ok).toBe(true);
+    expect(updated.patch?.programChangeGate).toBe(true);
+    expect(updated.patch).not.toHaveProperty('modelDetectsChange');
+  });
+
+  it('modelDetectsChange true closes the program gate', async () => {
+    const { updated, registry } = setup({ programChangeGate: true });
+    const env = await callUpdate(registry, { modelDetectsChange: true });
+    expect(env.ok).toBe(true);
+    expect(updated.patch?.programChangeGate).toBe(false);
+  });
 
   it('只改 prompt → patch 不含 intervalMs key(真 partial,不再需要三件套)', async () => {
     const { updated, registry } = setup({ intervalMs: 600_000 });

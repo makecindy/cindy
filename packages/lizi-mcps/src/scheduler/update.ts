@@ -87,6 +87,10 @@ export function registerScheduleUpdateTool(
         .boolean()
         .optional()
         .describe('静默运行开关,语义见 schedule_create 同名字段'),
+      modelDetectsChange: z
+        .boolean()
+        .optional()
+        .describe('检查任务是否允许模型自己发现变化。true 关闭程序变化门，每次启动模型；false 打开程序变化门，没有脚本 exit 0 或插件放行就不启动模型。省略 = 不修改。只能改本机任务。'),
       executionMode: z
         .enum(EXECUTION_MODE)
         .optional()
@@ -131,7 +135,7 @@ export function registerScheduleUpdateTool(
       expireAt: z.number().int().optional(),
       ...writeDeviceShape,
     },
-    handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
+    handler: async ({ id, bindToCurrentSession, device, modelDetectsChange, ...patch }) => {
       const expected = deps.getApprovedScheduleGuard?.();
       if (!isLocalDevice(device)) {
         // 对方电脑的 IPC 入口自己做校验与 hook 路径稳定化;这里只拦跨 JSON 边界
@@ -148,6 +152,8 @@ export function registerScheduleUpdateTool(
         }
         const unsupported = bindToCurrentSession
           ? 'bindToCurrentSession 只能绑定本机的当前任务'
+          : modelDetectsChange !== undefined
+            ? 'modelDetectsChange 只能在本机设置'
           : targetInvalid
             ? 'targetSessionId 必须是目标定时任务所在电脑上的任务（deviceId::sessionId 或该电脑的任务 id）'
           : patch.preRunHook
@@ -192,6 +198,8 @@ export function registerScheduleUpdateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = patch as UpdateScheduleInput;
+        if (modelDetectsChange === true) input = { ...input, programChangeGate: false };
+        if (modelDetectsChange === false) input = { ...input, programChangeGate: true };
         if ((patch as { targetSessionId?: string | null }).targetSessionId === null) {
           // JSON 边界的"解绑"表达:null → 归一成 undefined 但保留 key(storage patch
           // 按 hasOwnProperty 判定,key 在且 undefined = 清列 NULL,同 preRunHook 约定)。

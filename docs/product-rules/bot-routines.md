@@ -270,6 +270,12 @@ Pi 将 routine_list、routine_save、routine_sources、routine_history、routine
 `silentWhenIdle=false`。没有批量迁移旧规则：普通旧调度保留已存选择，旧伙伴
 未存该字段时沿用原静默通知默认值；旧客户端省略可选字段时不会清掉新配置。
 
+Agent 经 schedule_create 新建的检查（silentWhenIdle=true）默认带程序变化门：
+没有脚本 exit 0 或插件放行时不启动模型，run 记 skipped，零 token。没变化由脚本
+exit 2 或插件 skip 表达，不能再叫醒模型判断。变化本身必须由模型发现时，创建时
+显式设 modelDetectsChange=true，沿用启动模型、无变化不播报。已经开始、因退出而继续的那一轮不套这道门。绑定的非持续目标已删除，或服务托管任务已归档时，先暂停这条检查，不把没信号记成可以一直空跳。提醒、定时发送、
+桌面表单和已有任务不套这道门，也不批量迁移。
+
 前置检查复用调度器原有命令执行器：exit 2 留下 skipped 记录且不启动模型，
 exit 0 将现有长度限制内的 stdout 作为不可信数据传给本轮模型，不改保存的指令；
 其它退出码、超时和启动失败留下失败记录。前置检查跳过模型时不产生模型聊天消息或完成推送。
