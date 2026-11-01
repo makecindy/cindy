@@ -58,11 +58,12 @@ function makeParams(opts: {
   threadId?: string;
   turnId?: string;
   codexErrorInfo?: CodexErrorInfo;
+  additionalDetails?: string;
 }): {
   threadId: string;
   turnId: string;
   willRetry: boolean;
-  error: { message: string; codexErrorInfo?: CodexErrorInfo };
+  error: { message: string; codexErrorInfo?: CodexErrorInfo; additionalDetails?: string };
 } {
   return {
     threadId: opts.threadId ?? 't1',
@@ -71,6 +72,7 @@ function makeParams(opts: {
     error: {
       message: opts.message,
       ...(opts.codexErrorInfo !== undefined ? { codexErrorInfo: opts.codexErrorInfo } : {}),
+      ...(opts.additionalDetails !== undefined ? { additionalDetails: opts.additionalDetails } : {}),
     },
   };
 }
@@ -1105,6 +1107,56 @@ describe('translateErrorNotification', () => {
       isTerminal: true,
     });
   });
+
+  /**
+   * #8309 regression / unit: exercise the production Codex error translator. Existing overload
+   * coverage models an initial capacity rejection; it did not model a stream error after the
+   * app-server's sampling retry budget was already exhausted. Minimal failure input is the
+   * responseTooManyFailedAttempts tag plus a nested overload detail; the observable result must
+   * retain the stable overload reason and stop scheduling another turn replay.
+   */
+  it.each([
+    ['nested 503 overload code', {
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 503 } },
+      additionalDetails: '{"error":{"code":"server_is_overloaded"}}',
+    }],
+    ['nested 503 slow-down code', {
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 503 } },
+      additionalDetails: '{"error":{"code":"slow_down"}}',
+    }],
+    ['nested 529 status', {
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } },
+    }],
+  ] as Array<[string, { codexErrorInfo: CodexErrorInfo; additionalDetails?: string }]>) (
+    'surfaces %s after Codex sampling retries without starting another replay', async (_label, overload) => {
+      const rt = newCodexRuntimeState();
+      const q = createAsyncQueue<AgentEvent>();
+      const calls: number[] = [];
+      translateErrorNotification(
+        makeParams({
+          willRetry: false,
+          message: 'stream disconnected before completion',
+          ...overload,
+        }),
+        q,
+        {
+          ...makeCtx(rt),
+          tryTakeOverOverload: () => {
+            calls.push(1);
+            return { attempt: 1, maxAttempts: 4 };
+          },
+        },
+      );
+      const events = await collect(q);
+      expect(calls).toHaveLength(0);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.data).toMatchObject({
+        codexErrorInfo: 'responseTooManyFailedAttempts',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      });
+    },
+  );
 
   it('老 daemon 不发 codexErrorInfo 时按文案兜底，行为不变', async () => {
     const rt = newCodexRuntimeState();
