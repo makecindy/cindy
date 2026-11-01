@@ -3235,7 +3235,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!deviceId) return;
     guardedPush({
       pathname: '/devices/desktop/[deviceId]',
-      params: { deviceId, deviceName, screen: liveScreenParam(screen) },
+      params: { deviceId, deviceName, liveScreen: liveScreenParam(screen) },
     });
   };
   const homeNewSessionActionRef = newSessionActionRef;

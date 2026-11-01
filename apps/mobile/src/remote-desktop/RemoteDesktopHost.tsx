@@ -34,7 +34,7 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
         deviceId?: string;
         deviceName?: string;
         handoff?: string;
-        screen?: string;
+        liveScreen?: string;
       }
     | undefined;
   const account =
@@ -51,8 +51,8 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
       ? params.handoff
       : undefined;
   const routeScreen =
-    inDesktop && typeof params?.screen === "string" && params.screen
-      ? params.screen
+    inDesktop && typeof params?.liveScreen === "string" && params.liveScreen
+      ? params.liveScreen
       : undefined;
   const [session, setSession] = useState<Session | null>(null);
   const [visible, setVisible] = useState(true);
@@ -201,7 +201,7 @@ export function RemoteDesktopHost({ children }: { children: ReactNode }) {
                   deviceId: current.deviceId,
                   deviceName: current.deviceName,
                   ...(current.handoff ? { handoff: current.handoff } : {}),
-                  ...(current.screen ? { screen: current.screen } : {}),
+                  ...(current.screen ? { liveScreen: current.screen } : {}),
                 },
               });
             }}

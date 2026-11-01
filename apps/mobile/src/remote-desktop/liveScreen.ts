@@ -21,7 +21,10 @@ import {
   type LiveScreenButtonIcon,
 } from "@cindy/device-link";
 
-/** A plugin live screen in a route param: `plugin|id` (neither may contain `|`). */
+/**
+ * A plugin live screen in the `liveScreen` route param: `plugin|id` (neither may
+ * contain `|`). Not `screen`: navigation treats that param as a nested page and drops it.
+ */
 export function liveScreenParam(screen: {
   plugin: string;
   id: string;

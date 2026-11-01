@@ -222,12 +222,12 @@ export default function RemoteDesktopScreen() {
     deviceId: rawId,
     deviceName: rawName,
     handoff: rawHandoff,
-    screen: rawScreen,
+    liveScreen: rawScreen,
   } = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
     handoff?: string;
-    screen?: string;
+    liveScreen?: string;
   }>();
   const deviceId = typeof rawId === "string" ? rawId : "";
   const deviceName = deviceDisplayName(
