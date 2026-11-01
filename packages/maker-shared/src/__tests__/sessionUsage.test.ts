@@ -180,4 +180,37 @@ describe('buildSessionUsage', () => {
       models: [],
     });
   });
+
+  it('prices a turn from recorded money verbatim when no rates are supplied, and prefers recorded money over rates', () => {
+    const summary = buildSessionUsage([
+      {
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        inputTokens: 1500,
+        outputTokens: 400,
+        money: { amount: 0.042, currency: 'USD' },
+      },
+      {
+        model: 'claude-sonnet-4-6',
+        provider: 'anthropic',
+        inputTokens: 1000,
+        outputTokens: 200,
+        money: { amount: 0.008, currency: 'USD' },
+        rates: { inputPerMtok: 999, outputPerMtok: 999, currency: 'USD' },
+      },
+    ]);
+
+    expect(summary.turns).toBe(2);
+    expect(summary.totalTokens).toBe(3100);
+    expect(summary.costStatus).toBe('complete');
+    expect(summary.cost).toBe(0.05);
+    expect(summary.currency).toBe('USD');
+    expect(summary.unpricedModels).toEqual([]);
+    expect(summary.models[0]).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      turns: 2,
+      cost: 0.05,
+      currency: 'USD',
+    });
+  });
 });

@@ -10,6 +10,22 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 1: ROADMAP 1.9b-2, conversation usage adapter (`unit-tested`)
+
+**Outcome:**
+1. `packages/maker-shared/src/sessionUsage.ts` (+ `src/__tests__/sessionUsage.test.ts`, +1 test, 13/13): `SessionUsageTurn` gained `money?: SessionUsageMoney` (`{ amount, currency }`). `buildSessionUsage` checks `priceFromRecordedMoney(turn.money)` before `turn.rates` for non-local turns, so recorded turn money is summed verbatim and wins over any rate table; local turns still ignore both `money` and `rates`.
+2. `apps/desktop/src/main/usage/conversationUsageAdapter.ts` (new) + `apps/desktop/src/main/usage/__tests__/conversationUsageAdapter.test.ts` (new, 8 tests): `adaptStoredTurnToSessionUsageTurn`, `buildConversationUsageFromStoredTurns` and `resolveConversationUsageSummary` adapt stored `messages.agent_meta.turnUsageDetails` into `SessionUsageTurn` and roll them up with `buildSessionUsage`. Recorded money is extracted from `turnUsageDetails.perModelCost[].money` (or `turnMoney` fallback), refusing mixed-currency `perModelCost` on a single turn rather than dropping one currency; turns without recorded money look up their quote via `getModelPriceQuote` from `getGatewayModelPricingForModel()` on the `xd` route and `getReferenceModelPricing()` on non-`xd` routes (never mixing the two catalogs), projecting context-length bands (`inputTokenPriceBands`) and gateway `costDiscount` into per-turn `UsageRates`. Verified against `BUNDLED_CATALOG`: a Hermes `deepseek-flash` turn (10k in / 1k out / 5k cache-read) prices at USD 0.00423; a `deepseek-flash` turn with cache writes stays unpriced (`costStatus: "none"`, `unpricedModels: ["deepseek-flash"]`) because DeepSeek publishes no cache-write tariff; a mixed 4-turn conversation (Claude recorded money + Hermes `deepseek-v4-pro` reference quote + local `qwen3-8b` + unpriced model) sums to `costStatus: "partial"`, `cost: 0.04216`, `unpricedModels: ["mystery-model-x"]`.
+
+**Mutation checks (2):**
+- In `packages/maker-shared/src/sessionUsage.ts`, flipping the precedence to check `turn.rates` before `priceFromRecordedMoney(turn.money)` failed the new recorded-money test (`expected 1.2408 to be 0.05`), 12 others passed; restored byte-identical.
+- In `apps/desktop/src/main/usage/conversationUsageAdapter.ts`, routing `xd` lookups to `referencePricing ?? gatewayPricing` instead of isolating `xd` to `gatewayPricing` failed the gateway pricing and async catalog tests (2 failed, 6 passed); restored byte-identical.
+
+**Not claimed:** no panel UI, no IPC endpoint, and not exercised in the running desktop app. 1.9b-3 owns the per-conversation panel UI and the owner-clicked live proof.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`** (`pnpm typecheck` EXIT=0; `pnpm test:runner` EXIT=0; `pnpm test:unit:related` EXIT=0 across all workspaces including `packages/maker-shared` 13/13 on `sessionUsage.test.ts` and `apps/desktop` 8/8 on `conversationUsageAdapter.test.ts`; `pnpm check:test-hygiene` PASS, 361 files within baseline).
+
+---
+
 ## 2026-10-31 — Phase 1: ROADMAP 1.9b-1, Hermes per-turn usage facts (`unit-tested`)
 
 **The row was blocked by a gap nobody had written down.** 1.9b asks for an adapter "from stored turns (`messages.agent_meta` `TurnUsageDetails`) into 1.9a". The stored turns existed for Claude Code, Codex and Pi. **Hermes had none**: `sessionEventPipeline.ts` wires one recorder per agent kind and Hermes was not among them, so every Hermes conversation carried zero usage rows. Measured on the dev app database (read-only): 91 messages, agent kinds `hermes 87` / `codex 2` / `cc 1` / `null 1`, and exactly **one** message with `turnUsageDetails` (a Codex row). The 87 Hermes rows carried nothing but `turnCompleted`. A panel over a real Hermes conversation would have shown nothing, so the row's own acceptance criterion was unreachable until that closed. **1.9b is now split** into 1.9b-1 (the facts, this entry) / 1.9b-2 (the adapter) / 1.9b-3 (panel + live proof); 1.9b-1 is the only one closed.

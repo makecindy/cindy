@@ -29,6 +29,12 @@ export interface UsageRates {
   currency?: string;
 }
 
+/** Recorded money already attached to a stored turn. `currency` is required. */
+export interface SessionUsageMoney {
+  amount?: number;
+  currency?: string;
+}
+
 /** One turn as the caller normalises it. Every token field is optional and non-finite input is 0. */
 export interface SessionUsageTurn {
   model: string;
@@ -39,6 +45,8 @@ export interface SessionUsageTurn {
   cacheWriteTokens?: number;
   /** Ran on a local endpoint (LM Studio, Ollama, llama.cpp). Tokens only, never a cost. */
   local?: boolean;
+  /** Recorded turn money (e.g. from `turnUsageDetails.perModelCost`). Wins over `rates`. */
+  money?: SessionUsageMoney;
   rates?: UsageRates;
 }
 
@@ -102,6 +110,14 @@ function roundCost(value: number): number {
 interface PricedTurn {
   cost: number;
   currency: string;
+}
+
+function priceFromRecordedMoney(money: SessionUsageMoney | undefined): PricedTurn | null {
+  if (!money || typeof money !== 'object') return null;
+  const currency = typeof money.currency === 'string' ? money.currency.trim() : '';
+  const amount = toRate(money.amount);
+  if (!currency || amount === undefined || amount <= 0) return null;
+  return { cost: amount, currency };
 }
 
 /**
@@ -195,9 +211,11 @@ export function buildSessionUsage(turns: readonly SessionUsageTurn[]): SessionUs
 
     if (local) continue;
 
-    const priced = turn.rates
-      ? priceTurn({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, rates: turn.rates })
-      : null;
+    const priced =
+      priceFromRecordedMoney(turn.money) ??
+      (turn.rates
+        ? priceTurn({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, rates: turn.rates })
+        : null);
     if (!priced) {
       unpricedTurns += 1;
       unpricedModels.add(model);
