@@ -4222,10 +4222,13 @@ describe('CodexAgent confined guest workspace', () => {
   });
 
   it('refuses to start when the app-server cannot enforce permission profiles', async () => {
+    // A real directory: on Windows the project root is resolved before the version gate.
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-guest-old-'));
+    tempRoots.push(project);
     const agent = new CodexAgent(createDeps());
     installFakeHost(agent, undefined, { userAgent: 'codex/0.140.0' });
     await expect(agent.startSession({
-      sessionId: 'guest-old-codex', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      sessionId: 'guest-old-codex', model: 'gpt-6-luna', workingDir: project,
       permissionMode: 'ask', workspaceConfinement: 'project',
     })).rejects.toThrow(/confined guest/);
   });
