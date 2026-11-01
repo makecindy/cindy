@@ -399,6 +399,45 @@ describe('createBotSettingsAutosave flush & failure', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.commits).toHaveLength(0);
   });
+
+  it('does not write a discarded draft back after the in-flight save lands', async () => {
+    const h = harness();
+    const gate = h.gate();
+    h.edit({ name: 'New name' });
+    const saving = h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits).toHaveLength(1);
+
+    h.edit({ name: 'PR steward' });
+    const waiting = h.autosave.flush();
+    const abandoned = h.autosave.abandon();
+    gate.release();
+    await Promise.all([saving, waiting, abandoned]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.commits).toHaveLength(1);
+    expect(h.baseline.name).toBe('New name');
+    h.autosave.flushDetached();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits).toHaveLength(1);
+  });
+
+  it('saves an edit made after abandon and does not write the discarded draft', async () => {
+    const h = harness();
+    const gate = h.gate();
+    h.edit({ name: 'Hung name' });
+    const saving = h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    const abandoned = h.autosave.abandon();
+    h.edit({ name: 'Fresh name' });
+    h.autosave.schedule('instant');
+    gate.release();
+    await expect(abandoned).resolves.toBe(false);
+    await saving;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits.map((commit) => commit.name)).toEqual(['Hung name', 'Fresh name']);
+    expect(h.baseline.name).toBe('Fresh name');
+  });
 });
 
 
