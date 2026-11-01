@@ -63,7 +63,35 @@
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "간체·번체와 문체",
+      "hint": "AI가 선택한 문체로 답합니다. ‘일반 답변’을 고르면 화면은 문언문 그대로 두고 답변은 사용자의 언어를 따릅니다.",
+      "scriptAriaLabel": "문언문 간체·번체",
+      "styleAriaLabel": "AI 답변 문체",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "문언문(기본)",
+        "tang-poetry": "당시",
+        "song-ci": "송사",
+        "yuan-qu": "원곡",
+        "chu-ci": "초사",
+        "parallel-prose": "변문",
+        "pre-qin": "선진 제자",
+        "historian": "사기 문체",
+        "ming-qing-essay": "명청 소품",
+        "plain": "일반 답변"
+      }
     }
   },
   "version": {

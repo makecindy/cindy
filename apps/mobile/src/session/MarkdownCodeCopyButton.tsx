@@ -2,16 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, Pressable, StyleSheet } from 'react-native';
 import { Check, CircleAlert, Copy } from 'lucide-react-native';
-import { Text } from '@/components/AppText';
 import { writeClipboardText, type CopyMessageStatus } from '@/session/messageActions';
 import {
-  fontWeight,
   iconSize,
   iconStroke,
-  lineHeight,
   radius,
   spacing,
-  typeScale,
   useTheme,
   useThemedStyles,
   type ThemeColors,
@@ -93,13 +89,6 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
       ) : (
         <Copy color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
       )}
-      <Text style={styles.label}>
-        {state === 'copied'
-          ? t('message.renderer.copyStateCopied')
-          : state === 'failed'
-            ? t('message.renderer.copyStateFailed')
-            : t('message.renderer.copyCode')}
-      </Text>
     </Pressable>
   );
 }
@@ -107,24 +96,15 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   button: {
     alignItems: 'center',
-    alignSelf: 'flex-end',
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.pill,
-    flexDirection: 'row',
-    gap: spacing.xs,
+    height: spacing.xxl,
     justifyContent: 'center',
-    marginBottom: spacing.xs,
-    marginHorizontal: spacing.sm,
-    marginTop: spacing.sm,
-    minHeight: 32,
-    paddingHorizontal: spacing.md,
+    width: spacing.xxl,
   },
   disabled: { opacity: 0.6 },
-  label: {
-    color: colors.textPrimary,
-    fontSize: typeScale.bodySmall,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.bodySmall,
-  },
   pressed: { opacity: 0.72 },
 });

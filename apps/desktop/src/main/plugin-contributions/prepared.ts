@@ -137,7 +137,7 @@ async function prepare(
     const inspected = await manager.inspect(filePath);
     assertContributionOwner(owner);
     if ('rejection' in inspected)
-      throwIpcError('PRECONDITION_FAILED', 'Plugin package validation failed');
+      throwIpcError('PRECONDITION_FAILED', `Plugin package validation failed: ${inspected.rejection.reason}`);
     const current = readContributionInstallation(instanceId).ghost;
     if (
       !current ||

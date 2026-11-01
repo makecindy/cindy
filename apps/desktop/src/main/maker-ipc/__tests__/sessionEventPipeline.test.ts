@@ -276,6 +276,7 @@ function harness() {
       gate: failureGate,
       isCurrentOwner,
       commitActivity: (sessionId) => listActivity.commit(sessionId),
+      settlePluginTasks: () => {},
       interrupt: async () => {},
     })),
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
@@ -787,7 +788,7 @@ describe('production Session event pipeline', () => {
       await microtasks();
       expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
         instanceId: h.session.instanceId, generation: 0,
-      }, status, undefined);
+      }, status, undefined, undefined);
       if (status !== 'completed') {
         expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
           h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
@@ -823,13 +824,17 @@ describe('production Session event pipeline', () => {
         if (owner) gate.clear(owner);
         await successful();
       };
-      adapters.onUnsuccessfulProductTurn = async (sessionId, owner) => {
-        if (owner) {
-          gate.clear(owner);
-          h.deps.onPluginTaskTerminal(sessionId, owner.originalExecution ?? owner, 'failed');
-        }
-        await unsuccessful(sessionId, owner);
-      };
+      adapters.onUnsuccessfulProductTurn = createProductTurnFailureFinalizer({
+        gate,
+        isCurrentOwner: owner => owner.session === h.session,
+        commitActivity: () => {},
+        settlePluginTasks: (sessionId, execution, inputClientIds) =>
+          h.deps.onPluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+        interrupt: unsuccessful,
+      });
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([
+        'plugin-target:original', 'plugin-target:steered', 'human-steer',
+      ]);
       const settleFailure = (sessionId: string) => gate.settle(
         sessionId,
         owner => owner.session === h.session && owner.instanceId === h.session.instanceId
@@ -872,6 +877,10 @@ describe('production Session event pipeline', () => {
           return;
         }
         expect(h.deps.onPluginTaskTerminal.mock.calls.length).toBe(0);
+        // Queue ownership can change during recovery; retain the failed inputs.
+        if (!outcome.endsWith('continued')) {
+          h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+        }
         expect(unsuccessful).not.toHaveBeenCalled();
         expect(successful).not.toHaveBeenCalled();
         expect(deferOwner).toHaveBeenCalledOnce();
@@ -906,7 +915,7 @@ describe('production Session event pipeline', () => {
         await microtasks();
         expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
           instanceId: execution.sessionInstanceId, generation,
-        }), continued ? 'completed' : 'failed', ...(continued ? [undefined] : []));
+        }), continued ? 'completed' : 'failed', undefined, ['plugin-target:original', 'plugin-target:steered']);
         expect(successful).toHaveBeenCalledTimes(continued ? 1 : 0);
         expect(unsuccessful).toHaveBeenCalledTimes(continued ? 0 : 1);
         expect(gate.pending('task')).toBeUndefined();
@@ -2274,6 +2283,26 @@ describe('Bot adapters in the shared event pipeline', () => {
     expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
       event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: false }) }),
     }));
+  });
+
+  // Unit: target receipts must settle the accepted input even after the queue advances.
+  it.each([false, true])('attributes plugin terminal to the original accepted input (retry=%s)', async retry => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(retry ? 'retry-receipt' : 'plugin-target:original');
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:original', 'human-steer']);
+    if (retry) h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+      clientId: 'retry-receipt', autoResume: true, retrySourceClientId: 'plugin-target:original',
+    });
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('plugin-target:next');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+    });
+    h.emit(event('done', { status:'completed' }, {sessionInstanceId:h.session.instanceId,sessionTurnGeneration:0}));
+    await microtasks();
+    expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', {
+      instanceId:h.session.instanceId,generation:0,
+    }, 'completed', undefined, ['plugin-target:original']);
+    await h.dispose();
   });
 
   it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {

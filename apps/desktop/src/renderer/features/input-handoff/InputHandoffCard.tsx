@@ -323,6 +323,19 @@ function InputHandoffStepDialog({
         onError={onError}
       />
     );
+    // Cindy cannot see the agent's screen, so the owner says when the scan is done.
+    if (snapshot.agentPicture) {
+      footer = (
+        <div className="flex flex-col gap-2">
+          <Button size="lg" variant="cta" palette="confirmation" disabled={busy} onClick={() => onDecide('done')}>
+            {t('inputHandoff.action.done')}
+          </Button>
+          <Button size="lg" variant="secondary" palette="confirmation" onClick={onClose}>
+            {t('inputHandoff.action.close')}
+          </Button>
+        </div>
+      );
+    }
   } else if (mode === 'picture') {
     body = (
       <InputHandoffPictureStep
@@ -382,7 +395,7 @@ function InputHandoffStepDialog({
     );
   }
   // A terminal prompt has no screen to look at; a picture step already is one, except a QR code cut out of it.
-  const canPicture = !snapshot.command && mode !== 'picture';
+  const canPicture = !snapshot.command && mode !== 'picture' && !snapshot.agentPicture;
   const links =
     canPicture || liveView ? (
       <>

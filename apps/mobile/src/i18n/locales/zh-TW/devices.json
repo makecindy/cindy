@@ -11,6 +11,7 @@
     "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
+    "deleteRejectedWhileOffline": "未能刪除裝置：伺服器仍將它記為線上，與清單中的離線狀態不一致",
     "currentlyOnline": "目前在線",
     "availableSection": "在線裝置",
     "offlineSection": "離線裝置",
@@ -403,6 +404,7 @@
         "30d": "30 天",
         "all": "全部"
       },
+      "showCollapsedTeammateAvatars": "收起時顯示頭像",
       "displayHeading": "顯示",
       "view": {
         "text": "文字",
@@ -419,7 +421,8 @@
       "summarySeparator": "、",
       "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。",
       "filterTeammatesHeading": "夥伴",
-      "filterAnySource": "不限來源",
+      "filterAnySource": "全部",
+      "filterHideAllTeammates": "都不顯示",
       "filterSelectedTeammates": "已選 {{count}} 位"
     },
     "search": {
@@ -693,7 +696,14 @@
     "createMenu": "新增",
     "awaiting": "等你確認",
     "taskResult": "任務結果",
-    "collapseResult": "收起結果"
+    "collapseResult": "收起結果",
+    "avatarStatus": {
+      "awaiting": "待你確認",
+      "error": "需要注意",
+      "running": "正在工作",
+      "done": "已完成",
+      "unread": "未讀"
+    }
   },
   "companionProfile": {
     "avatar": "頭像",
@@ -921,5 +931,62 @@
     "homeOutdated": "主力電腦「{{device}}」上的 Cindy 版本較舊，請先更新它，或在那台電腦上更換",
     "homeUnreachable": "現在連不上「{{device}}」，它需要在線並開啟「允許同帳號裝置控制本機」",
     "sendUnreachable": "訊息還沒送到主力電腦「{{device}}」，它可能已離線。可以換一台電腦繼續。"
+  },
+  "sessionImport": {
+    "entry": "從其他工具匯入",
+    "title": "從其他工具匯入",
+    "found_one": "在 {{device}} 上找到 {{count}} 個任務",
+    "found_other": "在 {{device}} 上找到 {{count}} 個任務",
+    "search": "搜尋任務或資料夾",
+    "scanning": "正在尋找電腦上的任務…",
+    "loadFailed": "沒能讀取電腦上的任務，請重試",
+    "retry": "重試",
+    "rescan": "重新掃描",
+    "emptyTitle": "電腦上沒有找到可以匯入的任務",
+    "emptyDescription": "Cindy 可以匯入以下工具裡的任務。用過這些工具後，回來重新掃描即可。",
+    "noMatch": "沒有符合條件的任務",
+    "dialogue": "對話",
+    "folderMissing": "原資料夾已不存在",
+    "groupTasks_one": "{{count}} 個任務",
+    "groupTasks_other": "{{count}} 個任務",
+    "archived": "已歸檔",
+    "unsupported": "格式暫不支援",
+    "selected_one": "已選 {{count}} 個任務 · {{size}}",
+    "selected_other": "已選 {{count}} 個任務 · {{size}}",
+    "confirmBody_one": "將匯入 {{count}} 個任務，最多佔用 {{size}} 磁碟空間。匯入在電腦背景進行，可以隨時停止。再點一次開始。",
+    "confirmBody_other": "將匯入 {{count}} 個任務，最多佔用 {{size}} 磁碟空間。匯入在電腦背景進行，可以隨時停止。再點一次開始。",
+    "importCount_one": "匯入 {{count}} 個任務",
+    "importCount_other": "匯入 {{count}} 個任務",
+    "import": "匯入",
+    "progressTitle_one": "正在匯入 {{count}} 個任務",
+    "progressTitle_other": "正在匯入 {{count}} 個任務",
+    "background": "可以關掉這個面板，匯入會在電腦上繼續。",
+    "stop": "停止",
+    "done": "完成",
+    "queued": "等待中",
+    "copy": "正在複製原始記錄",
+    "messages_one": "正在寫入 {{count}} 則訊息",
+    "messages_other": "正在寫入 {{count}} 則訊息",
+    "verify": "正在確認能接著做",
+    "resultTitle_one": "已匯入 {{count}} 個任務",
+    "resultTitle_other": "已匯入 {{count}} 個任務",
+    "sumReady_one": "{{count}} 個可以繼續",
+    "sumReady_other": "{{count}} 個可以繼續",
+    "sumAction_one": "{{count}} 個需要你處理",
+    "sumAction_other": "{{count}} 個需要你處理",
+    "sumFailed_one": "{{count}} 個沒匯入成功",
+    "sumFailed_other": "{{count}} 個沒匯入成功",
+    "readyNative": "可以繼續，用 {{harness}} 原樣接著做",
+    "readyHandoff": "可以繼續，由 {{harness}} 接著做，可隨時更換",
+    "missingDir": "原資料夾已不存在，請在電腦上選一個資料夾繼續",
+    "cancelled": "已停止，沒有匯入",
+    "failure": {
+      "read-failed": "沒匯入成功：原始記錄檔讀不出來",
+      "unsupported-version": "沒匯入成功：這個版本的記錄格式暫不支援",
+      "empty": "沒匯入成功：原始記錄裡沒有訊息",
+      "not-found": "沒匯入成功：原始記錄已經不在了",
+      "disk-full": "沒匯入成功：磁碟空間不足",
+      "native-unloadable": "沒匯入成功：原始記錄無法載入"
+    }
   }
 }

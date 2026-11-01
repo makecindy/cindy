@@ -101,6 +101,7 @@ import type {
   AskUserQuestionItem,
   UsageSnapshot,
   RewindFilesResult,
+  RewindCommitOptions,
   ForkSdkSessionOptions,
   ForkSdkSessionResult,
 } from '../../types/events.js';
@@ -110,6 +111,7 @@ import {
   capabilitySelectionAddedByPlanEdit,
   findClaudeMcpCapabilityRoute,
   isCapabilityRouteInvocationAllowed,
+  withoutUserMcpRoutes,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
@@ -1386,6 +1388,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
+    // The routing policy this session actually runs under: user-registered MCP denials
+    // (cua-driver → cindy_computer) apply to local runtimes only; see withoutUserMcpRoutes.
+    const capabilityRouting = opts.remoteHostId
+      ? withoutUserMcpRoutes(this.deps.capabilityRouting)
+      : this.deps.capabilityRouting;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Claude Code sessions only');
     }
@@ -1834,7 +1841,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 加上设备托管时交给 cindy_exec 顶替的本机工具。启动时快照, 整条会话不变。
     const claudeDisallowedTools = [...new Set([
       ...(hosted ? DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS : []),
-      ...buildClaudeDisallowedTools(reviewMode ? undefined : this.deps.capabilityRouting),
+      ...buildClaudeDisallowedTools(reviewMode ? undefined : capabilityRouting),
     ])];
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
@@ -2247,7 +2254,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         )
       : mergeClaudeHookSets(
           buildClaudeLocalToolGuardHooks(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             () => activeCapabilitySelectionText,
             (toolName, route) => {
               log.warn('downstream MCP source denied by host PreToolUse route', {
@@ -2285,7 +2292,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
-        this.deps.capabilityRouting,
+        capabilityRouting,
         toolName,
         nonHarnessMcpServerNames,
       );
@@ -2549,7 +2556,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         appendActiveCapabilitySelectionText(
           capabilitySelectionAddedByPlanEdit(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             'claude-code',
             plan,
             decision.editedPlan,
@@ -2930,7 +2937,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         fastMode: opts.fastModePolicy?.isAllowed() === false ? false : mutableFastMode,
         fastModeAllowed: opts.fastModePolicy?.isRequestAllowed?.() ?? opts.fastModePolicy?.isAllowed(),
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
-        capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
+        capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
       if (Object.keys(disabledSkillOverrides).length > 0) {
         settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
@@ -3845,7 +3852,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = [
-          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteToolGuards(capabilityRouting),
           ...buildClaudeRemoteRootOnlyToolGuards(),
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
@@ -4021,7 +4028,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkInPlanMode = false;
                 appendActiveCapabilitySelectionText(
                   capabilitySelectionAddedByPlanEdit(
-                    this.deps.capabilityRouting,
+                    capabilityRouting,
                     'claude-code',
                     plan,
                     decision.editedPlan,
@@ -7886,7 +7893,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
       },
 
-      async commitRewindFiles(userUuid: string, priorAssistantUuid: string): Promise<undefined> {
+      async commitRewindFiles(
+        userUuid: string,
+        priorAssistantUuid: string,
+        rewindOpts?: RewindCommitOptions,
+      ): Promise<undefined> {
         // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
         // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
         while (idleResumeRebuildGate) {
@@ -7903,9 +7914,23 @@ export class ClaudeCodeAgent extends BaseAgent {
           await q.rewindFiles(userUuid, { dryRun: false });
           log.debug('commitRewindFiles: SDK rewindFiles ok');
         } catch (err) {
+          if (rewindOpts?.rewindsToNativeThreadStart) {
+            // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
+            // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
+            log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
           log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
             error: err instanceof Error ? err.message : String(err),
           });
+        }
+        if (rewindOpts?.rewindsToNativeThreadStart) {
+          // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
+          // 会话 id,下次发送开全新原生会话。
+          log.info('commitRewindFiles ◀ files only; host restarts the native session');
+          return undefined;
         }
         // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
         //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。

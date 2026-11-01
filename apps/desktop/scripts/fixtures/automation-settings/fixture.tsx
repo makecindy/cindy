@@ -2,6 +2,8 @@ import { ComputerUseSection } from '../../../src/renderer/components/settings/Co
 import { mountPage, subscription } from '../../ui-page/harness';
 
 void mountPage({
+  // The section links to the plugin page, so it renders inside the app router.
+  route: '/settings',
   host: (ctx) => ({
     maker: {
       plugins: {
@@ -36,9 +38,15 @@ void mountPage({
     browserBackend: {
       getState: async () => {
         if (ctx.case === 'error') throw new Error('Configuration unavailable');
-        return { active: 'external', useRealProfile: false };
+        return ctx.case === 'my-browser'
+          ? { active: 'user-browser', useRealProfile: true }
+          : { active: 'external', useRealProfile: false };
       },
-      getHealth: async () => ({ active: 'external', status: 'ready', canRecover: false }),
+      getHealth: async () => ({
+        active: ctx.case === 'my-browser' ? 'user-browser' : 'external',
+        status: 'ready',
+        canRecover: false,
+      }),
     },
   }),
   render: () => (

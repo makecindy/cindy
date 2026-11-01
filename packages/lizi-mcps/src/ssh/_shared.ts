@@ -49,7 +49,20 @@ export type SshErrorCode =
   | 'SSH_CONNECT_FAILED'
   | 'EXEC_TIMEOUT'
   | 'PLUGIN_DISABLED'
+  | 'HOST_ALREADY_EXISTS'
+  | 'INVALID_ARGS'
+  | 'SSH_CONFIG_RELOAD_REQUIRED'
+  | 'SSH_CONFIG_WRITE_FAILED'
   | 'INTERNAL';
+
+/**
+ * 主机只能用密码登录时的标准做法。askpass 代输入：本机任务命令行里的 ssh 要口令时，
+ * Cindy 直接向用户弹卡片索取并交回 ssh，值不经过模型（docs/product-rules/input-handoff.md §5）。
+ */
+export const PASSWORD_LOGIN_HINT =
+  '主机目前只能用密码登录时，先在本机任务的命令行运行 `ssh-copy-id -i ~/.ssh/<公钥>.pub [-p 端口] 用户@主机` 装上公钥'
+  + '（没有密钥就先 ssh-keygen 生成）：ssh 要密码时 Cindy 会直接弹卡片让用户输入，你看不到密码（macOS / Linux）。'
+  + '不要在聊天里向用户索要密码。';
 
 // ── host resolution ─────────────────────────────────────────────────────────
 
@@ -122,7 +135,7 @@ export function resolveHost(
     ok: false,
     result: errorPayload(
       'HOST_NOT_FOUND',
-      `"${nameOrIp}" 不在已配置的 SSH 主机里。请告知用户到「设置 → 远程连接」添加该主机（或确认 ~/.ssh/config 里的 alias 拼写），不要退回手拼 ssh 命令。`,
+      `"${nameOrIp}" 不在已配置的 SSH 主机里。确认 alias 拼写；确实没配置时用 ssh_add_host 添加，不要退回手拼 ssh 命令。`,
       { configuredHosts: snapshots.map((snapshot) => hostBrief(snapshot, deps)) },
     ),
   };
@@ -171,6 +184,13 @@ const EXEC_TIMEOUT_RE = / timed out after \d+ms$/;
 /** desktop throwIpcError 的 `[CODE] message` 前缀编码。 */
 const IPC_CODE_RE = /^\[([A-Z0-9_]+)\]\s*/;
 
+/** 拆出 desktop throwIpcError 的错误码与正文；无前缀时 code 为 undefined。 */
+export function splitIpcError(err: unknown): { code?: string; detail: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = IPC_CODE_RE.exec(message);
+  return match ? { code: match[1], detail: message.slice(match[0].length) } : { detail: message };
+}
+
 export interface ClassifiedSshError {
   errorCode: SshErrorCode;
   hint: string;
@@ -198,9 +218,8 @@ export function classifySshError(
     };
   }
 
-  const codeMatch = IPC_CODE_RE.exec(message);
-  const detail = codeMatch ? message.slice(codeMatch[0].length) : message;
-  switch (codeMatch?.[1]) {
+  const { code, detail } = splitIpcError(message);
+  switch (code) {
     case 'SSH_HOST_NOT_FOUND':
       return {
         errorCode: 'HOST_NOT_FOUND',
@@ -209,7 +228,7 @@ export function classifySshError(
     case 'SSH_AUTH_FAILED':
       return {
         errorCode: 'SSH_AUTH_FAILED',
-        hint: `SSH 认证失败（确定性错误，重试无效，请把提示转告用户处理）：${detail}`,
+        hint: `SSH 认证失败（确定性错误，重试无效）：${detail}。${PASSWORD_LOGIN_HINT}`,
       };
     case 'SSH_KEY_FILE_NOT_FOUND':
       return {

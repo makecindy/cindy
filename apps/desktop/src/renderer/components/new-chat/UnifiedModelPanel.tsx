@@ -1,4 +1,5 @@
 import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
@@ -120,6 +121,10 @@ export interface UnifiedSelectedRow {
 }
 
 export interface UnifiedModelPanelProps {
+  /** 「全部」视图且没有搜索词时，列表最上方额外渲染的内容(新任务的「让插件选」)。 */
+  pinnedTop?: ReactNode;
+  /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
+  pinnedTopHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -327,6 +332,7 @@ export interface UnifiedModelPanelProps {
      * 运行位置编进 providerId(见 state/agentDeviceFavorites)。
      */
     favoritesDeviceId?: string;
+    shareFavoriteSources?: ReadonlyMap<string, ControlledModelFavoriteSource>;
     /** 任务所在电脑自己的设备 id(已知时):收藏里编码成它的条目按普通收藏处理。 */
     homeDeviceId?: string | null;
     /** 在列表里、但目录还在读取或读取失败的电脑:收藏区里它的收藏置灰列出,不丢。 */
@@ -374,6 +380,8 @@ export interface UnifiedModelPanelProps {
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
 export function UnifiedModelPanel({
+  pinnedTop,
+  pinnedTopHasRows = false,
   providers,
   providerOrder,
   agents,
@@ -434,8 +442,9 @@ export function UnifiedModelPanel({
     deviceId,
     storedFavorites,
     remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    remoteSources?.shareFavoriteSources,
   );
-  const sharedFavoriteSources = useProviderShareFavoriteSources();
+  const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
   const agentDeviceFavorites = useAgentDeviceFavorites({
@@ -1467,6 +1476,7 @@ export function UnifiedModelPanel({
             </div>
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1479,7 +1489,7 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows ? (
+          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
               {!query.trim() && effectiveRail.kind === 'favorites'

@@ -22,6 +22,9 @@ export const responsesItemIdLengthStripController = createThreadStripController(
 // Raw reasoning content rejected after a provider switch; marked only by its own recovery rule.
 export const responsesReasoningContentStripController = createThreadStripController();
 
+// Responses tool call IDs rejected by strict gateways; after recovery, pre-clean later turns.
+export const responsesToolCallHistoryStripController = createThreadStripController();
+
 // 空 thinking 块主动剥离 —— always-on(删空块零成本)。必须与上面是独立实例。
 export const emptyThinkingStripController = createThreadStripController();
 

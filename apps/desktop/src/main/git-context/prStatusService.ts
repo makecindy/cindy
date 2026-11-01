@@ -18,6 +18,7 @@
 
 import { createLogger } from '../logger.js';
 import type { GhCliTokenReadResult } from './ghCliTokenSource.js';
+import type { PrChecksSummary } from '@cindy/maker-shared';
 
 const log = createLogger('git-context/pr-status');
 
@@ -56,9 +57,10 @@ export type PrStatusResult =
       branch: string;
       /**
        * 未解决的 review thread 数(GraphQL reviewThreads.isResolved 统计,
-       * 上限 100)。null = 查询失败 / token 不支持 GraphQL,UI 不显示该信号。
+       * 上限 100)。null = 查询失败、token 不支持 GraphQL 或有未读取的下一页。
        */
       unresolvedCount: number | null;
+      checks?: PrChecksSummary | null;
     }
   | {
       ok: false;
@@ -91,6 +93,7 @@ export interface PrRemoteState {
   branch: string;
   /** 未解决 review thread 数;fetch 端拿不到(GraphQL 失败)时为 null。 */
   unresolved_count?: number | null;
+  checks?: PrChecksSummary | null;
 }
 
 export interface PrStatusServiceDeps {
@@ -159,10 +162,10 @@ export class PrStatusService {
    */
   async getStatuses(
     queries: PrStatusQuery[],
-    opts: { remote?: boolean } = {},
+    opts: { remote?: boolean; waitForFresh?: boolean } = {},
   ): Promise<PrStatusResult[]> {
     const bounded = queries.slice(0, MAX_BATCH);
-    const results = await Promise.all(bounded.map((q) => this.getOne(q)));
+    const results = await Promise.all(bounded.map((q) => this.getOne(q, opts.waitForFresh)));
     if (!opts.remote) return results;
     return results.map((r) =>
       !r.ok && (r.reason === 'gh-missing' || r.reason === 'gh-not-logged-in')
@@ -171,12 +174,12 @@ export class PrStatusService {
     );
   }
 
-  private async getOne(q: PrStatusQuery): Promise<PrStatusResult> {
+  private async getOne(q: PrStatusQuery, waitForFresh = false): Promise<PrStatusResult> {
     const key = `${q.owner.toLowerCase()}/${q.repo.toLowerCase()}#${q.prNumber}`;
     const cached = this.cache.get(key);
     const now = this.now();
     if (cached && cached.expiresAt > now) return cached.result;
-    if (cached && cached.staleUntil > now) {
+    if (!waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.
       void this.revalidate(key, q).catch(() => undefined);
       return cached.result;
@@ -200,7 +203,11 @@ export class PrStatusService {
         //    保留原值继续作为 stale 回答,直到 staleUntil。
         if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
           const fetchedAt = this.now();
-          this.cache.set(key, { result, expiresAt: fetchedAt + this.ttlMs, staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs });
+          this.cache.set(key, {
+            result,
+            expiresAt: fetchedAt + this.ttlMs,
+            staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs,
+          });
         }
         return result;
       })
@@ -243,6 +250,7 @@ export class PrStatusService {
         htmlUrl: remote.html_url,
         branch: remote.branch,
         unresolvedCount: remote.unresolved_count ?? null,
+        checks: remote.checks ?? null,
       };
     } catch (err) {
       const status = (err as { status?: unknown })?.status;

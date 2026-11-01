@@ -163,3 +163,14 @@ export function groupingWorktreeBaseRepo(value: string): string | null {
 export function collapseWorktreeDirForGrouping(value: string): string {
   return groupingWorktreeBaseRepo(value) ?? value;
 }
+
+/** Explicit membership wins over cwd, including arbitrary sibling worktrees.
+ * Missing membership is the compatibility path for older tasks and hosts.
+ * This is a presentation/project identity, never a filesystem execution path.
+ */
+export function sessionProjectDirectory(session: {
+  projectDir?: string | null;
+  workingDir?: string | null;
+}): string | null {
+  return session.projectDir ?? session.workingDir ?? null;
+}

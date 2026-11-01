@@ -1,3 +1,4 @@
+import { pluginUiApprovalNotice } from "./pluginUiApprovalNotice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -948,6 +949,7 @@ function PluginDirectory() {
         enabled={enabled}
         busy={busy || detailLoading || managementPending}
         statusRecoveryBusy={busy || detailLoading}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t)}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),

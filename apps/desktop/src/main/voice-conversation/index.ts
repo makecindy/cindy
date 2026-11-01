@@ -58,7 +58,8 @@ function boundedString(value: unknown, name: string, limit: number): string {
  */
 export function registerVoiceConversationIpc(deps: {
   createProvider(): Promise<AsrProvider>;
-  createAudioGate(): AudioGate | undefined;
+  /** `onFiltered` runs each time the gate mutes someone else's speech. */
+  createAudioGate(onFiltered: () => void): AudioGate | undefined;
   hasDictation(): boolean;
   getSettings(): VoiceInputSettings;
   updateSettings(patch: Partial<VoiceInputSettings>): VoiceInputSettings;

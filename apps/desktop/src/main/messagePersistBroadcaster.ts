@@ -863,7 +863,8 @@ function enqueuePersistAssistant(
     clientId,
     role: 'assistant',
     content,
-    agentMeta: agentMeta ?? null,
+    // Add identity only after the caller has resolved model/usage fallbacks.
+    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId } : agentMeta ?? null,
     createdAt,
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
@@ -1620,7 +1621,9 @@ export function onThinkingEvent(
       role: 'thinking',
       content: { kind: 'thinking', text, durationMs, isRedacted: false, finishedAt },
       agentMeta: meta,
-      createdAt: finishedAt,
+      // 行在此刻才写入,但排序锚点用块的真实起点:按落库时刻排的话,一个跨过最终
+      // 回复的思考块会落到回复之后,渲染层就为它多折出一段「已工作」。
+      createdAt: finishedAt - Math.max(0, durationMs),
     }, releaseSnapshot);
     notePersistedMessage(sessionId, 'thinking', blockId);
   } else if (data.stage === 'redacted') {
@@ -2260,7 +2263,9 @@ function assembleAssistantTextEvent(
         isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope),
       });
       if (!isCurrentBoundary() || !isOwnerScopeCurrent(ownerScope)) return;
-      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+      if (updated) {
+        broadcastMessageRow(sessionId, updated, ownerScope);
+      }
       if (agentMeta) {
         const patched = await patchMessageAgentMetaWithResult(sessionId, linkedPersistId, { ...agentMeta });
         if (patched && isCurrentBoundary()) {
@@ -2387,7 +2392,7 @@ function assembleAssistantTextEvent(
               undefined,
               { isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope) },
             );
-            if (updated) {
+            if (updated && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
               // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
               boundaryFlushed.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);

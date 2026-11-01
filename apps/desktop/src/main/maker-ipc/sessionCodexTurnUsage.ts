@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -173,6 +173,7 @@ export function recordSessionCodexTurnUsage(
         // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
         // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
         const turnUsageDetails = buildTurnUsageDetails({
+          ...turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown'),
           inputTokens: promptTokens,
           outputTokens: completionTokens,
           cacheReadTokens: cachedTokens,
@@ -236,6 +237,7 @@ export function recordSessionCodexTurnUsage(
             });
           }
           if (money && money.amount > 0) {
+            if (turnUsageDetails) turnUsageDetails.perModelCost = [{ model: turnModel, money }];
             const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';
             if (isActualApiCost) {
               void recordTurnSpend(money);

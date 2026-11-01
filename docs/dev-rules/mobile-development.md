@@ -47,9 +47,15 @@ pnpm mobile:sim:start:cn
 
 修改原生依赖、Expo 原生配置，或切换到尚未安装对应开发包的区域时，重新构建：
 
+这里的 `rebuild` 是“准备兼容原生包”的入口：先复用匹配缓存，未命中才完整编译。
+未安装 App 不等于必须编译；纯 JS/TS 改动且 `native-matched` 时直接复用已安装包。
+截图和交付测试的完整流程见 [截图与当前版本测试](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)，
+缺少工具时见 [iOS 工具链](environment-setup.md#macosios-模拟器构建工具链)。
+
 `whoami` 还会比较已安装 `.app/EXUpdates.bundle/fingerprint` 与当前 worktree 的
 Expo Updates 开发指纹。`native-mismatch` 或 `native-unknown` 不能作为可测试状态，
-即使版本号、Metro 和页面都正常也要先普通重建。重建入口同样检查缓存、构建产物和安装后
+即使版本号、Metro 和页面都正常也不能交付。若未知源于工具探测或指纹计算失败，先修复检查；
+确认包缺失、不匹配或缺少兼容性证据时走普通重建。重建入口同样检查缓存、构建产物和安装后
 的真实指纹，避免跨 worktree 复用不兼容的原生包；不匹配的缓存会跳过。不要通过临时修改
 JS 参数协议来适配另一版本原生依赖。此检查不修改 App 配置或发布指纹。
 
@@ -86,8 +92,23 @@ JSON 已包含 `worktree` / `expectedSource`、`region` / `bundleId`、目标设
 `pageVerified: false` 明确保留这个边界。页面／bundle 验证与截图按模拟器调试手册另外完成，
 证据放在同一任务目录。
 
+### 仓库与个人配置的边界
+
+- 仓库维护工具要求、脚本参数、缓存与身份校验、mock 场景、测试授权范围、接管与并行规则和
+  验收合同；Agent 直接按模拟器调试手册「截图与当前版本测试」执行，不另设个人测试 Skill，
+  也不实现第二套指纹、bundle ID 或缓存解析。
+- 只有完全属于个人的偏好留在仓库外：常用机型、模拟器后端（`CINDY_MOBILE_SIMULATOR`）等。
+  本次明确指定的设备或区域高于个人默认；本次覆盖不自动写回个人偏好。
+- 自定义 bundle ID、签名团队与私有端点留在本地配置；仓库提供模板和校验，凭证进入凭证存储。
+- 设备在线状态、已安装包、Metro 占用、工具位置和缓存命中是现场事实，每次探测，不作为长期偏好。
+
 不要用临时 Metro、端口探测或手工修改 `.env` 代替这些脚本。多 worktree、原生构建、
 登录态和日志排查见 `apps/mobile/docs/simulator-debugging.md`。
+
+多个 iOS 模拟器可以同时跑不同 worktree：每台设备的开发版 App 按自己的 `RCT_jsLocation` 选择
+Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务、又不接管时，给本任务单独的
+设备和端口，步骤、验证与收尾见该手册的
+[Parallel devices](../../apps/mobile/docs/simulator-debugging.md#parallel-devices-another-task-owns-8081)。
 
 ## 分层验证
 
@@ -364,6 +385,41 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
 
+### iOS 桌面小组件
+
+`plugins/with-usage-widgets.js` 生成 `CindyHomeWidgets` WidgetKit 扩展（订阅余量、每日用量，iOS 17+），
+与 expo-sharing 共用 `group.<bundle id>` App Group，并向 EAS 登记扩展签名。App 内
+`src/widgets/UsageWidgetBridge.tsx` 在前台且已连接时约每 5 分钟经
+`device-link:usage-widget:snapshot:v1` 读取电脑快照，由本地模块 `cindy-usage-widgets` 写入 App Group 并刷新组件；
+App Group 里存每台电脑最近一次的快照和「自动」所选电脑（优先上次回应的那台）。组件「编辑小组件」里的
+「数据来源电脑」可选自动或某台电脑；组件绘制时把所选电脑记进 App Group，App 每次刷新也会读取这些电脑。
+切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
+显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
+
+### Android 桌面小组件
+
+同一对组件（订阅余量、每日用量）在 Android 上由本地模块 `cindy-usage-widgets` 的 `android/` 提供：两个
+`AppWidgetProvider`（`QuotaWidgetProvider`、`UsageWidgetProvider`）、数据来源选择页 `ComputerConfigActivity`
+都由模块自己的 `AndroidManifest.xml` 合并进应用，不经 config plugin。数据通道、快照格式与「自动 / 固定电脑」规则与 iOS
+相同（`UsageWidgetBridge` 两端共用，`readSnapshot` / `writeSnapshot` / `readPinnedDeviceIds` / `clearSnapshot` 同名）：
+快照存在应用私有的 `noBackupFilesDir/usage-widget-snapshot.json`（不进自动备份），组件选中的电脑与记录的固定电脑在
+SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有「排在前面的账号」（最多 7 个，可上移、下移、移除）与
+「隐藏的账号」，与 iOS 编辑页、Mac 菜单栏设置同一规则：排在前面的先显示，其余账号（含以后新加的）按电脑顺序跟在后面，隐藏的不显示，
+全部隐藏时照常显示全部；按组件存在同一 SharedPreferences（`pinned.<id>` / `hidden.<id>`，与 iOS 相同的 `AccountKey` 字符串，
+按 id 找不到时按同一图标与名字匹配）。换电脑不清空这两项。液面顶角与 iOS 一样是 4dp 圆角。
+
+组件内容由 `WidgetRenderer` 按启动器格子的实际尺寸直接画成位图（版式与 iOS 的小 / 中 / 大一致，格子比 iOS 尺寸小时整体
+等比缩小，大时靠弹性空白撑开），浅 / 深两套都画好，由 `layout` 与 `layout-night` 选择可见的一张，所以系统切换深浅色不需要
+重绘。一行高、宽度 ≥ 250dp 的格子（高度 < 120dp 且宽 ≥ 1.4 倍高）用 Android 独有的单行版式，更窄的一行沿用等比缩小的小号版式（4 个来源仍可见）（液柱在左、数字名称重置时间叠在右；每日用量是今日数字加迷你柱图），
+启动器里一行的实际高度因启动器而异（40–110dp），最小可缩到 40dp 高。每 30 分钟（`updatePeriodMillis`）、App 写入新数据、调整大小时重绘。Barlow Condensed 数字字体由 Gradle 任务从
+`apps/desktop/native/menubar` 复制进 assets，不再提交第三份；文案表 `assets/usage-widgets/text.json` 由
+`plugins/usage-widgets/UsageWidgetModel.swift` 的 `WidgetText` 转出并追加数据来源页文案，两处同步修改；选择器里的名称与说明
+在 `res/values*/cindy_usage_widgets_strings.xml`（同源生成）。
+
+调试：debug 包响应 `adb shell am broadcast -a app.cindy.usagewidgets.RENDER_PREVIEWS --es variant multi|single|stale|offline|empty
+-n <applicationId>/app.cindy.usagewidgets.QuotaWidgetProvider`，把示例数据下的全部版式与深浅色写到 `cache/widget-previews`；
+选择器预览图 `res/drawable*/cindy_*_widget_preview.png` 由它生成。Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包。
+
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 
@@ -383,8 +439,9 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 - **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
   确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
   Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
-  确认。未确认前不进入自动审查与自动合并路径;判定、hold 与放行走与技术架构变更门同一套
-  机制(讨论 issue + 转 draft + 确认后放行),名单与细则属维护者内部 gate。
+  确认。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论 issue 或转为
+  draft;冷更确认可直接留在 PR 中。未确认前不得合并(包括自动合并),把关人名单与确认
+  判定细则属维护者内部 gate。若同时命中其他独立的讨论或草稿门禁,仍按对应规则处理。
 - 提交前自查:在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。

@@ -2,7 +2,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, isTaskActionRevoked, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -248,6 +248,8 @@ export interface AgentInputSendOpts {
    */
   fromMobileClient?: boolean;
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage; direct wire values are stripped. */
+  classicalStyle?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -1194,11 +1196,22 @@ function isScheduledQuotaRecovery(
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  return isAutomaticInputOriginKind(item?.origin?.kind);
+  return !isManualSchedulerContinuation(item) && isAutomaticInputOriginKind(item?.origin?.kind);
+}
+
+// A same-process receipt: wire input and restored automation cannot impersonate
+// a fresh Continue click. Object spreads preserve it; JSON persistence does not.
+const manualSchedulerContinuation = Symbol('manual-scheduler-continuation');
+export function markManualSchedulerContinuation(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  return Object.assign(item, { [manualSchedulerContinuation]: true as const });
+}
+function isManualSchedulerContinuation(item: AgentInputQueuedMessage | null | undefined): boolean {
+  return (item as (AgentInputQueuedMessage & { [manualSchedulerContinuation]?: true }) | undefined)?.[manualSchedulerContinuation] === true;
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
+  return (!isSchedulerOriginItem(item) || isManualSchedulerContinuation(item))
+    && item.originalSyntheticTrigger === 'continue';
 }
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
@@ -1352,10 +1365,10 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
-  /** Account-scoped tools may not borrow the Host identity from plugin or shared guest input. */
+  /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return !!item && !item.sourcePlugin && !item.sharedTaskAuthor;
+    return !!item && !item.sharedTaskAuthor;
   }
 
   /**
@@ -1926,7 +1939,7 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
+    const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
@@ -2683,6 +2696,7 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
+        ...(item.classicalStyle ? { classicalStyle: item.classicalStyle } : {}),
         // 消息来源同样随 steer 透传(只用于说明与归属,steer 不经 send 事务)。主机生成的
         // 隐藏指令([UI_ACTION_TRIGGER])与自动续跑不是来源方的话,同 send 事务不加 `[消息来源]`。
         ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
@@ -3254,17 +3268,28 @@ export class AgentInputCoordinator {
     let continueItem: AgentInputQueuedMessage | null = null;
     let progressKnown = false;
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
+    const providerRestart = state.errorReason === 'remote_agent_restarted';
+    // Keep quota/error details for other recoveries. A provider restart already
+    // has a localized reconnect label on Desktop and Mobile; it is not an error
+    // summary to append to an otherwise successful continuation.
     // 额度重置后的续跑记录带上当初的限额原文，作为活动行展开详情里的原因。
     const automaticResumeInfo = opts?.auto
       ? previousAutoResumeInfo
       : usageWait
-        ? { ...usageWait.info, ...(state.error ? { error: state.error } : {}) }
+        ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continuationOnly = Boolean(
+    const continuationOnly = providerRestart || Boolean(
       opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
     );
     let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    if (providerRestart) {
+      continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
+        + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'
+          : ' Continue the interrupted task in the original conversation.')
+        + ' Some tools may already have executed on the task computer without their results reaching you.'
+        + ' Check the current files, processes and external state before continuing; do not repeat side effects.';
+    }
     let recoveryCheckpoint: RecoveryCheckpoint | undefined;
     if (recovery.kind === 'active-turn') {
       let hasProgress = false;
@@ -5056,7 +5081,25 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     let appMessageGuardRejected = false;
+    const taskActionGuard = taskActionInputGuard(sessionId, head);
     try {
+      if (taskActionGuard) {
+        // A revoked task action settles before screening, persistence or a vendor
+        // turn, so the receiving task never shows a failed reply for it. A check that
+        // merely failed is not a revocation: it takes the ordinary pre-accept failure
+        // path below, which keeps the message as a retryable queue head. The send
+        // transaction still rechecks the same guard at dispatch.
+        const rejection = await taskActionGuard().then(() => null, (error: unknown) => ({ error }));
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+        if (rejection) {
+          if (!isTaskActionRevoked(rejection.error)) throw rejection.error;
+          log.info('discarding revoked task action input before dispatch', {
+            sessionId, clientId: head.clientId, reason: errorMessage(rejection.error),
+          });
+          this.discardRevokedAppInput(sessionId, active, head);
+          return;
+        }
+      }
       // 意识拦截钩(订阅槽①):落库/派发之前问一遍——block 即丢弃本项
       // (不入库不起 turn),通知宿主降级气泡,继续放行后续排队消息;
       // rewrite 用新正文替换 head(送 agent / 落库 / 显示都用它),通知宿主
@@ -5123,13 +5166,24 @@ export class AgentInputCoordinator {
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
-      const appMessageGuard = combineInputGuards(queuedAppMessageGuard(head), taskActionInputGuard(sessionId, head));
+      const appMessageGuard = queuedAppMessageGuard(head);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
-        ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
+        ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
-            await appMessageGuard();
+            await appMessageGuard?.();
           } catch (error) {
             appMessageGuardRejected = true;
+            throw error;
+          }
+          // A task action is judged until its row is persisted. Afterwards a refusal could only
+          // leave a user row with a failed reply, and a queued task action cannot be retried (its
+          // guard is bound to the original clientId), so the message is delivered instead.
+          if (active.persisted) return;
+          try {
+            await taskActionGuard?.();
+          } catch (error) {
+            // Only a proven revocation discards; a failed check keeps the message retryable.
+            if (isTaskActionRevoked(error)) appMessageGuardRejected = true;
             throw error;
           }
         } } : {}),
@@ -5155,6 +5209,7 @@ export class AgentInputCoordinator {
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
+        ...(head.classicalStyle ? { classicalStyle: head.classicalStyle } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {

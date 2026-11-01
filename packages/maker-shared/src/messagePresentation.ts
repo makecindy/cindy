@@ -92,11 +92,13 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'edit' | 'fork' | 'more' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
   canCopy: boolean;
+  /** 只有最后一条用户消息可编辑(编辑 = 回退本轮 + 用改后的内容重发)。 */
+  canEdit?: boolean;
   canFork: boolean;
   hasMoreActions?: boolean;
   hasTime: boolean;
@@ -382,6 +384,8 @@ export function buildMessageActionBarPresentation(
     input.hasTime ? 'time' : null,
     input.canCopy ? 'copy' : null,
     input.canFork ? 'fork' : null,
+    // 对齐桌面用户消息操作行 [time][copy][fork][edit][...][more]。
+    input.canEdit ? 'edit' : null,
     input.hasMoreActions ? 'more' : null,
   ];
   const items = (input.align === 'agent' ? agentItems : userItems).filter(isMessageActionBarItemId);

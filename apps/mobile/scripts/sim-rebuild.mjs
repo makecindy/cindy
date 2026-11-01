@@ -69,7 +69,7 @@ import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
-import { podInstallBounded } from './sim-pod-install.mjs';
+import { podInstallBounded, inspectIOSBuildTools, withUserGemPodOnPath, COCOAPODS_SETUP_HINT } from './sim-pod-install.mjs';
 import { computeSimulatorNativeFingerprint, inspectSimulatorNativeIdentity } from './lib/sim-native-identity.mjs';
 import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
@@ -261,7 +261,10 @@ async function rebuildAndroidSimulator() {
 
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
 const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+console.log('› 解析目标 App 身份…');
 const expectedBundleId = resolveMobileSimulatorBundleId(region);
+console.log(`==> Worktree: ${worktreeRoot}; region=${region}; bundleId=${expectedBundleId}; arch=${simArch}`);
+console.log('› 计算原生兼容指纹（最长 120s）…');
 let expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
 
 function assertNativeIdentity(appPath) {
@@ -275,7 +278,7 @@ function assertNativeIdentity(appPath) {
 // 覆盖掉——否则逃生舱跑完一次,坏条目还在,下次普通 rebuild 又命中它。
 let fingerprintHash = null;
 try {
-  console.log('› 计算 native fingerprint(产物缓存键)…');
+  console.log('› 计算 native fingerprint(产物缓存键，最长 120s)…');
   fingerprintHash = computeFingerprintReport(mobileDir, {
     platforms: ['ios'],
     run: runFingerprintWithCurrentEnv,
@@ -286,17 +289,33 @@ try {
 const cacheDir = fingerprintHash ? join(appCacheRoot, `ios-${simArch}-${fingerprintHash}`) : null;
 
 let app = null;
+let cache = { code: forceBuild ? 'cache-bypassed' : 'cache-fingerprint-unavailable', app: null };
 if (cacheDir && !forceBuild) {
-  const cached = readAppCacheEntry(cacheDir, simArch);
-  if (cached && inspectSimulatorNativeIdentity({ appPath: cached, expectedFingerprint: expectedNativeFingerprint }).healthy) {
+  cache = readAppCacheEntry(cacheDir, simArch);
+  if (cache.app) {
     console.log(`✓ fingerprint 命中产物缓存(${fingerprintHash.slice(0, 12)}…),跳过 prebuild / pod / xcodebuild。`);
     console.log('  (改了原生层但怀疑缓存不对时,用 --force-build 强制重编。)');
     utimesSync(cacheDir, new Date(), new Date());
-    app = cached;
+    app = cache.app;
   }
 }
+console.log(`SIM_CACHE=${JSON.stringify({ ...cache, directory: cacheDir, root: appCacheRoot, fingerprint: fingerprintHash })}`);
 
 if (!app) {
+  console.log(`› 缓存不可复用（${cache.code}），检查 iOS 构建工具链…`);
+  const podEnv = withUserGemPodOnPath({ env: devProcessEnv });
+  if (podEnv !== devProcessEnv) {
+    devProcessEnv.PATH = podEnv.PATH;
+    console.log('  pod 不在 PATH，使用用户 gem 目录中的 CocoaPods（仅本次构建）。');
+  }
+  const preflight = inspectIOSBuildTools({ env: devProcessEnv });
+  console.log(`SIM_BUILD_PREFLIGHT=${JSON.stringify(preflight)}`);
+  if (!preflight.healthy) {
+    console.error(`✗ IOS_BUILD_TOOLS_UNAVAILABLE: ${preflight.checks.filter((check) => !check.healthy).map((check) => `${check.tool}=${check.code}`).join(', ')}；尚未执行 prebuild / pod install / xcodebuild。`);
+    if (preflight.checks.some((check) => check.tool === 'pod' && !check.healthy)) console.error(COCOAPODS_SETUP_HINT);
+    console.error('先按 docs/dev-rules/environment-setup.md 修复上述工具，再用相同 region / UDID / --mock 参数重试；不要改用其他 App 身份。');
+    process.exit(1);
+  }
   // 总是先 prebuild,再 xcodebuild。本脚本是 native 变更的验证路径 —— 若只在 ios/ 缺失时
   // prebuild,那么"改了 app.json / Expo plugins / Pods 但 ios/ 已存在"时会构建到 stale 的
   // native 工程还报成功。prebuild 不带 --clean 是增量的,无 native 改动时很快。
@@ -398,31 +417,37 @@ function runFingerprintWithCurrentEnv({ binPath, projectDir, platform }) {
     encoding: 'utf8',
     // 输出含全部 sources(>1MB),必须调大 maxBuffer(与 ci-fingerprint 同款)。
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: 'SIGKILL',
   });
   if (result.status !== 0) {
-    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.error?.code ?? `exit ${result.status}`}`);
   }
   return parseFingerprintCliOutput(result.stdout);
 }
 
 /** 读产物缓存条目;结构不完整(半份缓存)时视为未命中。 */
 function readAppCacheEntry(dir, expectedArch) {
+  const miss = (code) => ({ code, app: null });
+  if (!existsSync(join(dir, 'meta.json'))) return miss('cache-entry-missing');
   try {
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
-    if (typeof meta.scheme !== 'string' || !meta.scheme) return null;
+    if (typeof meta.scheme !== 'string' || !meta.scheme) return miss('cache-metadata-invalid');
     const cachedApp = join(dir, `${meta.scheme}.app`);
-    if (!existsSync(cachedApp)) return null;
-    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return null;
+    if (!existsSync(cachedApp)) return miss('cache-app-missing');
+    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return miss('cache-bundle-mismatch');
     const architectures = readAppArchitectures(cachedApp);
     if (!architectures.includes(expectedArch)) {
       console.warn(
         `  缓存产物架构不匹配(实际=${architectures.join(',') || '未知'},当前 Simulator 需要=${expectedArch}),忽略并重新构建。`,
       );
-      return null;
+      return miss('cache-architecture-mismatch');
     }
-    return cachedApp;
+    const native = inspectSimulatorNativeIdentity({ appPath: cachedApp, expectedFingerprint: expectedNativeFingerprint });
+    if (!native.healthy) return miss(`cache-${native.code}`);
+    return { code: 'cache-hit', app: cachedApp };
   } catch {
-    return null;
+    return miss('cache-read-failed');
   }
 }
 

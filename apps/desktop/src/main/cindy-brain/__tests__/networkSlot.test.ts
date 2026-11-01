@@ -5,9 +5,12 @@
  * 重定向逐跳守门、响应文本化与截断、错误折叠、在途并发闸、callId 归因。
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+
+import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -755,15 +758,46 @@ describe('networkSlot · 响应收敛', () => {
     }
   });
 
-  it('fetch 抛错折叠为结构化失败,不异常穿透', async () => {
-    const { slot } = makeSlot({
-      fetchImpl: async () => {
-        throw new Error('ECONNRESET');
-      },
-    });
+  // 插件协议:网络层失败给稳定 errorCode,原因码进 message。undici 只抛 `fetch failed`,
+  // 真实原因在 cause(可能再套 AggregateError);2026-10-31 证书过期时插件只拿到
+  // 「请求失败:fetch failed」无法定位。识别不出的异常保持原文、不打码,避免误标网络错误。
+  const coded = (code: string, message = '') => Object.assign(new Error(message), { code });
+  const undiciFailure = (cause?: unknown) => new TypeError('fetch failed', cause === undefined ? undefined : { cause });
+  it.each([
+    ['证书过期', undiciFailure(coded('CERT_HAS_EXPIRED', 'certificate has expired')),
+      'TLS_ERROR', '请求失败:HTTPS 证书或加密连接校验失败(CERT_HAS_EXPIRED: certificate has expired)'],
+    ['DNS 失败', undiciFailure(coded('ENOTFOUND', 'getaddrinfo ENOTFOUND api.search.brave.com')),
+      'DNS_FAILED', '请求失败:域名解析失败(getaddrinfo ENOTFOUND api.search.brave.com)'],
+    // 外层 AggregateError 不带 code,只有子错误带:验证会遍历 errors。
+    ['多地址连接全被拒(AggregateError)', undiciFailure(
+      new AggregateError([coded('ECONNREFUSED', 'connect ECONNREFUSED 10.0.0.1:443')], '')),
+    'CONNECTION_REFUSED', '请求失败:连接被拒绝(connect ECONNREFUSED 10.0.0.1:443)'],
+    ['读响应时连接断开', new TypeError('terminated', { cause: coded('UND_ERR_SOCKET', 'other side closed') }),
+      'CONNECTION_RESET', '请求失败:连接被中断(UND_ERR_SOCKET: other side closed)'],
+    ['连接阶段超时', undiciFailure(coded('UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error')),
+      'NETWORK_TIMEOUT', '请求失败:请求超时(UND_ERR_CONNECT_TIMEOUT: Connect Timeout Error)'],
+    ['只有 fetch failed', undiciFailure(), 'NETWORK_ERROR', '请求失败:网络错误(fetch failed)'],
+    ['非网络异常', new Error('installation changed'), undefined, '请求失败:installation changed'],
+  ])('fetch 抛错折叠为结构化失败:%s', async (_name, thrown, errorCode, message) => {
+    const { slot } = makeSlot({ fetchImpl: async () => { throw thrown; } });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toContain('ECONNRESET');
+    expect(r).toEqual({ ok: false, message, ...(errorCode ? { errorCode } : {}) });
+  });
+
+  it('主机超时中断保留「请求超时(Nms)」文案并标 NETWORK_TIMEOUT', async () => {
+    vi.useFakeTimers();
+    try {
+      const { slot } = makeSlot({
+        fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+      const pending = slot.handleFetchRequest('web-search', { url: BRAVE_URL, timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toEqual({ ok: false, errorCode: 'NETWORK_TIMEOUT', message: '请求失败:请求超时(1000ms)' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1653,16 +1687,19 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
   });
 
   it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
-    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }] as const) {
+    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }, { namespaceState: 'unconfirmed' }] as const) {
       const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+      const readSecret = vi.fn(() => 'github_pat_fallback');
       const { slot, fetchImpl } = makeGithubSlot({
         getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,
           trust: { level: 'cindy-official', publisherSigned: true, publisherVerified: true,
             reviewed: true, publisherName: 'Cindy Plugin Market' } }), ...identity }),
         readGhCliToken,
+        readSecret,
       });
       expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
       expect(readGhCliToken).not.toHaveBeenCalled();
+      expect(readSecret).not.toHaveBeenCalled();
       expect(fetchImpl).not.toHaveBeenCalled();
     }
   });
@@ -2346,5 +2383,272 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('重定向');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Handoff copies leave only through upload.handoff, scoped to the receiving instance.
+// Rule: plugin-security-and-authoring.md §4 handoff. Gap: third upload source.
+// Tier: unit with the real store; minimum inputs are one copy and a foreign instance.
+describe('Handoff file upload', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { GhostHandoffStore } = await import('../handoffStore');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-handoff-upload-'));
+  const store = new GhostHandoffStore({ root: () => root });
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const readHandoffFile: NetworkSlotDeps['readHandoffFile'] = (id, ref) => store.read(id, ref);
+  const [copy] = await store.import('web-search', [{ name: '销售.csv', bytes: new TextEncoder().encode('a,b') }], () => {});
+  const upload = (value: Record<string, unknown>) => ({ url: 'https://api.search.brave.com/upload', method: 'POST', upload: value });
+
+  it('uploads the copy with its type and original name', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: true });
+    const body = new TextDecoder().decode((fetchImpl.mock.calls as unknown as [string, { body: Uint8Array }][])[0]![1].body);
+    expect(body).toContain(`filename="__.csv"; filename*=UTF-8''${encodeURIComponent('销售.csv')}`);
+    expect(body).toContain('Content-Type: text/csv; charset=utf-8\r\n\r\na,b\r\n');
+  });
+  it('treats another instance reference as unavailable without dispatching', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('other', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  // Codex 4431420859: the copy folder is user-visible, so its file can change after
+  // opening. Uploads read at most the stored size and refuse a grown or shortened copy.
+  it('refuses a copy that grows or shrinks after it was opened', async () => {
+    for (const change of ['grow', 'shrink'] as const) {
+      const [changed] = await store.import('web-search', [{ name: `${change}.csv`, bytes: new TextEncoder().encode('1,2') }], () => {});
+      const file = path.join(root, 'web-search', changed!.ref.slice('handoff:'.length), `${change}.csv`);
+      const editing = new (class extends GhostHandoffStore {
+        override async open(instance: string, ref: string) {
+          const opened = await super.open(instance, ref);
+          if (change === 'grow') fs.appendFileSync(file, 'x'.repeat(4096));
+          else fs.truncateSync(file, 1);
+          return opened;
+        }
+      })({ root: () => root });
+      const { slot, fetchImpl } = makeSlot({ readHandoffFile: (id, ref) => editing.read(id, ref) });
+      expect(await slot.handleFetchRequest('web-search', upload({ handoff: [changed!.ref] })))
+        .toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+  // Sliding expiry: a successful upload is a use and renews the copy for 7 days.
+  it('renews the copy after a successful upload', async () => {
+    const day = 24 * 60 * 60_000;
+    const clock = { now: 0 };
+    const timed = new GhostHandoffStore({ root: () => root, now: () => clock.now });
+    const [renewed] = await timed.import('web-search', [{ name: 'renew.csv', bytes: new TextEncoder().encode('1') }], () => {});
+    clock.now = 6 * day;
+    const { slot } = makeSlot({
+      readHandoffFile: (id, ref) => timed.read(id, ref),
+      touchHandoffFiles: (id, refs) => timed.touch(id, refs),
+    });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [renewed!.ref] }))).toMatchObject({ ok: true });
+    expect((await timed.list('web-search')).find((file) => file.ref === renewed!.ref)?.expiresAt).toBe(13 * day);
+  });
+  it('accepts exactly one upload source', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref], hashes: ['a'.repeat(64)] }))).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// B4/B6 production slot: the missing cases are Library streams and transport reuse.
+// tier: unit; minimum failure inputs are a two-chunk response and an over-limit header.
+describe('Library file transfer', () => {
+  const libraryGhost = () => { const ghost = fakeGhost(); ghost.manifest.library = true; return ghost; };
+  it('uses the normal authenticated POST for Library multipart and reports separate phases', async () => {
+    const progress = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      createTransferProgress: () => progress,
+      readLibraryFile: async () => new Response('abc', { headers: { 'content-length': '3' } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['exports/result.txt'], fields: { size: '{bytes}' } } })).toMatchObject({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = (fetchImpl.mock.calls as unknown as [string, { headers: Record<string, string>; body: Uint8Array }][]) [0]![1];
+    expect(request.headers['X-Subscription-Token']).toBe('BSA-secret');
+    expect(new TextDecoder().decode(request.body as Uint8Array)).toContain('filename="result.txt"');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在读取文件');
+    expect(progress).toHaveBeenCalledWith(undefined, undefined, '正在上传');
+    expect(progress).toHaveBeenLastCalledWith(undefined, undefined, '文件处理结束');
+  });
+  it('rejects a Library upload above the cap without reading or dispatching', async () => {
+    const cancel = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      readLibraryFile: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-length': String(GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE + 1) } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['big.bin'] } })).toMatchObject({ ok: false, errorCode: 'TOO_LARGE', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('passes response chunks to Library storage and reports actual received bytes', async () => {
+    const progress = vi.fn();
+    const saveLibraryStream = vi.fn<NonNullable<NetworkSlotDeps['saveLibraryStream']>>(async (_id, input) => {
+      let bytes = 0;
+      for await (const chunk of input.source) { input.assertCurrent(); bytes += chunk.length; input.onProgress?.(bytes, input.totalBytes); }
+      return { ok: true, path: input.path, ref: `library:${input.path}`, bytes, sha256: 'hash' };
+    });
+    const { slot } = makeSlot({ getGhost: libraryGhost, createTransferProgress: () => progress, saveLibraryStream,
+      fetchImpl: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2])); c.enqueue(new Uint8Array([3])); c.close(); } })),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/file', as: 'library', path: 'downloads/a.bin' })).toMatchObject({ ok: true, library: { bytes: 3, ref: 'library:downloads/a.bin' } });
+    expect(progress).toHaveBeenCalledWith(2, undefined, '正在保存文件');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在保存文件');
+  });
+});
+
+// Regression for Node-held bearer + Host-granted multipart (unit/DI). Existing
+// upload tests use vault headers and do not exercise the private Node boundary.
+describe('private Node authenticated uploads', () => {
+  const url = 'https://api.search.brave.com/upload';
+  const token = '11111111-2222-4333-8444-555555555555';
+  it('uploads granted bytes with the private bearer and strips browser-supplied credentials', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2,
+        files: [{ relPath: 'proof.txt', size: 2, read: async () => new TextEncoder().encode('ok') }] } : null });
+    const request = { url, method: 'POST', uploadDir: { token, fileField: 'file' } };
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', request, 'Bearer synthetic', () => {}, new AbortController().signal);
+    expect(result.ok).toBe(true);
+    const init = h.fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer synthetic');
+    expect(new TextDecoder().decode(init.body as Uint8Array)).toContain('filename="proof.txt"');
+    await h.slot.handleFetchRequest('web-search', { url, headers: { Authorization: 'Bearer injected' }, authorization: 'Bearer forged' });
+    expect((h.fetchImpl.mock.calls[1]![1] as RequestInit).headers).not.toHaveProperty('Authorization');
+  });
+  it('rejects unknown hosts and missing tickets; never forwards the bearer through redirects', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2, files: [{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}] } : null });
+    const signal = new AbortController().signal;
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url: 'https://other.example/u', method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token: '00000000-2222-4333-8444-555555555555' } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect(h.fetchImpl).not.toHaveBeenCalled();
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok:false, message:'NODE_AUTH_UPLOAD_REQUIRED' });
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example/u' } }));
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok: false, message: 'NODE_AUTH_REDIRECT_BLOCKED' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay an authenticated upload after 401', async () => {
+    const h=makeSlot({getGhost:()=>fakeGhost({network:{hosts:['api.search.brave.com']}}),
+      takeDirDeposit:()=>({totalBytes:2,files:[{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}]})});
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({status:401}));
+    await h.slot.handleAuthenticatedNodeFetch('web-search',{url,method:'POST',uploadDir:{token}},'Bearer synthetic',()=>{},new AbortController().signal);
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not send after the call or installation guard is revoked', async () => {
+    const h = makeSlot();
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => { throw Error('revoked'); }, new AbortController().signal);
+    expect(result.ok).toBe(false); expect(h.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// 测试价值(MCP Apps 手册头)
+// - 生产入口与可观察结果：handleFetchRequest 实际发给 fetchImpl / fetchPublicImpl 的请求头；
+//   resolver 用 createMcpAppsManualResolver 的生产实现(版本号 + sha256 拼 CDN 地址)。
+// - 规则依据：plugin-network.md「MCP Apps 手册头」——按 mcpApps.ui 的模型可见工具默认带、
+//   mcpAppsManual 显式覆盖、插件自带同名头剥除、只发往 network 已声明主机(逐跳重判)、
+//   开发版 0.0.0 不带。
+// - 现有覆盖缺口：此前没有任何 Host 自动附加的非凭证请求头。
+// - 最小失败输入：app-only 工具调用、mcpAppsManual:false、插件伪造的小写同名头、
+//   302 跳到未声明主机、appVersion 0.0.0。
+// - tier：unit(纯 DI 假 fetch，无 Electron)。
+describe('networkSlot · MCP Apps 手册头', () => {
+  const MANUAL = new TextEncoder().encode('# manual\n');
+  const SHA = 'f'.repeat(64);
+  const resolver = (appVersion: string) => createMcpAppsManualResolver({
+    appVersion: () => appVersion,
+    readManual: () => MANUAL,
+    cdnBaseUrl: () => 'https://cdn.test/cindy/',
+  });
+  const pagesGhost = (): InstalledGhost => ({
+    manifest: {
+      schemaVersion: 3, id: 'pages', name: 'Pages', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      tools: [{ name: 'open_view', description: 'open' }, { name: 'load_view', description: 'load' }, { name: 'plain', description: 'plain' }],
+      network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: {
+        resources: [{ uri: 'ui://pages/view', file: 'ui/page.html' }],
+        tools: { open_view: { resourceUri: 'ui://pages/view', visibility: ['model'] }, load_view: { visibility: ['app'] } },
+      } },
+    },
+    dir: '/fake/brain/pages',
+    enabled: true,
+  }) as unknown as InstalledGhost;
+  const setup = (appVersion = '0.1.122-beta', overrides: Partial<NetworkSlotDeps> = {}) => makeSlot({
+    getGhost: () => pagesGhost(),
+    inFlightCallInfo: (callId) => ({ ghostId: 'pages', sessionId: 's1', remoteHostId: null, channel: 'session', tool: callId.replace('call-', '') }),
+    mcpAppsManual: resolver(appVersion),
+    ...overrides,
+  });
+  const sentHeaders = (fn: { mock: { calls: unknown[][] } }, index = 0) =>
+    (fn.mock.calls[index]![1] as { headers: Record<string, string> }).headers;
+  const manualSha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+  it('按工具声明默认带上，mcpAppsManual 显式覆盖', async () => {
+    const expected = {
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    };
+    for (const [name, payload, carries] of [
+      ['模型可见、会打开页面的工具', { callId: 'call-open_view' }, true],
+      ['只给页面调用的工具默认不带', { callId: 'call-load_view' }, false],
+      ['只给页面调用的工具传 true 时带上', { callId: 'call-load_view', mcpAppsManual: true }, true],
+      ['会打开页面的工具传 false 时不带', { callId: 'call-open_view', mcpAppsManual: false }, false],
+      ['未在 mcpApps.ui 声明的工具不带', { callId: 'call-plain' }, false],
+    ] as const) {
+      const { slot, fetchImpl } = setup();
+      expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', ...payload }), name).toMatchObject({ ok: true });
+      const headers = sentHeaders(fetchImpl);
+      if (carries) expect(headers, name).toMatchObject(expected);
+      else expect(Object.keys(headers).filter((key) => key.toLowerCase().startsWith('cindy-mcp-apps-manual')), name).toEqual([]);
+    }
+  });
+
+  it('剥除插件伪造的同名头(不区分大小写)，由 Host 的值替换', async () => {
+    const forged = { 'cindy-mcp-apps-manual': 'https://evil.example/m.md', 'CINDY-MCP-APPS-MANUAL-SHA256': SHA };
+    const off = setup();
+    await off.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-load_view', headers: forged });
+    expect(sentHeaders(off.fetchImpl)).toEqual({});
+    const on = setup();
+    await on.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', headers: forged });
+    expect(sentHeaders(on.fetchImpl)).toEqual({
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    });
+  });
+
+  it('开发版 0.0.0 不带手册头', async () => {
+    const { slot, fetchImpl } = setup('0.0.0');
+    await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', mcpAppsManual: true });
+    expect(sentHeaders(fetchImpl)).toEqual({});
+  });
+
+  it('读取手册的意外错误不缓存，下次请求重试；构建里没有手册则不带', () => {
+    let reads = 0;
+    const flaky = createMcpAppsManualResolver({
+      appVersion: () => '0.1.122-beta',
+      readManual: () => { reads += 1; if (reads === 1) throw new Error('EMFILE'); return MANUAL; },
+      cdnBaseUrl: () => 'https://cdn.test/cindy',
+    });
+    expect(flaky()).toBeNull();
+    expect(flaky()?.sha256).toBe(manualSha(MANUAL));
+    const missing = createMcpAppsManualResolver({ appVersion: () => '0.1.122-beta', readManual: () => null, cdnBaseUrl: () => 'https://cdn.test/cindy' });
+    expect(missing()).toBeNull();
+  });
+
+  it('跳转到未声明主机时不带手册头', async () => {
+    const fetchPublicImpl = vi.fn<NetworkSlotDeps['fetchPublicImpl']>(async () => ({ response: fakeResponse(), release: async () => undefined }));
+    const { slot, fetchImpl } = setup('0.1.122-beta', { fetchPublicImpl });
+    fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example.com/next' } }));
+    const result = await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view' });
+    expect(result).toMatchObject({ ok: true });
+    expect(sentHeaders(fetchImpl)).toHaveProperty('Cindy-MCP-Apps-Manual');
+    expect(fetchPublicImpl.mock.calls[0]![0]).toBe('https://other.example.com/next');
+    expect(sentHeaders(fetchPublicImpl)).toEqual({});
+  });
+
+  it('mcpAppsManual 不是布尔值时拒绝', async () => {
+    const { slot, fetchImpl } = setup();
+    expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', mcpAppsManual: 'yes' })).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

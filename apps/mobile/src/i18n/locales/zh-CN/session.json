@@ -562,6 +562,7 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续，请新建任务。",
+    "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
@@ -758,5 +759,17 @@
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在编辑消息",
+    "discard": "放弃编辑消息",
+    "stopTimeout": "等待任务停止超时，请稍后重试",
+    "queueNotEmpty": "任务有排队中的消息，先发送或移除队列内容后再编辑",
+    "notLast": "任务里已有更新的消息，这条不再是最后一条，无法编辑重发",
+    "failed": "编辑重发失败，请重试",
+    "noPriorAssistant": "这条消息前面还没有 AI 回复，电脑端当前版本暂不支持编辑；更新电脑端 Cindy 后再试。",
+    "uploadsPending": "还有附件正在上传，等上传完成后再编辑消息。",
+    "rollbackHint": "发送将撤销上一轮对 {{count}} 个文件的改动",
+    "conversationOnlyHint": "发送不会恢复项目文件，上一轮的文件改动会保留"
   }
 }

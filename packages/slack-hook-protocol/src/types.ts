@@ -215,6 +215,11 @@ export const HOOK_MESSAGE_TYPES = [
   'task.ack',
   'turn.end',
   'turn.delivery',
+  'x.media.init',
+  'x.media.append',
+  'x.media.finalize',
+  'x.media.abort',
+  'x.media.result',
   'turn.progress',
   'turn.reopen',
   'msg.op',
@@ -535,11 +540,60 @@ export interface TurnEndPayload {
    */
   attachments?: TaskAttachment[];
   /**
+   * 已经分块转传到 X 的媒体(见 x.media.*)。字节不在帧里, 服务端回帖时直接引用。
+   * 只有声明 HOOK_FEATURE_X_MEDIA_RELAY 的 server 才会收到。
+   */
+  xMediaIds?: string[];
+  /**
    * 客户端终稿发布结果(HOOK_FEATURE_TELEGRAM_FINAL_OPS)。缺席 = 客户端没发布过终稿,
    * 服务端照旧渲染。只适用于不带附件的轮次: 带附件时 desktop 不发布终稿、不带本字段,
    * 附件照常放在 attachments 里由服务端发送(服务端对带附件的 turn.end 也不认本字段)。
    */
   clientFinal?: TurnEndClientFinal;
+}
+
+/**
+ * x.media.*(desktop <-> server): 把视频分块转传给 X, 不经 turn.end 内联。
+ *
+ * 内联受 48 MiB 单帧限制, 用不上 X 自身的上限。desktop 发一段、等一次 x.media.result,
+ * server 每段立刻转给 X, 不落库也不攒内存。finalize 成功返回 mediaId, 随 turn.end.xMediaIds
+ * 回传。上传在回帖前完成, 失败时 desktop 照常发正文并提示附件未发出。
+ */
+export const X_MEDIA_SEGMENT_MAX_BYTES = 4 * 1024 * 1024;
+export const X_MEDIA_STEPS = ['init', 'append', 'finalize'] as const;
+export type XMediaStep = (typeof X_MEDIA_STEPS)[number];
+
+export interface XMediaTarget {
+  /** desktop 生成, 一次上传一个。 */
+  uploadId: string;
+  /** 这次上传所属的任务; server 据此确认任务派给了这台设备。 */
+  requestId: string;
+}
+
+export interface XMediaInitPayload extends XMediaTarget {
+  mimeType: string;
+  totalBytes: number;
+}
+
+export interface XMediaAppendPayload extends XMediaTarget {
+  /** 从 0 开始连续递增。 */
+  segmentIndex: number;
+  /** 解码后不超过 X_MEDIA_SEGMENT_MAX_BYTES。 */
+  dataBase64: string;
+}
+
+export type XMediaFinalizePayload = XMediaTarget;
+export type XMediaAbortPayload = XMediaTarget;
+
+export interface XMediaResultPayload {
+  uploadId: string;
+  step: XMediaStep;
+  /** step 为 append 时是对应分段, 其余为 null。 */
+  segmentIndex: number | null;
+  /** finalize 成功时非 null。 */
+  mediaId: string | null;
+  /** 失败时非 null; 不携带上游响应体、凭证或用户内容。 */
+  error: TurnDeliveryError | null;
 }
 
 /**
@@ -1356,6 +1410,8 @@ export const HOOK_FEATURE_SESSION_RESULT = 'session-result-v1';
  * 不进入本回执与重放链路。
  */
 export const HOOK_FEATURE_TURN_DELIVERY = 'turn-delivery-v1';
+/** server 支持 x.media.* 分块转传与 turn.end.xMediaIds。未声明时 desktop 只内联 10 MiB 以内的视频。 */
+export const HOOK_FEATURE_X_MEDIA_RELAY = 'x-media-relay-v1';
 
 // ── 阶段 20: 消息操作动词(msg.op) —— 内容面上收客户端 ─────────────────────────
 
@@ -1867,6 +1923,11 @@ export type HookTaskDispatchMessage = HookEnvelope<'task.dispatch', TaskDispatch
 export type HookTaskAckMessage = HookEnvelope<'task.ack', TaskAckPayload>;
 export type HookTurnEndMessage = HookEnvelope<'turn.end', TurnEndPayload>;
 export type HookTurnDeliveryMessage = HookEnvelope<'turn.delivery', TurnDeliveryPayload>;
+export type HookXMediaInitMessage = HookEnvelope<'x.media.init', XMediaInitPayload>;
+export type HookXMediaAppendMessage = HookEnvelope<'x.media.append', XMediaAppendPayload>;
+export type HookXMediaFinalizeMessage = HookEnvelope<'x.media.finalize', XMediaFinalizePayload>;
+export type HookXMediaAbortMessage = HookEnvelope<'x.media.abort', XMediaAbortPayload>;
+export type HookXMediaResultMessage = HookEnvelope<'x.media.result', XMediaResultPayload>;
 export type HookTurnProgressMessage = HookEnvelope<'turn.progress', TurnProgressPayload>;
 export type HookMessageOpMessage = HookEnvelope<'msg.op', MessageOpPayload>;
 export type HookMessageOpResultMessage = HookEnvelope<'msg.op.result', MessageOpResultPayload>;
@@ -1960,6 +2021,11 @@ export type HookMessage =
   | HookTaskAckMessage
   | HookTurnEndMessage
   | HookTurnDeliveryMessage
+  | HookXMediaInitMessage
+  | HookXMediaAppendMessage
+  | HookXMediaFinalizeMessage
+  | HookXMediaAbortMessage
+  | HookXMediaResultMessage
   | HookTurnProgressMessage
   | HookTurnReopenMessage
   | HookBindStartMessage

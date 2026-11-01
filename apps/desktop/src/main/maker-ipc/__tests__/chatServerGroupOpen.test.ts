@@ -123,6 +123,93 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
+  // Unit: an open group's immutable kind was re-read in a full snapshot before
+  // every topic post. Keep current server write authorization even with warm UI context.
+  it('sends a reply in an already open group without another snapshot and preserves write refusals', async () => {
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+      : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    // HTTP fallback must reuse immutable room kind too, even without a live socket.
+    await warm(); await timed(() => service.getGroup(rooms[0]));
+    const input = { groupId: rooms[0], rootId: message.id, text: 'Timing regression', clientId: 'topic-timing-first',
+      mentions: { all: false, botIds: [] } };
+    const reply = await timed(() => service.chatServer!.reply(input));
+    expect(reply.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(reply.ms).toBeLessThanOrEqual(200);
+    expect(reply.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    await connected();
+    const afterReconnect = await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-after-reconnect' }));
+    expect(afterReconnect.value.ok).toBe(true);
+    expect(afterReconnect.ms).toBeLessThanOrEqual(200);
+    expect(afterReconnect.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith(`/messages/${message.id}`)
+      ? { body: { ...message, threadRootId: rooms[1] } }
+      : route.endsWith('/members') ? { body: [] }
+        : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    const share = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: message.id }));
+    expect(share.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(share.ms).toBeLessThanOrEqual(200);
+    expect(share.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+        : route.endsWith('/messages') && method === 'POST' ? { status: 403, body: { error: { code: 'FORBIDDEN' } } } : response(route));
+    expect((await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-timing-revoked' }))).value)
+      .toMatchObject({ ok: false, errorCode: 'FORBIDDEN' });
+  });
+
+  // Unit: a successful share used to wait for snapshots/executions before its
+  // first paint. A single-message server read must publish its authorized row in
+  // two 100ms rounds, independently of slow full-room reconciliation.
+  it('publishes a posted share directly from its server row before slow room metadata', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async key => structuredClone(disk.get(key)), write: async (key, state) => {
+      if (state) disk.set(key, structuredClone(state)); else disk.delete(key);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const source = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: message.id,
+      content: [{ type: 'text', text: 'Authorized topic reply' }] };
+    let posted = { ...message, id: '50000000-0000-4000-8000-000000000003', seq: '58' };
+    let sourceUnavailable = false;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [source, message], reads: [], cursor: '57' } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '57', changes: [] } };
+      if (route.endsWith(`/messages/${source.id}`)) return sourceUnavailable
+        ? { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } } : { body: source };
+      if (route.endsWith(`/messages/${posted.id}`)) return { body: posted };
+      if (route.endsWith('/messages') && method === 'POST') { posted = { ...posted, content: body.content }; return { body: { id: posted.id } }; }
+      return response(route);
+    });
+    await warm(); await timed(() => service.getGroup(rooms[0])); onChanged.mockClear();
+    fixture.timing = route => ({ serve: 100, deliver: route.endsWith('/snapshot') ? 5000 : 100 });
+    const start = Date.now();
+    const shared = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(shared.value.ok).toBe(true); expect(shared.ms).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(Date.now() - start).toBeLessThanOrEqual(200);
+    expect(onChanged.mock.calls.map(([payload]) => payload).find(payload => payload.messages?.length)).toMatchObject({
+      groupId: rooms[0], historyRevision: disk.get(rooms[0])!.generation,
+      messages: [{ id: posted.id, threadShare: { status: 'available', content: 'Authorized topic reply' } }],
+    });
+    expect(fixture.routes.slice(-3).some(route => route.endsWith('/members'))).toBe(false);
+    // Expiry still rechecks the source instead of treating a cached row as authority forever.
+    await vi.advanceTimersByTimeAsync(30_001);
+    const expired = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(expired.value.ok).toBe(true); expect(expired.ms).toBeLessThanOrEqual(200);
+    expect(expired.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    // Ready precedes replay: old cached text may have become invisible while disconnected.
+    sourceUnavailable = true;
+    await connected();
+    const revoked = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(revoked.value).toMatchObject({ ok: false, errorCode: 'SHARE_UNAVAILABLE' });
+    expect(revoked.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    expect(revoked.routes).not.toContain(`/conversations/${rooms[0]}/messages`);
+    sourceUnavailable = false;
+    const live = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(live.value.ok).toBe(true); expect(live.ms).toBeLessThanOrEqual(200);
+    expect(live.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+  });
+
   // Unit: the production topic entry used to bypass persisted history on every open.
   // Restart, old-page edits and a permission reset must all share the room projection.
   it('reopens topics without downloading members, roots or covered pages and updates old replies', async () => {
@@ -310,7 +397,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
 
   // Unit: all successful local /read writers must update the durable UI projection
   // even while WS is unavailable; existing HTTP tests had no persistent cache.
-  it.each(['main', 'thread', 'follow'] as const)('invalidates personal metadata after a local %s write without a socket notice', async action => {
+  it.each(['main', 'thread', 'follow'] as const)('refreshes personal metadata after a local %s write without a socket notice', async action => {
     const disk = new Map<string, ChatHistoryState>();
     const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
       if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
@@ -325,7 +412,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       if (route.endsWith('/read') && method === 'POST') {
         if (body.threadRootId) { threadRead = body.readSeq; following = body.following ?? following; }
         else mainRead = body.readSeq;
-        return { body: { following } };
+        return { body: { readSeq: body.readSeq, following, muted: false, markedUnread: false } };
       }
       if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [reply, root], cursor: '57',
         reads: [{ thread_key: 'main', read_seq: mainRead }, { thread_key: root.id, read_seq: threadRead, following }] } };
@@ -341,7 +428,8 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       : action === 'thread' ? service.chatServer!.thread({ groupId: rooms[0], rootId: root.id, markRead: true })
         : service.chatServer!.followThread({ groupId: rooms[0], rootId: root.id, following: true }));
     expect(result.value.ok).toBe(true);
-    await timed(() => service.getGroup(rooms[0]));
+    const refreshed = await timed(() => service.getGroup(rooms[0]));
+    if (action !== 'follow') expect(refreshed.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
     expect(disk.get(rooms[0])?.snapshot).toMatchObject({ reads: [
       { thread_key: 'main', read_seq: action === 'main' ? '1' : '0' },
       { thread_key: root.id, read_seq: action === 'thread' ? '2' : '0', following: action === 'follow' },

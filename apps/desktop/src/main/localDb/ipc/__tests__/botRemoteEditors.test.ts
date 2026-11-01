@@ -186,6 +186,16 @@ describe('portable teammate memory pages', () => {
     const f = fixture();
     const detail = await f.resource('settings:bot-a/memory/feedback_sources');
     expect(detail.actions![1]).toMatchObject({ tone: 'destructive', confirmation: { body: { translations: { 'zh-CN': 'Cindy之后不会再参考「注明来源」。' } } } });
+    // #8157/r4427953333: the real remote resource previously tested only zh-CN;
+    // a named teammate + titled entry must also carry localized consequences (unit tier).
+    const body = detail.actions![1].confirmation!.body!;
+    expect(typeof body).toBe('object');
+    for (const locale of ['es', 'fr', 'de', 'pt-PT', 'pt-BR']) {
+      const translated = typeof body === 'object' ? body.translations?.[locale] : undefined;
+      expect(translated, locale).toEqual(expect.stringContaining('Cindy'));
+      expect(translated, locale).toEqual(expect.stringContaining('注明来源'));
+      expect(translated, locale).not.toBe(typeof body === 'object' ? body.fallback : body);
+    }
     await f.send(detail, {}, 1);
     expect(f.deps.memory.delete).toHaveBeenCalledWith({ botId: 'bot-a', filename: 'feedback_sources.md', expectedUpdatedAt: detail.revision });
     await expect(f.resource('settings:bot-a/memory/feedback_sources')).rejects.toBeInstanceOf(RemoteResourceRegistryError);

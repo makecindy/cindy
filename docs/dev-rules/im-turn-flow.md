@@ -172,8 +172,13 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 8. **终稿必达**（官方）：`turn.end` 先进持久出箱；客户端发布终稿时以 `clientFinal` 交回。
    带附件的轮次不由客户端发布。Telegram / Slack 的持久出箱只存文本；X 的出箱保留
    `cindy-media` 地址、引用 ID、名称、MIME 与大小，Base64 只存在传输帧和内存中。
+   Agent 在远程供应商上运行时，`[名称](xdt-file:///影子路径)` 由远程事件投影先还原成本机路径，
+   收集器再按工作目录校验；漏掉这一步，文件会被当作目录外附件跳过。
    X 仅收 JPEG / PNG / WebP / GIF / MP4 / MOV；单图片 5 MiB、GIF 15 MiB、视频 10 MiB，
-   一轮最多 8 项、总计 30 MiB（服务端再核验 X 的附件组合；持久出箱仍按 32 MB 总预算计入媒体的传输大小）。托管媒体通过 `ingestMedia`
+   一轮最多 8 项、总计 30 MiB（持久出箱仍按 32 MB 总预算计入媒体的传输大小）。
+   server 声明 `x-media-relay-v1` 时，视频不内联：客户端在回帖前把文件分块转传给 X（`hook-control/xMediaRelay.ts`），
+   拿到 media id 后随 `turn.end.xMediaIds` 回传，大小只受 X 限制，不做压缩；失败时正文照发并提示未发出。一条回帖最多四张图片，或一个 GIF／视频：客户端发送前先选定，回复里引用的优先，工具结果旁路带来的
+   媒体最先让位且不算发送失败；服务端再核验，组合不合规时整条回帖（含正文）都发不出去。托管媒体通过 `ingestMedia`
    作为非缓存入库；待发 pin 使用 `message` 引用、出生任务与 `hook-outbox` 来源，沿用
    任务删除清理。恢复时核对当前账号、任务与引用，失效不重放附件；仍待发的结果保留 24 小时。
    收到 `turn.delivery`（未协商回执时为 transport 接受）后清除出箱媒体地址并释放 pin；

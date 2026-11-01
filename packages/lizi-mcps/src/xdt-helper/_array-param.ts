@@ -6,7 +6,7 @@ import { z } from 'zod';
  * 把数组参数序列化成 <item> 重复标签，单元素时折叠成标量，实测四类形态：
  * 多套一层 [[a],[b]] → 拍平；XML 风格 {item:[a,b]} → 取 item；单元素折叠
  * {item:a} 与裸标量 a → [a]。其余原样交给 zod 报错。
- * 只用于「顶层是标量字符串数组」的参数；对象数组（如 ask_user_question_async
+ * 只用于「顶层是标量字符串数组」的参数；对象数组（如 ask_owner
  * 的 questions）的折叠发生在内层节点，本函数救不了，不要套。
  */
 export function coerceStringArrayParam(value: unknown): unknown {

@@ -324,6 +324,8 @@ export interface CatalogModel {
   selectedInterface?: ModelInterfaceSnapshot;
   availableInterfaces?: ModelInterfaceSnapshot[];
   nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
+  /** Catalog-recommended engine for this source and model (Registry `recommendedAgents`). */
+  recommendedAgent?: AgentKind;
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';

@@ -24,10 +24,17 @@ afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 /** Agent 写进文件的路径还原到本机时沿用它的分隔符，源码字符串里不会冒出 `\f`、`\b` 这类转义。 */
 function written(local: string, virtual: string): string { return virtual.startsWith('C:') ? local : local.replace(/\\/g, '/'); }
 
-/** 转发给 exec-server 的 Codex 请求里与沙箱有关的字段。 */
+/** managed fixture 的结果投影；原始 wire 字段由下方断言核实，不是外部输入校验。 */
 interface MappedSandboxRequest {
   cwd?: string;
-  sandbox: { cwd?: string; userHomeDir?: string; permissions: { file_system: { entries: unknown[] } } };
+  sandbox: {
+    cwd?: string;
+    userHomeDir?: string;
+    windowsSandboxLevel?: unknown;
+    permissions: {
+      file_system: { entries: unknown[] };
+    };
+  };
 }
 
 function setup(virtual: string) {
@@ -590,6 +597,7 @@ describe('virtual workspace', () => {
       ] } },
       cwd: 'file:///home/agent/workspace',
       userHomeDir: 'file:///home/agent',
+      windowsSandboxLevel: 'disabled',
     };
     const params = mapExecServerParams({ path: 'file:///home/agent/workspace/a.txt', sandbox }, workspace, 'fs/readFile') as MappedSandboxRequest;
     expect(params.sandbox.permissions.file_system.entries).toEqual([
@@ -606,6 +614,12 @@ describe('virtual workspace', () => {
     ]);
     expect(params.sandbox.cwd).toBe(pathToFileURL(project).href);
     expect(params.sandbox.userHomeDir).toBe(pathToFileURL(os.homedir()).href);
+    expect(params.sandbox.windowsSandboxLevel).toBe(process.platform === 'win32' ? 'restricted-token' : 'disabled');
+    const explicit = mapExecServerParams({ sandbox: { ...sandbox, windowsSandboxLevel: 'mxc' } }, workspace) as MappedSandboxRequest;
+    expect(explicit.sandbox.windowsSandboxLevel).toBe('mxc');
+    const unrestricted = mapExecServerParams({ sandbox: { ...sandbox, permissions: { type: 'unrestricted' } } }, workspace) as { sandbox: { windowsSandboxLevel?: unknown } };
+    expect(unrestricted).toMatchObject({ sandbox: { permissions: { type: 'unrestricted' } } });
+    expect(unrestricted.sandbox.windowsSandboxLevel).toBe('disabled');
     // 没有虚拟工作区(旧版对端)时沙箱原样转发，与之前一致。
     const plain = new ExecutorWorkspace({ workingDir: project });
     expect((mapExecServerParams({ sandbox }, plain) as MappedSandboxRequest).sandbox).toBe(sandbox);

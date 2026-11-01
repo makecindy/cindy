@@ -129,7 +129,7 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
   return (
     <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <SafeAreaProvider>
-        <SafeAreaView edges={['top', 'bottom']} style={[styles.fill, { backgroundColor: colors.surface }]}>
+        <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[styles.fill, { backgroundColor: colors.surface }]}>
           <View style={[styles.header, { borderBottomColor: colors.border }]}>
             <Pressable
               accessibilityRole="button"

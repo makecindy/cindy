@@ -366,13 +366,18 @@ export function pickRecommendedAgent(
     const model = findCatalogModel(provider, modelId, agent, { exact: true });
     if (model) models[agent] = model;
   }
+  const comparison = provider ? modelProtocolComparison(provider, models) : null;
+  // The catalog's official/community recommendation for this exact source wins, unless this
+  // source can only reach that engine through Cindy's local compatibility conversion.
+  const declared = Object.values(models).map(model => model.recommendedAgent).find(Boolean);
+  if (declared && candidates.includes(declared) &&
+      comparison?.forAgent(declared)?.mode !== 'compatibility') return declared;
   // Grok uses Pi by default even when the supplier speaks Responses. This is a
   // recommendation only: candidates and explicit engine overrides stay authoritative.
   if (candidates.includes('pi') && models.pi && groupOf({
     id: normalizeModelIdForClassification(modelId),
     ...(models.pi.group !== undefined ? { group: models.pi.group } : {}),
   }) === 'grok') return 'pi';
-  const comparison = provider ? modelProtocolComparison(provider, models) : null;
   const canonical = comparison?.reference;
   if (canonical) {
     const preferred =

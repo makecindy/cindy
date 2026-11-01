@@ -53,6 +53,7 @@ import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import type { MobileMediaPlayerStatus } from '@/session/mediaPlayerWebViewHtml';
 import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
+import { VideoDownloadButton } from '@/session/VideoDownloadButton';
 import {
   isDesktopLocalMediaUrl,
   mediaLoadFailureKey,
@@ -229,6 +230,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const [videoToolbarHeight, setVideoToolbarHeight] = useState(64);
   const urls = useMemo(() => images.map((image) => image.url), [images]);
   const initialKeyIndex = initialImageKey ? images.findIndex((image) => image.key === initialImageKey) : -1;
   const initialIndex = initialKeyIndex >= 0 ? initialKeyIndex : lightboxInitialIndex(urls, initialUrl);
@@ -650,8 +652,14 @@ export const ImageLightbox = memo(function ImageLightbox({
     && (activeImage?.payload.media.previewable
       || (activeResolveState?.status === 'ready' && !!activeImage && loadedImageKeys.has(activeImage.key)));
   const pageLabel = lightboxPageLabel(activeIndex, images.length);
-  // 工具栏从打开那一刻就在:原图还在取件时先置灰,就绪即可用,不让工具「晚到」。
-  // 取件结果是 data: 等不可分享地址时才收起分享。
+  // 原图还在取件或解码:底栏整条换成载入提示,不摆一排点不动的按钮。失败(含取件
+  // 结果不可预览)不算载入,仍是置灰按钮 + 页内重试;相册句柄等不靠取件的图不进这里。
+  const activeMedia = activeImage?.payload.media;
+  const activeLoading = !!activeMedia && !activeIsVideo && !activeActionsReady
+    && !!onResolveRemoteMedia && !activeMedia.previewable && isDesktopLocalMediaUrl(activeMedia.url)
+    && activeResolveState?.status !== 'error'
+    && !(activeResolveState?.status === 'ready' && !activeResolveState.media.previewable);
+  // 分享取件结果是 data: 等不可分享地址时才收起。
   const shareVisible = !!onShareImage && !!activeImage && !activeIsVideo
     && (!activeUri || canShareLightboxImage(activeUri));
   const shareEnabled = shareVisible && activeActionsReady;
@@ -803,7 +811,9 @@ export const ImageLightbox = memo(function ImageLightbox({
               active={index === activeIndex}
               height={height}
               image={item}
-              insetBottom={insets.bottom}
+              // Keep native transport controls above the shared viewer toolbar,
+              // including wrapped actions and larger accessibility text.
+              insetBottom={insets.bottom + videoToolbarHeight + 24}
               // 让出顶部关闭 / 页码一行,系统播放控件不被压住。
               insetTop={insets.top + 64}
               onRetry={handleRetryPage}
@@ -958,8 +968,18 @@ export const ImageLightbox = memo(function ImageLightbox({
           ) : pageLabel ? (
             <Text style={styles.pageLabel} testID="message.imageLightboxPageLabel">{pageLabel}</Text>
           ) : null}
-          {isAnnotating ? null : extraActions && extraActions.length > 0 ? (
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
+          {isAnnotating ? null : activeIsVideo && !extraActions?.length ? (
+            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}
+              testID="message.imageLightboxVideoActions"
+              onLayout={event => setVideoToolbarHeight(event.nativeEvent.layout.height)}>
+              <View style={styles.actionBarPill}>
+                <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType} immersive />
+              </View>
+            </View>
+          ) : extraActions && extraActions.length > 0 ? (
+            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}
+              testID={activeIsVideo ? 'message.imageLightboxVideoActions' : undefined}
+              onLayout={activeIsVideo ? event => setVideoToolbarHeight(event.nativeEvent.layout.height) : undefined}>
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
@@ -996,6 +1016,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                     <Text style={styles.actionLabel}>{action.label}</Text>
                   </Pressable>
                 ))}
+                {activeIsVideo ? <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType} immersive /> : null}
                 {shareVisible && !showFileHeader ? (
                   <Pressable
                     accessibilityLabel={t('message.lightbox.shareImage')}
@@ -1021,6 +1042,20 @@ export const ImageLightbox = memo(function ImageLightbox({
                     </Text>
                   </Pressable>
                 ) : null}
+              </View>
+            </View>
+          ) : activeLoading && (shareVisible || annotateVisible || directSubmitVisible) ? (
+            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
+              <View
+                accessibilityLabel={t('message.lightbox.loadingOriginal')}
+                accessibilityLiveRegion="polite"
+                accessibilityRole="progressbar"
+                accessible
+                style={[styles.actionBarPill, styles.loadingBar]}
+                testID="message.imageLightboxLoadingBar"
+              >
+                <ActivityIndicator color="#ffffff" size="small" />
+                <Text style={styles.pageLabel}>{t('message.lightbox.loadingOriginal')}</Text>
               </View>
             </View>
           ) : shareVisible || annotateVisible || directSubmitVisible ? (
@@ -2238,6 +2273,8 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
   },
   actionLabelDisabled: { color: DISABLED_ICON_COLOR },
+  // 与按钮栏同高(按钮 48 + 上下留白),载入完成换回按钮时胶囊不跳。
+  loadingBar: { gap: 8, minHeight: 66 },
   stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   retryButton: {
     borderColor: 'rgba(255, 255, 255, 0.5)',

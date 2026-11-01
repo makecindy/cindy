@@ -1,3 +1,4 @@
+import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
@@ -76,6 +77,37 @@ export function simplifyBotRenderItems(
   });
   // Unanswered/failed deliveries remain reachable without inserting ahead of a live reply.
   return [...visible, ...fallbackReceipts];
+}
+
+export function botProcessItems(items: readonly RenderItem[], isStreaming: boolean): RenderItem[] {
+  const projected = simplifyBotRenderItems(items, isStreaming);
+  const addressed = new Set<RenderItem>();
+  let sealed = false;
+  for (let i = projected.length - 1; i >= 0; i--) {
+    const item = projected[i]!;
+    if (!isProse(item) || item.message.assistantPhase === 'commentary') { sealed = false; continue; }
+    sealed ||= isCompletedAssistantMessage(item.message) || item.message.assistantPhase === 'final_answer';
+    if (sealed) addressed.add(item);
+  }
+  const lastUser = projected.findLastIndex(item => item.type === 'message' && item.message.role === 'user'
+    && !item.message.isSyntheticTrigger && !item.message.systemCardType);
+  const lastCompleted = projected.findLastIndex(item => isProse(item) && isCompletedAssistantMessage(item.message));
+  const liveItems = new Set(isStreaming ? projected.slice(Math.max(lastUser, lastCompleted) + 1) : []);
+  return groupTeammateProcess(projected, {
+    children: item => item.type === 'work_group' ? item.children : undefined,
+    isProgress: item => !addressed.has(item) && isProse(item) && !isCompletedAssistantMessage(item.message)
+      && item.message.assistantPhase !== 'final_answer' && !item.message.explicitDelivery
+      && !item.message.sourceGroup && !hasRichAnswer(item.message.content)
+      && (item.message.assistantPhase === 'commentary' || (liveItems.has(item))),
+    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    start: renderItemStartMs, end: renderItemEndMs,
+    streaming: item => item.type === 'work_group' ? item.isStreaming === true
+      : liveItems.has(item),
+    create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
+      children: children as WorkGroupChildItem[], isStreaming: streaming,
+      ...(start !== null ? { startedAtMs: start } : {}),
+      ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
+  });
 }
 
 /** Empty avatar rows never make a fold on their own; unloaded history still does. */

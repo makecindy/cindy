@@ -1,3 +1,4 @@
+import { TEAMMATE_AVATAR } from '@cindy/maker-shared/teammate-status';
 /**
  * BotAvatar — the single Bot identity mark used by every Bot surface.
  *
@@ -70,6 +71,8 @@ const SIZE_CLASSES = {
   xs: 'h-5 w-5 text-11',
   sm: 'h-7 w-7 text-14',
   md: 'h-10 w-10 text-20',
+  row: 'h-11 w-11 text-20',
+  strip: 'h-9 w-9 text-18',
   lg: 'h-14 w-14 text-28',
   /** 64px — the roster card portrait. `text-28` is the top of the numeric scale. */
   xl: 'h-16 w-16 text-28',
@@ -136,7 +139,8 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
       )}
       // Kept even for artwork: the hue is what shows through while the bundled
       // image decodes, so the avatar never flashes white.
-      style={{ backgroundColor: botAvatarHueToken(bot.avatarColor) }}
+      style={{ backgroundColor: botAvatarHueToken(bot.avatarColor),
+        ...((size === 'row' || size === 'strip') ? { width: TEAMMATE_AVATAR[size], height: TEAMMATE_AVATAR[size] } : {}) }}
     >
       {visibleArtwork ? (
         <img

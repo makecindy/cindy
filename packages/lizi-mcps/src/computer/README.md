@@ -40,12 +40,36 @@ its error code and partial-input progress alongside the new observation. A faile
 observation does not replace the original action error. Cancelled actions and
 unresolved window identities do not trigger this follow-up read.
 
-Cindy MCP supplies the task's stable driver session. When using the native CLI
-instead, pass the **same non-default `session` on every read and action**, then
-call `end_session` for that session. Independent invocations without a session
-do not share the screenshot lease. Reuse discovered process/window identities;
-do not guess bundle IDs. Foreground input already activates its target, so a
-preceding `bring_to_front` is usually redundant.
+Cindy MCP supplies the task's stable driver session and is the only desktop
+input entry. The native `cua-driver` CLI/MCP, `osascript` keystrokes, `cliclick`,
+CGEvent scripts and clipboard paste are not alternatives: they skip the session,
+the secure-field refusal, remote-input and user-activity yield and result
+verification. Cindy keeps them out of reach: the user's own `cua-driver` / `cua`
+MCP registrations are always denied for Claude Code (`maker-host/capability-routing.ts`;
+Cindy's Computer Use setting is the one switch for driving this desktop, and a
+raw driver server would bypass it exactly when it is off), shell-synthesized
+input is denied by a Claude PreToolUse guard (local runtimes only; full-access
+included) and, under Ask / Auto, by the shared reviewer policy for the computer
+running Cindy (`maker-core/agents/shared/desktop-input-shell.ts`,
+`continuation-policy.ts`). Codex full access has no host interception point and
+Pi full access is left native. A refusal is a result to report. Reuse discovered process/window identities; do not guess bundle IDs.
+Foreground input already activates its target, so a preceding `bring_to_front`
+is usually redundant.
+
+## Routing facts from the 2026-10 audit
+
+- `USER_INPUT_ACTIVE`: foreground delivery is refused while system input newer
+  than the Agent's own last dispatch is under three seconds old
+  (`powerMonitor.getSystemIdleTime`, whole seconds). Background delivery and
+  `set_value` are unaffected.
+- `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
+- `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
+  `window_gone` / `window_not_on_screen` (from recovery discovery) or
+  `driver_error`. Recovery discovery is compacted to window identity fields.
+- `list_windows` identities add `ios-simulator` (Simulator.app, Device Hub) with a
+  hint that synthetic input is not delivered there, and a `set_value` hint for
+  Electron / browser targets. `set_value` was verified on Cindy's own composer:
+  the field updates and its send button enables, without focus.
 
 ## CUA 0.37 compatibility
 

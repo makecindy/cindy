@@ -17,20 +17,22 @@ import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REM
  */
 const TEAMMATES = 'teammates';
 export const VISUAL_TEAMMATE_SESSION_ID = 'visual-teammate-session';
+export const VISUAL_TEAMMATE_THREAD_ROOT_ID = 'visual-teammate-topic-root';
+export const visualTeammateThreads = new Map([[VISUAL_TEAMMATE_THREAD_ROOT_ID, { sessionId: 'visual-teammate-topic', replyCount: 2 }]]);
 const MINUTE = 60_000;
-const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minutesAgo: number; avatar: RemoteCollectionItem['display']['avatar']; working?: boolean; following?: string[] }> = [
+const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minutesAgo: number; avatar: RemoteCollectionItem['display']['avatar']; working?: boolean; phase?: string; following?: string[] }> = [
   { id: 'cindy-default', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
     avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' }, working: true,
     // Task rows show the follow mark (`ui-mock` tasks): one shared with LiZi, so the mark picks by name.
     following: ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`] },
-  { id: 'visual-bot-dash', name: 'Dash', preview: 'Weekly numbers are in: sign-ups up 12%, churn flat.', minutesAgo: 25,
+  { id: 'visual-bot-dash', phase: 'needs-interaction', working: true, name: 'Dash', preview: 'Weekly numbers are in: sign-ups up 12%, churn flat.', minutesAgo: 25,
     avatar: { kind: 'asset', value: 'cindy://avatar/preset/dash', fallbackText: 'D' } },
-  { id: 'visual-bot-lizi', name: 'LiZi', preview: '这个 PR 我看完了，留了两条建议。', minutesAgo: 90,
+  { id: 'visual-bot-lizi', phase: 'completed', name: 'LiZi', preview: '这个 PR 我看完了，留了两条建议。', minutesAgo: 90,
     avatar: { kind: 'asset', value: 'cindy://avatar/preset/lizi', fallbackText: 'L' },
     following: ['visual-running', `${UI_MOCK_ID_PREFIX}english`] },
   { id: 'visual-bot-xiaoman', name: '小满', preview: '明天上午十点的会已经帮你约好。', minutesAgo: 60 * 20,
     avatar: { kind: 'emoji', value: '🌾', fallbackText: '小' } },
-  { id: 'visual-bot-research', name: 'Research Assistant', preview: 'Three sources disagree on the release date; details inside.', minutesAgo: 60 * 30,
+  { id: 'visual-bot-research', phase: 'error', name: 'Research Assistant', preview: 'Three sources disagree on the release date; details inside.', minutesAgo: 60 * 30,
     avatar: { kind: 'text', value: 'R', fallbackText: 'R' } },
   { id: 'visual-bot-tuantuan', name: '团团', preview: '开始对话', minutesAgo: 60 * 72,
     avatar: { kind: 'emoji', value: '🐼', fallbackText: '团' } },
@@ -38,6 +40,10 @@ const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minu
 
 // Fixed per process: a moving clock would make every row look unread again on each read.
 const FIXTURE_NOW = Date.now();
+export function teammateVisualReplyAt(sessionId: string): number {
+  const bot = teammates.find(item => sessionId === `${VISUAL_TEAMMATE_SESSION_ID}:${item.id}`);
+  return FIXTURE_NOW - (bot?.minutesAgo ?? 0) * MINUTE;
+}
 // In-memory mock state only: exercises the real glance actions without a host or automation.
 let dailyTodoCheck = true;
 let todoDeleted = false;
@@ -62,6 +68,22 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
       : bot?.id === 'visual-bot-lizi' ? [`${UI_MOCK_ID_PREFIX}english`, `${UI_MOCK_ID_PREFIX}archived`] : [];
     return { ok: true, delegations: ids.map(childSessionId => ({ requestingBotId: bot!.id, childSessionId })) };
   }
+  if (channel === 'local-db:bots:get' && teammates.some(bot => bot.id === args[0])) return {
+    id: args[0], canonicalSessionId: VISUAL_TEAMMATE_SESSION_ID, dmThreadsSupported: true,
+    sessions: [{ id: VISUAL_TEAMMATE_SESSION_ID, role: 'canonical', status: 'active' },
+      ...[...visualTeammateThreads].map(([rootClientId, thread]) => ({ id: thread.sessionId, role: 'thread', status: 'active',
+        threadRoot: { rootSessionId: VISUAL_TEAMMATE_SESSION_ID, rootClientId } }))],
+  };
+  if (channel === 'local-db:bots:dm-thread:list') return [...visualTeammateThreads].filter(([, thread]) => thread.replyCount).map(([rootClientId, thread]) => ({
+    ...thread, rootSessionId: VISUAL_TEAMMATE_SESSION_ID, rootClientId, lastReplyAt: now - MINUTE * 2, lastAssistantAt: now - MINUTE * 2, createdAt: now - MINUTE * 5,
+  }));
+  if (channel === 'local-db:bots:dm-thread:ensure') {
+    const root = (args[0] as { rootClientId: string }).rootClientId;
+    const previous = visualTeammateThreads.get(root);
+    const thread = previous ?? { sessionId: `visual-teammate-topic-${visualTeammateThreads.size}`, replyCount: 0 };
+    visualTeammateThreads.set(root, thread);
+    return { ok: true, sessionId: thread.sessionId, created: !previous };
+  }
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
@@ -84,7 +106,41 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     if (request.input?.operation === 'restore') todoDeleted = false;
     return { effects: [], todo: glanceTodo };
   }
+  // PR #7899: synthetic content for native partial selection and mention screenshots.
+  // Open /companions/groups/visual-group-text-selection?deviceId=cindy-visual-mock-mac in --mock.
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-group-text-selection') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'visual-1', display: { title: '文字选择 · 模拟数据' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '文字选择 · 模拟数据', data: {
+      id: request.ref.id, name: '文字选择 · 模拟数据',
+      members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }, { botId: 'visual-bot-dash', name: 'Dash', status: 'active' }],
+      messages: [
+        { id: 'selection-user', sequence: 1, kind: 'message', authorKind: 'user', authorName: '演示用户',
+          content: '@Cindy @Dash 请看这段示例，只选中需要的几个字再复制。', createdAt: now - MINUTE },
+        { id: 'selection-reply', sequence: 2, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+          content: [
+            '这是一段用于局部文字选择的长回复。长按正文，拖动两端手柄，只选中需要的几个字，再复制到输入框。其余文字应继续保留原来的排版。',
+            '', '下面是代码块，可以选择其中的一小段：', '',
+            '~~~typescript', 'const greeting = "Hello Cindy";', 'console.log(greeting);', '~~~', '',
+            '| 项目 | 说明 |', '| --- | --- |', '| 文字选择 | 只复制需要的几个字 |', '| 表格单元格 | 拖动手柄调整选区 |',
+          ].join('\n'), createdAt: now },
+      ], plans: [], createdAt: now, updatedAt: now,
+    } }],
+  };
   // Nine members from three accounts: the header shows a member count, not every name.
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-process-history') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'process-1', display: { title: 'Design review' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
+      id: request.ref.id, name: 'Design review', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active', isOwned: true, homeDeviceId: 'cindy-visual-mock-mac' }],
+      messages: [{ id: 'fixture-group-answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+        content: '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', createdAt: now,
+        process: { groupId: request.ref.id, executionId: 'fixture-process-execution', sessionId: 'visual-teammate-process', clientId: 'fixture-process-source', durationMs: 60000 } }],
+      plans: [], createdAt: now, updatedAt: now, round: { status: 'idle', canContinue: false, speakers: [] },
+    } }],
+  };
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id === 'visual-crowded-group') return {
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
@@ -124,8 +180,8 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     const bot = teammates.find(item => item.id === id);
     if (bot) return {
       ref: { collectionId: TEAMMATES, kind: 'bot', id: request.ref.id }, revision: 'visual-1',
-      display: { title: bot.name, avatar: bot.avatar },
-      links: [{ rel: 'conversation', target: { kind: 'session', sessionId: VISUAL_TEAMMATE_SESSION_ID } },
+      display: { title: bot.name, avatar: bot.avatar, lastReplyAt: teammateVisualReplyAt(`${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}`) },
+      links: [{ rel: 'conversation', target: { kind: 'session', sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } },
         ...(id === 'cindy-default' ? [{ rel: 'todos', target: { kind: 'resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: 'todos:cindy-default' } } }] : [])],
       actions: [], blocks: [{ id: 'profile', primitive: 'markdown', fallbackMarkdown: bot.preview }],
     };
@@ -142,6 +198,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
         timestamp: now - bot.minutesAgo * MINUTE,
         lastReplyAt: now - bot.minutesAgo * MINUTE,
         avatar: bot.avatar,
+        ...(bot.phase ? { teammateActivity: { phase: bot.phase } } : {}),
         ...(bot.working ? { generation: { phase: 'replying', startedAt: now - MINUTE } } : {}),
       },
       links: [

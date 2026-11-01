@@ -22,6 +22,7 @@ Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回�
 - `UI_MOCK_TASKS`：运行中、等待确认、排队、置顶、超长标题、英文、无文件夹对话、自动化、
   已归档等任务；`登录页窄窗口错位排查` 一条覆盖标题、表格、代码块、列表、引用、思考与工具
   调用。
+  两条 `插件模型：…` 任务覆盖新任务选了插件模型后的说明行（选了模型、插件没回应）。
 - `buildUiMockRows()`：按 Desktop 数据库行的格式生成任务与消息。Mobile 平时从电脑收到的
   也是这些行，所以两端看到的是同一份内容。
 
@@ -70,6 +71,9 @@ pnpm mobile:sim:whoami -- --mock --json
 - App 里是一台在线的模拟电脑和一台离线电脑，任务、消息、插件演示、文件浏览都由
   `apps/mobile/src/debug/visualMock.ts` 在内存里提供，写操作只在本次进程内生效，重启即还原。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
+  地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
+- 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 
 ## 可复用的展示项目：Orbit Garden
 

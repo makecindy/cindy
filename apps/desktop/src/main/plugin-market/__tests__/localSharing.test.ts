@@ -2,10 +2,18 @@
 // package across upload/material retries and require the original signed-in owner.
 // Public sharing tests have no upload or owner-bound package session. Minimal
 // inputs are one local package, an ambiguous material failure and an owner switch.
-// Unit tier: native/filesystem/network boundaries are fake; no real waits or I/O.
+// Unit tier: coordinator cases fake native/filesystem/network boundaries; the
+// historical package regression below uses real temporary files and installation.
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
+import JSZip from 'jszip';
+import { GhostManager, type GhostManagerOptions } from '../../cindy-brain/GhostManager.js';
+import { projectPluginPublishingSource } from '../../cindy-brain/pluginPublishingSource.js';
+import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({
@@ -31,6 +39,7 @@ vi.mock('../objectUrlPolicy.js', () => ({ pluginObjectUrlOptions: () => undefine
 import { prepareLocalPluginShare as prepareShare, releaseLocalPluginShare, readLocalPluginShare, installLocalPluginShare } from '../localSharing.js';
 import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
 import type { ShareContent, ShareOptions } from '../../../shared/share.js';
+const realPackages = await vi.importActual<typeof import('../../cindy-brain/exportGhostPackage.js')>('../../cindy-brain/exportGhostPackage.js');
 
 const operation = 'operation_00000001';
 const bytes = Buffer.from('frozen-local-package');
@@ -404,4 +413,71 @@ describe('local plugin sharing coordinator', () => {
     expect(io.api).not.toHaveBeenCalled();
     expect(io.snapshot).not.toHaveBeenCalled();
   });
+});
+
+// #7924 tester R7-02: real share preparation + snapshot + GhostManager validation.
+// Earlier coordinator fixtures faked inspect success, missing historical HTML was
+// not covered. Unit: install/approve a valid package, remove its HTML, restart,
+// freeze/upload through prepareShare, then install those exact bytes as a stored release.
+it('shares an installed package with missing HTML without granting UI to its recipient', async () => {
+  const fsp = fs.promises;
+  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-share-missing-ui-')));
+  const raw = { ...manifest, minCindyVersion: '0.1.122-beta', tools: [{ name: 'run', description: 'Run' }],
+    mcpApps: { ui: { resources: [{ uri: 'ui://page', file: 'ui/page.html' }], tools: { run: { resourceUri: 'ui://page' } } } } };
+  const opts: GhostManagerOptions = { getRootDir: () => path.join(root, 'sender'),
+    sourcesForInstance: (record, receipt) => ({ publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'absent' }) }),
+    mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) };
+  try {
+    const original = path.join(root, 'original.cindy');
+    const zip = new JSZip(); zip.file('ghost.json', JSON.stringify(raw)); zip.file('index.js', '// original tool'); zip.file('ui/page.html', '<p>page</p>');
+    await fsp.writeFile(original, await zip.generateAsync({ type: 'nodebuffer' }));
+    const sender = new GhostManager(opts);
+    const installed = await sender.install(original, { uiCapabilityApproved: true });
+    if ('rejection' in installed) throw new Error(installed.rejection.reason);
+    await fsp.unlink(path.join(installed.ghost.dir, 'ui/page.html'));
+    const restarted = new GhostManager(opts);
+    const current = restarted.list()[0]!;
+    expect(pluginHasToolUi(current.manifest)).toBe(false);
+    io.list.mockImplementation(() => restarted.list());
+    io.inspect.mockImplementation(restarted.inspect.bind(restarted));
+    io.content.mockImplementation(realPackages.inspectInstalledGhostPackageContent);
+    io.snapshot.mockImplementation(realPackages.snapshotInstalledGhostPackage);
+    io.mkdir.mockImplementation(fsp.mkdtemp.bind(fsp)); io.write.mockImplementation(fsp.writeFile.bind(fsp));
+    io.open.mockImplementation(fsp.open.bind(fsp)); io.remove.mockImplementation(fsp.rm.bind(fsp));
+    let uploaded = Buffer.alloc(0);
+    io.put.mockImplementation(async (handle: import('node:fs/promises').FileHandle) => { uploaded = await handle.readFile(); return { bytesSent: uploaded.length }; });
+    let frozen: Record<string, unknown> = {};
+    const snapshotId = 'q'.repeat(32);
+    const snapshot = () => ({ ...details(snapshotId), ...frozen });
+    io.api.mockImplementation(async (route: string, options: { body: Record<string, unknown> }) => {
+      if (route.endsWith('/check')) return { status: 'upload_required', contentSha256: options.body.contentSha256 };
+      if (route.endsWith('/uploads')) {
+        frozen = { sha256: options.body.sha256, contentSha256: options.body.contentSha256, sizeBytes: options.body.sizeBytes };
+        return { snapshotId, status: 'uploading', putUrl: 'https://object.example.test/upload', headers: { 'Content-Type': 'application/octet-stream', 'x-oss-forbid-overwrite': 'true' }, expiresAt: new Date(Date.now() + 60000).toISOString() };
+      }
+      if (route.endsWith('/commit')) return { snapshotId, status: 'ready', snapshot: snapshot(), expiresAt: new Date(Date.now() + 60000).toISOString() };
+      if (route === '/api/shares') return { schemaVersion: 1, kind: 'local-plugin', snapshot: snapshot(), includeAttribution: false, shareId: snapshotId, url: `https://share.example.test/s/${snapshotId}`, imageSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' };
+      throw new Error('Unexpected route');
+    });
+    const id = installedGhostStoragePart(current);
+    const clicked = { version: raw.version, approvalToken: ghostInstallApprovalToken(current.approval) };
+    expect(await prepareShare(9, id, operation, { includeAttribution: false }, clicked, false)).toEqual({ confirmationRequired: true });
+    expect(await prepareShare(9, id, operation, { includeAttribution: false }, clicked, true)).toHaveProperty('url', `https://share.example.test/s/${snapshotId}`);
+    const frozenZip = await JSZip.loadAsync(uploaded);
+    expect(JSON.parse(await frozenZip.file('ghost.json')!.async('string'))).toEqual(raw);
+    expect(frozenZip.file('ui/page.html')).toBeNull();
+    expect(createHash('sha256').update(uploaded).digest('hex')).toBe(frozen.sha256);
+    const received = path.join(root, 'received.cindy'); await fsp.writeFile(received, uploaded);
+    const recipient = new GhostManager({ ...opts, getRootDir: () => path.join(root, 'recipient') });
+    const result = await recipient.install(received, { manifestSource: 'stored-release' });
+    if ('rejection' in result) throw new Error(result.rejection.reason);
+    expect(result.ghost).toMatchObject({ enabled: true, approval: { state: 'approved' }, manifest: { tools: raw.tools } });
+    expect(pluginHasToolUi(result.ghost.manifest)).toBe(false);
+    expect(result.ghost.uiCapabilityApproved).not.toBe(true);
+    expect(pluginToolVisible(result.ghost.manifest, 'run', 'model')).toBe(true);
+    expect(await fsp.readFile(path.join(result.ghost.dir, 'index.js'), 'utf8')).toBe('// original tool');
+  } finally {
+    await releaseLocalPluginShare(9, operation);
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

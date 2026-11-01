@@ -937,6 +937,23 @@ describe('resumable cross-computer copy', () => {
     await start();
     expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
   });
+  // #7972: real copy entry must name its destination after membership, but copy cwd files.
+  // Existing coverage only exercised legacy worktree inference; unit, isolated host paths.
+  it.each([['products', 'Chosen'], ['app', '.worktrees', 'feature']])(
+    'copies explicit project identity independently of the checkout: %j',
+    async (...segments) => {
+      await moveSource('tmp', 'checkout');
+      const projectDir = path.join(state.root, ...segments);
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(path.join(projectDir, 'draft'), 'project files');
+      state.rows.get('A')!.get('fork')!.projectDir = projectDir;
+      await start();
+      const copied = await copiedDir();
+      expect(copied).toBe(path.join(path.dirname(projectDir), `${path.basename(projectDir)} 2`));
+      expect(state.recentProjects).toEqual([copied]);
+      expect(await fs.readFile(path.join(copied, 'draft'), 'utf8')).toBe('original');
+    },
+  );
   it.each([
     ['parent', ['Code']],
     // E.g. a Windows reserved name such as CON: the parent exists, the folder itself is refused.

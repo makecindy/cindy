@@ -12,6 +12,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from './homeDisplaySettings';
@@ -30,7 +31,7 @@ export interface HomeViewPreferences {
   manualProjectOrder: string[];
   /** 项目 key 带设备与路径,只对保存它的账号身份有效(见 projectFilterOwner)。 */
   projectFilter: HomeProjectFilter;
-  teammateFilter: HomeProjectFilter;
+  teammateFilter: HomeTeammateFilter;
   teammateFilterOwner: string;
   /** 保存项目筛选时的账号身份(homeNavigationOwner);读取时与当前身份不符则视为不筛选。 */
   projectFilterOwner: string;
@@ -53,7 +54,7 @@ export interface HomeViewPreferencePatch {
   manualProjectOrder?: string[];
   /** 写项目筛选必须同时给 owner,否则无法判断它属于哪个账号。 */
   projectFilter?: { owner: string; value: HomeProjectFilter };
-  teammateFilter?: { owner: string; value: HomeProjectFilter };
+  teammateFilter?: { owner: string; value: HomeTeammateFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
   viewMode?: HomeListViewMode;
@@ -122,7 +123,7 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
       delete record[field];
       delete record[`${field}Owner`];
     } else {
-      record[field] = [...filter.value];
+      record[field] = filter.value === 'none' ? 'none' : [...filter.value];
       record[`${field}Owner`] = filter.owner;
     }
   }
@@ -199,7 +200,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectOrder: record.projectOrder === 'custom' ? 'custom' : 'activity',
     manualProjectOrder: readStringList(record.manualProjectOrder),
     projectFilter: normalizeProjectFilter(record.projectFilter),
-    teammateFilter: normalizeProjectFilter(record.teammateFilter),
+    teammateFilter: record.teammateFilter === 'none' ? 'none' : normalizeProjectFilter(record.teammateFilter),
     teammateFilterOwner: readString(record.teammateFilterOwner) ?? '',
     projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),
@@ -256,8 +257,10 @@ export interface LastTeammateIdentity {
 export interface HomeNavigationPreferences {
   /** Preselects the computer when creating another teammate; launch never reopens it. */
   lastTeammate?: LastTeammateIdentity;
-  /** The task home's teammate section: rows (false/absent) or the avatar strip (true). */
+  /** The task home's teammate section: expanded rows or collapsed header. */
   teammatesCollapsed?: boolean;
+  /** Explicit account override; absent defaults to showing the collapsed avatar strip. */
+  showCollapsedTeammateAvatars?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';
 
@@ -270,6 +273,7 @@ export function normalizeHomeNavigationPreferences(value: unknown): HomeNavigati
     typeof last[field] === 'string' && last[field].trim().length > 0 && last[field].length <= 256);
   // The retired tasks/teammates `mode` is dropped here, so the next write clears it.
   return {
+    ...(typeof record.showCollapsedTeammateAvatars === 'boolean' ? { showCollapsedTeammateAvatars: record.showCollapsedTeammateAvatars } : {}),
     ...(typeof record.teammatesCollapsed === 'boolean' ? { teammatesCollapsed: record.teammatesCollapsed } : {}),
     ...(validLast ? { lastTeammate: {
       deviceId: last!.deviceId as string,
@@ -290,7 +294,7 @@ export async function readHomeNavigationPreferences(owner: string): Promise<Home
 
 export function saveHomeNavigationPreferences(
   owner: string,
-  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean },
+  patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean; showCollapsedTeammateAvatars?: boolean },
 ): Promise<void> {
   if (!owner) return Promise.resolve();
   // Share the existing serialized writer; each operation captures its own owner.
@@ -303,7 +307,50 @@ export function saveHomeNavigationPreferences(
   return next;
 }
 
+/** Task-home group disclosure. Keys carry device and path, so the record belongs to one account. */
+export interface HomeCollapsePreferences {
+  pinnedCollapsed?: boolean;
+  sharedCollapsed?: boolean;
+  collapsedProjectKeys?: string[];
+  expandedAutomationGroups?: string[];
+}
+const COLLAPSE_PREFIX = 'cindy.mobile.home.collapse.v1.';
+/** Removed projects never toggle again; keep the most recent choices instead of a GC pass. */
+const COLLAPSE_KEY_LIMIT = 200;
+
+function normalizeHomeCollapsePreferences(value: unknown): HomeCollapsePreferences {
+  const record = readRecord(value);
+  if (!record) return {};
+  const next: HomeCollapsePreferences = {};
+  for (const field of ['pinnedCollapsed', 'sharedCollapsed'] as const) {
+    if (typeof record[field] === 'boolean') next[field] = record[field];
+  }
+  for (const field of ['collapsedProjectKeys', 'expandedAutomationGroups'] as const) {
+    if (Array.isArray(record[field])) next[field] = readStringList(record[field]).slice(-COLLAPSE_KEY_LIMIT);
+  }
+  return next;
+}
+
+export async function readHomeCollapsePreferences(owner: string): Promise<HomeCollapsePreferences> {
+  if (!owner) return {};
+  const raw = await AsyncStorage.getItem(COLLAPSE_PREFIX + encodeURIComponent(owner));
+  if (!raw) return {};
+  try { return normalizeHomeCollapsePreferences(JSON.parse(raw)); } catch { return {}; }
+}
+
+export function saveHomeCollapsePreferences(owner: string, patch: HomeCollapsePreferences): Promise<void> {
+  if (!owner) return Promise.resolve();
+  const next = writeChain.then(async () => {
+    const current = await readHomeCollapsePreferences(owner);
+    const merged = normalizeHomeCollapsePreferences({ ...current, ...patch });
+    await AsyncStorage.setItem(COLLAPSE_PREFIX + encodeURIComponent(owner), JSON.stringify(merged));
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
 export const __testing = {
   storageKey: STORAGE_KEY,
   navigationPrefix: NAVIGATION_PREFIX,
+  collapsePrefix: COLLAPSE_PREFIX,
 };

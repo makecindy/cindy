@@ -1382,7 +1382,9 @@ function AskUserQuestionForm({
       )}
 
       {/* Shown for both layouts: the option-less card has a microphone too. */}
-      {voice.error ? <Text testID="interaction.ask.voiceError">{voice.error}</Text> : null}
+      {voice.error ? <Text testID="interaction.ask.voiceError">{voice.error}</Text>
+        : voice.speakerFiltered ? <Text style={styles.voiceNotice} testID="interaction.ask.voiceNotice">{t('composer.voice.speakerFiltered')}</Text>
+        : null}
 
       <InteractionActions touchLayout={touchLayout}>
         {item.retainedDraft ? (
@@ -2216,6 +2218,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     minHeight: 44,
     paddingHorizontal: spacing.md,
+  },
+  voiceNotice: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   taskCollapseText: {
     color: colors.textSecondary,

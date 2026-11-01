@@ -209,6 +209,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     >
     <div
       ref={overlayRef}
+      data-lightbox-layer
       style={{
         position: 'fixed',
         inset: 0,

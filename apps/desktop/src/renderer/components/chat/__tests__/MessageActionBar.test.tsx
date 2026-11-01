@@ -15,15 +15,26 @@ vi.mock('react-i18next', async () => {
   };
 });
 
-vi.mock('@/components/ui/tooltip', async (importOriginal) => ({
-  // Keep Tip's real ref/event forwarding for the composed menu trigger.
-  ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
-  Tooltip: {
-    Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-    Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-    Content: ({ children }: { children: ReactNode }) => <>{children}</>,
-  },
-}));
+vi.mock('@/components/ui/tooltip', async (importOriginal) => {
+  const { createContext, useContext } = await import('react');
+  // 受控 Root 的 open 传给 Content：open=true 渲染成 role=tooltip，false 不渲染；非受控保持直出。
+  const OpenContext = createContext<boolean | undefined>(undefined);
+  return {
+    // Keep Tip's real ref/event forwarding for the composed menu trigger.
+    ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
+    Tooltip: {
+      Root: ({ children, open }: { children: ReactNode; open?: boolean }) => (
+        <OpenContext.Provider value={open}>{children}</OpenContext.Provider>
+      ),
+      Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+      Content: function Content({ children }: { children: ReactNode }) {
+        const open = useContext(OpenContext);
+        if (open === undefined) return <>{children}</>;
+        return open ? <div role="tooltip">{children}</div> : null;
+      },
+    },
+  };
+});
 
 vi.mock('@/hooks/useRelativeTime', () => ({
   useRelativeTime: () => 'just now',
@@ -99,6 +110,27 @@ describe('MessageActionBar', () => {
       configurable: true,
       value: { writeText },
     });
+  });
+
+  it('keeps companion quote and copy visible and opens a topic from More with a persistent focus target', async () => {
+    const onAddToChat = vi.fn();
+    let opener: Element | null = null;
+    const openTopic = vi.fn(() => { opener = document.activeElement; });
+    render(<MessageActionBar copyText="private reply" align="left" hovered={false}
+      simplifiedBotConversation companionFooter onAddToChat={onAddToChat}
+      replyAction={{ label: 'Open topic', count: 3, onClick: openTopic }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.reply' }));
+    expect(onAddToChat).toHaveBeenCalledOnce();
+    expect(openTopic).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('private reply'));
+    expect(screen.queryByRole('button', { name: 'Open topic' })).toBeNull();
+    const more = screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open topic' }));
+    await waitFor(() => expect(openTopic).toHaveBeenCalledOnce());
+    expect(opener).toBe(more);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('keeps fork beside copy and groups the remaining actions under ellipsis', async () => {
@@ -327,6 +359,53 @@ describe('MessageActionBar', () => {
     });
   });
 
+  it('keeps the fork tooltip and bar visible after hover leaves once the fork is confirmed', async () => {
+    let confirmFork!: () => void;
+    let resolveFork!: () => void;
+    const onFork = vi.fn(async (options?: { onConfirmed?: () => void }) => {
+      await new Promise<void>((resolve) => {
+        confirmFork = resolve;
+      });
+      options?.onConfirmed?.();
+      await new Promise<void>((resolve) => {
+        resolveFork = resolve;
+      });
+    });
+    const bar = (hovered: boolean) => (
+      <MessageActionBar copyText="message body" align="left" hovered={hovered} onFork={onFork} />
+    );
+
+    const { container, rerender } = render(bar(true));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.fork' }));
+    // 确认框打开期间不强制显示提示，否则会压在确认框背后。
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    await act(async () => {
+      confirmFork();
+    });
+    expect(screen.getByRole('tooltip').textContent).toBe('chat.messageActionBar.fork');
+
+    // 鼠标移出整条消息并越过淡出防抖：转圈期间提示与操作栏都不应消失。
+    vi.useFakeTimers();
+    try {
+      rerender(bar(false));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByRole('tooltip')).toBeTruthy();
+      expect((container.firstElementChild as HTMLElement).classList.contains('opacity-100')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await act(async () => {
+      resolveFork();
+    });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect((container.firstElementChild as HTMLElement).classList.contains('opacity-0')).toBe(true);
+  });
+
   it('restores focus to the ellipsis trigger for keyboard users', async () => {
     render(
       <MessageActionBar
@@ -390,6 +469,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&

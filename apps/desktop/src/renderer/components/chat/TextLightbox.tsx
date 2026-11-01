@@ -23,6 +23,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { CHAT_LIGHTBOX_ICON_BUTTON_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { Copy, Download, ExternalLink, Folder, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -125,6 +126,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   const [remoteCopy, setRemoteCopy] = useState<{ cachePath: string; stale: boolean } | null>(null);
   const [fetchProgressText, setFetchProgressText] = useState<string | null>(null);
   const isClosingRef = useRef(false);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<PlaintextEditorHandle>(null);
   const initialLineScrollKeyRef = useRef<string | null>(null);
@@ -189,7 +191,10 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   // F6: Esc key listener
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Escape' && overlayRef.current && !isLightboxCovered(overlayRef.current)) {
+        handleClose();
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -383,6 +388,8 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   const overlay = (
     <div
       data-text-lightbox-overlay
+      data-lightbox-layer
+      ref={overlayRef}
       style={{
         position: 'fixed',
         inset: 0,
@@ -413,6 +420,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card
+        data-text-lightbox-search-host={renderable.kind === 'markdown' ? '' : undefined}
         className={cn(
           'cursor-auto flex flex-col overflow-hidden rounded-xl',
           'border border-[var(--msg-tool-card-border)]',
@@ -639,6 +647,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             // emits flow content with its own margins.
             <div
               ref={bodyScrollRef}
+              data-text-lightbox-search-root
               className={cn(
                 'flex-1 overflow-y-auto overflow-x-hidden',
                 'text-14 leading-[1.6]',

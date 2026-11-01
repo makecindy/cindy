@@ -5,7 +5,7 @@ export default {
   id: 'remote-control',
   order: 2,
   entries: [
-    { id: 'remoteControl.relay', isVisible: ({ mode }) => mode === 'cloud', tab: 'remote-control', targetId: 'settings-search-target-remote-relay', titleKey: 'settings.remoteControl.sections.relay', sectionKey: 'settings.sections.remoteControl', aliases: ['relay', 'self-hosted relay', '中转', '自建中转'] },
+    { id: 'remoteControl.relay', isVisible: ({ mode }) => mode === 'cloud', tab: 'remote-control', targetId: 'settings-search-target-remote-relay', titleKey: 'settings.remoteControl.relay.route.title', sectionKey: 'settings.sections.remoteControl', aliases: ['relay', 'self-hosted relay', 'connection route', '中转', '自建中转', '中转服务', '连接线路'] },
     { id: 'remoteControl.devices', isVisible: ({ mode }) => mode === 'cloud', tab: 'remote-control', targetId: 'settings-search-target-remote-devices', titleKey: 'settings.remoteControl.sections.myDevices', sectionKey: 'settings.sections.remoteControl', aliases: ['device link', 'devices', '设备互联', '我的设备'] },
     { id: 'remoteControl.ssh', tab: 'remote-control', targetId: 'settings-search-target-remote-ssh', titleKey: 'settings.remoteControl.sections.ssh', sectionKey: 'settings.sections.remoteControl', aliases: ['SSH', 'SSH host', 'SSH hosts', 'SSH主机', 'remote host', '远程主机', '主机'] },
     { id: 'remoteControl', tab: 'remote-control', targetId: 'settings-panel-remote-control', titleKey: 'settings.tabs.remoteControl', sectionKey: 'settings.sections.remoteControl' },

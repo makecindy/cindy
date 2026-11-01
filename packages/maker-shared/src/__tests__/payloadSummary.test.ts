@@ -395,6 +395,18 @@ describe('payloadSummary', () => {
       previewText: '内联图片数据 · PNG · 2 B',
     });
 
+    // 约 1 MiB 的内联图片:档位要按取整后的展示值选,不能留在 KB 档显示 "1024 KB"。
+    // 1048575 字节的 base64 载荷,按解码后的字节数计(无 padding)。
+    const nearMibB64 = 'A'.repeat(1398100);
+    expect(summarizeMessagePayloadBody(buildAttachmentPayload({
+      kind: 'image',
+      name: 'big.png',
+      previewable: true,
+      uri: `data:image/png;base64,${nearMibB64}`,
+    }))).toMatchObject({
+      bodyText: '内联图片数据 · PNG · 1.0 MB',
+    });
+
     expect(buildAttachmentPayload({
       kind: 'file',
       name: 'spec.md',

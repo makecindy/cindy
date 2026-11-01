@@ -11,6 +11,7 @@
     "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，重新登录后可再次加入。",
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
+    "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致",
     "currentlyOnline": "当前在线",
     "availableSection": "在线设备",
     "offlineSection": "离线设备",
@@ -403,6 +404,7 @@
         "30d": "30 天",
         "all": "全部"
       },
+      "showCollapsedTeammateAvatars": "收起时显示头像",
       "displayHeading": "显示",
       "view": {
         "text": "文字",
@@ -419,7 +421,8 @@
       "summarySeparator": "、",
       "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
       "filterTeammatesHeading": "伙伴",
-      "filterAnySource": "不限来源",
+      "filterAnySource": "全部",
+      "filterHideAllTeammates": "都不显示",
       "filterSelectedTeammates": "已选 {{count}} 位"
     },
     "search": {
@@ -693,7 +696,14 @@
     "createMenu": "新建",
     "awaiting": "等你确认",
     "taskResult": "任务结果",
-    "collapseResult": "收起结果"
+    "collapseResult": "收起结果",
+    "avatarStatus": {
+      "awaiting": "待你确认",
+      "error": "需要关注",
+      "running": "正在工作",
+      "done": "已完成",
+      "unread": "未读"
+    }
   },
   "companionProfile": {
     "avatar": "头像",
@@ -921,5 +931,62 @@
     "homeOutdated": "主力电脑「{{device}}」上的 Cindy 版本较旧，请先更新它，或在那台电脑上更换",
     "homeUnreachable": "现在连不上「{{device}}」，它需要在线并开启「允许同账号设备控制本机」",
     "sendUnreachable": "消息还没送到主力电脑「{{device}}」，它可能已离线。可以换一台电脑继续。"
+  },
+  "sessionImport": {
+    "entry": "从其他工具导入",
+    "title": "从其他工具导入",
+    "found_one": "在 {{device}} 上找到 {{count}} 个任务",
+    "found_other": "在 {{device}} 上找到 {{count}} 个任务",
+    "search": "搜索任务或文件夹",
+    "scanning": "正在查找电脑上的任务…",
+    "loadFailed": "没能读取电脑上的任务，请重试",
+    "retry": "重试",
+    "rescan": "重新扫描",
+    "emptyTitle": "电脑上没有找到可以导入的任务",
+    "emptyDescription": "Cindy 可以导入以下工具里的任务。用过这些工具后，回来重新扫描即可。",
+    "noMatch": "没有符合条件的任务",
+    "dialogue": "对话",
+    "folderMissing": "原文件夹已不存在",
+    "groupTasks_one": "{{count}} 个任务",
+    "groupTasks_other": "{{count}} 个任务",
+    "archived": "已归档",
+    "unsupported": "格式暂不支持",
+    "selected_one": "已选 {{count}} 个任务 · {{size}}",
+    "selected_other": "已选 {{count}} 个任务 · {{size}}",
+    "confirmBody_one": "将导入 {{count}} 个任务，最多占用 {{size}} 磁盘空间。导入在电脑后台进行，可以随时停止。再点一次开始。",
+    "confirmBody_other": "将导入 {{count}} 个任务，最多占用 {{size}} 磁盘空间。导入在电脑后台进行，可以随时停止。再点一次开始。",
+    "importCount_one": "导入 {{count}} 个任务",
+    "importCount_other": "导入 {{count}} 个任务",
+    "import": "导入",
+    "progressTitle_one": "正在导入 {{count}} 个任务",
+    "progressTitle_other": "正在导入 {{count}} 个任务",
+    "background": "可以关掉这个面板，导入会在电脑上继续。",
+    "stop": "停止",
+    "done": "完成",
+    "queued": "等待中",
+    "copy": "正在复制原始记录",
+    "messages_one": "正在写入 {{count}} 条消息",
+    "messages_other": "正在写入 {{count}} 条消息",
+    "verify": "正在确认能接着做",
+    "resultTitle_one": "已导入 {{count}} 个任务",
+    "resultTitle_other": "已导入 {{count}} 个任务",
+    "sumReady_one": "{{count}} 个可以继续",
+    "sumReady_other": "{{count}} 个可以继续",
+    "sumAction_one": "{{count}} 个需要你处理",
+    "sumAction_other": "{{count}} 个需要你处理",
+    "sumFailed_one": "{{count}} 个没导入成功",
+    "sumFailed_other": "{{count}} 个没导入成功",
+    "readyNative": "可以继续，用 {{harness}} 原样接着做",
+    "readyHandoff": "可以继续，由 {{harness}} 接着做，可随时换",
+    "missingDir": "原文件夹已不存在，请在电脑上选一个文件夹继续",
+    "cancelled": "已停止，没有导入",
+    "failure": {
+      "read-failed": "没导入成功：原记录文件读不出来",
+      "unsupported-version": "没导入成功：这个版本的记录格式暂不支持",
+      "empty": "没导入成功：原记录里没有消息",
+      "not-found": "没导入成功：原记录已经不在了",
+      "disk-full": "没导入成功：磁盘空间不足",
+      "native-unloadable": "没导入成功：原记录无法加载"
+    }
   }
 }

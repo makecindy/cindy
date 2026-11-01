@@ -162,6 +162,7 @@
     "mediaErrorLine": "错误：{{message}}",
     "mediaDeviceLinkHint": "打开前，手机会先请远程设备上传这个媒体。",
     "controlDelete": "删除消息",
+    "controlEdit": "编辑",
     "controlRewind": "回到此处",
     "controlFork": "从这里开启新任务",
     "markdownDocAriaLabel": "消息正文",
@@ -261,6 +262,14 @@
     "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 为这个任务选了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用 {{model}}",
+        "failed": "{{plugin}} 没有及时回应，这个任务用 {{model}}",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文并继续",
       "labelTimeout": "上一轮没有响应，已整理后继续",
@@ -420,8 +429,26 @@
     "sent": "已提交",
     "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
+    "downloadVideo": "下载视频",
     "openVideoSource": "打开原视频",
     "calculationUnavailable": "此项暂时无法计算。",
     "incomplete": "部分内容未能显示。"
+  },
+  "usageCost": {
+    "title": "费用明细",
+    "conversation": "对话",
+    "additional": "附加费用",
+    "unknownModel": "未记录模型",
+    "estimate": "估算价值",
+    "charged": "按量费用",
+    "loading": "正在读取明细…",
+    "unavailable": "这条记录暂无明细。",
+    "explanation": "按模型和渠道汇总。订阅价值是估算，不是额外扣费。仅包含已记录的费用，历史记录的明细可能不完整。",
+    "source": {
+      "subscription": "订阅账户",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 供应商",
+      "unknown": "未记录渠道"
+    }
   }
 }

@@ -55,8 +55,11 @@ export function Magnifier({
     const canvas = canvasRef.current;
     if (!canvas || !frame) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(VIEW * dpr);
-    canvas.height = Math.round(VIEW * dpr);
+    const pixels = Math.round(VIEW * dpr);
+    // Assigning even an unchanged size resets the backing store and context.
+    // Pointer movement only needs a repaint; resize when the density changes.
+    if (canvas.width !== pixels) canvas.width = pixels;
+    if (canvas.height !== pixels) canvas.height = pixels;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

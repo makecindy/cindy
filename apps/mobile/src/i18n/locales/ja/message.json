@@ -162,6 +162,7 @@
     "mediaErrorLine": "エラー: {{message}}",
     "mediaDeviceLinkHint": "開く前に、スマートフォンからリモートデバイスにこのメディアのアップロードを依頼します。",
     "controlDelete": "メッセージを削除",
+    "controlEdit": "編集",
     "controlRewind": "ここまで戻る",
     "controlFork": "ここから新しいセッションを始める",
     "markdownDocAriaLabel": "メッセージ本文",
@@ -261,6 +262,14 @@
     "waitingMessage": "送信待ちのメッセージ:{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} がこのタスクに {{model}} を選びました",
+      "kept": {
+        "no-opinion": "{{plugin}} は今回モデルを変えませんでした。このタスクは {{model}} を使います",
+        "failed": "{{plugin}} から時間内に応答がなかったため、このタスクは {{model}} を使います",
+        "unavailable-route": "{{plugin}} が選んだモデルは使えないため、このタスクは {{model}} を使います"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "コンテキストを整理して続行しました",
       "labelTimeout": "直前の応答がなかったため、整理して続行しました",
@@ -420,8 +429,26 @@
     "sent": "送信済み",
     "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
+    "downloadVideo": "動画をダウンロード",
     "openVideoSource": "元の動画を開く",
     "calculationUnavailable": "この値を計算できません。",
     "incomplete": "一部の内容を表示できませんでした。"
+  },
+  "usageCost": {
+    "title": "費用の内訳",
+    "conversation": "チャット",
+    "additional": "追加費用",
+    "unknownModel": "モデル未記録",
+    "estimate": "推定価値",
+    "charged": "従量料金",
+    "loading": "内訳を読み込み中…",
+    "unavailable": "この記録の内訳は取得できません。",
+    "explanation": "モデルと経路別に集計します。サブスクリプションの価値は推定であり、追加請求ではありません。記録済みの費用のみを含み、過去の内訳は不完全な場合があります。",
+    "source": {
+      "subscription": "サブスクリプション",
+      "cindy-ai": "Cindy AI",
+      "provider": "API プロバイダー",
+      "unknown": "経路未記録"
+    }
   }
 }

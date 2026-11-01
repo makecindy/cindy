@@ -632,7 +632,8 @@ export interface MobileMakerTransport {
   ): Promise<unknown>;
   getSessionEstimatedValue(
     sessionId: string,
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+    options?: { includeBreakdown?: boolean; clientId?: string },
+  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -765,7 +766,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -1356,8 +1358,8 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) =>
-      call("local-db:messages:estimatedSessionValue", [sessionId]),
+    getSessionEstimatedValue: (sessionId, options) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId, ...(options ? [options] : [])]),
     getCodexRateLimits: async (providerId) => {
       const result = await call<MobileCodexRateLimitsResult>(
         "maker:usage:codex-rate-limits",

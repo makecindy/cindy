@@ -206,7 +206,7 @@ export function GhostInstallConsentHost() {
             // 账号已切换的旧请求不渲染任何插件事实，直接按取消回给 Main。
             if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
             const { facts } = request;
-            const capabilityOnly = request.purpose === 'task-capability';
+            const capabilityOnly = request.purpose === 'task-capability' || request.purpose === 'ui-capability';
             const replacement = request.purpose === 'share-replace' && facts.kind === 'update';
             const source = ghostInstallConsentSourceLabel(t, request);
             confirmed = await confirm(
@@ -228,6 +228,8 @@ export function GhostInstallConsentHost() {
                         source,
                       }),
                 content: <>
+                  {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+                    <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}

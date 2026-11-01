@@ -166,6 +166,14 @@ Windows 真实 Chrome＋原生 helper＋生产浮层的黑盒回归入口为
 记录 Light／Dark 连续移动时的 DOM 提交与绘制帧，并延后真实元素响应验证过程中无整窗闪回及跨边界切换；
 只适配测试传输，不替代生产 IPC 授权用例或 macOS 实机验证。
 
+macOS helper 在读取首条请求前初始化 `NSApplication`，使用 `.prohibited` 激活策略保持
+后台进程；否则 AppKit 窗口命中可能始终返回 0。不得为初始化激活应用、显示 Dock 图标或
+启动阻塞 stdin 协议的应用事件循环。原生回归入口为
+`node apps/desktop/scripts/check-macos-region-snapping.mjs`（需要 macOS 图形桌面与辅助功能权限），
+实际编译生产 helper 并查询独立 AppKit 测试窗口，覆盖冷启动、焦点／鼠标保持、内容区、
+截图浮层排除和真实遮挡；`--helper=<binary>` 可对旧二进制运行同一用例。
+透明像素使用独立 AppKit 应用的实际命中作参照，不假定每个系统都把视觉透明区域视为鼠标穿透。
+
 滚动截图与区域录制复用该浮层和会话 token，开始后把控制区移到选区之外。
 滚动截图在原透明浮层显示选区轮廓与侧边预览，只在预览和自动滚动按钮处接收鼠标。
 长图编辑交给独立无标题栏窗口，复用辅助窗口 controller，原浮层结束；首份图片绘制后才显示。
@@ -188,8 +196,21 @@ main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向�
 不授予 Renderer 通用屏幕媒体流，不扩大 device-link 的远程 IPC 白名单。
 Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
 macOS 复用本地 ScreenCaptureKit helper，main 裁剪后才跨 IPC。没有录制临时文件或音频采集。
+本地区域 GIF／视频录制通过同包 helper 的 `cursor-overlay-demand` 模式按请求编码：
+系统仍按原来的 30fps 配置提供画面，仅保留最新一张尚未编码的 IOSurface，使用 CF retain 与
+IOSurface use count 阻止缓冲复用；替换、编码完成、空白画面和销毁均释放它。无请求时不做 JPEG
+编码，静止画面可复用已编码结果；请求早于首帧时等第一张有效画面。分辨率、JPEG 参数和大小预算
+降级规则不变，仍先压缩整屏再由 main 裁选区。远程桌面与单窗口拍照沿用原 `cursor-overlay`
+即时编码方式；不新增远端字段、权限、allowlist 或 relay 行为。单次取帧会增加编码等待，验收需
+同时检查 CPU、取帧速率和暂停恢复，不能只报编码次数。原生对照与实机入口分别为
+`benchmark-macos-demand-capture.mjs`、`benchmark-macos-live-capture.mjs`（位于 Desktop scripts）。
 暂停停止采样，关闭、显示器变化或 Renderer 故障结束会话；异步迟到帧丢弃。
 视频与 GIF 在内存中编码；保存通过原生保存框选择导出路径，取消保存保留本次结果供重试。
+GIF 的量化与压缩在 Renderer 专属 Web Worker 中完成，仅接收已裁剪像素，不获得 Node 或
+屏幕访问权限。每次等待上一帧完成再采样，暂停与停止按序处理；取消、异常和超时均终止 Worker。
+GIF 只在 rgb444 每个分组的计数与 RGB 总和全部相同时复用量化结果，索引映射和压缩仍逐帧执行，
+不得用近似调色板或降低颜色数替代。大幅不透明 PNG 保存可用已有 libvips 线程池无损编码；
+透明图、JPEG 与编码器不可用时保持原生路径，仍先经用户的保存框选址，不新增临时媒体文件。
 复制通过媒体总仓保留文件，并写入原生文件剪贴板。
 
 `webviewTag` 默认关闭；受控例外目前只有两类——主界面与右侧栏子窗口（内置浏览器需要；

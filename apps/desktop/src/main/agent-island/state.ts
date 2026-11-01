@@ -15,6 +15,7 @@ import {
 } from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
@@ -111,6 +112,7 @@ interface AgentIslandSessionMeta {
   sessionId: string;
   agentKind?: string;
   workingDir?: string | null;
+  projectDir?: string | null;
   title?: string | null;
   workspaceKind?: string | null;
   /** undefined = not resolved yet; null = not a companion's Session. */
@@ -797,10 +799,12 @@ export function applyAgentIslandEvent(
     session.running = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
-    // Codex ask_user / plan_review can outlive a successful turn. Permission
-    // cards belong to the dead turn and must not keep the island waiting.
+    // Codex ask_user / plan_review can outlive a successful turn, and an input
+    // handoff never blocks it (the agent usually ends the turn right after
+    // asking). Permission cards belong to the dead turn and must not keep the
+    // island waiting.
     for (const [requestId, kind] of [...session.pendingInteractionKinds.entries()]) {
-      if (kind === 'ask_user_question' || kind === 'plan_review') continue;
+      if (kind === 'ask_user_question' || kind === 'plan_review' || kind === 'input_handoff') continue;
       dismissPendingInteraction(state, session, requestId, now, {
         requirePending: true,
         pruneIfIdle: false,
@@ -1244,7 +1248,7 @@ function applyDeviceSessionMeta(
   // A companion's home folder on that computer is not a project; its group is the context.
   const project = companion
     ? companion.groupName ?? null
-    : projectNameFromWorkingDir(input.workingDir, input.workspaceKind);
+    : projectNameForSession(input);
   const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
   const agentKind = dbToMakerAgentKind(input.agentKind);
   const changed = session.title !== input.title
@@ -2706,7 +2710,7 @@ function createSession(meta: AgentIslandSessionMeta, now: number): AgentIslandSe
     sessionId: meta.sessionId,
     title: meta.title?.trim() || null,
     companion: null,
-    projectName: projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind),
+    projectName: projectNameForSession(meta),
     detail: '',
     detailSource: null,
     reconnectStatus: null,
@@ -2811,8 +2815,8 @@ function applyMeta(session: AgentIslandSessionState, meta: AgentIslandSessionMet
   if (session.companion) {
     // A companion's working directory is its private home, not a project the user chose.
     session.projectName = session.companion.groupName ?? null;
-  } else if (meta.workingDir !== undefined || meta.workspaceKind !== undefined) {
-    session.projectName = projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind);
+  } else if (meta.workingDir !== undefined || meta.projectDir !== undefined || meta.workspaceKind !== undefined) {
+    session.projectName = projectNameForSession(meta);
   }
 }
 
@@ -3234,9 +3238,9 @@ function truncateInlineText(text: string, maxLength: number): string {
   return `${chars.slice(0, Math.max(0, maxLength - 3)).join('')}...`;
 }
 
-function projectNameFromWorkingDir(workingDir: string | null | undefined, workspaceKind?: string | null): string | null {
-  if (workspaceKind === 'dialogue') return null;
-  const trimmed = workingDir?.trim();
+function projectNameForSession(meta: Pick<AgentIslandSessionMeta, 'workingDir' | 'projectDir' | 'workspaceKind'>): string | null {
+  if (meta.workspaceKind === 'dialogue') return null;
+  const trimmed = sessionProjectDirectory(meta)?.trim();
   if (!trimmed) return null;
   const normalized = stripTrailingPathSeparators(trimmed);
   const parts = normalized.split(/[\\/]/).filter(Boolean);

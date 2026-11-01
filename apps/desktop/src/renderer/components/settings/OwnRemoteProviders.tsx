@@ -122,7 +122,7 @@ function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: 
   return (
     <RemoteSourceMark markSize={size}>
       {hasProviderLogo(provider.id, provider.routing) ? (
-        <ProviderLogoMark providerId={provider.id} routing={provider.routing} size={size} />
+        <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={size} />
       ) : (
         <span className="text-15 font-medium leading-none">{providerMonogram(provider.name)}</span>
       )}

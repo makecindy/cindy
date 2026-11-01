@@ -59,6 +59,28 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
+// Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
+// including endpoint overrides and explicit user headers (not just a helper).
+it('attributes native Pi per model endpoint without lending identity to another service', () => {
+  const cfg: Cfg = { id: 'router', name: 'Router', runtimes: { pi: {
+    baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'router-model' }, { id: 'other-model', route: {
+      baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat',
+    } }],
+  } } };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  expect(result.providers[0].headers).toBeUndefined();
+  expect(result.providers[0].models[0].headers).toMatchObject({
+    'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+  });
+  expect(result.providers[0].models[1].headers).toBeUndefined();
+  cfg.runtimes.pi!.headers = { 'http-referer': 'https://custom.example', 'x-title': 'Custom app' };
+  const custom = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  const headers = custom.providers[0].models[0].headers!;
+  expect(headers['X-OpenRouter-Title']).toBeUndefined();
+  expect(custom.env[headers['x-title'].slice(1)]).toBe('Custom app');
+});
+
 it('never projects retired independent Claude accounts into Pi', () => {
   const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
   const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
@@ -276,6 +298,12 @@ describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
         compat: {
           requiresReasoningContentOnAssistantMessages: true,
           sendSessionAffinityHeaders: true,
+          // The loopback Gateway URL defeats Pi's deepseek.com detection. Without the exact
+          // DeepSeek row, V4.1 Flash sent `developer`, `max_completion_tokens` and no
+          // `thinking` toggle, so "thinking off" stayed on.
+          thinkingFormat: 'deepseek',
+          supportsDeveloperRole: false,
+          maxTokensField: 'max_tokens',
         },
       });
     }
@@ -2845,7 +2873,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       compat: id === 'deepseek-v4-pro' ? {
         supportsDeveloperRole: false, supportsStore: false,
         maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
-        thinkingFormat: 'deepseek',
+        thinkingFormat: 'deepseek', supportsStrictMode: true, supportsMidConvoSystemMessages: true,
       } : { supportsDeveloperRole: false },
     });
   });
@@ -2943,6 +2971,25 @@ describe('server metadata reaches every native Pi transport', () => {
 });
 
 
+it.each([true, false, undefined])('preserves configured image input %s against a same-id built-in catalog', (supportsImageInput) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai',
+    models: [{ id: 'same-model', supportsImageInput }],
+  }) } };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [{ ...BUNDLED_CATALOG.providers[0]!,
+    id: 'xai', models: { pi: [{ id: 'same-model', name: 'Builtin', contextWindow: 123456,
+      efforts: [], defaultEffort: null, supportsImageInput: supportsImageInput === undefined ? true : !supportsImageInput,
+    }] } }] };
+  const launch = () => buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog)
+    .providers[0]!.models[0]!;
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text'] : ['text', 'image']);
+  // The custom runtime identity owns the fully resolved local override layer.
+  catalog.providers.push({ ...catalog.providers[0]!, id: 'custom:xai', source: 'user', models: { pi: [{
+    ...catalog.providers[0]!.models.pi![0]!, supportsImageInput: supportsImageInput === false,
+  }] } });
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text', 'image'] : ['text']);
+});
+
 it('uses the resolved BYOM catalog without borrowing its route or credentials', () => {
   const cfg: Cfg = { id: 'my-api', name: 'My API', auth: { method: 'apiKey' },
     runtimes: { pi: piRuntime({ baseUrl: 'https://user.example/v1', models: [{ id: 'same-model' }] }) } };
@@ -2957,6 +3004,42 @@ it('uses the resolved BYOM catalog without borrowing its route or credentials', 
       reasoning: true, input: ['text', 'image'], cost: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 } })] });
   expect(result.providers[0]!.models[0]!.baseUrl).toBeUndefined();
   expect(result.env[result.providers[0]!.apiKeyEnvVar!]).toBe('fixture-key');
+});
+
+it.each(['field', 'model'] as const)('inherits a text-only default when the user projection lacks the %s', (missing) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai', models: [{ id: 'same-model' }],
+  }) } };
+  const model = { id: 'same-model', name: 'Builtin', contextWindow: 123456,
+    efforts: [], defaultEffort: null };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'xai',
+      models: { pi: [{ ...model, supportsImageInput: false }] } },
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'custom:xai', source: 'user',
+      models: { pi: missing === 'model' ? [] : [model] } },
+  ] };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog);
+  expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
+});
+
+it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
+  const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
+    baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'same-model', name: 'My model', supportsImageInput: !supportsImageInput }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const parsed = sanitizeModelCatalogOverrides({ patches: {
+    'custom%3Axai:same-model': { perAgent: { pi: { supportsImageInput } } },
+  } });
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0]?.models[0]?.input).toEqual(supportsImageInput ? ['text', 'image'] : ['text']);
+  } finally {
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    setCustomProviders([]);
+  }
 });
 
 // Check the actual Pi launch descriptor, not just the settings/catalog projection.

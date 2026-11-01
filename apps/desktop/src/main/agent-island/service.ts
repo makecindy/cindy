@@ -50,7 +50,6 @@ import {
   DEFAULT_AGENT_ISLAND_MASCOT_SKIN,
   cloneAgentIslandDisplayTarget,
   cloneAgentIslandSoundSettings,
-  computeAgentIslandContentHeight,
   createDefaultAgentIslandDisplayConfig,
   createEmptyAgentIslandPillSnapshot,
   getAgentIslandDefaultContentWidth,
@@ -197,12 +196,14 @@ interface AgentIslandSessionMeta {
   sessionId: string;
   agentKind?: string;
   workingDir?: string | null;
+  projectDir?: string | null;
   workspaceKind?: string | null;
 }
 
 interface AgentIslandCachedMetadata {
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** undefined until the Session row has been read; null for non-companion Sessions. */
   companion?: AgentIslandCompanionIdentity | null;
@@ -1574,7 +1575,7 @@ export class AgentIslandService {
 
   handleSessionMetadataPatch(
     sessionId: string,
-    patch: { title?: string | null; workingDir?: string | null; workspaceKind?: string | null },
+    patch: { title?: string | null; workingDir?: string | null; projectDir?: string | null; workspaceKind?: string | null },
   ): void {
     const current: AgentIslandCachedMetadata = this.metadataCache.get(sessionId) ?? {
       title: null,
@@ -1585,6 +1586,7 @@ export class AgentIslandService {
       ...current,
       title: patch.title !== undefined ? patch.title : current.title,
       workingDir: patch.workingDir !== undefined ? patch.workingDir : current.workingDir,
+      projectDir: patch.projectDir !== undefined ? patch.projectDir : current.projectDir,
       workspaceKind: patch.workspaceKind !== undefined ? patch.workspaceKind : current.workspaceKind,
     };
     this.commitMetadata(sessionId, next);
@@ -1688,6 +1690,8 @@ export class AgentIslandService {
       // 原始标题:投影只在 publish 构建 payload 时做(见 commitMetadata 的说明)。
       title: cached?.title ?? null,
       workingDir: cached?.workingDir ?? meta.workingDir,
+      // A persisted clear must win over stale event metadata as well.
+      projectDir: cached?.projectDir !== undefined ? cached.projectDir : meta.projectDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
       ...(cached?.companion !== undefined ? { companion: cached.companion?.companion ?? null } : {}),
     };
@@ -1769,6 +1773,7 @@ export class AgentIslandService {
         this.commitMetadata(sessionId, {
           title: row?.title ?? null,
           workingDir: row?.workingDir ?? null,
+          projectDir: row?.projectDir ?? null,
           workspaceKind: row?.workspaceKind ?? null,
           companion,
         });
@@ -2415,27 +2420,53 @@ export class AgentIslandService {
   }
 
   private computeNativeFrame(displayState: AgentIslandDisplayState, display: Display): AgentIslandNativeFrame {
-    const rawScreenMetrics = this.getScreenLayoutMetrics(display);
     const layoutPreference = this.getLayoutPreferenceForDisplay(display);
     const expanded = displayState.notchStatus === 'expanded';
     const hasSession = displayState.totalCount > 0;
+    const contentWidthFor = (mode: { expanded: boolean; hasSession: boolean }) => this.computeNativeContentWidth({
+      displayState,
+      display,
+      layoutPreference,
+      ...mode,
+    });
+    const contentWidth = contentWidthFor({ expanded, hasSession });
+    // The carrier keeps one size for both modes: macOS animates every window resize
+    // while Mission Control is open, which made expanding and collapsing jump. The
+    // expanded width assumes a session so the first task does not resize it either.
+    const carrierContentWidth = Math.max(
+      expanded ? contentWidthFor({ expanded: false, hasSession }) : contentWidth,
+      contentWidthFor({ expanded: true, hasSession: true }),
+    );
+    return {
+      ...computeAgentIslandWindowBounds(display, {
+        expanded: true,
+        centerXRatio: layoutPreference.centerXRatio,
+        contentWidth: carrierContentWidth,
+        minimumContentWidth: carrierContentWidth,
+      }),
+      displayId: display.id,
+      displayBounds: display.bounds,
+      contentWidth,
+    };
+  }
+
+  private computeNativeContentWidth(input: {
+    displayState: AgentIslandDisplayState;
+    display: Display;
+    layoutPreference: AgentIslandLayoutPreference;
+    expanded: boolean;
+    hasSession: boolean;
+  }): number {
+    const { displayState, display, layoutPreference, expanded, hasSession } = input;
     const screenMetrics = this.getEffectiveScreenLayoutMetrics({
       display,
       expanded,
       layoutPreference,
-      screenMetrics: rawScreenMetrics,
-    });
-    const contentHeight = computeAgentIslandContentHeight({
-      mode: displayState.mode,
-      displaySurface: displayState.displaySurface,
-      hasSession,
-      totalCount: displayState.totalCount,
-      measuredContentHeight: displayState.measuredContentHeight,
+      screenMetrics: this.getScreenLayoutMetrics(display),
     });
     const rawPreferredContentWidth = expanded
       ? layoutPreference.expandedContentWidth
       : layoutPreference.compactContentWidth;
-    const expandedPreferredContentWidth = layoutPreference.expandedContentWidth;
     const defaultContentWidth = getAgentIslandDefaultContentWidth({
       expanded,
       hasSession,
@@ -2460,39 +2491,14 @@ export class AgentIslandService {
         pillSnapshot: displayState.pillSnapshot,
       })
       : null;
-    const contentWidth = preferredContentWidth !== null
-      ? preferredContentWidth
-      : defaultContentWidth;
-    const expandedClampContentWidth = typeof expandedPreferredContentWidth === 'number'
-      ? expandedPreferredContentWidth
-      : getAgentIslandDefaultContentWidth({
-        expanded: true,
-        hasSession,
-        displayWidth: display.bounds.width,
-        screenMetrics,
-      });
-    const carrierSize = computeAgentIslandCarrierSize(
+    return computeAgentIslandCarrierSize(
       display,
       expanded,
-      contentHeight,
-      contentWidth,
+      undefined,
+      preferredContentWidth ?? defaultContentWidth,
       defaultContentWidth,
       minimumContentWidth,
-    );
-    return {
-      ...computeAgentIslandWindowBounds(display, {
-        expanded,
-        contentHeight,
-        centerXRatio: layoutPreference.centerXRatio,
-        contentWidth,
-        defaultContentWidth,
-        minimumContentWidth,
-        expandedClampContentWidth,
-      }),
-      displayId: display.id,
-      displayBounds: display.bounds,
-      contentWidth: carrierSize.contentWidth,
-    };
+    ).contentWidth;
   }
 
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {

@@ -24,6 +24,7 @@ import { preparePackagedNodePty } from './forge-node-pty';
 import { prunePackagedRuntime, prunePackagedMigrationSnapshots } from './forge-prune-runtime';
 import { copyRuntimeDependencyTrees as copyRuntimeTrees } from './forge-runtime-deps';
 import { packagedResourcesPath, stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { stageMacPermissionLocales } from './forge-mac-locales';
 import {
   swiftTargetTriple,
   swiftTargetTriplesForForgeArch,
@@ -1983,6 +1984,9 @@ const config: ForgeConfig = {
       (buildPath, _electronVersion, platform, _arch, callback) => {
         try {
           prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          if (platform === 'darwin' || platform === 'mas') {
+            stageMacPermissionLocales(packagedResourcesPath(buildPath, platform));
+          }
           callback();
         } catch (err) {
           callback(err as Error);
@@ -2135,6 +2139,11 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.contacts-sync-codec-worker.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/performance-trace/traceRedactionWorker.ts',
           config: 'vite.contacts-sync-codec-worker.config.ts',
           target: 'preload',
         },

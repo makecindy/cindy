@@ -353,6 +353,14 @@ describe('mobile:sim simulator choice', () => {
 });
 
 describe('mobile:sim:whoami bundle identity', () => {
+  // 2026-10-29: identity checks stalled for minutes with no actionable phase.
+  // Unit: a timed-out Expo config must remain an explicit error, never a guessed bundle ID.
+  it('reports the bounded Expo config timeout without leaking child output', () => {
+    const execFile = vi.fn(() => { throw Object.assign(new Error('private output'), { code: 'ETIMEDOUT', stderr: 'private output' }); });
+    expect(() => resolveMobileSimulatorBundleId('global', { execFile })).toThrow(/Expo config.*超时/);
+    expect(execFile).toHaveBeenCalledWith('pnpm', expect.any(Array), expect.objectContaining({ timeout: 30_000, killSignal: 'SIGKILL' }));
+  });
+
   it.each([
     ['cn', 'com.local.cindycn'],
     ['global', 'com.local.cindy'],

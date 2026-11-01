@@ -1,3 +1,16 @@
+export const REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON = 'remote-compact-encrypted-content';
+
+/**
+ * Raw failures require explicit ciphertext evidence. For persisted UI errors,
+ * the old overflow reason plus the exact bare wrapper recovers details that an
+ * older translator discarded. Concrete error details must keep their meaning.
+ */
+export function isRemoteCompactEncryptedContentError(message: string, reason?: unknown): boolean {
+  if (reason === REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON || /\bCINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE\b/.test(message)) return true;
+  return (/remote compact/i.test(message) && /invalid_encrypted_content/i.test(message))
+    || (reason === 'context-overflow' && /^Error running remote compact task$/i.test(message.trim()));
+}
+
 /**
  * Remove credentials and credential-like values from user-visible or persisted
  * error text while keeping the surrounding diagnostic context.
@@ -36,6 +49,34 @@ export function redactSensitiveText(input: string): string {
   // (`]` is in the excluded set) and grows the placeholder to `[REDACTED]]`.
   output = output.replace(/\baigw:(?!\[REDACTED\])[^\s"'`,;)\]}]+/gi, 'aigw:[REDACTED]');
   return output;
+}
+
+/**
+ * Recursively apply `redactSensitiveText` to every string leaf of an unknown
+ * structure, preserving keys and shape.
+ *
+ * Why this exists: error rows are persisted as `{ message, reason?, sdkError?,
+ * toolLoop?, providerId? }` but only `message` / `sdkError` pass through
+ * `redactSensitiveText` on the write path — `reason` is stored verbatim. Any
+ * exit that hands error rows to another process or device must therefore
+ * redact on the way out, otherwise raw operator-visible strings can leave the
+ * controlled device.
+ *
+ * Non-string leaves (number / boolean / null / undefined) are returned as-is;
+ * the intent is masking, not coercion. Input is expected to come from
+ * JSON.parse, so reference cycles are not handled.
+ */
+export function redactSensitiveTextDeep(input: unknown): unknown {
+  if (typeof input === 'string') return redactSensitiveText(input);
+  if (Array.isArray(input)) return input.map((item) => redactSensitiveTextDeep(item));
+  if (input && typeof input === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+      output[key] = redactSensitiveTextDeep(value);
+    }
+    return output;
+  }
+  return input;
 }
 
 export interface NonSecretErrorSignals {
