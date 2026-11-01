@@ -11329,7 +11329,8 @@
         "noProjects": "先在「關聯專案」裡關聯一個專案，才能綁定訪客。",
         "loadFailed": "訪客讀取失敗",
         "saveFailed": "沒有儲存成功，請重試。",
-        "refusedNotice": "🔒 這個機器人暫未向你開放。"
+        "refusedNotice": "🔒 這個機器人暫未向你開放。",
+        "engineUnsupported": "{{name}} 目前使用 Pi，Pi 無法把訪客限制在其專案內：綁定了專案的訪客會被拒絕。要為他們服務，請把 {{name}} 切換到 Claude 或 Codex。"
       },
       "add": {
         "button": "新增平台",

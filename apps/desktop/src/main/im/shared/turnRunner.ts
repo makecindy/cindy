@@ -1238,6 +1238,22 @@ export function createTurnRunner(
         };
       }
     }
+    if (target.botOwned?.lane === 'channel' && deps.companion?.guestRefused
+      && await deps.companion.guestRefused(row.id)) {
+      const text = ui.agent.guestRefused?.() ?? ui.agent.runtimeError(COMPANION_GUEST_REFUSED);
+      if (args.queueMode === 'internal') {
+        const consumed = (await args.onEarlyReject?.('guest_refused', text)) ?? false;
+        if (!consumed) {
+          try {
+            await sendTextClaimingOpener(userId, text, scopeKey);
+          } catch (err) {
+            log.warn(`guest refusal notice failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+      await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+      return { kind: 'rejected', reason: 'guest_refused' };
+    }
     let state: SessionState;
     try {
       state = await ensureSessionWired(wireTarget, userId);

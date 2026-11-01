@@ -11375,7 +11375,8 @@
         "noProjects": "Link a project in Linked Projects to bind a guest to it.",
         "loadFailed": "Couldn't load guests",
         "saveFailed": "Not saved. Try again.",
-        "refusedNotice": "🔒 This bot isn't open to you yet."
+        "refusedNotice": "🔒 This bot isn't open to you yet.",
+        "engineUnsupported": "{{name}} runs on Pi, which cannot keep a guest inside its project: guests bound to a project are refused. Switch {{name}} to Claude or Codex to serve them."
       },
       "add": {
         "button": "Add platform",

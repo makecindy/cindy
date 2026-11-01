@@ -50,12 +50,19 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
 /** Refuse before the send lock, so a guest never starts a runtime it may not use. */
 async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
   const [link] = await getDbClient()
-    .drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey })
+    .drizzle.select({
+      botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey,
+      agentKind: sessions.agentKind,
+    })
     .from(botSessionLinks)
+    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(eq(botSessionLinks.sessionId, sessionId))
     .limit(1);
   if (!link || link.role !== 'channel') return false;
-  return (await resolveBotGuestLaneAccess(link.botId, link.routeKey)).kind === 'refused';
+  const access = await resolveBotGuestLaneAccess(link.botId, link.routeKey);
+  // Pi cannot confine a bound guest (it refuses to start); answer with the
+  // same plain notice instead of a start failure.
+  return access.kind === 'refused' || (access.kind === 'bound' && link.agentKind === 'pi');
 }
 
 export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
@@ -101,6 +108,8 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
     },
 
     archiveLane: (routeKey) => archiveBotChannelLanes({ routeKey }),
+
+    guestRefused: (sessionId) => isRefusedGuestLane(sessionId),
 
     prepareSend: async (sessionId) =>
       (await isRefusedGuestLane(sessionId)) ? COMPANION_GUEST_REFUSED : prepareBotSessionForImSend(sessionId),

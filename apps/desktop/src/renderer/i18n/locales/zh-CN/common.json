@@ -11329,7 +11329,8 @@
         "noProjects": "先在「关联项目」里关联一个项目，才能绑定访客。",
         "loadFailed": "访客读取失败",
         "saveFailed": "没保存上，请重试。",
-        "refusedNotice": "🔒 这个机器人暂未向你开放。"
+        "refusedNotice": "🔒 这个机器人暂未向你开放。",
+        "engineUnsupported": "{{name}} 当前使用 Pi，Pi 无法把访客限制在其项目内：绑定了项目的访客会被拒绝。要为他们服务，请把 {{name}} 切换到 Claude 或 Codex。"
       },
       "add": {
         "button": "添加平台",

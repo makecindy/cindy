@@ -11329,7 +11329,8 @@
         "noProjects": "先於「相關之案」繫一案，乃可繫賓客。",
         "loadFailed": "未能讀賓客",
         "saveFailed": "未能存，請再試。",
-        "refusedNotice": "🔒 此機器人尚未為汝開放。"
+        "refusedNotice": "🔒 此機器人尚未為汝開放。",
+        "engineUnsupported": "{{name}} 今用 Pi，Pi 不能限賓客於其案：已繫案之賓客皆謝絕。欲應之，請易 {{name}} 為 Claude 或 Codex。"
       },
       "add": {
         "button": "增平台",

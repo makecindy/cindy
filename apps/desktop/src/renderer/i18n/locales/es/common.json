@@ -11469,7 +11469,8 @@
         "noProjects": "Vincula primero un proyecto en Proyectos vinculados para asignarle un invitado.",
         "loadFailed": "No se pudieron cargar los invitados",
         "saveFailed": "No se guardó. Inténtalo de nuevo.",
-        "refusedNotice": "🔒 Este bot aún no está disponible para ti."
+        "refusedNotice": "🔒 Este bot aún no está disponible para ti.",
+        "engineUnsupported": "{{name}} funciona con Pi, que no puede limitar a un invitado a su proyecto: los invitados vinculados a un proyecto se rechazan. Cambia {{name}} a Claude o Codex para atenderlos."
       },
       "add": {
         "button": "Agregar plataforma",

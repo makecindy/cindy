@@ -43,11 +43,13 @@ interface GuestRow {
   name: string | null;
 }
 
-export function BotChannelGuestAccess({ api, view, botId, botName, onApplied }: {
+export function BotChannelGuestAccess({ api, view, botId, botName, onApplied, engineConfinesGuests = true }: {
   api: BotImConnectionApi | null;
   view: BotImConnectionView;
   botId: string;
   botName: string;
+  /** Pi cannot keep a guest inside its project; bound guests are refused there. */
+  engineConfinesGuests?: boolean;
   onApplied: (next: BotImConnectionListPayload) => void;
 }) {
   const { t } = useBotTranslation();
@@ -117,6 +119,11 @@ export function BotChannelGuestAccess({ api, view, botId, botName, onApplied }: 
       <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.guests.hint', { name: botName })}
       </p>
+      {!engineConfinesGuests ? (
+        <p role="note" className="text-12 leading-[1.5] text-[var(--text-danger)]">
+          {t('bots.channels.guests.engineUnsupported', { name: botName })}
+        </p>
+      ) : null}
       {failed !== null ? (
         <p role="alert" className="text-12 text-[var(--text-danger)]">
           {t(failed === 'load' ? 'bots.channels.guests.loadFailed' : 'bots.channels.guests.saveFailed')}

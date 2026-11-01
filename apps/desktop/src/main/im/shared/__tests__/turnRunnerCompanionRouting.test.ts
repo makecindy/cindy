@@ -549,6 +549,21 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
   });
 
+  // #8359: a refused guest is answered before its lane runtime is wired, so it
+  // sees the plain notice instead of a runtime start failure.
+  it('answers a refused channel lane without wiring or sending to it', async () => {
+    // The fake adapter maps non-owner users to group lanes; the refusal check is
+    // the same for every `channel` lane (guest DMs included).
+    const guestRefused = vi.fn(async () => true);
+    (companion as unknown as { guestRefused: typeof guestRefused }).guestRefused = guestRefused;
+    await runTurn('g/-100123');
+    expect(guestRefused).toHaveBeenCalledWith('lane:im:telegram:777:g:-100123');
+    expect(harnesses.has('lane:im:telegram:777:g:-100123')).toBe(false);
+    expect(companion.prepareSend).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).toHaveBeenCalledWith('g/-100123', expect.any(String), expect.anything());
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+  });
+
   it('stops only an existing bot task and never creates one or touches the legacy row', async () => {
     companion.resolveSession.mockImplementation(async ({ create }: { create: boolean }) =>
       (create ? { ok: true, sessionId: 'mimi-main', created: false } : null));

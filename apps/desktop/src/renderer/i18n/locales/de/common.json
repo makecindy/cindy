@@ -11375,7 +11375,8 @@
         "noProjects": "Verknüpfe zuerst unter „Verknüpfte Projekte“ ein Projekt, um einen Gast zuzuordnen.",
         "loadFailed": "Gäste konnten nicht geladen werden",
         "saveFailed": "Nicht gespeichert. Versuche es erneut.",
-        "refusedNotice": "🔒 Dieser Bot ist für dich noch nicht freigegeben."
+        "refusedNotice": "🔒 Dieser Bot ist für dich noch nicht freigegeben.",
+        "engineUnsupported": "{{name}} läuft mit Pi, das einen Gast nicht auf sein Projekt beschränken kann: Gäste mit Projekt werden abgelehnt. Stelle {{name}} auf Claude oder Codex um, um sie zu bedienen."
       },
       "add": {
         "button": "Plattform hinzufügen",

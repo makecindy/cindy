@@ -237,7 +237,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
                 ) : null}
                 {view.botContextId && target.kind === 'local' && botImConnectionGuestAccessSupported(im) ? (
-                  <BotChannelGuestAccess api={im} view={view} botId={bot.id} botName={bot.name} onApplied={apply} />
+                  <BotChannelGuestAccess api={im} view={view} botId={bot.id} botName={bot.name} onApplied={apply}
+                    engineConfinesGuests={bot.capabilities.harness !== 'pi'} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
