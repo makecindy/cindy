@@ -244,11 +244,17 @@ indefinitely.
   overflow remains accessible by panning.
 - Controls groups rotation, audio, view-only and system picture in picture into
   quick actions. Display settings contain frame rate, quality, actual computer
-  resolution and monitor selection. Touch and Trackpad use a segmented
-  selector, with a saved Show mouse buttons option. Disconnect stays visible in
-  a separate footer while settings scroll.
+  resolution and monitor selection. Touch, Trackpad and Virtual mouse use a
+  segmented selector, with a saved Show mouse buttons option. Disconnect stays
+  visible in a separate footer while settings scroll.
 - Trackpad mode moves the pointer relatively. Touch mode taps at an absolute
   location. Hold then move to drag, including selections and window dragging.
+- Virtual mouse keeps a visible pointer arrow you can grab: pressing the arrow
+  picks it up and lifts it above the finger, dragging then moves the pointer
+  one-to-one with the finger, tapping clicks where the arrow points, and holding
+  then moving drags. Dragging anywhere else pans the picture. The arrow flips
+  below the finger when there is no room above the desktop area, and it rides
+  closer near the bottom edge so the last rows stay reachable.
 - Pinch zoom preserves the point under the two fingers. Two-finger gestures pan and zoom the picture; trackpad scrolling is also available through the virtual wheel. The normalized view
   focus survives rotation and keyboard resizing.
 - The keyboard offers native text composition, modifier combinations, navigation

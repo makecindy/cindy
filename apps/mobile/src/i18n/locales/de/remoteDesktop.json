@@ -119,6 +119,8 @@
   "displayNumber": "Bildschirm {{number}}",
   "touchHint": "Tippe zum Klicken, halte zum Ziehen gedrückt. Scrolle mit zwei Fingern; ziehe sie zum Zoomen auseinander oder zusammen.",
   "pointerHint": "Wische, um den Mauszeiger zu bewegen, und tippe zum Klicken. Scrolle mit zwei Fingern; ziehe sie zum Zoomen auseinander oder zusammen.",
+  "handle": "Virtuelle Maus",
+  "handleHint": "Ziehe den Pfeil im Bild, um den Zeiger präzise zu bewegen; tippe zum Klicken, halte zum Ziehen, ziehe daneben, um das Bild zu verschieben. Zwei Finger scrollen, Pinch zoomt.",
   "panHint": "Wische, um die Ansicht zu verschieben; ziehe zwei Finger zum Zoomen auseinander oder zusammen. Deaktiviere dies, um deinen Eingabemodus wiederherzustellen.",
   "viewOnlyHint": "„Nur ansehen“ ist aktiviert. Wische, um die Ansicht zu verschieben, oder zoome mit zwei Fingern, ohne den Computer zu steuern.",
   "close": "Schließen",

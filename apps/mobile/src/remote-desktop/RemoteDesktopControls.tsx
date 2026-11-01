@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { INPUT_MODES, type InputMode } from "./useInputModePreference";
 import type {
   RemoteDesktopDisplay,
   RemoteDesktopVideoSettings,
@@ -72,11 +73,11 @@ export function RemoteDesktopControls({
   controlling: boolean;
   viewOnly?: boolean;
   controlDisabled: boolean;
-  inputMode: "touch" | "pointer";
+  inputMode: InputMode;
   displays: RemoteDesktopDisplay[];
   displayId?: string;
   onViewOnly(): void;
-  onInputMode(mode: "touch" | "pointer"): void;
+  onInputMode(mode: InputMode): void;
   showMouseButtons: boolean;
   onShowMouseButtons(value: boolean): void;
   onDisplay(id: string): void;
@@ -217,26 +218,21 @@ export function RemoteDesktopControls({
           </Text>
           {Platform.OS === "ios" ? (
             <SegmentedControl
-              values={[t("remoteDesktop.touch"), t("remoteDesktop.pointer")]}
-              selectedIndex={inputMode === "touch" ? 0 : 1}
+              values={INPUT_MODES.map((mode) =>
+                t(`remoteDesktop.${mode}`),
+              )}
+              selectedIndex={Math.max(0, INPUT_MODES.indexOf(inputMode))}
               enabled={connected}
               appearance={colorScheme}
               style={{ height: 44 }}
               onChange={({ nativeEvent }) => {
-                if (
-                  connected &&
-                  [0, 1].includes(nativeEvent.selectedSegmentIndex)
-                )
-                  onInputMode(
-                    nativeEvent.selectedSegmentIndex === 0
-                      ? "touch"
-                      : "pointer",
-                  );
+                const next = INPUT_MODES[nativeEvent.selectedSegmentIndex];
+                if (connected && next) onInputMode(next);
               }}
             />
           ) : (
             <View style={styles.segments}>
-              {(["touch", "pointer"] as const).map((value) => (
+              {INPUT_MODES.map((value) => (
                 <MainWindowOptionButton
                   key={value}
                   accessibilityRole="tab"
@@ -268,6 +264,7 @@ export function RemoteDesktopControls({
               {[
                 "touchHint",
                 "pointerHint",
+                "handleHint",
                 "viewOnlyHint",
                 "controlUnavailableHint",
               ].map((key) => (

@@ -119,6 +119,8 @@
   "displayNumber": "Tela {{number}}",
   "touchHint": "Toque para clicar, mantenha pressionado para arrastar. Use dois dedos para rolar e o gesto de pinça para ampliar.",
   "pointerHint": "Deslize para mover o ponteiro, toque para clicar. Use dois dedos para rolar e o gesto de pinça para ampliar.",
+  "handle": "Mouse virtual",
+  "handleHint": "Arraste a seta da imagem para mover o ponteiro com precisão; toque para clicar, mantenha para arrastar e arraste fora da seta para deslocar a imagem. Dois dedos rolam; pinça para ampliar.",
   "panHint": "Deslize para mover a visualização; faça o gesto de pinça para ampliar. Desative para restaurar seu modo de entrada.",
   "viewOnlyHint": "Somente visualização está ativado. Deslize para mover a visualização ou faça o gesto de pinça para ampliar sem controlar o computador.",
   "close": "Fechar",

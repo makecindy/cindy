@@ -1,7 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type InputMode = "touch" | "pointer";
+export type InputMode = "touch" | "pointer" | "handle";
+/** 操作方式的展示顺序,也是分段控件的索引顺序。 */
+export const INPUT_MODES: readonly InputMode[] = ["touch", "pointer", "handle"];
 // Phone-local preference shared across remote computers. Only explicit choices
 // are persisted; absent or invalid values follow the default touch mode.
 const STORAGE_KEY = "cindy.mobile.remote-desktop.input-mode.v1";
@@ -16,8 +18,8 @@ export function useInputModePreference() {
     void writes
       .then(() => AsyncStorage.getItem(STORAGE_KEY))
       .then((value) => {
-        if (active && !edited.current && (value === "touch" || value === "pointer")) {
-          setMode(value);
+        if (active && !edited.current && INPUT_MODES.includes(value as InputMode)) {
+          setMode(value as InputMode);
         }
       })
       .catch(() => undefined);

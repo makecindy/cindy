@@ -119,6 +119,8 @@
   "displayNumber": "Pantalla {{number}}",
   "touchHint": "Toque para hacer clic, mantenga presionado para arrastrar. Se desplazan dos dedos; pellizcar para hacer zoom.",
   "pointerHint": "Deslice para mover el puntero, toque para hacer clic. Se desplazan dos dedos; pellizcar para hacer zoom.",
+  "handle": "Ratón virtual",
+  "handleHint": "Arrastra la flecha de la imagen para mover el puntero con precisión; toca para hacer clic, mantén para arrastrar y arrastra fuera para desplazar la imagen. Dos dedos desplazan; pellizca para ampliar.",
   "panHint": "Deslice para mover la vista; pellizcar para hacer zoom. Desactívelo para restaurar su modo de entrada.",
   "viewOnlyHint": "Ver solo está activado. Desliza para mover la vista o pellizca para hacer zoom sin controlar la computadora.",
   "close": "Cerrar",

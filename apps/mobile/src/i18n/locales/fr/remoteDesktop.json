@@ -119,6 +119,8 @@
   "displayNumber": "Écran {{number}}",
   "touchHint": "Touchez pour cliquer, maintenez pour faire glisser. Deux doigts pour défiler ; pincez pour zoomer.",
   "pointerHint": "Glissez pour déplacer le pointeur, touchez pour cliquer. Deux doigts pour défiler ; pincez pour zoomer.",
+  "handle": "Souris virtuelle",
+  "handleHint": "Faites glisser la flèche de l’image pour déplacer le pointeur avec précision ; touchez pour cliquer, maintenez pour glisser, et glissez ailleurs pour déplacer l’image. Deux doigts font défiler ; pincez pour zoomer.",
   "panHint": "Glissez pour déplacer la vue ; pincez pour zoomer. Désactivez pour revenir à votre mode de saisie.",
   "viewOnlyHint": "La lecture seule est activée. Glissez pour déplacer la vue ou pincez pour zoomer sans contrôler l'ordinateur.",
   "close": "Fermer",
