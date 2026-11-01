@@ -195,6 +195,18 @@ describe('代输入 requests the agent makes', () => {
     prompt.abandon?.();
   });
 
+  it('asks for a window title when the windows are spread over several processes of one app', async () => {
+    const h = harness();
+    const shown = { frame: [0, 0, 800, 600], focused: true, minimized: false };
+    h.desktop.driver.windows = async () => ({ frontmost: 5, apps: [
+      { pid: 5, app: 'Google Chrome', bundleId: 'com.google.Chrome', windows: [{ ...shown, index: 0, title: 'Home' }] },
+      { pid: 6, app: 'Google Chrome', bundleId: 'com.google.Chrome', windows: [{ ...shown, index: 0, title: 'Sign in' }] },
+    ] });
+    expect((await h.service.checkTarget({ app: 'Google Chrome' }))?.errorCode).toBe('TARGET_AMBIGUOUS');
+    expect(await h.service.checkTarget({ pid: 6 })).toBeNull();
+    expect(await h.service.checkTarget({ app: 'Google Chrome', windowTitle: 'Sign in' })).toBeNull();
+  });
+
   it('asks the agent to name a window instead of guessing among several', async () => {
     const h = harness();
     const shown = { frame: [0, 0, 800, 600], focused: false, minimized: false };

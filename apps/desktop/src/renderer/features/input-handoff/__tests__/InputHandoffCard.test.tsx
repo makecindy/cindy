@@ -435,6 +435,17 @@ describe('InputHandoffCard', () => {
       expect(screen.getByRole('button', { name: 'inputHandoff.action.done' })).toBeTruthy();
     });
 
+    it('offers the form when the window cannot be used, and shows an error when opening it did not work', async () => {
+      stubDesktop();
+      raise.mockResolvedValueOnce(false);
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openWindow' }));
+      await waitFor(() => expect(screen.getByText('inputHandoff.error.raise')).toBeTruthy());
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.useForm' }));
+      expect(screen.getByRole('button', { name: 'inputHandoff.action.fill' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.openWindow' })).toBeNull();
+    });
+
     it('keeps the form from another computer when there is no live view', () => {
       mocks.hostDeviceId = 'mac';
       render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);

@@ -1024,8 +1024,11 @@ export class InputHandoffSession {
     if (!previous) return;
     const mine = list.apps.find((app) => app.pid === target.pid);
     if (!mine) {
-      // Not on screen: gone only if the program itself is.
-      if (!(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
+      // Nothing of it on screen: minimized or on another desktop is still there; no window at all, or no program, is gone.
+      const all = await driver.windows({ background: true }).catch(() => null);
+      if (!this.watching() || this.target !== target) return;
+      const entry = all?.apps.find((app) => app.pid === target.pid);
+      if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
       return;
     }
     const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
@@ -1057,7 +1060,19 @@ export class InputHandoffSession {
       }
       return;
     }
-    if (++this.fieldsGoneReads >= FIELDS_GONE_READS) this.present(step, true);
+    if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
+    // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
+    if (!this.hintsMet(step)) {
+      this.step = step;
+      const scanning = await this.showQr();
+      // The owner may have ended it or started answering meanwhile.
+      if (this.ended || this.busy || this.phase !== 'ready') return;
+      if (scanning) {
+        this.publish('ready');
+        return;
+      }
+    }
+    this.present(step, true);
   }
 
   /**

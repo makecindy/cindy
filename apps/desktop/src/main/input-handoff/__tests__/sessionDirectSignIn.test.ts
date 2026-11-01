@@ -301,6 +301,55 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
   });
 
+  it('ends when the app keeps running with no window at all, but not while one is only minimized', async () => {
+    const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    const windows = driver.windows.bind(driver);
+    // Closed: the plain list leaves the app out, the full one shows it with no window.
+    state.running = true;
+    driver.windows = async (options) =>
+      options?.background
+        ? { frontmost: 99, apps: [{ ...chrome, windows: [] }] }
+        : { frontmost: 99, apps: [] };
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
+    driver.windows = windows;
+
+    const kept = desktop();
+    const second = start(kept.driver);
+    await second.session.start();
+    kept.driver.windows = async (options) =>
+      options?.background
+        ? {
+            frontmost: 99,
+            apps: [
+              {
+                ...chrome,
+                windows: [{ index: 0, title: 'Sign in', frame, focused: false, minimized: true }],
+              },
+            ],
+          }
+        : { frontmost: 99, apps: [] };
+    await settle();
+    expect(second.finished).toEqual([]);
+    second.session.cancel();
+  });
+
+  it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {
+    const { driver, state } = desktop('password');
+    driver.qr = async () => ({
+      text: 'weixin://dl/login?x=1',
+      capture: { jpeg: Buffer.from('jpeg'), width: 8, height: 8, area: frame, windowFrame: frame },
+    });
+    const run = start(driver);
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(run.latest()).toMatchObject({ phase: 'ready', qr: 'scan' }));
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+  });
+
   it('ends when the program quits', async () => {
     const { driver, state } = desktop();
     const run = start(driver);

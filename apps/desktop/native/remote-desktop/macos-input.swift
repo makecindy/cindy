@@ -569,7 +569,9 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
-    if !onScreen.contains(pid) && !windows.contains(where: { $0["minimized"] as? Bool == true }) { continue }
+    // Without `background`, an app is listed only while it has something on screen. With it, every
+    // app is, even with no window at all: that is how a closed last window is told from a hidden one.
+    if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
     apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
                  "windows": windows])
   }

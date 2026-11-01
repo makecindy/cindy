@@ -85,6 +85,8 @@ export function InputHandoffCard({
   // Stays wanted across steps: after Continue the sheet hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [sheetWanted, setSheetWanted] = useState(false);
+  // The owner chose the form over the live view (it could not be opened, or they prefer it).
+  const [formFor, setFormFor] = useState<string | null>(null);
   const push = useGuardedPush();
   const devices = useRemoteDeviceIdentity();
   // Every new screen starts from a clean draft; stale values are never reused.
@@ -250,7 +252,12 @@ export function InputHandoffCard({
     spinner = true;
     status = t("interaction.inputHandoff.qr.scanned");
     actions = [skip, handBack];
-  } else if (snapshot.phase === "ready" && snapshot.directSignIn && openLiveView) {
+  } else if (
+    snapshot.phase === "ready" &&
+    snapshot.directSignIn &&
+    openLiveView &&
+    formFor !== snapshot.requestId
+  ) {
     // A sign-in happens on the window, here through its live view; without one, the form below finishes it.
     // With a picture the page could not be read, so the end cannot be seen either: the owner says when.
     status = t(
@@ -367,6 +374,20 @@ export function InputHandoffCard({
       {error && !sheetWanted ? <Text style={styles.error}>{error}</Text> : null}
       {actions.length > 0 && below ? (
         <MainWindowActionGroup density="compact" primaryActions={actions} />
+      ) : null}
+      {snapshot.phase === "ready" &&
+      snapshot.directSignIn &&
+      openLiveView &&
+      sheetContent &&
+      formFor !== snapshot.requestId ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setFormFor(snapshot.requestId)}
+          style={styles.quietLink}
+          testID="interaction.inputHandoff.useForm"
+        >
+          <Text style={styles.meta}>{t("interaction.inputHandoff.action.useForm")}</Text>
+        </Pressable>
       ) : null}
       {openLiveView && !sheetContent ? (
         <Pressable

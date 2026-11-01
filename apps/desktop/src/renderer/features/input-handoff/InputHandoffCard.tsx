@@ -71,6 +71,8 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // Stays wanted across steps: after Continue the dialog hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [dialogWanted, setDialogWanted] = useState(false);
+  // The owner chose the form over the window (the live view or the window could not be used).
+  const [formFor, setFormFor] = useState<string | null>(null);
 
   // A new screen clears any message about the previous one.
   const stepKey = inputHandoffStepKey(snapshot);
@@ -151,7 +153,8 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // A sign-in happens on the window: here on this computer, through the live view from elsewhere.
   // Without a live view from another computer, the form stays the way to finish it.
   const onThisComputer = !getStickySessionDeviceId(sessionId);
-  const directSignIn = snapshot.directSignIn === true && (onThisComputer || !!liveView);
+  const canUseForm = snapshot.controls.length > 0 || snapshot.picture === true;
+  const directSignIn = snapshot.directSignIn === true && (onThisComputer || !!liveView) && formFor !== snapshot.requestId;
   const qrScan = snapshot.qr === 'scan' && snapshot.picture === true;
 
   const skip: StripAction = { label: t('inputHandoff.action.skip'), onClick: () => void decide('cancel') };
@@ -204,7 +207,13 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
         ),
         primary: true,
         onClick: () => {
-          void window.electronAPI.maker.raiseInputHandoff(snapshot.requestId).catch(() => setError(t('inputHandoff.error.raise')));
+          setError(null);
+          void window.electronAPI.maker
+            .raiseInputHandoff(snapshot.requestId)
+            .then((raised) => {
+              if (!raised) setError(t('inputHandoff.error.raise'));
+            })
+            .catch(() => setError(t('inputHandoff.error.raise')));
         },
         ...(liveView ? { element: <LiveViewButton deviceId={liveView} requestId={snapshot.requestId} /> } : {}),
       },
@@ -282,6 +291,11 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
         <p role="alert" className="mt-2 pl-12 text-12 text-[var(--error-fg)]">
           {error}
         </p>
+      )}
+      {directSignIn && canUseForm && snapshot.directSignIn === true && (
+        <div className="mt-1 pl-12">
+          <QuietLink onClick={() => setFormFor(snapshot.requestId)}>{t('inputHandoff.action.useForm')}</QuietLink>
+        </div>
       )}
       {liveView && !dialogContent && !directSignIn && (
         <div className="mt-1 pl-12">

@@ -239,7 +239,11 @@ export class InputHandoffService {
       }
       if (target.pid === undefined && !target.app) return null;
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
-      const titles = list.apps.find((app) => app.pid === resolved.pid)?.windows.map((w) => w.title).filter(Boolean) ?? [];
+      // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
+      const sameApp = target.pid !== undefined
+        ? list.apps.filter((app) => app.pid === resolved.pid)
+        : list.apps.filter((app) => app.pid !== this.deps.hostPid && app.bundleId === resolved.bundleId);
+      const titles = sameApp.flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
       if (titles.length < 2) return null;
       return {
         errorCode: 'TARGET_AMBIGUOUS',

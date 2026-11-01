@@ -4130,6 +4130,16 @@ function dismissInputHandoffForOwnerMessage(sessionId: string, text: unknown): v
   getInputHandoffService()?.dismissForOwnerMessage(sessionId);
 }
 
+/** Closes the card for the owner's steered message and returns the note the agent should hear, if any. */
+function inputHandoffSteerNote(sessionId: string, message: unknown): string | null {
+  dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message));
+  return getInputHandoffService()?.ownerMessageNote(sessionId) ?? null;
+}
+
+function inputHandoffNoteDelivered(sessionId: string): void {
+  getInputHandoffService()?.ownerMessageNoteDelivered(sessionId);
+}
+
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
   mcpSetupBridge.cleanupForSession(sessionId);
   cleanupPendingAgentInteractionsForSession(sessionId, reason);
@@ -19339,14 +19349,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sharedTaskAuthor: so.sharedTaskAuthor,
         })
       : null;
-    if (!so[MCP_APP_MESSAGE_GUARD]) dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message as HandoffWireMessage));
-    const steerHandoffNote = getInputHandoffService()?.ownerMessageNote(sessionId);
-    const withSteerHandoffNote = steerHandoffNote
-      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerHandoffNote)
-      : normalized;
     const withSteerReplyQuoteNote = steerReplyQuoteNote
-      ? prependNoteToWireUserMessage(withSteerHandoffNote as HandoffWireMessage, steerReplyQuoteNote)
-      : withSteerHandoffNote;
+      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)
+      : normalized;
     const withSteerSourceNote = steerSourceNote
       ? prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)
       : withSteerReplyQuoteNote;
@@ -19381,6 +19386,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let steerPayload = steerPlannedNotes['ui-language']
       ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
       : withSteerNote;
+    // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
+    const steerHandoffNote = so[MCP_APP_MESSAGE_GUARD] ? null : inputHandoffSteerNote(sessionId, message);
+    if (steerHandoffNote) {
+      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
+    }
     if (steerPlannedNotes['side-chat']) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerPlannedNotes['side-chat']);
     }
@@ -19425,7 +19435,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       appContext?.consume();
       steerNotePlan?.commit();
-      if (steerHandoffNote) getInputHandoffService()?.ownerMessageNoteDelivered(sessionId);
+      if (steerHandoffNote) inputHandoffNoteDelivered(sessionId);
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
       const messageText = err instanceof Error ? err.message : String(err);
