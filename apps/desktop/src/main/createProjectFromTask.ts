@@ -3,6 +3,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import type { ControlResult } from '@cindy/mcps';
 import { isIpcErrorCode } from '../shared/ipc-errors.js';
+import { workingDirEquals } from '../shared/workingDir.js';
 import type { PreparedProjectFromTask, ProjectsRootState } from '../shared/projectsRoot.js';
 import { createLogger } from './logger.js';
 import { throwIpcError } from './utils/ipcValidate.js';
@@ -143,13 +144,29 @@ export async function createProjectFromTask(
     }
     let moved: string[] = [];
     let registered: string | null = null;
+    let movingTask = false;
     try {
       const { workingDir } = unwrap(await deps.validateProjectDirectory(target));
       if (source) moved = await moveEntries(source, target);
       registered = unwrap(await deps.registerProject(input.sessionId, workingDir)).workingDir;
+      movingTask = true;
       unwrap(await deps.moveTask(input.sessionId, registered));
       return { workingDir: registered, movedEntries: moved.length };
     } catch (error) {
+      if (movingTask && registered) {
+        // A failed move may already be committed (e.g. the account changed right after the
+        // write). Only roll back when the task is known to still point at its old directory.
+        const directory = registered;
+        const committed = await deps.readTask(input.sessionId).then(
+          (task) => workingDirEquals(task.workingDir, directory),
+          () => null,
+        );
+        if (committed === true) return { workingDir: directory, movedEntries: moved.length };
+        if (committed === null) {
+          log.warn('task move outcome unknown; keeping files in the new project folder');
+          throw error;
+        }
+      }
       if (source) await restoreEntries(target, source, moved);
       if (registered) {
         await deps.hideProject(registered).catch((hideError: unknown) => {

@@ -64,6 +64,21 @@ describe('createProjectFromTask', () => {
     expect(deps.hideProject).toHaveBeenCalledWith(path.join(projects, 'my-app'));
   });
 
+  // Review (#8339): the task move can commit and then fail its post-write account check.
+  // Rolling the files back then would split the task from its files.
+  it.each([
+    ['already committed', async () => ({ title: 'Plan', workingDir: path.join(projects, 'my-app'), workspaceKind: 'project' }), 'resolves'],
+    ['unknown after an account change', async () => { throw Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' }); }, 'rejects'],
+  ] as const)('keeps the files in the new folder when a failed move is %s', async (_case, reread, outcome) => {
+    deps.moveTask.mockResolvedValue({ ok: false, errorCode: 'PRECONDITION_FAILED', message: 'account changed' });
+    deps.readTask.mockImplementationOnce(async () => ({ title: 'Plan', workingDir: dialogue, workspaceKind: 'dialogue' }));
+    deps.readTask.mockImplementationOnce(reread);
+    if (outcome === 'resolves') await expect(create()).resolves.toMatchObject({ movedEntries: 2 });
+    else await expect(create()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect((await readdir(path.join(projects, 'my-app'))).sort()).toEqual(['design.md', 'docs']);
+    expect(deps.hideProject).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['an existing folder', async () => mkdir(path.join(projects, 'my-app')), 'ALREADY_EXISTS'],
     ['a task that cannot move', async () => {

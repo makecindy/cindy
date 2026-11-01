@@ -376,9 +376,10 @@ export function SessionContentHeader({
    * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /
    * 被 IM 接管中拦截)与乐观更新 + 失败回滚;不含 sidebar 的目标项目节点自动
    * 展开(collapse 是 CCAgentSidebarUpper 实例内 state,header 拿不到)。 */
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  // Pin the task when the dialog opens: switching tasks must not retarget a pending creation.
+  const [newProjectSessionId, setNewProjectSessionId] = useState<string | null>(null);
   const closeNewProjectDialog = useCallback((open: boolean) => {
-    if (!open) setNewProjectOpen(false);
+    if (!open) setNewProjectSessionId(null);
   }, []);
 
   const handleMoveSession = useCallback(
@@ -416,7 +417,7 @@ export function SessionContentHeader({
       }
 
       if (target.kind === 'newProject') {
-        setNewProjectOpen(true);
+        setNewProjectSessionId(session.id);
         return;
       }
 
@@ -790,12 +791,12 @@ export function SessionContentHeader({
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
 
-      {newProjectOpen && (
+      {newProjectSessionId && (
         <NewProjectFromTaskDialog
-          sessionId={session.id}
+          sessionId={newProjectSessionId}
           onOpenChange={closeNewProjectDialog}
           onCreated={(result) => {
-            patchLocal(session.id, { workingDir: result.workingDir, workspaceKind: 'project' });
+            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
             void recentWorkdirsStore.forceRefresh().catch(() => undefined);
             toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
           }}

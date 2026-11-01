@@ -116,8 +116,14 @@ export function inferProjectsRoot(directories: readonly string[], platform = pro
   return best?.parent ?? null;
 }
 
-/** Explicit choice first, then visible existing projects, then ~/Projects. Never writes. */
-export async function resolveProjectsRoot(client: DbClient): Promise<ProjectsRootState> {
+/**
+ * Explicit choice first, then visible existing projects, then ~/Projects. Never writes.
+ * Callers that already listed the catalog pass it to avoid a second scan.
+ */
+export async function resolveProjectsRoot(
+  client: DbClient,
+  catalog?: ReadonlyArray<{ path: string; exists: boolean }>,
+): Promise<ProjectsRootState> {
   const setting = readProjectsRootDirectory();
   let root: Omit<ProjectsRootState, 'exists'>;
   if (setting) {
@@ -128,7 +134,7 @@ export async function resolveProjectsRoot(client: DbClient): Promise<ProjectsRoo
         projectKeyComparisonKey(key, process.platform),
       ),
     );
-    const visible = (await listRecentWorkdirs(client))
+    const visible = (catalog ?? (await listRecentWorkdirs(client)))
       .filter((row) => row.exists && !hidden.has(identity(row.path)))
       .map((row) => row.path);
     const inferred = inferProjectsRoot(visible);
@@ -178,7 +184,7 @@ export async function listProjects(params: {
       })
       .filter((row) => params.includeHidden || !row.hidden);
     const end = params.offset + params.limit;
-    const projectsRoot = await resolveProjectsRoot(context.client);
+    const projectsRoot = await resolveProjectsRoot(context.client, directories);
     context.assertCurrent();
     return {
       ok: true as const,
