@@ -44,6 +44,13 @@ const PUNCTUATION_RUN_RE = /[-.=<>|]/;
 const EDGE_TIP_RE = /^(?:<?(?:-{2,}|={2,}|-\.+-|-\.+))$/;
 
 /**
+ * What may stand in front of a token that starts with an edge head (`o`, `x`, `<`):
+ * whitespace, a pipe, or the closer of the node the edge leaves. `A[x]o.->B` is legal
+ * in Mermaid, so the `]` has to count as a boundary just like a space does.
+ */
+const HEAD_BOUNDARY_BEFORE_RE = /[\s|)\]}]/;
+
+/**
  * Prefix counts of the characters an edge tip is built from. The scan asks whether
  * the run ending at the current character is an edge tip, once per character, so
  * slicing the run and matching a regex there made a long run of `>` quadratic
@@ -290,7 +297,8 @@ function completeEdgeTokenEnd(
     // must be consumed here; otherwise the bare-edge skipper runs over the label of the
     // next node on the line.
     const leftHead = text[i - 1];
-    if ((leftHead === 'o' || leftHead === 'x' || leftHead === '<') && (i === 1 || /[\s|]/.test(text[i - 2]))) {
+    const headAfterBoundary = i === 1 || HEAD_BOUNDARY_BEFORE_RE.test(text[i - 2]);
+    if ((leftHead === 'o' || leftHead === 'x' || leftHead === '<') && headAfterBoundary) {
       let end = i;
       while (text[end] === ch) end += 1;
       return text[end] === '>' ? end + 1 : end;
@@ -350,8 +358,13 @@ function completeEdgeTokenEnd(
   // `A o.-> B` / `A x.-> B` / `A<.->B` close the edge with a dotted tip on the left
   // side, so a source head in front of the dots is part of the token as well.
   const leftHead = text[i - 1];
-  const afterHead = i === 1 || /[\s|]/.test(text[i - 2]);
-  if (!insideBareText && i > 0 && !(afterHead && (leftHead === 'o' || leftHead === 'x' || leftHead === '<')) && !/[\s|]/.test(leftHead)) {
+  const afterHead = i === 1 || HEAD_BOUNDARY_BEFORE_RE.test(text[i - 2]);
+  if (
+    !insideBareText &&
+    i > 0 &&
+    !(afterHead && (leftHead === 'o' || leftHead === 'x' || leftHead === '<')) &&
+    !HEAD_BOUNDARY_BEFORE_RE.test(leftHead)
+  ) {
     return -1;
   }
   if (after === '>') return dashes + 1;
@@ -611,10 +624,15 @@ function mapOutsideQuotesAndLabels(text: string, fn: (segment: string) => string
       // otherwise the `}` of the metadata could never close it and the rest of the
       // document would stay inside the body.
       const metadataScalar = labelInMetadata && !opensMetadataValue(text, labelBodyStart, lastNonSpace);
-      const nested =
+      const candidate =
         labelQuoted || metadataScalar || !OPENER_HEADS.has(ch)
           ? undefined
           : LABEL_OPENERS.find(([open]) => text.startsWith(open, i));
+      // A metadata value is YAML, so only a flow sequence or a flow mapping opens a
+      // nested body there. A leading `(` is a bare scalar (`label: (foo }`), and
+      // treating it as a shape would keep the metadata open behind its own `}`.
+      const scalarParen = labelInMetadata && candidate !== undefined && candidate[0][0] === '(';
+      const nested = candidate === undefined || scalarParen ? undefined : candidate;
       if (nested) {
         outerBodyStarts.push(labelBodyStart);
         outerMetadataFlags.push(labelInMetadata ? 1 : 0);

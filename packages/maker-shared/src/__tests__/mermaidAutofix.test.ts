@@ -772,4 +772,30 @@ describe('quotes, complete edges and block headers', () => {
     expect(output).toContain('\u5c4f\u5e55"');
     expect(output).toContain('C --> D');
   });
+  it('does not open a label at a bracket that starts a metadata scalar', () => {
+    // `(foo` is a bare scalar too, so the same rule as for `foo(` applies: the
+    // metadata closes at its own `}` and the next statement is graph syntax.
+    const source = ['flowchart TD', '  A@{ shape: rect, label: (foo }', '  C → D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A@{ shape: rect, label: (foo }');
+    expect(output).toContain('C --> D');
+  });
+
+  it('still opens a flow sequence that starts a metadata value', () => {
+    const source = ['flowchart TD', '  A@{ shape: rect, constraint: [(on)], label: ok }', '  C → D'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('constraint: [(on)]');
+    expect(output).toContain('C --> D');
+  });
+
+  it('consumes a source head that follows a node closer', () => {
+    // `A[label]o.->B` is legal Mermaid: the head is glued to the closer of the
+    // source node, so the `]` has to end the token like a space does.
+    for (const head of ['o.->', 'x.->', '<.->']) {
+      const source = ['flowchart TD', `  A[label]${head}B; C → D; E[label]`].join('\n');
+      const output = repairMermaidSource(source);
+      expect(output).toContain(`A[label]${head}B`);
+      expect(output).toContain('C --> D');
+    }
+  });
 });
