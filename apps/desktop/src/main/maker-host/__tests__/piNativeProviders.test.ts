@@ -2971,6 +2971,25 @@ describe('server metadata reaches every native Pi transport', () => {
 });
 
 
+it.each([true, false, undefined])('preserves configured image input %s against a same-id built-in catalog', (supportsImageInput) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai',
+    models: [{ id: 'same-model', supportsImageInput }],
+  }) } };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [{ ...BUNDLED_CATALOG.providers[0]!,
+    id: 'xai', models: { pi: [{ id: 'same-model', name: 'Builtin', contextWindow: 123456,
+      efforts: [], defaultEffort: null, supportsImageInput: supportsImageInput === undefined ? true : !supportsImageInput,
+    }] } }] };
+  const launch = () => buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog)
+    .providers[0]!.models[0]!;
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text'] : ['text', 'image']);
+  // The custom runtime identity owns the fully resolved local override layer.
+  catalog.providers.push({ ...catalog.providers[0]!, id: 'custom:xai', source: 'user', models: { pi: [{
+    ...catalog.providers[0]!.models.pi![0]!, supportsImageInput: supportsImageInput === false,
+  }] } });
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text', 'image'] : ['text']);
+});
+
 it('uses the resolved BYOM catalog without borrowing its route or credentials', () => {
   const cfg: Cfg = { id: 'my-api', name: 'My API', auth: { method: 'apiKey' },
     runtimes: { pi: piRuntime({ baseUrl: 'https://user.example/v1', models: [{ id: 'same-model' }] }) } };
@@ -2985,6 +3004,42 @@ it('uses the resolved BYOM catalog without borrowing its route or credentials', 
       reasoning: true, input: ['text', 'image'], cost: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 } })] });
   expect(result.providers[0]!.models[0]!.baseUrl).toBeUndefined();
   expect(result.env[result.providers[0]!.apiKeyEnvVar!]).toBe('fixture-key');
+});
+
+it.each(['field', 'model'] as const)('inherits a text-only default when the user projection lacks the %s', (missing) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai', models: [{ id: 'same-model' }],
+  }) } };
+  const model = { id: 'same-model', name: 'Builtin', contextWindow: 123456,
+    efforts: [], defaultEffort: null };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'xai',
+      models: { pi: [{ ...model, supportsImageInput: false }] } },
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'custom:xai', source: 'user',
+      models: { pi: missing === 'model' ? [] : [model] } },
+  ] };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog);
+  expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
+});
+
+it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
+  const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
+    baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'same-model', name: 'My model', supportsImageInput: !supportsImageInput }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const parsed = sanitizeModelCatalogOverrides({ patches: {
+    'custom%3Axai:same-model': { perAgent: { pi: { supportsImageInput } } },
+  } });
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0]?.models[0]?.input).toEqual(supportsImageInput ? ['text', 'image'] : ['text']);
+  } finally {
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    setCustomProviders([]);
+  }
 });
 
 // Check the actual Pi launch descriptor, not just the settings/catalog projection.
