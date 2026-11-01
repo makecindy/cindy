@@ -1022,6 +1022,7 @@ import {
   isGlobalVoiceInputOverlaySender,
   releaseActiveGlobalVoiceInputShortcut,
   registerGlobalVoiceInputIpc,
+  showSessionVoicePromptOverlay,
 } from './voice-input/global.js';
 import { ensureMainAppPresence } from './appPresence.js';
 import {
@@ -4653,6 +4654,7 @@ const registerIpcHandlers = () => {
       if (hasFocusedAppWindow()) return;
       showDeviceSessionDesktopEvent(() => getWindow() ?? null, event);
     },
+    openSessionVoicePrompt: (target) => showSessionVoicePromptOverlay(target),
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,

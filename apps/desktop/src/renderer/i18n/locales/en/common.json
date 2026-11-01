@@ -1411,7 +1411,9 @@
       "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
       "alwaysAllowForSession": "Always allow for this session",
-      "deny": "Deny"
+      "deny": "Deny",
+      "voiceReply": "Voice reply",
+      "voicePromptFailed": "Couldn't open voice input. Try again."
     }
   },
   "menubar": {
@@ -12633,6 +12635,15 @@
       "transcriptKept": "Recognized text kept",
       "permissionRequired": "Permission required",
       "error": "Voice input failed"
+    },
+    "sessionPrompt": {
+      "listening": "Reply to \"{{title}}\"",
+      "sending": "Sending",
+      "statusSendFailed": "Send failed",
+      "sendFailed": "Couldn't send. Try again.",
+      "taskUnavailable": "This task can't receive messages right now. It may be archived or its computer is offline.",
+      "placeholder": "Say what you want to send to this task…",
+      "submit": "Send to task"
     },
     "hint": "Press shortcut again to input",
     "placeholder": "Start speaking…",

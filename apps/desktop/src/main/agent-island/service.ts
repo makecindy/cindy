@@ -17,6 +17,7 @@ import {
   type SessionActivityTransition,
 } from '@cindy/maker-shared/session-activity';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import type { SessionVoicePromptTarget } from '../../shared/sessionVoicePrompt.js';
 import {
   isProductTurnCompletionTailEvent,
   isTurnContinuationBoundaryEvent,
@@ -232,6 +233,8 @@ export interface AgentIslandServiceDeps {
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
+  /** Opens the shared dictation overlay for a terminal task's voice reply. */
+  openSessionVoicePrompt?: (target: SessionVoicePromptTarget) => void | Promise<void>;
 }
 
 interface AgentIslandNativeRenderer {
@@ -453,6 +456,7 @@ export class AgentIslandService {
       onExpand: (displayId) => this.handleNativeExpand(displayId),
       onCollapse: () => this.handleNativeCollapse(),
       onFocusSession: (sessionId) => this.focusSession(sessionId),
+      onVoicePrompt: (sessionId, displayId) => this.handleVoicePrompt(sessionId, displayId),
       onCompletionAction: (sessionId, action, token) => this.handleCompletionAction(sessionId, action, token),
       onOpenSettings: () => this.dispatchMainWindowCommand('open-agent-island-settings', { playSelectSound: true }),
       onNewMessage: () => this.dispatchMainWindowCommand('new-maker', { playSelectSound: true }),
@@ -2862,6 +2866,28 @@ export class AgentIslandService {
     log.warn('native Agent Island renderer unavailable; island will remain hidden');
   }
 
+  private handleVoicePrompt(sessionId: string, displayId: number | null = null): void {
+    const session = this.state.sessions.get(sessionId);
+    if (!session || session.groupChat || (session.phase !== 'completed' && session.phase !== 'error')) return;
+    const open = this.deps.openSessionVoicePrompt;
+    if (!open) {
+      log.warn('agent island voice prompt opener is unavailable');
+      return;
+    }
+    const target = {
+      sessionId,
+      title: session.companion?.name || session.title?.trim() || session.sessionId.slice(0, 8),
+      sourceDeviceId: session.sourceDeviceId,
+      displayId,
+    };
+    void Promise.resolve().then(() => open(target)).then(() => {
+      if (requestAgentIslandManualCollapse(this.state, Date.now())) this.publish();
+    }).catch((error) => {
+      log.warn('agent island voice prompt failed to open', { sessionId, error });
+      void dialog.showMessageBox({ type: 'error', message: t('agentIsland.native.voicePromptFailed') });
+    });
+  }
+
   private focusSession(sessionId: string): void {
     const nextSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : null;
     if (!nextSessionId) return;
@@ -3100,6 +3126,7 @@ function buildAgentIslandStrings(): AgentIslandStrings {
     allowOnce: t('agentIsland.native.allowOnce'),
     alwaysAllowForSession: t('agentIsland.native.alwaysAllowForSession'),
     deny: t('agentIsland.native.deny'),
+    voiceReply: t('agentIsland.native.voiceReply'),
   };
 }
 

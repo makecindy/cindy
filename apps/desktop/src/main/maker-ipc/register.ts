@@ -83,6 +83,7 @@ import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { setSessionVoicePromptDispatcher } from '../voice-input/sessionPromptDispatch.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
@@ -19480,6 +19481,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToAgentAccepted(sessionId, message, createOpts, attachTrustedDesktopSendContext(message, sendOpts)),
     (sessionId) => inputCoordinator.getClearBoundaryMs(sessionId),
   );
+  setSessionVoicePromptDispatcher(async (input) => {
+    const sendOpts = { persistUserMessage: { clientId: input.clientId, content: input.text } };
+    if (input.sourceDeviceId) {
+      const result = await invokeBotPeer(
+        input.sourceDeviceId,
+        'maker:send',
+        [input.sessionId, input.text, undefined, sendOpts],
+        { preSend: input.assertCurrent },
+      );
+      if (result.ok && (result.result as { accepted?: unknown } | null)?.accepted === true) {
+        return { ok: true };
+      }
+      return { ok: false, errorCode: result.ok ? 'SEND_FAILED' : 'REMOTE_UNAVAILABLE' };
+    }
+    const owner = getCurrentDbClientSnapshot();
+    await withSessionPermissionChange(input.sessionId, async () => undefined);
+    input.assertCurrent();
+    if (!owner || owner !== getCurrentDbClientSnapshot()) return { ok: false, errorCode: 'NO_TARGET' };
+    const row = await getSessionRowSnapshot(input.sessionId);
+    input.assertCurrent();
+    if (owner !== getCurrentDbClientSnapshot()) return { ok: false, errorCode: 'NO_TARGET' };
+    if (!row || row.status === 'archived' || row.status === 'deleted') {
+      return { ok: false, errorCode: 'TARGET_NOT_FOUND' };
+    }
+    const result = await sendToAgentAccepted(
+      input.sessionId,
+      input.text,
+      undefined,
+      attachTrustedDesktopSendContext(input.text, sendOpts, input.text),
+    );
+    return result.accepted ? { ok: true } : { ok: false, errorCode: 'SEND_FAILED' };
+  });
   setPluginPageToolRunner(async (grant, args, signal) => {
     await grant.assertCurrent();
     const owner = getCurrentDbClientSnapshot();

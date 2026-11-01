@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "許 {{toolName}} 乎？",
       "allowOnce": "許一次",
       "alwaysAllowForSession": "此差事恆許",
-      "deny": "拒"
+      "deny": "拒",
+      "voiceReply": "以聲覆之",
+      "voicePromptFailed": "聲入未啟，請再試。"
     }
   },
   "menubar": {
@@ -12581,6 +12583,15 @@
       "transcriptKept": "所識之文已存",
       "permissionRequired": "需授權",
       "error": "聲入未成"
+    },
+    "sessionPrompt": {
+      "listening": "覆「{{title}}」",
+      "sending": "方傳",
+      "statusSendFailed": "傳而未達",
+      "sendFailed": "傳而未達，請再試。",
+      "taskUnavailable": "此差事今不能受訊，或已封存，或所屬電腦離線。",
+      "placeholder": "言所欲告此差事者…",
+      "submit": "傳於差事"
     },
     "hint": "再按快捷鍵以輸入",
     "placeholder": "洗耳恭聽…",

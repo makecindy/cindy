@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "允許 {{toolName}}？",
       "allowOnce": "允許一次",
       "alwaysAllowForSession": "本任務總是允許",
-      "deny": "拒絕"
+      "deny": "拒絕",
+      "voiceReply": "語音回覆",
+      "voicePromptFailed": "無法開啟語音輸入，請再試一次。"
     }
   },
   "menubar": {
@@ -12581,6 +12583,15 @@
       "transcriptKept": "已保留識別出的文字",
       "permissionRequired": "需要授權",
       "error": "語音輸入失敗"
+    },
+    "sessionPrompt": {
+      "listening": "回覆「{{title}}」",
+      "sending": "正在傳送",
+      "statusSendFailed": "傳送失敗",
+      "sendFailed": "傳送失敗，請再試一次。",
+      "taskUnavailable": "這個任務目前無法接收訊息，可能已封存或所在電腦離線。",
+      "placeholder": "說出你想對任務說的話…",
+      "submit": "傳送到任務"
     },
     "hint": "再次按快捷鍵輸入",
     "placeholder": "開始說話…",

@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "{{toolName}} 사용을 허용할까요?",
       "allowOnce": "한 번 허용",
       "alwaysAllowForSession": "이 세션에서 항상 허용",
-      "deny": "거부"
+      "deny": "거부",
+      "voiceReply": "음성으로 답장",
+      "voicePromptFailed": "음성 입력을 열지 못했습니다. 다시 시도하세요."
     }
   },
   "menubar": {
@@ -12581,6 +12583,15 @@
       "transcriptKept": "인식된 텍스트는 유지됨",
       "permissionRequired": "권한 필요",
       "error": "음성 입력 실패"
+    },
+    "sessionPrompt": {
+      "listening": "\"{{title}}\"에 답장",
+      "sending": "보내는 중",
+      "statusSendFailed": "전송 실패",
+      "sendFailed": "전송하지 못했습니다. 다시 시도하세요.",
+      "taskUnavailable": "이 작업은 지금 메시지를 받을 수 없습니다. 보관되었거나 실행 중인 컴퓨터가 오프라인일 수 있습니다.",
+      "placeholder": "작업에 보낼 내용을 말하세요…",
+      "submit": "작업에 보내기"
     },
     "hint": "단축키를 다시 눌러 입력",
     "placeholder": "말씀해 주세요…",

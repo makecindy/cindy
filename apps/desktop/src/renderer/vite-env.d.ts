@@ -1838,6 +1838,13 @@ interface ElectronAPI {
     stop: () => Promise<{ ok: true } | { ok: false; error: string }>;
     cancel: (params?: { runId?: string }) => Promise<{ ok: true }>;
     onEvent: (callback: (event: VoiceInputRendererEvent) => void) => () => void;
+    onSessionPromptStart: (
+      callback: (context: import('../shared/sessionVoicePrompt').SessionVoicePromptContext) => void,
+    ) => () => void;
+    submitSessionPrompt: (
+      requestId: string,
+      text: string,
+    ) => Promise<import('../shared/sessionVoicePrompt').SessionVoicePromptResult>;
     getDataSnapshot: () => VoiceInputDataSnapshot;
     migrateLegacyRendererData: (payload: {
       settingsRaw?: string | null;

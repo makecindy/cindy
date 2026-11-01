@@ -1429,7 +1429,9 @@
       "permissionPromptTitleWithTool": "Permitir {{toolName}}?",
       "allowOnce": "Permitir uma vez",
       "alwaysAllowForSession": "Permitir sempre nesta sessão",
-      "deny": "Recusar"
+      "deny": "Recusar",
+      "voiceReply": "Resposta por voz",
+      "voicePromptFailed": "Não foi possível abrir a entrada de voz. Tente novamente."
     }
   },
   "menubar": {
@@ -12734,6 +12736,15 @@
       "transcriptKept": "Texto reconhecido mantido",
       "permissionRequired": "Permissão necessária",
       "error": "Falha na introdução por voz"
+    },
+    "sessionPrompt": {
+      "listening": "Responder a «{{title}}»",
+      "sending": "A enviar",
+      "statusSendFailed": "Falha no envio",
+      "sendFailed": "Não foi possível enviar. Tente novamente.",
+      "taskUnavailable": "Esta tarefa não pode receber mensagens agora. Pode estar arquivada ou o computador estar offline.",
+      "placeholder": "Diga o que pretende enviar a esta tarefa…",
+      "submit": "Enviar para a tarefa"
     },
     "hint": "Prima novamente o atalho para introduzir",
     "placeholder": "Comece a falar…",

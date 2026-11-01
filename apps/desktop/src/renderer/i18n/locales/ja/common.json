@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
-      "deny": "拒否"
+      "deny": "拒否",
+      "voiceReply": "音声で返信",
+      "voicePromptFailed": "音声入力を開けませんでした。もう一度お試しください。"
     }
   },
   "menubar": {
@@ -12581,6 +12583,15 @@
       "transcriptKept": "認識したテキストは保持しています",
       "permissionRequired": "権限が必要です",
       "error": "音声入力に失敗しました"
+    },
+    "sessionPrompt": {
+      "listening": "「{{title}}」に返信",
+      "sending": "送信中",
+      "statusSendFailed": "送信に失敗しました",
+      "sendFailed": "送信できませんでした。もう一度お試しください。",
+      "taskUnavailable": "このタスクは現在メッセージを受け取れません。アーカイブ済みか、実行中のコンピューターがオフラインの可能性があります。",
+      "placeholder": "タスクに送る内容を話してください…",
+      "submit": "タスクに送信"
     },
     "hint": "もう一度ショートカットで入力",
     "placeholder": "話し始めてください…",

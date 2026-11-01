@@ -1429,7 +1429,9 @@
       "permissionPromptTitleWithTool": "Autoriser {{toolName}} ?",
       "allowOnce": "Autoriser une fois",
       "alwaysAllowForSession": "Toujours autoriser pour cette session",
-      "deny": "Refuser"
+      "deny": "Refuser",
+      "voiceReply": "Réponse vocale",
+      "voicePromptFailed": "Impossible d'ouvrir la saisie vocale. Réessayez."
     }
   },
   "menubar": {
@@ -12734,6 +12736,15 @@
       "transcriptKept": "Texte reconnu conservé",
       "permissionRequired": "Autorisation requise",
       "error": "Échec de la saisie vocale"
+    },
+    "sessionPrompt": {
+      "listening": "Répondre à « {{title}} »",
+      "sending": "Envoi en cours",
+      "statusSendFailed": "Échec de l'envoi",
+      "sendFailed": "Impossible d'envoyer. Réessayez.",
+      "taskUnavailable": "Cette tâche ne peut pas recevoir de messages pour le moment. Elle est peut-être archivée ou son ordinateur est hors ligne.",
+      "placeholder": "Dites ce que vous voulez envoyer à cette tâche…",
+      "submit": "Envoyer à la tâche"
     },
     "hint": "Appuyez à nouveau sur le raccourci pour saisir",
     "placeholder": "Parlez…",

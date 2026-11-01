@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本任务总是允许",
-      "deny": "拒绝"
+      "deny": "拒绝",
+      "voiceReply": "语音回复",
+      "voicePromptFailed": "无法打开语音输入，请重试。"
     }
   },
   "menubar": {
@@ -12581,6 +12583,15 @@
       "transcriptKept": "已保留识别出的文字",
       "permissionRequired": "需要授权",
       "error": "语音输入失败"
+    },
+    "sessionPrompt": {
+      "listening": "回复「{{title}}」",
+      "sending": "正在发送",
+      "statusSendFailed": "发送失败",
+      "sendFailed": "发送失败，请重试。",
+      "taskUnavailable": "这个任务当前无法接收消息，可能已归档或所在电脑离线。",
+      "placeholder": "说出你想对任务说的话…",
+      "submit": "发送到任务"
     },
     "hint": "再次按快捷键输入",
     "placeholder": "开始说话…",
