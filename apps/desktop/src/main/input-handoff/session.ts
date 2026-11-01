@@ -200,6 +200,10 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
   };
 }
 
+/** A password or a one-time code still on the screen is a sign-in step, whether or not its page address could be read. */
+const hasSecretField = (step: ExtractedStep): boolean =>
+  step.shown.some((control) => control.kind === 'text' && (control.contentType === 'password' || control.contentType === 'one-time-code'));
+
 /** How long a window just brought back may take to draw its form (a sign-in page loads frames). */
 const RESTORED_PAGE_WAIT_MS = 6000;
 /** How long a browser may take to expose its page to accessibility on the first read. */
@@ -668,7 +672,7 @@ export class InputHandoffSession {
     this.fieldsGoneReads = 0;
     if (read.signIn) this.signInMode = true;
     // Past a sign-in, a page's own fields (a reply box) are not its next step.
-    const signInOver = this.signInMode && !read.signIn && !read.pageMissing && !read.deviceCode;
+    const signInOver = this.signInMode && !read.signIn && !read.pageMissing && !read.deviceCode && !hasSecretField(read);
     const step = signInOver ? { ...read, shown: [] } : read;
     this.step = step;
     this.guardSignInPage(step);
@@ -1083,7 +1087,7 @@ export class InputHandoffSession {
       return;
     }
     if (!this.step) return;
-    if (this.signInMode ? step.signIn : actionable(step)) {
+    if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
       this.fieldsGoneReads = 0;
       // Whatever page the owner is on is covered, whoever is typing where.
       this.guardSignInPage(step);
@@ -1179,8 +1183,9 @@ export class InputHandoffSession {
     const driver = this.options.driver;
     if (!target.minimized || !driver.raise) return false;
     const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    // Restored only if it came back: a window that could not be found (it was renamed) is still minimized.
-    return !!raised && !('error' in raised);
+    // Restored only if it came back and macOS let its app take the front: a window that could not be found
+    // (it was renamed) is still minimized, and one that stayed behind other apps still has to be brought forward.
+    return !!raised && !('error' in raised) && raised.activated !== false;
   }
 
   /**

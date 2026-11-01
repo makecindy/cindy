@@ -30,6 +30,11 @@ const screens = {
   ]),
   blank: page('https://login.example.com/', []),
   signedIn: page('https://app.example.com/inbox', [node('1.0', 'AXTextArea', { title: 'Reply' })]),
+  noAddress: [
+    node('0', 'AXTextField', { desc: '地址和搜索栏', hasValue: true }),
+    node('1', 'AXWebArea', { frame }),
+    node('1.0', 'AXTextField', { title: 'Password', secure: true }),
+  ],
   address: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Street' })]),
 };
 
@@ -150,6 +155,23 @@ describe('a sign-in step', () => {
     run.session.cancel();
   });
 
+  it('brings a restored window forward again when macOS refused its first activation', async () => {
+    const { driver, state } = desktop('password');
+    state.minimized = true;
+    let calls = 0;
+    const raise = driver.raise!.bind(driver);
+    driver.raise = async (target) => {
+      calls++;
+      const raised = await raise(target);
+      state.minimized = false;
+      return calls === 1 ? { ...raised, activated: false } : raised;
+    };
+    const run = start(driver, { app: 'Google Chrome', windowTitle: 'Sign in' });
+    await run.session.start();
+    expect(calls).toBeGreaterThanOrEqual(2);
+    run.session.cancel();
+  });
+
   it('says so when macOS refused to bring the window forward', async () => {
     const { driver } = desktop();
     const run = start(driver);
@@ -183,6 +205,18 @@ describe('a sign-in step', () => {
     );
     expect(run.latest().directSignIn).toBe(true);
     expect(run.guarded).toContain('https://login.example.com/');
+    run.session.cancel();
+  });
+
+  it('keeps a password step whose page address went missing as a step, instead of calling the sign-in done', async () => {
+    const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    // The next step still asks for a password, but the browser no longer reports the page's address.
+    state.screen = 'noAddress';
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
     run.session.cancel();
   });
 
