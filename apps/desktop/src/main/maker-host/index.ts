@@ -186,6 +186,11 @@ import {
   reconcileCodexAgentProxyEnv,
 } from '../remote-ssh/agent-proxy.js';
 import {
+  assertRemoteCodexModelSupportsImages,
+  cleanupRemoteCodexSessionImages,
+  stageRemoteCodexImageFiles,
+} from '../remote-ssh/remote-codex-attachments.js';
+import {
   createSshPiDaemonTransport,
   createRemotePiFileOps,
   resolveRemotePiBinaryPath,
@@ -2333,6 +2338,23 @@ export function getMaker(): Maker {
         const remoteHost = getRemoteSshPool().get(remoteHostId);
         if (!remoteHost) throw new Error(`remote SSH host "${remoteHostId}" is not connected`);
         return createRemotePiFileOps(remoteHost);
+      },
+      stageRemoteCodexImages: async ({ remoteHostId, sessionId, model, images }) => {
+        if (images.length === 0) return [];
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost || remoteHost.getStatus() !== 'ready') {
+          throw new Error(`Remote Codex image upload requires a connected SSH host (${remoteHostId})`);
+        }
+        const agent = _codexAgent;
+        if (!agent) throw new Error('Remote Codex is not ready');
+        const models = await agent.listRemoteModels(remoteHostId);
+        assertRemoteCodexModelSupportsImages(models, model);
+        return await stageRemoteCodexImageFiles({ remoteHost, sessionId, images });
+      },
+      cleanupRemoteCodexImages: async ({ remoteHostId, sessionId }) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost || remoteHost.getStatus() !== 'ready') return;
+        await cleanupRemoteCodexSessionImages({ remoteHost, sessionId });
       },
       getRemoteCodexTransport: (remoteHostId) => {
         const remoteHost = getRemoteSshPool().get(remoteHostId);

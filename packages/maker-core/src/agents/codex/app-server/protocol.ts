@@ -129,6 +129,8 @@ export interface CodexModelListItem {
   defaultReasoningEffort: ReasoningEffort;
   additionalSpeedTiers: string[];
   serviceTiers: Array<{ id: string; name: string; description: string }>;
+  /** Model-input modalities reported by app-server, e.g. text/image. */
+  inputModalities?: string[];
   isDefault: boolean;
   [k: string]: unknown;
 }

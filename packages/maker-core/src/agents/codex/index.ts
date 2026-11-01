@@ -62,6 +62,7 @@ import {
   type OneShotOptions,
   type PinnedSkillInvocation,
   type RefreshLocalModelsOptions,
+  type RemoteCodexImageAttachment,
   type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
@@ -1332,9 +1333,41 @@ function userMessageText(content: UserMessage['content']): string {
  *
  * 远程 http(s):// 图片不动 (resizer 不抓远程图)。失败安全降级回原 path。
  */
+export interface RemoteAttachmentTaskQueue {
+  enqueue<T>(work: () => Promise<T>): Promise<T>;
+  drain(): Promise<void>;
+}
+
+/** Serialize per-session remote attachment work so cleanup cannot overtake uploads. */
+export function createRemoteAttachmentTaskQueue(): RemoteAttachmentTaskQueue {
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    enqueue<T>(work: () => Promise<T>): Promise<T> {
+      const result = tail.then(work, work);
+      tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+    async drain(): Promise<void> {
+      await tail;
+    },
+  };
+}
+
+export interface ToAppServerInputOptions {
+  /**
+   * SSH Codex only: replace resized local image paths with paths on the remote
+   * host. The callback must preserve input order and fail closed on upload or
+   * model-capability errors.
+   */
+  stageLocalImages?: (
+    images: readonly RemoteCodexImageAttachment[],
+  ) => Promise<readonly string[]>;
+}
+
 export async function toAppServerInput(
   content: UserMessage['content'],
   workingDir?: string,
+  options?: ToAppServerInputOptions,
 ): Promise<UserInput[]> {
   if (typeof content === 'string') {
     return [{ type: 'text', text: content }];
@@ -1352,6 +1385,32 @@ export async function toAppServerInput(
   const resizedPaths = new Map<number, string>();
   for (const [idx, p] of localImageJobs) {
     resizedPaths.set(idx, await p);
+  }
+
+  if (options?.stageLocalImages && localImageJobs.size > 0) {
+    const localImages: RemoteCodexImageAttachment[] = [];
+    const localImageIndexes: number[] = [];
+    content.forEach((block, idx) => {
+      if (block.type !== 'image') return;
+      const raw = block.path;
+      if (raw.startsWith('http://') || raw.startsWith('https://')) return;
+      localImageIndexes.push(idx);
+      localImages.push({
+        path: resizedPaths.get(idx) ?? stripFileUrl(raw),
+        ...(block.mimeType ? { mimeType: block.mimeType } : {}),
+      });
+    });
+    const staged = await options.stageLocalImages(localImages);
+    if (
+      !Array.isArray(staged)
+      || staged.length !== localImageIndexes.length
+      || staged.some((candidate) => typeof candidate !== 'string' || candidate.length === 0)
+    ) {
+      throw new Error('Remote Codex image staging returned an invalid path list');
+    }
+    localImageIndexes.forEach((idx, stagedIndex) => {
+      resizedPaths.set(idx, staged[stagedIndex]!);
+    });
   }
 
   type PlannedInput = UserInput | { type: 'referencedPathsPreamble' } | { type: 'requestText'; text: string };
@@ -4830,6 +4889,12 @@ assertRouteCurrent();
 
     /** Phase 3: mutable 配置, 下一个 turn/start 透传; resume 时也透传一次。 */
     let mutableModel = opts.model;
+    const remoteHostId = opts.remoteHostId;
+    const remoteAttachmentScope = sid || opts.sessionInstanceId || randomUUID();
+    const stageRemoteCodexImagesDep = this.deps.stageRemoteCodexImages;
+    const cleanupRemoteCodexImagesDep = this.deps.cleanupRemoteCodexImages;
+    let remoteImagesStaged = false;
+    const remoteAttachmentQueue = createRemoteAttachmentTaskQueue();
     /**
      * 运行时 provider 路由(会话创建时取 opts.providerId,setModel 可带新值覆盖)。
      * host 侧的 provider route 与它必须同步,窗口上限按 (provider, model) 解析。
@@ -6692,6 +6757,37 @@ assertRouteCurrent();
       return undefined;
     }
 
+    const toCodexInput = async (content: UserMessage['content']): Promise<UserInput[]> => {
+      const hasLocalImage = typeof content !== 'string' && content.some((block) => {
+        if (block.type !== 'image') return false;
+        const raw = block.path;
+        return !raw.startsWith('http://') && !raw.startsWith('https://');
+      });
+      if (remoteHostId && hasLocalImage && !stageRemoteCodexImagesDep) {
+        throw new Error(
+          'Remote Codex image upload is unavailable in this Cindy host; update Cindy before sending local images.',
+        );
+      }
+      const stageLocalImages = remoteHostId && stageRemoteCodexImagesDep
+        ? async (images: readonly RemoteCodexImageAttachment[]) => {
+            if (closed) throw new Error('Remote Codex session closed before image upload');
+            if (images.length > 0) remoteImagesStaged = true;
+            return await remoteAttachmentQueue.enqueue(() => stageRemoteCodexImagesDep({
+              remoteHostId,
+              sessionId: remoteAttachmentScope,
+              model: mutableCatalogModel ?? mutableModel,
+              providerId: mutableProviderId ?? null,
+              images,
+            }));
+          }
+        : undefined;
+      return toAppServerInput(
+        content,
+        opts.workingDir,
+        stageLocalImages ? { stageLocalImages } : undefined,
+      );
+    };
+
     const toTurnInput = async (
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
@@ -6703,13 +6799,13 @@ assertRouteCurrent();
         await assertReviewMessageContentPaths(content, opts.workingDir, reviewReadGrants);
         // Review never resolves leading slash text as a user/project Skill. Its
         // prompt and evidence must stay independent from task customizations.
-        return toAppServerInput(content, opts.workingDir);
+        return toCodexInput(content);
       }
       if (typeof content !== 'string') {
         if (pinnedSkill) {
           throw new Error('A pinned Skill invocation requires a text command');
         }
-        return toAppServerInput(content, opts.workingDir);
+        return toCodexInput(content);
       }
 
       const slash = parseLeadingSlashToken(content.trim());
@@ -6732,7 +6828,7 @@ assertRouteCurrent();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
-      if (!slash) return toAppServerInput(content, opts.workingDir);
+      if (!slash) return toCodexInput(content);
 
       try {
         const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
@@ -6741,7 +6837,7 @@ assertRouteCurrent();
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
           slash.name,
         );
-        if (!skill) return toAppServerInput(content, opts.workingDir);
+        if (!skill) return toCodexInput(content);
 
         const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
         const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
@@ -6752,7 +6848,7 @@ assertRouteCurrent();
           name: slash.name,
           error: String(err),
         });
-        return toAppServerInput(content, opts.workingDir);
+        return toCodexInput(content);
       }
     };
 
@@ -13111,6 +13207,19 @@ assertRouteCurrent();
       await releaseCurrentThreadSubscription('session close subscription release', {
         retireHostOnFailure: opts.retireHostOnCleanupFailure ?? true,
       });
+      // close() is synchronous up to this point, so no new upload can be queued
+      // after `closed = true`. Drain every upload that started before cleanup.
+      await remoteAttachmentQueue.drain();
+      if (remoteImagesStaged && remoteHostId && cleanupRemoteCodexImagesDep) {
+        try {
+          await cleanupRemoteCodexImagesDep({
+            remoteHostId,
+            sessionId: remoteAttachmentScope,
+          });
+        } catch (e) {
+          log.warn('remote Codex image cleanup failed', { error: String(e) });
+        }
+      }
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────

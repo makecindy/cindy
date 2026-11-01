@@ -193,6 +193,10 @@ export function mapCodexAppServerModelsToCatalog(
       ...(Array.isArray(raw.additionalSpeedTiers) ? raw.additionalSpeedTiers : []),
     ];
     const supportsFastMode = tiers.some((tier) => tier === 'priority' || tier === 'fast');
+    const inputModalities =
+      Array.isArray(raw.inputModalities) && raw.inputModalities.every((value) => typeof value === 'string')
+        ? raw.inputModalities
+        : undefined;
     const model: CatalogModel = {
       id: slug,
       discoveredMetadata: pickModelMetadata({
@@ -204,6 +208,8 @@ export function mapCodexAppServerModelsToCatalog(
           Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
             ? supportsFastMode
             : undefined,
+        supportsImageInput:
+          inputModalities !== undefined ? inputModalities.includes('image') : undefined,
       }),
       name: str(raw.displayName) ?? slug,
       group: 'gpt',
@@ -222,6 +228,9 @@ export function mapCodexAppServerModelsToCatalog(
         ? { supportsFastMode }
         : {}),
       supportsUltrafastMode: tiers.includes('ultrafast'),
+      ...(inputModalities !== undefined
+        ? { supportsImageInput: inputModalities.includes('image') }
+        : {}),
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     out.push(model);
