@@ -297,6 +297,33 @@ describe('mobile native deep-link redirects', () => {
     expect(redirectSystemPath({path, initial: true})).toBe('/');
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：redirectSystemPath 将外部任务链接路由到真实 sessions 页面并映射设备与消息锚点参数。
+  // - Bug／规则依据：#8205 与 protocol-compatibility.md「任务链接保留所属电脑」。
+  // - 现有覆盖缺口：既有测试只确认 /sessions 路由保持原样，未覆盖生产者发出的 /session 深链。
+  // - 最小失败输入：cindy://session/s-123?device=host-7&message=msg-9。
+  // - tier：unit；直接调用 native intent 生产入口，不启动原生 runtime 或网络。
+  describe('session task links', () => {
+    it.each([true, false])('routes canonical and legacy links with their device and message target (initial=%s)', initial => {
+      for (const path of [
+        'cindy://session/s-123?device=host-7&message=msg-9&source=history',
+        'cindycn://session/s-123?device=host-7&message=msg-9&source=history',
+        'xdt-maker://session/s-123?device=host-7&message=msg-9&source=history',
+        '/session/s-123?device=host-7&message=msg-9&source=history',
+      ]) {
+        expect(redirectSystemPath({ path, initial })).toBe(
+          '/sessions/s-123?deviceId=host-7&focusClientId=msg-9&source=history',
+        );
+      }
+    });
+
+    it.each([true, false])('keeps invalid singular session links out of an unmatched route (initial=%s)', initial => {
+      for (const path of ['/session/', '/session/%E0%A4%A', '/session/%2F']) {
+        expect(redirectSystemPath({ path, initial })).toBe(initial ? '/' : null);
+      }
+    });
+  });
+
   it('preserves existing auth and ordinary deep-link behavior', () => {
     expect(redirectSystemPath({
       path: 'cindy://auth?code=abc',
