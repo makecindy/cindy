@@ -10,6 +10,31 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 3.2a: start a Hermes session as an expert (`unit-tested`); ADR 0005 orchestrator plan
+
+**Owner decisions:** build order "3.2 → Hermes as Orca lead → expert creator → orchestrator expert" ("Let's go with that"). Recorded as `docs/decisions/0005-orchestrator-and-expert-creator.md`; "Autonomous multi-agent orchestration" un-parked with limits (depth 1, every job a visible session, new experts approved by the owner = option A, the recommended default since the owner did not pick). New rows 3.7–3.9.
+
+**Changes (3.2a):**
+- `apps/desktop/src/main/maker-ipc/expertSessions.ts` (new): `ExpertSessionStore`. Pending pick in memory (30 min limit); bound to the next fresh Hermes session on its first send and kept in `~/.cindy-harness/expert-sessions.json` (temp + rename, 0600). `resolveFirstTurnPreamble` fails closed: expert that no longer loads, non-Hermes expert, or a session on a different route than the expert's `model:` (`createRouteMatcher` over `resolveModelRoute`, same model and base URL) throws a message naming the fix. No model switch. `buildExpertPreamble` is new prompt text for a new feature (no existing prompt touched).
+- `expertsHandlers.ts` + `channels.ts` + `register.ts`: `maker:experts:get-pending`, `set-pending` (slug validated as a plain folder name), `session-binding`, push `maker:experts:session-event`. Preload + `vite-env.d.ts`.
+- `packages/maker-core/src/agents/base-agent.ts`: optional `AgentDeps.resolveHermesExpertPreamble`. `agents/hermes/agent.ts`: on a fresh (non-`--resume`) handle, the first accepted `send()` prepends the preamble to the text Hermes receives (same mechanism as the daemon's first-turn preamble; the stored Cindy message is unchanged); a refused or failed send keeps it pending. Wired in `maker-host/index.ts`. No CC/Codex/Pi code touched.
+- Renderer: `HermesExpertPicker.tsx` (native select beside the engine selector, Hermes drafts only, hidden when there are no experts; broken and non-Hermes experts listed disabled with the reason), `HermesExpertLabel.tsx` (header chip: name; hover = route, error, folder), mounted in `NewMakerDraftRoute.tsx` and `SessionContentHeader.tsx`.
+
+**Verification:** `unit-tested`. New tests: `expertSessions.test.ts` (10, real files), `hermesExpertPicker.test.tsx` (3), Hermes `agent.test.ts` +3 (36/36). Mutation checks, each caught by one failing test then restored: preamble resent on every turn; pending not cleared on bind; route check skipped. `pnpm typecheck` green (serial form). Not live-proven yet.
+
+**Live check for the owner (closes 3.2a, and 3.5b for Code Reviewer):**
+1. `mkdir -p ~/.cindy-harness/experts && cp -R docs/experts-examples/code-reviewer ~/.cindy-harness/experts/`
+2. Restart the dev app, new task, engine Hermes, model qwen3-8b, pick "Code Reviewer" in the Expert menu, send "who are you and what do you do?".
+3. Expect: a Code Reviewer answer, header chip "Code Reviewer", picker back to "No expert". Then add `model: local-small` to that expert.md (a route on another model), start another one on qwen3-8b, and expect a refusal naming the route.
+
+**Open / learned:**
+- 3.2b: `tools.yaml`, `skills/`, auto-selecting the expert's model, non-Hermes experts.
+- A pending pick binds to *any* fresh Hermes session that sends first within 30 min (e.g. a scheduled task). Acceptable for one user; revisit if it bites.
+- If the daemon's `resume-reset` path starts a new Hermes session mid-way, that session does not get the expert prompt again (the handle was opened with `--resume`). Logged, not fixed.
+- For 3.7: Orca is hidden for Hermes leads in the draft page, and the Hermes adapter ignores `userPrompt`/Orca instructions, so "check whether Hermes can lead" is answered: not today; it needs building.
+
+---
+
 ## 2026-11-01 — ROADMAP 2.5b `live-proven`; Phase 2 closed apart from 2.4 polish (owner)
 
 - First attempt failed before the banner: after the 2.4c test the owner reloaded Gemma in LM Studio with LM Studio's default (small) context, and LM Studio rejected a ~13.7k-token Hermes request as too large. Not a Cindy defect; the owner reloaded Gemma with a large context and saved it as the model default.

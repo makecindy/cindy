@@ -97,6 +97,8 @@ import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/
 import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
 import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
+import { createRouteMatcher, getDesktopExpertSessionStore } from '../maker-ipc/expertSessions.js';
+import { resolveModelRoute } from '@cindy/maker-core/model-route-resolver';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import {
@@ -2846,6 +2848,13 @@ export function getMaker(): Maker {
             removeServer: removeHermesMcpServer,
           },
         }),
+        // Experts (ROADMAP 3.2a): the picked expert's prompt rides the first turn of a
+        // fresh session; a broken expert or wrong model route refuses the turn.
+        resolveHermesExpertPreamble: async (input) =>
+          getDesktopExpertSessionStore().resolveFirstTurnPreamble(
+            input,
+            createRouteMatcher((model) => resolveModelRoute(model)),
+          ),
         auth: HERMES_HOST_AUTH,
         runtimeConfig: { userDataPath: app.getPath('userData') },
         logger: desktopMakerLogger,

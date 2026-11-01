@@ -797,6 +797,7 @@ const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
 const fanOutMakerEvent = createIpcFanOut('maker:event');
 const fanOutMakerAgentsChanged = createIpcFanOut('maker:agents:changed');
 const fanOutMakerExpertsChanged = createIpcFanOut('maker:experts:changed');
+const fanOutMakerExpertsSessionEvent = createIpcFanOut('maker:experts:session-event');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
@@ -6271,6 +6272,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       list: (): Promise<import('@cindy/maker-core/experts').ExpertEntry[]> =>
         ipcRenderer.invoke('maker:experts:list'),
       onChanged: fanOutMakerExpertsChanged,
+      getPending: (): Promise<string | null> => ipcRenderer.invoke('maker:experts:get-pending'),
+      setPending: (slug: string | null): Promise<string | null> =>
+        ipcRenderer.invoke('maker:experts:set-pending', slug),
+      getSessionBinding: (
+        sessionId: string,
+      ): Promise<import('../main/maker-ipc/expertSessions').ExpertSessionBindingView | null> =>
+        ipcRenderer.invoke('maker:experts:session-binding', sessionId),
+      onSessionEvent: fanOutMakerExpertsSessionEvent,
     },
     providers: {
       list: (): Promise<import('@cindy/maker-core/providers-file').ProviderFileResult> =>

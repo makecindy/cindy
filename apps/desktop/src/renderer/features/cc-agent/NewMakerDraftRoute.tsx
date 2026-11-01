@@ -40,6 +40,7 @@ import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibili
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NEW_MAKER_DRAFT_KEY } from './newMakerDraftKeys';
+import { HermesExpertPicker } from './HermesExpertPicker';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
@@ -5924,14 +5925,18 @@ export function NewMakerDraftRoute() {
                     middleToolbarSlot={
                       unifiedModelPanelActive
                       && !(availableAgentsLoaded && availableVendors.has('hermes')) ? undefined : (
-                        <AgentSelect
-                          value={draft.vendor}
-                          onChange={handleVendorChange}
-                          visualVariant="create-agent"
-                          className="shrink-0"
-                          disabled={wtCreating}
-                          hiddenVendors={hiddenSwitcherVendors}
-                        />
+                        <>
+                          <AgentSelect
+                            value={draft.vendor}
+                            onChange={handleVendorChange}
+                            visualVariant="create-agent"
+                            className="shrink-0"
+                            disabled={wtCreating}
+                            hiddenVendors={hiddenSwitcherVendors}
+                          />
+                          {/* ROADMAP 3.2a: start this Hermes task as an expert. */}
+                          {draft.vendor === 'hermes' ? <HermesExpertPicker /> : null}
+                        </>
                       )
                     }
                     onUnifiedDraftSelect={handleUnifiedDraftSelect}

@@ -12,7 +12,7 @@ import * as net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AgentStartupStoppedError,
@@ -650,6 +650,64 @@ describe('HermesAgent', () => {
       expect(daemon.sendTexts).toEqual([]);
       expect(daemon.methods).not.toContain('query/send');
       expect(checked).toEqual(['gemma-local:2']);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('prepends the expert preamble to the first turn of a fresh session only (ROADMAP 3.2a)', async () => {
+    const daemon = await startDaemon();
+    const asked: Array<{ sessionId: string; model: string }> = [];
+    const handle = await start(buildAgent({
+      deps: {
+        resolveHermesExpertPreamble: async (input) => {
+          asked.push(input);
+          return '[Cindy expert: Code Reviewer]\nReview carefully.';
+        },
+      },
+    }));
+    try {
+      await handle.send({ type: 'user', content: 'who are you?' });
+      expect(daemon.sendTexts[0]).toBe('[Cindy expert: Code Reviewer]\nReview carefully.\n\nwho are you?');
+      expect(asked).toEqual([{ sessionId: 'business-1', model: 'hermes-default' }]);
+      await handle.send({ type: 'user', content: 'second' }).catch(() => undefined);
+      expect(asked).toHaveLength(1);
+      expect(daemon.sendTexts.slice(1).every((t) => !t.includes('Cindy expert'))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('never re-sends the expert preamble into a resumed Hermes session', async () => {
+    const daemon = await startDaemon();
+    const resolver = vi.fn(async () => 'EXPERT');
+    const handle = await startResuming(buildAgent({ deps: { resolveHermesExpertPreamble: resolver } }), 'hermes-old-1');
+    try {
+      await handle.send({ type: 'user', content: 'hi' });
+      expect(resolver).not.toHaveBeenCalled();
+      expect(daemon.sendTexts[0]).toBe('hi');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('refuses the turn when the expert cannot be applied, and retries it on the next send', async () => {
+    const daemon = await startDaemon();
+    let broken = true;
+    const handle = await start(buildAgent({
+      deps: {
+        resolveHermesExpertPreamble: async () => {
+          if (broken) throw new Error('Expert "Code Reviewer": this expert runs on route "local-backup"');
+          return 'EXPERT';
+        },
+      },
+    }));
+    try {
+      await expect(handle.send({ type: 'user', content: 'hi' })).rejects.toThrow('runs on route "local-backup"');
+      expect(daemon.methods).not.toContain('query/send');
+      broken = false;
+      await handle.send({ type: 'user', content: 'hi' });
+      expect(daemon.sendTexts[0]).toBe('EXPERT\n\nhi');
     } finally {
       await handle.close();
     }
