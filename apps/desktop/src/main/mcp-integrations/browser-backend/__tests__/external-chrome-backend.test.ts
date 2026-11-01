@@ -871,6 +871,212 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     expect(started.message).toContain('could not be stopped');
   });
 
+  it('reclaims the CDP port when the vendored stop itself fails, instead of hard-blocking', async () => {
+    // The stop dispatch can fail in-process while Chrome keeps owning the port.
+    // The early `!ok` return skipped the teardown entirely, so the same Windows
+    // survivor hard-blocked every later request including start.
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'stop') {
+          return {
+            ok: false,
+            action: req.action,
+            status: 500,
+            errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+            message: 'stop dispatch failed',
+          };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: true } };
+      }),
+    };
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: () => runtime,
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      terminateManagedPortOwner,
+      isBrowserGone: vi.fn(async () => true),
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+    await backend.call({ action: 'start', proxyServer: 'http://proxy-a.test:8080' });
+
+    const stopped = await backend.call({ action: 'stop' });
+
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(terminateManagedPortOwner).toHaveBeenCalledWith({
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+      cdpPort: 18800,
+      userDataDir: '/managed/browser/Cindy/user-data',
+    });
+    expect(stopped).toMatchObject({ ok: true, data: { stopped: true } });
+    // The verified teardown must lift the block: later requests are not refused.
+    await expect(backend.call({ action: 'tabs' })).resolves.toMatchObject({ ok: true });
+  });
+
+  it('keeps the original stop error for a foreign profile instead of killing the active browser', async () => {
+    // A profile-scoped stop can 404 on a stale/unknown profile name BEFORE any
+    // dispatch — the error says nothing about the browser this backend runs.
+    // Forced teardown here would destroy the active browser and its tabs for a
+    // misdirected stop, so the rescue must stay off and the original error must
+    // survive untouched.
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'stop') {
+          // The vendored server 404s the unknown profile before any dispatch.
+          return {
+            ok: false,
+            action: req.action,
+            status: 404,
+            errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+            message: 'Profile "Cindy-stale" not found.',
+          };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: true } };
+      }),
+    };
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: () => runtime,
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      terminateManagedPortOwner,
+      isBrowserGone: vi.fn(async () => true),
+      managedUserDataDir: '/managed/browser/Cindy-real/user-data',
+      managedProfileName: 'Cindy-real',
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+    await backend.call({ action: 'start', proxyServer: 'http://proxy-a.test:8080' });
+
+    const stopped = await backend.call({ action: 'stop', profile: 'Cindy-stale' });
+
+    expect(terminateManagedPortOwner).not.toHaveBeenCalled();
+    expect(stopped.ok).toBe(false);
+    expect(stopped.message).toContain('Profile "Cindy-stale" not found');
+  });
+
+  it('still reclaims after a failed stop that targeted this backend\'s own profile', async () => {
+    // The MCP stop tool always threads the resolved profile name, so the
+    // rescue must also fire when the request names the active managed profile.
+    const runtime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'stop') {
+          return {
+            ok: false,
+            action: req.action,
+            status: 500,
+            errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+            message: 'stop dispatch failed',
+          };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: true } };
+      }),
+    };
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: () => runtime,
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      terminateManagedPortOwner,
+      isBrowserGone: vi.fn(async () => true),
+      managedUserDataDir: '/managed/browser/Cindy-real/user-data',
+      managedProfileName: 'Cindy-real',
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+    await backend.call({ action: 'start', proxyServer: 'http://proxy-a.test:8080' });
+
+    const stopped = await backend.call({ action: 'stop', profile: 'Cindy-real' });
+
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(stopped).toMatchObject({ ok: true, data: { stopped: true } });
+  });
+
+  it('completes a route switch when the vendored stop fails and the termination reclaims the port', async () => {
+    // stopCurrentRuntime returned on `!stopped.ok` before attempting the
+    // teardown, so a failed stop during a route switch hard-blocked with the
+    // survivor still holding the port.
+    const failingStopRuntime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'stop') {
+          return {
+            ok: false,
+            action: req.action,
+            status: 500,
+            errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+            message: 'stop dispatch failed',
+          };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: true } };
+      }),
+    };
+    const created: BrowserProxyRoute[] = [];
+    const terminateManagedPortOwner = vi.fn(async () => true);
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: (route) => {
+        created.push(route);
+        return route.mode === 'proxied' ? failingStopRuntime : fakeRuntime();
+      },
+      createProxyAuth: () => ({ start: async () => {}, dispose: async () => {} }),
+      terminateManagedPortOwner,
+      isBrowserGone: vi.fn(async () => true),
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+    await backend.call({ action: 'start', proxyServer: 'http://proxy-a.test:8080' });
+
+    const switched = await backend.call({ action: 'start' });
+
+    expect(switched.ok).toBe(true);
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(created.map(({ mode }) => mode)).toEqual(['proxied', 'direct']);
+  });
+
+  it('reclaims the CDP port in start-failure cleanup instead of hard-blocking the route', async () => {
+    // A failing proxied start funnels through stopAndForget; its bare vendored
+    // stop left the just-launched Chrome owning the port and hard-blocked the
+    // route until an explicit verified stop — the termination belongs here too,
+    // so the next start can recover on its own.
+    let killed = false;
+    const proxiedRuntime = {
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        if (req.action === 'start') return { ok: true, action: req.action, status: 200 };
+        if (req.action === 'stop') {
+          // Cleanup stop cannot prove the exit (Windows orphans survive).
+          return { ok: true, action: req.action, status: 200, data: { stopped: false } };
+        }
+        return { ok: true, action: req.action, status: 200, data: { running: !killed } };
+      }),
+    };
+    const isBrowserGone = vi.fn(async () => killed);
+    const terminateManagedPortOwner = vi.fn(async () => {
+      killed = true;
+      return true;
+    });
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: (route) => (route.mode === 'proxied' ? proxiedRuntime : fakeRuntime()),
+      createProxyAuth: () => ({
+        start: async () => { throw new Error('auth setup failed'); },
+        dispose: async () => {},
+      }),
+      terminateManagedPortOwner,
+      isBrowserGone,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      cdpHttpUrl: 'http://127.0.0.1:18800',
+    });
+
+    const failedStart = await backend.call({
+      action: 'start',
+      proxyServer: 'http://proxy.test:8080',
+    });
+
+    expect(failedStart.ok).toBe(false);
+    expect(terminateManagedPortOwner).toHaveBeenCalledTimes(1);
+    expect(terminateManagedPortOwner).toHaveBeenCalledWith(expect.objectContaining({
+      userDataDir: '/managed/browser/Cindy/user-data',
+    }));
+    // No hard block: a later plain start must launch again without needing an
+    // explicit stop first.
+    const restarted = await backend.call({ action: 'start' });
+    expect(restarted.ok).toBe(true);
+  });
+
   it('installs the lifetime guard for credential-free proxied launches too', async () => {
     const auth = { start: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
     const routes: BrowserProxyRoute[] = [];
