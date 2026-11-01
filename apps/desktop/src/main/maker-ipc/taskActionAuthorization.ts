@@ -17,6 +17,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'update_goal',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',

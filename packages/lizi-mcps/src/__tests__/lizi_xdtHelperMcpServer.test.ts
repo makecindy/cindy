@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
+import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -44,6 +45,54 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // agent-user-parity.md: Goal edits must be discoverable and use the live caller identity
+  // and ordinary authorization. Existing tests have no Goal tools. Minimum: shared bridge
+  // caller changes, denied edit, blank/foreign-target arguments. Unit, real MCP wire.
+  it.each(['claude-code', 'codex', 'pi'] as const)('scopes Goal tools to the live %s task and authorizes edits', async (agentKind) => {
+    let context: LiziMcpSessionContext = { agentKind, workingDir: '/fixture', sessionId: 'first' };
+    let denied = false;
+    const get = vi.fn(async () => ({ ok: true as const, goal: null }));
+    const update = vi.fn(async () => ({ ok: false as const, errorCode: 'GOAL_NOT_FOUND', message: 'No goal' }));
+    const authorizeCall = vi.fn(async () => denied
+      ? { ok: false as const, errorCode: 'TEST_DENIED', message: 'Denied' }
+      : { ok: true as const });
+    const server = createXdtHelperMcpServer({ sessionGoal: { get, update }, authorizeCall }, {
+      agentKind, workingDir: '', getSessionContext: () => context,
+    });
+    const client = new Client({ name: 'goal-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args = {}) => parsePayload(await client.callTool({
+      name: 'call_tool', arguments: { name, args },
+    }));
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({
+        name: 'control', description: expect.stringContaining('get_goal / update_goal'),
+      })]));
+      const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect(listed.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'get_goal' }), expect.objectContaining({ name: 'update_goal' }),
+      ]));
+      expect(await call('get_goal')).toMatchObject({ ok: true, session_id: 'first', goal: null });
+      expect(get).toHaveBeenCalledExactlyOnceWith(context);
+      context = { ...context, sessionId: 'second' };
+      expect(await call('update_goal', { objective: '  revised goal  ' })).toMatchObject({ ok: false, errorCode: 'GOAL_NOT_FOUND' });
+      expect(update).toHaveBeenCalledExactlyOnceWith(context, 'revised goal');
+      expect(authorizeCall).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'second', tool: 'update_goal' }));
+      for (const args of [{ objective: ' ' }, { objective: 'goal', session_id: 'other' }, { objective: 'goal', maxTurns: 99 }])
+        expect(await call('update_goal', args)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(update).toHaveBeenCalledTimes(1);
+      denied = true;
+      expect(await call('update_goal', { objective: 'denied edit' })).toMatchObject({ ok: false, errorCode: 'TEST_DENIED' });
+      expect(update).toHaveBeenCalledTimes(1);
+      denied = false;
+      context = { ...context, sessionId: undefined };
+      expect(await call('update_goal', { objective: 'unbound edit' })).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(update).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
   // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): a system Skill the owner turned off loses its
   // tools and its text together. Unit: the live switch hides and denies the todo tools for every
   // entry (category list, call_tool, direct tool) while other teammate tools keep working.

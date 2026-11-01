@@ -339,6 +339,7 @@ const ownerWrites = [
   ['cindy_helper', 'continue_workbench_task'],
   ['cindy_helper', 'set_workbench_task_responsibility'],
   ['cindy_helper', 'set_session_runtime'],
+  ['cindy_helper', 'update_goal'],
   ['cindy_orca', 'create_worker'],
   ['cindy_orca', 'send_to_worker'],
   ['cindy_orca', 'switch_focus'],

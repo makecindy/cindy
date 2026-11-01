@@ -7,6 +7,8 @@ import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
 
 import {
   GoalController,
+  GoalControllerInputError,
+  GoalControllerDisposedError,
   GoalSessionRestoreError,
   GoalUpdateSupersededError,
   decideNextGoalState,
@@ -19,6 +21,7 @@ import { buildContinuationDirective, buildFirstTurnDirective } from '../directiv
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
+import { createSessionGoalCallbacks } from '../../mcp-integrations/sessionGoal.js';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -525,6 +528,94 @@ describe('GoalController', () => {
   });
 
   // ── setGoal / updateGoal ──
+  // Goal MCP API: real controller persistence, UI broadcasts and next-turn objective.
+  // Existing controller-only tests do not pass through the host callback. Unit, in-memory.
+  it('edits a running Goal through the MCP callback without restarting its turn or resetting limits', async () => {
+    const callbacks = createSessionGoalCallbacks({
+      getController: () => h.controller,
+      isCurrentSession: () => true,
+      withAccess: async (_id, operation) => operation(async () => {}),
+    });
+    const context = { sessionId: 's1', agentKind: 'codex' as const, workingDir: '/fixture' };
+    try {
+      await startGoal(h, 'old objective');
+      await h.storage.update('s1', { turnsUsed: 2, tokensUsed: 500, maxTurns: 20, budgetTokens: 10_000 });
+      expect(await callbacks.update(context, 'new objective')).toMatchObject({ ok: true, goal: {
+        objective: 'new objective', status: 'active', turnsUsed: 2, tokensUsed: 500, maxTurns: 20, budgetTokens: 10_000,
+      } });
+      expect(h.session.sends).toHaveLength(1);
+      expect(h.userMessages.at(-1)).toMatchObject({ content: 'new objective', updated: true });
+      expect(h.updates.at(-1)?.goal?.objective).toBe('new objective');
+      h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+      await tick();
+      expect(h.session.sends).toHaveLength(2);
+      expect(h.session.sends.at(-1)?.content).toContain('new objective');
+      expect(h.session.sends.at(-1)?.content).not.toContain('old objective');
+      await h.controller.pauseGoal('s1');
+      expect(await callbacks.get(context)).toMatchObject({ ok: true, goal: { status: 'paused' } });
+      expect(await callbacks.update(context, 'paused edit')).toMatchObject({ ok: true, goal: { status: 'active' } });
+      expect(h.session.sends).toHaveLength(3);
+      expect(h.session.sends.at(-1)?.content).toContain('paused edit');
+      expect(await callbacks.get(context)).toMatchObject({ ok: true, goal: { objective: 'paused edit', status: 'active' } });
+    } finally { await h.controller.dispose(); }
+  });
+
+  it('distinguishes absent Goals from an unavailable host without starting dormant work', async () => {
+    let controller: GoalController | null = h.controller;
+    const callbacks = createSessionGoalCallbacks({
+      getController: () => controller, isCurrentSession: () => true,
+      withAccess: async (_id, operation) => operation(async () => {}),
+    });
+    const context = { sessionId: 's1', agentKind: 'codex', workingDir: '/fixture' };
+    expect(await callbacks.get(context)).toEqual({ ok: true, goal: null });
+    expect(await callbacks.update(context, 'new goal')).toMatchObject({ ok: false, errorCode: 'GOAL_NOT_FOUND' });
+    await h.storage.upsert(seededGoal());
+    expect(await callbacks.get(context)).toMatchObject({ ok: true, goal: { objective: 'old objective' } });
+    expect(h.session.sends).toHaveLength(0);
+    controller = null;
+    expect(await callbacks.get(context)).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    await h.controller.dispose();
+  });
+
+  it.each([
+    [new GoalControllerInputError('current goal dispatch is still being accepted'), 'INVALID_ARGS'],
+    [new GoalSessionRestoreError(), 'PRECONDITION_FAILED'],
+    [new GoalUpdateSupersededError(), 'PRECONDITION_FAILED'],
+    [new GoalControllerDisposedError(), 'PRECONDITION_FAILED'],
+    [new Error('private failure details'), 'INTERNAL'],
+  ])('reports Goal callback failure %s as %s', async (error, errorCode) => {
+    vi.spyOn(h.controller, 'updateGoal').mockRejectedValueOnce(error);
+    const callbacks = createSessionGoalCallbacks({
+      getController: () => h.controller, isCurrentSession: () => true,
+      withAccess: async (_id, operation) => operation(async () => {}),
+    });
+    const result = await callbacks.update({ sessionId: 's1', agentKind: 'codex', workingDir: '/fixture' }, 'new goal');
+    expect(result).toMatchObject({ ok: false, errorCode });
+    expect(JSON.stringify(result)).not.toContain('private failure details');
+    await h.controller.dispose();
+  });
+
+  it('rejects stale Goal callers before mutation and suppresses reads across controller or account replacement', async () => {
+    let current = false;
+    let controller: GoalController | null = h.controller;
+    let accessible = true;
+    const callbacks = createSessionGoalCallbacks({
+      getController: () => controller, isCurrentSession: () => current,
+      withAccess: async (_id, operation) => operation(async () => { if (!accessible) throw new Error('Account changed'); }),
+    });
+    const context = { sessionId: 's1', agentKind: 'codex', workingDir: '/fixture' };
+    const update = vi.spyOn(h.controller, 'updateGoal');
+    expect(await callbacks.update(context, 'stale write')).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(update).not.toHaveBeenCalled();
+    current = true;
+    for (const invalidate of [() => { current = false; }, () => { controller = null; }, () => { accessible = false; }]) {
+      current = true; controller = h.controller; accessible = true;
+      vi.spyOn(h.controller, 'getStatus').mockImplementationOnce(async () => { invalidate(); return seededGoal(); });
+      expect(await callbacks.get(context)).toMatchObject({ ok: false });
+    }
+    await h.controller.dispose();
+  });
+
   it('blocks an unconfirmed dispatch without retrying duplicate Goal work', async () => {
     const local = makeController();
     vi.spyOn(local.session, 'send').mockImplementation(async (

@@ -114,6 +114,7 @@ import { registerTeammateSkillReader, teammateDeniedTools } from './xdt-helper/t
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
+import { registerGoalTools, type SessionGoalCallbacks } from './xdt-helper/goal.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
@@ -162,7 +163,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
-  control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+  control: '管理任务与项目：get_goal / update_goal 查看与修改当前任务的目标（当前 Cindy 宿主，不可指定其他任务或电脑）；归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
@@ -814,6 +815,8 @@ export interface XdtHelperMcpDeps {
   sessionQueue?: SessionQueueDeps;
   /** 本机 session 的统一控制面；host 注入后注册队列编辑/撤回、插话、停止与运行探针。 */
   sessionControl?: Omit<SessionControlDeps, 'getSessionContext'>;
+  /** Current task's existing Goal Mode objective; does not create a task or goal. */
+  sessionGoal?: SessionGoalCallbacks;
   /**
    * Session handoff 回调。host 注入后, send_to_session 工具注册到 handoff 类目(走
    * call_tool);不注入则工具不出现。此工具是 skill(如 maker-github-issue)做跨会话
@@ -969,6 +972,9 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       setCurrentSessionTitle: deps.setCurrentSessionTitle,
     });
+  }
+  if (deps.sessionGoal) {
+    registerGoalTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.sessionGoal);
   }
   if (deps.createProject) {
     registerCreateProjectTool(registry, {
