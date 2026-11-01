@@ -45,6 +45,7 @@ rules:
         model: 'qwen3-8b',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
+        providerId: 'lmstudio-local',
       });
 
       // Resolve by model name matching the route
@@ -53,6 +54,7 @@ rules:
         model: 'qwen3-8b',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
+        providerId: 'lmstudio-local',
       });
 
       // Resolve by provider/model prefix (including slash in model name)
@@ -61,6 +63,7 @@ rules:
         model: 'other-model',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
+        providerId: 'lmstudio-local',
       });
 
       const routeWithSlashInModel = resolveModelRoute('lmstudio-local/google/gemma-4-26b-a4b-qat', { harnessDir: tmpDir });
@@ -68,6 +71,7 @@ rules:
         model: 'google/gemma-4-26b-a4b-qat',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
+        providerId: 'lmstudio-local',
       });
 
       // Resolve by discovered endpoint models without provider prefix
@@ -79,6 +83,7 @@ rules:
         model: 'google/gemma-4-26b-a4b-qat',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
+        providerId: 'lmstudio-local',
       });
 
       // Unmatched model returns null (home default)

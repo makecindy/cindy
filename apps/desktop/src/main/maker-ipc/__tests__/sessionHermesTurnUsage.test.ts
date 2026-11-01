@@ -142,4 +142,23 @@ describe('recordSessionHermesTurnUsage', () => {
     expect(effects.recordTurnUsageOnMessage).not.toHaveBeenCalled();
     expect(effects.recordSessionTurnTokens).not.toHaveBeenCalled();
   });
+
+  it('labels a per-session route turn with its endpoint, not the home provider', async () => {
+    recordSessionHermesTurnUsage(
+      { readHermesRoute: async () => ({ model: 'deepseek-flash', provider: 'deepseek' }) },
+      session,
+      hermesDone({
+        inputTokens: 1000,
+        outputTokens: 10,
+        model: 'google/gemma-4-26b-a4b-qat',
+        provider: 'lmstudio-local',
+      }),
+      'assistant-2',
+    );
+    await vi.waitFor(() => expect(effects.recordTurnUsageOnMessage).toHaveBeenCalledTimes(1));
+    expect(effects.recordTurnUsageOnMessage.mock.calls[0]![0].turnUsageDetails).toMatchObject({
+      model: 'google/gemma-4-26b-a4b-qat',
+      provider: 'lmstudio-local',
+    });
+  });
 });
