@@ -42,7 +42,12 @@
   工具接线在 `mcp-integrations/mcp-providers.ts`，channel 处理在 `maker-ipc/register.ts`。
 - 工具：`packages/lizi-mcps/src/xdt-helper/list_machines.ts`。
 
-## 5. 后续
+## 5. 验收注意
+
+沙箱里的新任务可能落到上次控制的电脑，侧栏的「本机」只筛选列表，不决定任务发到哪台。登录真实账号验收跨电脑工具前，
+先在沙箱里关掉对真实电脑的控制，确认工具结果里 `isSelf` 是这个沙箱，否则消息会发到真实电脑上的旧版本。
+
+## 6. 后续
 
 按机器执行（`shell` / `read_file` / `await_shell` / `copy_file`）、账号级模型资源、失败时换到另一台、大脑租约按顺序另行交付，
 不在当前实现内。
