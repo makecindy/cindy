@@ -1347,6 +1347,10 @@
       "lock-unreadable": "The local data maintenance lock could not be read or saved. Check access to the data directory, then reopen it after access is restored. Contact support if this continues.",
       "recovery-busy": "Another Cindy instance is checking the local data maintenance lock. Reopen the local data shortly."
     },
+    "passiveCorrupt": {
+      "title": "Shared database can't be recovered",
+      "description": "Cindy is running in read-only / shared mode and will not automatically recover or modify this shared database. If another instance uses the same userData, close it and retry, or start with --isolated."
+    },
     "databaseCleanup": {
       "interruptedTitle": "Database Cleanup Was Interrupted",
       "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
@@ -1361,6 +1365,16 @@
     "preparing": {
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. Fetching the new version, please wait…",
       "progress": "{{progress}}% downloaded"
+    },
+    "initFailed": {
+      "title": "Local database failed to start",
+      "description": "The local database couldn't start. Try again first. If it keeps failing, share the technical details below with the team.",
+      "retry": "Retry Starting Database"
+    },
+    "corrupt": {
+      "title": "Local database can't be opened",
+      "description": "The local database may be damaged, or it may be in use by another Cindy instance sharing the same data. If another instance is open, close it and retry. If the problem persists, no usable backup could restore it automatically; copy the technical details and share them with the team to get help recovering your data.",
+      "copy": "Copy Technical Details"
     },
     "noUpdate": {
       "title": "Local data can't be opened right now",
@@ -11538,6 +11552,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Open conversation",
+      "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
       "hideDetails": "Hide call transcript",
       "transcriptTitle": "Current transcription",
@@ -11606,6 +11622,7 @@
       "unsent": "Not sent · select the text to copy it",
       "hint": "Pause to send. Replies are read aloud with an AI voice. Speak at any time to interrupt.",
       "status": {
+        "questionElsewhere": "A question is waiting in the task · call continues",
         "idle": "Ready when you are",
         "connecting": "Connecting to speech recognition…",
         "listening": "Listening",
@@ -11621,6 +11638,7 @@
         "muted": "Microphone off · You can still listen"
       },
       "errors": {
+        "busy": "Voice is in use by another call, read-aloud, preview or dictation. End it and try again.",
         "connection": "Voice connection interrupted. Your unsent text is kept below.",
         "microphone": "Microphone stopped. Check its permission and connection, then resume.",
         "send": "This message was not accepted. Your text is kept below.",
@@ -12507,6 +12525,7 @@
         "titleLocal": "Run the Agent on this computer again?",
         "titleOther": "Run the Agent on “{{device}}”?",
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
         "cancel": "Keep as is"
       }

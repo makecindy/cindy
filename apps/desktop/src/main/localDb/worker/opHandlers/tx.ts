@@ -2245,6 +2245,8 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。
 // 两份实现必须同步,typecheck 抓不到 drift。
@@ -2293,7 +2295,9 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
           code: 'PRECONDITION_FAILED',
         });
       }
-      if ((existing as { source?: unknown }).source === 'bot') {
+      // 例行/渠道专线与普通任务一起出现在任务列表，生命周期与普通任务一致（同 setTerminalStatus）；
+      // 伙伴主对话等其余 bot 会话仍必须走 Bot 生命周期。
+      if ((existing as { source?: unknown }).source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
         throw Object.assign(new Error(`Bot 任务必须通过 Bot 生命周期管理: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',
         });
@@ -2329,8 +2333,6 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     status: 'active' | 'archived';
   }>;
 }
-
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
 
 /** Atomically persist a terminal task status and its local-close fence. */
 function sessionsSetTerminalStatus(db: Database.Database, args: unknown): SessionsSetTerminalStatusResult {

@@ -25,4 +25,18 @@ describe('resolveLocalDbFatalView', () => {
     expect(resolveLocalDbFatalView('error')).toBe('no-update');
     expect(resolveLocalDbFatalView(undefined)).toBe('no-update');
   });
+
+  it('DB_INIT_FAILED → init-failed、DB_CORRUPT_NO_BACKUP → corrupt（与更新状态无关，不引导更新）', () => {
+    const statuses: (UpdateStatusValue | undefined)[] = ['ready', 'checking', 'idle', 'error', undefined];
+    for (const status of statuses) {
+      expect(resolveLocalDbFatalView(status, 'DB_INIT_FAILED')).toBe('init-failed');
+      expect(resolveLocalDbFatalView(status, 'DB_CORRUPT_NO_BACKUP')).toBe('corrupt');
+    }
+  });
+
+  it('MIGRATE_FAILED / 未知码仍按更新状态映射（保持原行为）', () => {
+    expect(resolveLocalDbFatalView('ready', 'MIGRATE_FAILED')).toBe('install-update');
+    expect(resolveLocalDbFatalView('idle', 'MIGRATE_FAILED')).toBe('no-update');
+    expect(resolveLocalDbFatalView('ready', undefined)).toBe('install-update');
+  });
 });

@@ -1334,6 +1334,20 @@
       "lock-unreadable": "不能讀存此機資料之維護鎖。請察資料目錄之存取權限；復存取後重啟。若仍未成，請聯絡支援人員。",
       "recovery-busy": "另一 Cindy 執行個體方察此機資料之維護鎖。請稍後重啟。"
     },
+    "passiveCorrupt": {
+      "title": "共享資料庫不可復原",
+      "description": "今以唯讀／共享之式運行，Cindy 不自行復原或改動此共享資料庫。若另有實例共用同一 userData，請先關閉而重試，或改以 --isolated 啟動。"
+    },
+    "corrupt": {
+      "title": "本地資料庫不可開",
+      "description": "本地資料庫或已損毀，或為共用同一資料之他 Cindy 實例所佔。若他實例已開，請先關閉而重試；仍不可，則無可用備份能自動復原，請複製技術細節告知團隊，以求協助復原資料。",
+      "copy": "複製技術細節"
+    },
+    "initFailed": {
+      "title": "本地資料庫啟動失敗",
+      "description": "本地資料庫未能啟動。請先重試；若仍失敗，請將下列技術細節告知團隊。",
+      "retry": "重試啟動資料庫"
+    },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中輟",
       "interruptedDescription": "資料庫清理異常中斷。請重啟 Cindy，系統將依維護紀錄安全復原。",
@@ -11491,6 +11505,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "啟對話",
+      "inCallWith": "正與 {{name}} 通話",
       "showDetails": "展通話錄",
       "hideDetails": "收通話錄",
       "transcriptTitle": "今所辨之文",
@@ -11559,6 +11575,7 @@
       "unsent": "尚未遣 · 可選文錄之",
       "hint": "稍頓即自遣，回覆由 AI 之聲朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務有問待答 · 通話如故",
         "idle": "君備則始",
         "connecting": "方接語音辨識…",
         "listening": "方聆",
@@ -11574,6 +11591,7 @@
         "muted": "麥克風已闔 · 仍可聆聽"
       },
       "errors": {
+        "busy": "語音為他事所占，請畢之再試。",
         "connection": "語音連線中斷，未遣之文已留。",
         "microphone": "麥克風已止，請查權柄與裝置連線後再續。",
         "send": "此訊未獲接收，文已留。",
@@ -12460,6 +12478,7 @@
         "titleLocal": "改回此機執行 Agent？",
         "titleOther": "改於「{{device}}」執行 Agent？",
         "description": "原機之言談錄不能攜來，將撰為交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
+        "descriptionNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改撰交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
         "confirm": "換機執行",
         "cancel": "一仍其舊"
       }

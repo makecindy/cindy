@@ -1365,6 +1365,20 @@
       "lock-unreadable": "El bloqueo de mantenimiento de datos local no se pudo leer ni guardar. Verifique el acceso al directorio de datos y vuelva a abrirlo después de restaurar el acceso. Póngase en contacto con el soporte si esto continúa.",
       "recovery-busy": "Otra instancia de Cindy está comprobando el bloqueo de mantenimiento de datos local. Vuelva a abrir los datos locales en breve."
     },
+    "passiveCorrupt": {
+      "title": "No se puede recuperar la base de datos compartida",
+      "description": "Cindy se está ejecutando en modo de solo lectura o compartido y no recuperará ni modificará automáticamente esta base de datos compartida. Si otra instancia usa los mismos userData, ciérrala y vuelve a intentarlo, o inicia con --isolated."
+    },
+    "corrupt": {
+      "title": "No se puede abrir la base de datos local",
+      "description": "La base de datos local puede estar dañada o estar en uso por otra instancia de Cindy que comparte los mismos datos. Si hay otra instancia abierta, ciérrala y vuelve a intentarlo. Si el problema continúa, ninguna copia de seguridad utilizable pudo restaurarla automáticamente; copia los detalles técnicos y compártelos con el equipo para recibir ayuda con la recuperación de tus datos.",
+      "copy": "Copiar detalles técnicos"
+    },
+    "initFailed": {
+      "title": "No se pudo iniciar la base de datos local",
+      "description": "No se pudo iniciar la base de datos local. Inténtalo de nuevo primero. Si sigue fallando, comparte los detalles técnicos de abajo con el equipo.",
+      "retry": "Reintentar el inicio de la base de datos"
+    },
     "databaseCleanup": {
       "interruptedTitle": "Se interrumpió la limpieza de la base de datos",
       "interruptedDescription": "La limpieza de la base de datos se detuvo inesperadamente. Reinicie Cindy para que pueda recuperarse de forma segura del estado de mantenimiento guardado.",
@@ -11633,6 +11647,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Abrir conversación",
+      "inCallWith": "En llamada con {{name}}",
       "showDetails": "Mostrar transcripción de la llamada",
       "hideDetails": "Ocultar transcripción de la llamada",
       "transcriptTitle": "Transcripción actual",
@@ -11701,6 +11717,7 @@
       "unsent": "No enviado · selecciona el texto para copiarlo",
       "hint": "Haz una pausa para enviar. Las respuestas se leen en voz alta con una voz de IA. Habla en cualquier momento para interrumpir.",
       "status": {
+        "questionElsewhere": "Hay una pregunta esperando en la tarea · la llamada continúa",
         "idle": "Todo listo cuando quieras",
         "connecting": "Conectando al reconocimiento de voz…",
         "listening": "Escuchando",
@@ -11716,6 +11733,7 @@
         "muted": "Micrófono desactivado · Puedes seguir escuchando"
       },
       "errors": {
+        "busy": "La voz está en uso por otra llamada, lectura, vista previa o dictado. Termínalo e inténtalo de nuevo.",
         "connection": "Se interrumpió la conexión de voz. Tu texto sin enviar se conserva abajo.",
         "microphone": "El micrófono se detuvo. Revisa sus permisos y su conexión y luego reanuda.",
         "send": "Este mensaje no se aceptó. Tu texto se conserva abajo.",
@@ -12603,6 +12621,7 @@
         "titleLocal": "¿Volver a ejecutar el Agent en esta computadora?",
         "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
         "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
+        "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
         "confirm": "Cambiar de computadora",
         "cancel": "Dejar como está"
       }

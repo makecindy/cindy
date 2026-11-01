@@ -98,6 +98,11 @@ import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { useRetainedRightSidebarMount } from '@/hooks/useRetainedRightSidebarMount';
 import { useRightSidebarResize } from '@/hooks/useRightSidebarResize';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
+import {
+  GlobalVoiceCallHost,
+  RemoteVoiceCallSurface,
+  VoiceCallFloatingSlot,
+} from '@/features/bots/voice/GlobalVoiceCall';
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
 import { syncNotificationsEnabledToMain } from '@/hooks/useNotificationSettings';
 import {
@@ -1877,6 +1882,7 @@ export function MainLayout() {
                       )}
                     </div>
                   )}
+                  <VoiceCallFloatingSlot />
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
@@ -2025,6 +2031,8 @@ export function MainLayout() {
       {/* 副窗支持管理页手动审批；自动提醒与受邀申请仍只由主窗口处理。 */}
       <ProviderShareGlobalHost manualOnly={isSecondaryWindow()} />
       {!isSecondaryWindow() && <ChatInviteHost />}
+      {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
+      {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}
       {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}

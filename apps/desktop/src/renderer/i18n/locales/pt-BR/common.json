@@ -1365,6 +1365,20 @@
       "lock-unreadable": "Não foi possível ler ou salvar o bloqueio de manutenção dos dados locais. Verifique o acesso ao diretório de dados e reabra os dados após restaurar o acesso. Entre em contato com o suporte se o problema persistir.",
       "recovery-busy": "Outra instância do Cindy está verificando o bloqueio de manutenção dos dados locais. Reabra os dados locais em instantes."
     },
+    "passiveCorrupt": {
+      "title": "Não foi possível recuperar o banco de dados compartilhado",
+      "description": "O Cindy está em execução no modo somente leitura ou compartilhado e não recuperará nem modificará automaticamente este banco de dados compartilhado. Se outra instância usar os mesmos userData, feche-a e tente novamente, ou inicie com --isolated."
+    },
+    "corrupt": {
+      "title": "Não é possível abrir o banco de dados local",
+      "description": "O banco de dados local pode estar danificado ou em uso por outra instância do Cindy que compartilha os mesmos dados. Se houver outra instância aberta, feche-a e tente novamente. Se o problema persistir, nenhum backup utilizável conseguiu restaurá-lo automaticamente; copie os detalhes técnicos e compartilhe com a equipe para obter ajuda na recuperação dos seus dados.",
+      "copy": "Copiar detalhes técnicos"
+    },
+    "initFailed": {
+      "title": "Falha ao iniciar o banco de dados local",
+      "description": "Não foi possível iniciar o banco de dados local. Tente novamente primeiro. Se continuar falhando, compartilhe com a equipe os detalhes técnicos abaixo.",
+      "retry": "Tentar iniciar o banco de dados novamente"
+    },
     "databaseCleanup": {
       "interruptedTitle": "A limpeza do banco de dados foi interrompida",
       "interruptedDescription": "A limpeza do banco de dados parou inesperadamente. Reinicie Cindy para que ele possa se recuperar com segurança a partir do estado de manutenção salvo.",
@@ -11633,6 +11647,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Abrir conversa",
+      "inCallWith": "Em chamada com {{name}}",
       "showDetails": "Mostrar transcrição da chamada",
       "hideDetails": "Ocultar transcrição da chamada",
       "transcriptTitle": "Transcrição atual",
@@ -11701,6 +11717,7 @@
       "unsent": "Não enviado · selecione o texto para copiá-lo",
       "hint": "Faça uma pausa para enviar. As respostas são lidas em voz alta com uma voz de IA. Fale a qualquer momento para interromper.",
       "status": {
+        "questionElsewhere": "Há uma pergunta aguardando na tarefa · a chamada continua",
         "idle": "Tudo pronto quando você quiser",
         "connecting": "Conectando ao reconhecimento de fala…",
         "listening": "Ouvindo",
@@ -11716,6 +11733,7 @@
         "muted": "Microfone desligado · você ainda pode ouvir"
       },
       "errors": {
+        "busy": "A voz está em uso por outra chamada, leitura, prévia ou ditado. Encerre e tente novamente.",
         "connection": "Conexão de voz interrompida. Seu texto não enviado foi mantido abaixo.",
         "microphone": "O microfone parou. Verifique a permissão e a conexão e retome.",
         "send": "Esta mensagem não foi aceita. Seu texto foi mantido abaixo.",
@@ -12603,6 +12621,7 @@
         "titleLocal": "Executar o Agent neste computador novamente?",
         "titleOther": "Executar o Agent em “{{device}}”?",
         "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
+        "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
         "confirm": "Trocar de computador",
         "cancel": "Manter como está"
       }
