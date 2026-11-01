@@ -191,11 +191,12 @@ export function resolveRemoteInvokeTimeoutMs(
     if (action === 'estimate') return TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
     return 30_000;
   }
-  if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
-  // Renewals must settle before the 12s lease, independently of slow media offers.
+  // Both viewers serialize renewals. Settle a lost reply before the 12s lease
+  // expires so the next 3s heartbeat can renew it, independently of slow offers.
   const request = args?.[0];
   if (channel === 'device-link:remote-desktop:v1' && request &&
       typeof request === 'object' && 'op' in request && request.op === 'heartbeat') return 5_000;
+  if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   const exact = MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   if (exact !== undefined) return exact;
   if (channel.startsWith('maker:schedule:')) return MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS;

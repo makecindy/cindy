@@ -85,9 +85,17 @@ describe('remote invoke policy boundaries', () => {
     expect(resolveRemoteInvokeTimeoutMs('maker:send', [], 'mobile')).toBe(30_000);
     expect(resolveRemoteInvokeTimeoutMs('maker:send', [], 'desktop')).toBeUndefined();
     expect(resolveRemoteInvokeTimeoutMs('maker:schedule:list', [], 'mobile')).toBe(40_000);
-    expect(resolveRemoteInvokeTimeoutMs('device-link:remote-desktop:v1', [{ op: 'heartbeat' }], 'mobile')).toBe(5_000);
-    expect(resolveRemoteInvokeTimeoutMs('device-link:remote-desktop:v1', [{ op: 'heartbeat' }], 'desktop')).toBe(59_000);
     expect(resolveRemoteInvokeTimeoutMs('unknown:read', [], 'mobile')).toBeUndefined();
+  });
+
+  // A pending heartbeat blocks the viewer's next renewal. Both clients must settle
+  // before the host's 12s lease; slow capture negotiation needs its separate budget.
+  it.each(['desktop', 'mobile'] as const)('bounds desktop renewals independently of media setup on %s', (platform) => {
+    const channel = 'device-link:remote-desktop:v1';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ op: 'heartbeat' }], platform)).toBe(5_000);
+    for (const args of [[{ op: 'offer' }], [{ op: 'start' }], [], [null]]) {
+      expect(resolveRemoteInvokeTimeoutMs(channel, args, platform)).toBe(59_000);
+    }
   });
   it('gives the read-only task copy estimate a longer budget than other copy requests', () => {
     const budget = (action: string) =>
