@@ -1042,9 +1042,13 @@ export class InputHandoffSession {
     if (++this.fieldsGoneReads >= FIELDS_GONE_READS) this.present(step, true);
   }
 
-  /** The target's title went away and exactly one new one came: a page changed its title, the window is the same. */
+  /**
+   * The target's title went away and exactly one new one came, with as many windows as
+   * before: a page changed its title, the window is the same. (Another window's title
+   * can change as the target closes, say an unread count.)
+   */
   private renamedWindow<W extends { title: string }>(windows: W[], before: Array<{ title: string }> | undefined): W | undefined {
-    if (!before?.some((w) => w.title === this.target?.window.title)) return undefined;
+    if (before?.length !== windows.length || !before.some((w) => w.title === this.target?.window.title)) return undefined;
     const fresh = windows.filter((w) => !before.some((old) => old.title === w.title));
     return fresh.length === 1 ? fresh[0] : undefined;
   }

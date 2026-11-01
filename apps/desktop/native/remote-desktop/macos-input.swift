@@ -573,7 +573,8 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
     apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
                  "windows": windows])
   }
-  return ["frontmost": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
+  // Read fresh (see handoffFrontPid): NSWorkspace can name another app in this short-lived process.
+  return ["frontmost": Int(handoffFrontPid() ?? NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
 }
 let handoffSource = CGEventSource(stateID: .privateState)
 func handoffKey(_ code: CGKeyCode, flags: CGEventFlags = []) {

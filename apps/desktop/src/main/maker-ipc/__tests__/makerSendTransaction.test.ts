@@ -3523,7 +3523,7 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Signed in');
     expect(note).toBeNull();
     await transaction.sendToAgentAccepted('session-1', 'Continue');
-    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
   });
 
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {

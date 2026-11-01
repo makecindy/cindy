@@ -227,6 +227,22 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
   });
 
+  it('does not follow another window whose title changes as the target closes', async () => {
+    const { driver, state } = desktop();
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      return state.closed
+        ? { ...windows, apps: windows.apps.map((app) => ({ ...app, windows: app.windows.map((w) => ({ ...w, title: '(5) X' })) })) }
+        : windows;
+    };
+    const run = start(driver);
+    await run.session.start();
+    state.closed = true;
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
+  });
+
   it('ends when the program quits', async () => {
     const { driver, state } = desktop();
     const run = start(driver);
