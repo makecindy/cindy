@@ -40,7 +40,7 @@ const {
     mediaReady: false,
     customOverride: null as ProviderView | null,
     loading: false,
-    error: null as { reason: 'storage-quota' } | null,
+    error: null as { reason: 'storage-quota' | 'catalog-unavailable' } | null,
   },
   wizardSpy: vi.fn(),
 }));
@@ -184,6 +184,7 @@ vi.mock('@/lib/providerSubtitle', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => true,
+  isModelVisibilityCustomized: () => false,
   setModelVisibilities: vi.fn(),
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
@@ -239,6 +240,73 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #6601 review / #5090, unit: real ProvidersSection → list → drawer. Existing
+  // discovery tests only cover completed refreshes. One pending fetch/readback
+  // must block alias writes, keep the draft, then save against the refreshed config.
+  it.each(['success', 'failed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
+    const initial = { id: 'refresh-rename', name: 'Relay', runtimes: { codex: { baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private', extra: { keep: true } }] } } };
+    let stored: CustomProviderConfig = initial;
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    let finishFetch!: () => void;
+    const fetchModels = vi.fn(() => new Promise(resolve => { finishFetch = () => resolve({ ok: true, models: [{ id: 'private', name: 'Discovered' }, { id: 'new', name: 'New' }] }); }));
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels, updateCustomProvider: persist, getModelContextLimit: async () => ({ limit: null, isCustomized: false }) });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    refetchProvidersSpy.mockImplementation(async () => {
+      await readback;
+      if (outcome === 'failed') {
+        providerSnapshotState.error = { reason: 'catalog-unavailable' };
+        view.rerender(page());
+        return false;
+      }
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      return true;
+    });
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' }));
+      await waitFor(() => expect(fetchModels).toHaveBeenCalledOnce());
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      fireEvent.click(save);
+      expect(persist).not.toHaveBeenCalled();
+      await act(async () => { finishFetch(); });
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      expect(save.disabled).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      const refreshed = structuredClone(stored);
+      await act(async () => { finishReadback(); });
+      if (outcome === 'failed') {
+        expect(save.disabled).toBe(true);
+        fireEvent.click(save);
+        expect(persist).toHaveBeenCalledOnce();
+        expect(input.value).toBe('Work Alias');
+        refetchProvidersSpy.mockImplementation(async () => {
+          providerSnapshotState.error = null;
+          providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+          view.rerender(page());
+          return true;
+        });
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+      }
+      await waitFor(() => expect(save.disabled).toBe(false));
+      expect(input.value).toBe('Work Alias');
+      fireEvent.click(save);
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      expect(stored).toEqual({ ...refreshed, runtimes: { ...refreshed.runtimes, codex: { ...refreshed.runtimes.codex, models: refreshed.runtimes.codex!.models.map(model => model.id === 'private' ? { ...model, name: 'Work Alias', nameExplicit: true } : model) } } });
+      expect(stored.runtimes.codex!.models.map(model => model.id).sort()).toEqual(['new', 'private']);
+    } finally { finishReadback(); vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset(); }
+  });
+
   // Renderer unit: click the real provider refresh/menu, inspect the persisted
   // config and visible dialog. Earlier refresh cases only used chat-only proxies;
   // a MiniMax API connection with no speech is the minimal missing-default case.

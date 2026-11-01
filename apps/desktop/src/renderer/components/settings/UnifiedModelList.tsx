@@ -1464,6 +1464,7 @@ export function UnifiedModelList({
       </div>
       <ModelAdvancedDrawer
         provider={provider}
+        refreshing={refreshing}
         row={currentAdvancedRow}
         open={advancedOpen && currentAdvancedRow !== null}
         onOpenChange={(next) => {
