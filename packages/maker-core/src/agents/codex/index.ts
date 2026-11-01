@@ -49,6 +49,7 @@ import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
   INHERITED_CAPABILITY_SELECTION,
+  AUTO_REVIEW_SOURCE_CONTENT,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   OneShotError,
@@ -6695,6 +6696,7 @@ assertRouteCurrent();
     const toTurnInput = async (
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
+      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -6709,10 +6711,15 @@ assertRouteCurrent();
         if (pinnedSkill) {
           throw new Error('A pinned Skill invocation requires a text command');
         }
-        return toAppServerInput(content, opts.workingDir);
+        if (typeof sourceContent !== 'string') return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(content.trim());
+      // Host notes decorate the wire text, but must not hide the user's explicit
+      // Skill selection. Reuse the call-local source snapshot, never rescan disk
+      // or treat text found inside Host context as a new invocation.
+      const invocationText = !pinnedSkill && typeof sourceContent === 'string'
+        ? sourceContent : typeof content === 'string' ? content : null;
+      const slash = invocationText === null ? null : parseLeadingSlashToken(invocationText.trim());
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -6734,19 +6741,14 @@ assertRouteCurrent();
       }
       if (!slash) return toAppServerInput(content, opts.workingDir);
 
+      let skill: SkillMetadata | undefined;
       try {
-        const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
+        const { skills } = await this.listSkillsForHost(host, opts.workingDir, false);
         // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
-        const skill = selectInvocableCodexSkill(
+        skill = selectInvocableCodexSkill(
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
           slash.name,
         );
-        if (!skill) return toAppServerInput(content, opts.workingDir);
-
-        const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
-        const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
-        if (prompt) inputs.push({ type: 'text', text: prompt });
-        return inputs;
       } catch (err) {
         log.warn('failed to resolve leading slash as Codex skill, sending literal text', {
           name: slash.name,
@@ -6754,6 +6756,17 @@ assertRouteCurrent();
         });
         return toAppServerInput(content, opts.workingDir);
       }
+      if (!skill) return toAppServerInput(content, opts.workingDir);
+
+      const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
+      const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
+      if (content !== invocationText) {
+        inputs.push(...await toAppServerInput(content, opts.workingDir));
+        if (!slash.rest.trim() && prompt) inputs.push({ type: 'text', text: prompt });
+      } else if (prompt) {
+        inputs.push({ type: 'text', text: prompt });
+      }
+      return inputs;
     };
 
     const isLikelyValidThreadId = (id: string | undefined): id is string =>
@@ -13306,6 +13319,7 @@ assertRouteCurrent();
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
+            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
         } catch (e) {
           isTurnStartPending = false;
@@ -13949,7 +13963,7 @@ assertRouteCurrent();
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.
-        const input = await toTurnInput(message.content);
+        const input = await toTurnInput(message.content, undefined, sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT]);
         rejectIfCancelled(sendOpts, 'steer');
         if (closed) {
           throw new Error('No active Codex turn to steer: session is closed');

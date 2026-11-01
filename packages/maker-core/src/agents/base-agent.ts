@@ -2097,7 +2097,8 @@ export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
 /** Optional question replies must never be queued for a later execution. */
 export const ASYNC_QUESTION_ANSWER = Symbol('cindy.async-question-answer');
 
-/** Call-local user content before Session replaces images with generated descriptions. */
+/** Call-local user content before Host context and Session image descriptions.
+ * Also retains explicit Skill intent when the wire text has been decorated. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
 
 /** Host-restored user authorization for this send; never accepted from wire options. */

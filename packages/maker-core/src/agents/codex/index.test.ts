@@ -8283,6 +8283,61 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  // #7903: Main decorates wire text but preserves the original content in a
+  // call-local snapshot. Explicit Skill selection must survive those notes,
+  // while a disabled Skill must remain unavailable.
+  it.each(['send', 'steer'] as const)('resolves decorated Skill selections on %s without enabling disabled Skills', async (delivery) => {
+    const skillPath = '/repo/.agents/skills/implement-spec/SKILL.md';
+    const agent = new CodexAgent(createDeps());
+    let enabled = true;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.SkillsList) {
+        const { cwds = ['/repo'] } = params as { cwds?: string[] };
+        return { data: cwds.map(cwd => ({ cwd, skills: [{
+          name: 'implement-spec', description: 'Implement the selected spec',
+          path: skillPath, scope: 'repo', enabled,
+          interface: { defaultPrompt: 'Implement the current spec' },
+        }], errors: [] })) };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'turn-explicit-skill' } };
+      if (method === Method.TurnSteer) return { turnId: 'turn-explicit-skill' };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'decorated-skill', model: 'gpt-5.4', workingDir: '/repo' });
+    const original = '/implement-spec Implement the tickets';
+    const decorated = `[UI language] Host context\n\n${original}`;
+    if (delivery === 'steer') await handle.send({ type: 'user', content: 'Prepare the task' });
+    for (const content of [decorated, [{ type: 'text' as const, text: decorated }]]) {
+      await handle[delivery]!({ type: 'user', content }, { [AUTO_REVIEW_SOURCE_CONTENT]: original });
+      const rpc = delivery === 'send' ? Method.TurnStart : Method.TurnSteer;
+      const request = host.request.mock.calls.filter(([method]) => method === rpc).at(-1)?.[1] as { input?: unknown[] };
+      expect(request.input).toEqual([
+        { type: 'skill', name: 'implement-spec', path: skillPath },
+        { type: 'text', text: decorated },
+      ]);
+    }
+    const bareCommand = '/implement-spec';
+    const decoratedBareCommand = `[UI language] Host context\n\n${bareCommand}`;
+    await handle[delivery]!({ type: 'user', content: decoratedBareCommand }, { [AUTO_REVIEW_SOURCE_CONTENT]: bareCommand });
+    const defaultRequest = host.request.mock.calls.filter(([method]) => method === (delivery === 'send' ? Method.TurnStart : Method.TurnSteer)).at(-1)?.[1] as { input?: unknown[] };
+    expect(defaultRequest.input).toEqual([
+      { type: 'skill', name: 'implement-spec', path: skillPath },
+      { type: 'text', text: decoratedBareCommand },
+      { type: 'text', text: 'Implement the current spec' },
+    ]);
+    await handle[delivery]!({ type: 'user', content: decoratedBareCommand }, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: 'Explain how Skills work',
+    });
+    const contextOnlyRequest = host.request.mock.calls.filter(([method]) => method === (delivery === 'send' ? Method.TurnStart : Method.TurnSteer)).at(-1)?.[1] as { input?: unknown[] };
+    expect(contextOnlyRequest.input).toEqual([{ type: 'text', text: decoratedBareCommand }]);
+    enabled = false;
+    await handle[delivery]!({ type: 'user', content: decorated }, { [AUTO_REVIEW_SOURCE_CONTENT]: original });
+    const rpc = delivery === 'send' ? Method.TurnStart : Method.TurnSteer;
+    const request = host.request.mock.calls.filter(([method]) => method === rpc).at(-1)?.[1] as { input?: unknown[] };
+    expect(request.input).toEqual([{ type: 'text', text: decorated }]);
+    await handle.close();
+  });
+
   it.each(['/learn release flow', '/skill:learn release flow'])(
     'dispatches the exact Host-attested Skill path for %s without rescanning a new winner',
     async (command) => {
@@ -8378,6 +8433,32 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     },
   );
+
+  it('resolves an explicit Skill on the session host instead of a local utility host', async () => {
+    const workingDir = '/srv/project';
+    const skillPath = '/home/remote/.agents/skills/remote-release/SKILL.md';
+    const remoteTransport = new MockCodexTransport();
+    remoteTransport.setMockResponse(Method.SkillsList, { result: { data: [{
+      cwd: workingDir, skills: [{ name: 'remote-release', description: 'Release remotely',
+        path: skillPath, scope: 'user', enabled: true }], errors: [],
+    }] } });
+    remoteTransport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'remote-skill-turn' } } });
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => remoteTransport }));
+    const handle = await agent.startSession({ sessionId: 'remote-skill', model: 'gpt-5.4',
+      workingDir, remoteHostId: 'remote-skill-host' });
+    const original = '/remote-release Prepare the release';
+    const decorated = `[UI language] Host context\n\n${original}`;
+    await handle.send({ type: 'user', content: decorated }, { [AUTO_REVIEW_SOURCE_CONTENT]: original });
+    const request = remoteTransport.lines.map(line => JSON.parse(line) as { method?: string; params?: { input?: unknown[] } })
+      .find(line => line.method === Method.TurnStart);
+    expect(request?.params?.input).toEqual([
+      { type: 'skill', name: 'remote-release', path: skillPath },
+      { type: 'text', text: decorated },
+    ]);
+    expect(createdStdioOptions).toHaveLength(0);
+    await handle.close();
+    await agent.dispose();
+  });
 
   it('lists remote skills through the target remote app-server host', async () => {
     const remoteWorkingDir = '/srv/project';
