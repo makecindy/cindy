@@ -166,7 +166,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { RunningTokenCount } from './RunningTokenCount';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -6782,12 +6782,10 @@ function RunningStatusBar({
     generationDurationMs,
   ]);
 
-  // Animate the token counter so live mid-turn updates feel like a smoothly-
-  // incrementing number. Rate does not use this: locally ticking the
-  // denominator would make a paused model look like decaying speed.
-  const animatedTokens = useAnimatedNumber(tokenUsage, 400);
+  // Keep authoritative text for the accessible popover label. Interpolation
+  // belongs to the displayed counter leaf, so rate-only/hidden rows do no RAF work.
   const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
+    tokens: formatRunningTokenCount(tokenUsage),
   });
   // Host speed counts and times generation itself; usage counters stay the fallback.
   const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
@@ -6929,6 +6927,7 @@ function RunningStatusBar({
                       : rateText
                 }
                 isTokenCount={usageMeta.kind === 'tokens'}
+                tokenUsage={tokenUsage}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
                 outputTokens={rateOutputTokens}
                 history={rateHistory}
@@ -6970,7 +6969,7 @@ function RunningStatusBar({
                     </span>
                     <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenCountText}
+                      <RunningTokenCount tokenUsage={tokenUsage} />
                     </span>
                   </>
                 )}
