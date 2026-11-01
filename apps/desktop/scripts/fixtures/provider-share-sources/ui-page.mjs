@@ -23,11 +23,32 @@ export default {
     'shared-sources': { about: 'Local and remote outgoing shares appear together, separately from ordinary providers' },
     'no-outgoing-shares': { about: 'The outgoing section disappears without established shares' },
     'wizard-reopen': { about: 'Complete the real wizard, reopen during a deferred refresh, and keep the new dialog interactive after the old refresh settles' },
+    'builtin-save-guard': { about: 'Search a builtin API-key entry from a custom draft, save with deferred IPC, and block Escape until completion' },
   },
   async ready(page) {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'builtin-save-guard') {
+      await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.customAction'), exact: true }).click();
+      await page.getByRole('combobox').fill('Gemini');
+      await page.getByRole('option').filter({ has: page.getByText('Gemini', { exact: true }) }).first().click();
+      const subtitle = page.getByText(await ui.t('settings.providers.wizard.builtinApiKey.subtitle'), { exact: true });
+      await subtitle.waitFor();
+      const key = page.getByRole('dialog').locator('input[type="password"]');
+      await key.fill('fixture-key');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.finish'), exact: true }).click();
+      await page.waitForFunction(() => window.providerSourcesFixture.keySaveControl.pending);
+      await key.press('Escape');
+      assert.equal(await subtitle.isVisible(), true, 'saving must keep the builtin wizard open');
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).isDisabled(), true);
+      await ui.capture('builtin-save-pending');
+      await page.evaluate(() => window.providerSourcesFixture.keySaveControl.release());
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      assert.equal(await page.getByRole('combobox').count(), 0, 'success must complete without restoring the draft');
+      return;
+    }
     if (ui.case === 'wizard-reopen') {
       const add = page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true });
       const dialog = page.getByRole('dialog');

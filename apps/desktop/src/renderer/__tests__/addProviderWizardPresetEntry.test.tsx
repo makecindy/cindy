@@ -1207,6 +1207,41 @@ it.each(['audioModels', 'embeddingModels'] as const)('opens key setup for a disc
 });
 
 
+// #8065 r4435924110: unit/jsdom, real wizard with a deferred secret-store IPC.
+// Existing builtin coverage only saved immediately; the OAuth guard test uses
+// a different handler. Save + Escape must retain this dialog while pending;
+// success completes once, failure restores editing and cancellation.
+it.each(['success', 'failure'] as const)('guards builtin key saving until %s', async outcome => {
+  const provider = { ...anthropicProvider, id: 'gemini', name: 'Gemini', auth: { method: 'apiKey' } } as ProviderView;
+  let succeed!: () => void;
+  let fail!: (error: Error) => void;
+  const store = vi.fn(() => new Promise<void>((resolve, reject) => { succeed = resolve; fail = reject; }));
+  window.electronAPI.builtinApiKeyStore = store;
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[provider]} entry={{ kind: 'builtin', providerId: 'gemini' }} onOpenCustomForm={vi.fn()} onClose={onClose} onDone={onDone} />);
+  await screen.findByText('settings.providers.wizard.builtinApiKey.subtitle');
+  const input = screen.getByRole('dialog').querySelector('input[type="password"]')!;
+  fireEvent.change(input, { target: { value: 'fixture-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog').contains(input)).toBe(true);
+  expect(store).toHaveBeenCalledExactlyOnceWith('gemini', 'fixture-key');
+  if (outcome === 'success') {
+    await act(async () => { succeed(); });
+    await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('gemini'));
+    expect(onClose).not.toHaveBeenCalled();
+  } else {
+    await act(async () => { fail(new Error('Fixture save failure')); });
+    expect(onDone).not.toHaveBeenCalled();
+    expect((input as HTMLInputElement).value).toBe('fixture-key');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  }
+});
+
 it('preserves each runtime preset media type when discovery is unavailable', async () => {
   const image = { id: 'shared-media', name: 'Media', mode: 'image_generation' as const,
     modalities: { input: ['text'], output: ['image'] }, officialDocs: 'https://example.test/image' };

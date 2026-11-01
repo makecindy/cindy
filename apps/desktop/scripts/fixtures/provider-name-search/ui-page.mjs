@@ -12,12 +12,43 @@ export default {
     'keyboard-reopen': { about: 'Reopening with ArrowUp keeps the active result visible, including a retained bottom selection' },
     'offline-jump': { about: 'Bundled DeepSeek still opens when both catalog reads fail; cancel retains the original draft' },
     ollama: { about: 'Managed Ollama describes installation and opens its existing install guide' },
+    'theme-surface': { about: 'Independent popover/dialog theme overrides retain the shared popover surface and elevation' },
   },
   async check(page, ui) {
+    if (ui.case === 'theme-surface') {
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty('--popover', 'var(--background)');
+        document.documentElement.style.setProperty('--confirm-bg', 'var(--surface-elevated)');
+        document.documentElement.style.setProperty('--shadow-menu', '0 4px 12px var(--border-default)');
+      });
+    }
     const input = page.getByRole('combobox');
     const query = ui.case === 'keyboard-reopen' ? 'a' : ui.case === 'ollama' ? 'Ollama' : ui.case === 'custom' ? 'My private gateway' : ['many', 'scroll', 'keyboard-reopen'].includes(ui.case) ? 'de' : 'dee';
     await input.fill(query);
     await page.getByText(await ui.t('settings.providers.custom.nameSearchHint'), { exact: true }).waitFor();
+    if (ui.case === 'theme-surface') {
+      const styles = await page.getByRole('listbox').evaluate(list => {
+        const panel = list.parentElement;
+        const probe = document.createElement('div');
+        panel.append(probe);
+        probe.style.backgroundColor = 'hsl(var(--popover))';
+        const expected = getComputedStyle(probe).backgroundColor;
+        probe.style.backgroundColor = 'var(--confirm-bg)';
+        const dialog = getComputedStyle(probe).backgroundColor;
+        probe.style.boxShadow = 'var(--shadow-menu)';
+        const shadow = getComputedStyle(probe).boxShadow;
+        const actual = getComputedStyle(panel);
+        const result = { expected, dialog, shadow, background: actual.backgroundColor, actualShadow: actual.boxShadow };
+        probe.remove();
+        return result;
+      });
+      assert.notEqual(styles.expected, styles.dialog, 'theme probe must distinguish popover and dialog surfaces');
+      assert.equal(styles.background, styles.expected);
+      assert.notEqual(styles.shadow, 'none', 'theme probe must provide a visible menu shadow');
+      // Tailwind may prepend transparent focus-ring layers to the menu shadow.
+      assert.ok(styles.actualShadow.endsWith(styles.shadow), 'popover must retain the themed menu shadow');
+      await ui.capture('theme-surface');
+    }
     assert.equal(await page.getByText('匹配的供应商', { exact: true }).count(), 0);
     if (ui.case === 'keyboard-reopen') {
       assert.ok(await page.getByRole('option').count() >= 8);

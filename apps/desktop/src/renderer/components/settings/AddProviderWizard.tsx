@@ -1271,7 +1271,7 @@ export function AddProviderWizard({
    * 图像通道 ready 都以「key 已存」为准 —— 无自定义供应商落库、无模型拉取步。
    */
   const handleSaveBuiltinApiKey = useCallback(async () => {
-    if (!sel || sel.kind !== 'builtinApiKey') return;
+    if (savingRef.current || !sel || sel.kind !== 'builtinApiKey') return;
     const id = sel.provider.id;
     if (!isBuiltinApiKeyProviderId(id)) {
       // 目录出现了未在 providerSecrets 登记的内置 API-key 供应商 = 数据/代码脱节,
@@ -1281,6 +1281,7 @@ export function AddProviderWizard({
     }
     const key = apiKey.trim();
     if (!key) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
@@ -1290,6 +1291,7 @@ export function AddProviderWizard({
     } catch {
       toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [sel, apiKey, onDone, t]);

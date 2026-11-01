@@ -23,6 +23,7 @@ const snapshot = {
   },
 };
 const refreshControl = { defer: false, pending: false, release: (): void => {} };
+const keySaveControl = { pending: false, release: (): void => {} };
 const received = [{
   shareId: 'fixture-received', memberId: 'fixture-member', providerId: 'anthropic',
   providerLabel: 'Anthropic', hostDeviceId: 'fixture-share-host', deviceName: 'Example computer',
@@ -32,6 +33,7 @@ const received = [{
 Object.assign(window, { providerSourcesFixture: {
   snapshot,
   refreshControl,
+  keySaveControl,
   devices: [{ deviceId: 'fixture-host', name: 'Studio', platform: 'darwin' }],
   catalogs: new Map([['fixture-host', { providers: entries, loading: false, error: null }]]),
   received: { received, loaded: true },
@@ -41,7 +43,15 @@ mountPage({
   route: '/settings?tab=providers&connect=anthropic',
   host: ctx => {
     refreshControl.defer = ctx.case === 'wizard-reopen';
+    if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
+      ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
+      agents: [], auth: { method: 'apiKey' }, audioModels: [{ id: 'fixture-media', name: 'Fixture' }],
+    });
     return {
+      builtinApiKeyStore: async () => {
+        keySaveControl.pending = true;
+        await new Promise<void>(resolve => { keySaveControl.release = () => { keySaveControl.pending = false; resolve(); }; });
+      },
       maker: {
         listProviders: async () => snapshot,
         scanLocalCli: async () => ({ detections: [] }),
