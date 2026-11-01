@@ -212,9 +212,18 @@ Desktop 冷启动恢复与运行时 refresh 共用随机指数退避策略：连
 promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，且
 此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
 续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
-确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
-实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
-`main/__tests__/authRefreshBackoff.test.ts`。
+同机 token 替换恢复仍先走原有磁盘重读与替换重试。运行时若同一登录代次、区域及凭据
+在最近 15 分钟内收到无响应的网络错误（含传输层超时），或收到 2xx 但无法读出响应体，
+随后首次 `INVALID_REFRESH_TOKEN` 会保留会话并按上述共享退避再确认一次。确认再次
+invalid 时走原有会话过期通知；后续网络错误不能重新获得确认次数。纯网络故障仍只
+按瞬时失败退避，不能伪装成刷新成功。15 分钟是首次 invalid 获得确认机会的资格窗口，
+不是网络离线后的强制退出期限。成功、凭据变化或登录代次变化隔离旧确认状态；
+`REFRESH_TOKEN_EXPIRED`、`MEMBERSHIP_DISABLED`、`DEVICE_MISMATCH` 及没有上述不确定
+结果的 invalid 不延后。确认状态只留在进程内存中，退出时清除，不改变服务端鉴权。
+服务端若已轮换且响应丢失，客户端不能自行重建新凭据；完整恢复仍需要服务端支持
+安全的轮换重放宽限。本轮确认不依赖该支持，也不修改冷启动恢复的失效判定。
+实现见 `main/authRefreshBackoff.ts`、`main/authRefreshFailure.ts`、`main/authManager.ts`；回归见
+`main/__tests__/authRefreshBackoff.test.ts`、`main/__tests__/authRuntimeRefreshRecovery.test.ts`。
 
 ## 路径与生命周期
 

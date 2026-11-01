@@ -255,6 +255,29 @@ describe('serverApiFetch', () => {
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
   });
 
+  // #7612: a deferred refresh confirmation returns false, not a successful
+  // renewal. The original resource 401 must not independently clear that session.
+  it.each(['TOKEN_EXPIRED', 'UNAUTHORIZED'])(
+    '%s does not invalidate a session while refresh is deferred',
+    async (code) => {
+      mocks.getAccessToken.mockReturnValue('synthetic-expired-access');
+      mocks.refresh.mockResolvedValue(false);
+      mocks.netFetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code } }),
+      });
+      await expect(
+        serverApiFetch('/api/resource', {
+          baseUrl: 'https://resource.example.invalid',
+        }),
+      ).rejects.toMatchObject({ code, statusCode: 401 });
+      expect(mocks.refresh).toHaveBeenCalledTimes(1);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    },
+  );
+
   it('refresh 后仍返回可恢复 401 时完整退登', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.refresh.mockResolvedValue(true);
