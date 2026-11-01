@@ -397,7 +397,7 @@ it('resolves everyone using authorized members at send time instead of the displ
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/members')) {
       const [member] = await original(path, options);
-      return [member, { ...member, id: joined, kind: 'bot', name: 'New teammate' },
+      return [member, { ...member, id: joined, kind: 'human', name: 'New person' },
         { ...member, id: invited, state: 'invited' }, { ...member, id: left, state: 'left' }];
     }
     return original(path, options);
@@ -827,7 +827,7 @@ it.each([false, true])('persists the exact uncertain send across restart and nev
   let memberReads = 0;
   const client = createChatServerClient(async <T,>(path: string, method?: string, body?: unknown): Promise<T> => {
     if (path === '/me') return { actor: { id: self, kind: 'human' } } as T;
-    if (path.endsWith('/members')) { memberReads++; return [{ id: self, state: 'joined' }, { id, state: 'joined' }] as T; }
+    if (path.endsWith('/members')) { memberReads++; return [{ id: self, kind: 'human', state: 'joined' }, { id, kind: 'human', state: 'joined' }] as T; }
     if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
     throw new Error('Unexpected request');
   });

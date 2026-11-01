@@ -208,8 +208,14 @@ export function removeRemoteSessionActivityForDevice(deviceId: string): void {
 }
 
 /** 全清(登出 / device-link stopped)。 */
-export function clearRemoteSessionActivity(): void {
+export function clearRemoteSessionActivity(matchesDevice?: (deviceId: string) => boolean): void {
   if (activityByDevice.size === 0) return;
+  if (matchesDevice) {
+    for (const deviceId of activityByDevice.keys()) {
+      if (matchesDevice(deviceId)) removeRemoteSessionActivityForDevice(deviceId);
+    }
+    return;
+  }
   activityByDevice.clear();
   emit();
 }

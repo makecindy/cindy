@@ -1,5 +1,7 @@
 ## 4.11 发起 Agent 新回合(agent 能力)
 
+新建与管理普通任务见独立章节 §4.11.3，可调用 `ghost_forge_guide({section:"4.11.3"})` 读取。
+
 `main.js` 可把文字作为**普通用户消息**交给 Cindy Agent，支持用户点卡片后让 Agent 继续。
 消息不进入系统提示词，也不修改该会话里其它插件或 Agent 的长期规则。
 
@@ -385,3 +387,18 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 自然终态持久记录，重启后仍可查询；崩溃而没有终态证据时 settled=false，不自动重发。
 恢复尚未结束时保持 settled=false；恢复最终失败后记录原输入的 failed 终态，即使运行时已重建也保留原 instanceId/generation，不结算后来排队的请求。
 取消只撤回该插件输入，只有原队列和执行确已结束时 settled=true。不读取伙伴历史。
+
+## 4.11.8 只读查看项目任务（未发布）
+
+插件需要按项目展示任务列表和状态（例如看板）时，声明 `"agent": { "observe": true }`，在本机 Desktop 逻辑页使用 `cindy.observe`。
+它不依赖、也不授予 `agent.tasks` / `agent.targets`；`agent:observe` 单列为独立权限，安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+旧 tasks/targets 批准和历史未知字段不授予查看权限；拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试。
+先检查 `typeof cindy.observe?.projectTasks === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面返回 `UNSUPPORTED_CAPABILITY`。
+
+- `projectTasks({project})`：project 为 Cindy 已登记、目录仍存在的本机项目路径（可用 `cindy.targets.list({targetKind:'project'})` 或用户选择获得）。
+  返回 `{tasks:[{id,title,agentKind,archived,status,lastActivityAt}]}`，按最近活动倒序，最多 200 条；包含已归档任务和该项目 worktree 下的任务。
+  `status` 为 `running | awaiting | error | done | idle`，与侧边栏右侧状态同源（团队主任务同样带上本机 Worker 的出错/待处理）；`lastActivityAt` 为毫秒时间戳。
+  用户拒绝首次确认后，可在插件详情页点「确认任务查看权限」重新允许；插件不要反复调用来触发确认。
+  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
+- `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
+- 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。

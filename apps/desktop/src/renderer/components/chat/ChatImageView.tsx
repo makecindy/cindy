@@ -152,7 +152,13 @@ export function ChatImageView({
   const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(displaySrc);
 
   if (imageStatus) {
-    return <ImageMissingPlaceholder filename={filename} status={imageStatus} />;
+    return (
+      <ImageMissingPlaceholder
+        filename={filename}
+        status={imageStatus}
+        onRetry={!remote && localFailure.canRetry ? localFailure.retry : undefined}
+      />
+    );
   }
 
   const { style, className } = VARIANT_STYLES[variant];

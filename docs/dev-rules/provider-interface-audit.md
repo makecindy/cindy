@@ -28,10 +28,13 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 
 ## 维护规则
 
-- 模型原生协议、渠道提供的接口、Harness 请求协议分开记录。固定协议的 Claude Code / Codex
-  与模型原生协议不一致时，即使转换发生在供应商侧，仍显示兼容、默认关闭；不能因为渠道
-  同时提供 Messages / Responses 就将 Gemini 标成三种原生。Pi 使用现有 adapter 直接请求
-  渠道声明的 API，默认原生可用；不因此给 OpenRouter / Hermes 虚构 Google 端点。
+- 模型原生协议、渠道提供的接口、Harness 请求协议分开记录。**兼容模式只指 Cindy 在本地转换
+  请求格式**（Chris 2026-10-30）：上游（厂商、Cindy AI、OpenRouter 等）提供几种接口，就按它
+  提供的接口直接使用，引擎协议与所用接口一致即不是兼容模式、默认开启；界面不解释上游内部如何
+  实现，也不出现“直连”“渠道转换”等概念。原生声明仍只记录厂商事实，不从渠道入口反推；
+  Pi 使用现有 adapter 直接请求渠道声明的 API，不因此给 OpenRouter / Hermes 虚构 Google 端点。
+- 内置订阅（ChatGPT、SuperGrok、Claude）里跨家的引擎经 Cindy 本地桥接到厂商自家接口，
+  路由未声明协议时以厂商接口为实际出站，按兼容模式显示并默认关闭。
 - 自定义渠道与 Gateway 共用 Cindy 的原生声明。服务器缺项时用本地声明补齐；明确修正、
   未知和退役优先。原生声明不携带其他渠道的价格、窗口、账号权限或请求地址。
 - Pi 导入的 API 只说明 Pi 当前选用的 adapter，不代表供应商全部能力。
@@ -40,7 +43,14 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
   它只修正统一模型表的执行协议与地址；不借其他供应商的型号参数，不自动开通未导入模型。
 - 新增 Pi 目录条目、API 发现条目和旧导入投影共用入口规则；用户自定义 host/path 与显式非 Chat 协议不覆盖。
 - Claude Code 优先 Messages、Codex 优先 Responses、Pi 保留可直接调用的 adapter。
-  不匹配才由现有本地转换器提供兼容，兼容默认关闭；保留用户开关。
+  不匹配才由现有本地转换器提供兼容，兼容默认关闭；保留用户开关。厂商官方提供 Responses 时
+  补接口模板，让 Codex 不经本地转换（2026-10-30：DeepSeek、Kimi K3、Z.ai 与智谱 Coding Plan、
+  百炼按量与 Token Plan、MiMo、火山方舟、LongCat）。智谱国内标准 API 仍走 Chat：曾开通 Coding
+  Plan 的账号只能用 Chat 调标准 API。
+- Pi 选用接口按社区共识，其次按 Pi 最新内置定义（DeepSeek、Kimi 为 Chat）。切换须先有对应
+  Chat 兼容资料（`deepseek-flash`、`kimi-k3.1-pro*` 等），资料到位前保持现有接口。
+- 目录预设与 Cindy AI 由 Cindy 自动选接口，模型设置不提供协议下拉；只有用户自己填地址的
+  自定义供应商保留协议选择。
 - 底层 Bedrock/Vertex/Mistral SDK、认证和路由不作为新增 UI 语言；模型管理保持四种公开语言。
 - 供应商升级文档/接口时应更新此记录和精确契约测试。Pi catalog 同步不会覆盖官方逐模型纠正层。
 

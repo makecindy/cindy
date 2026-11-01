@@ -99,6 +99,7 @@
     "incomplete": "語音輸入未完成，請重試。",
     "missingRefinerTargetProvider": "語音潤色暫時無法使用，請重新登入 {{appName}} 後重試。",
     "emptyTranscript": "語音辨識未回傳文字，請重新錄音。",
+    "speakerFiltered": "已忽略其他人的聲音",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音識別沒有繼續返回結果，請重試。",
     "transcriptKept": "{{message}}（識別出的文字已經保留，可以直接編輯）",

@@ -417,6 +417,8 @@ function assertRemotePiContextProfileAvailable(
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
+/** Pi may spend over 30s restoring a large session during startup; keep this absolute and local to resume. */
+const PI_RESUME_TIMEOUT_MS = 60_000;
 /** prompt 接受前可能自动压缩，同样必须覆盖一次完整摘要调用。 */
 const PI_PROMPT_ACCEPTANCE_TIMEOUT_MS = PI_COMPACT_TIMEOUT_MS;
 const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
@@ -6546,7 +6548,7 @@ export class PiAgent extends BaseAgent {
           const switched = await proc.request({
             type: 'switch_session',
             sessionPath: opts.resumeSessionId,
-          });
+          }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。

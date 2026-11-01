@@ -1,3 +1,4 @@
+import type { SupportedLocale } from '../../../src/shared/locale';
 export type UiPageTheme = 'light' | 'dark';
 
 /** Serialized by the runner into the page; identical shape for every engine. */
@@ -5,7 +6,7 @@ export interface UiPageContext {
   page: string;
   case: string;
   theme: UiPageTheme;
-  locale: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+  locale: SupportedLocale;
   platform: 'darwin' | 'win32' | 'linux';
   viewport: { width: number; height: number };
   /** JSON data declared by the page case; the fixture and the Playwright checks read the same values. */

@@ -44,6 +44,7 @@ export interface PluginDetailViewProps {
   previewLabel?: string;
   settingsContent?: ReactNode;
   managementNotice?: PluginNoticeProps;
+  uiApprovalNotice?: PluginNoticeProps;
   onEnabledChange(enabled: boolean): void;
   onOpen(surface: PluginPageSurface): void;
   onNewTask(): void;
@@ -147,6 +148,7 @@ export function PluginDetailView(p: PluginDetailViewProps) {
             }
           />
         ) : null}
+        {p.uiApprovalNotice ? <PluginNotice {...p.uiApprovalNotice} /> : null}
         {p.managementNotice ? <PluginNotice {...p.managementNotice} /> : null}
         {notices.loading ? (
           <ActivityIndicator

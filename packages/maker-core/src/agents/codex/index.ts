@@ -932,6 +932,16 @@ function isExactUnloadedThreadReadError(error: unknown, threadId: string): boole
     `codex app-server thread/read error -32600: thread not loaded: ${threadId}`);
 }
 
+/** A native refusal proves no writer was loaded, and the selected route is active. */
+function isSavedModelProviderMismatch(error: unknown, selectedProvider: string | undefined): boolean {
+  if (!selectedProvider || typeof error !== 'object' || error === null) return false;
+  const { code, data } = error as { code?: unknown; data?: Record<string, unknown> };
+  return code === -32600 && data?.type === 'modelProviderMismatch'
+    && data.currentModelProvider === selectedProvider
+    && typeof data.modelProvider === 'string' && data.modelProvider.length > 0
+    && data.modelProvider !== selectedProvider;
+}
+
 function isExactArchivedThreadResumeError(error: unknown, threadId: string): boolean {
   return isExactThreadLookupError(error,
     `codex app-server thread/resume error -32600: session ${threadId} is archived. Run \`codex unarchive ${threadId}\` to unarchive it first.`);
@@ -3015,6 +3025,7 @@ assertRouteCurrent();
     let remoteCompactionProviderId: string | undefined;
     let cindyRemoteCompactionProviderId: string | undefined;
     let localCompactionProviderId: string | undefined;
+    let defaultModelProviderId: string | undefined;
     let codexCustomProviderRoutes: CodexExtraSpawnConfig['codexCustomProviderRoutes'];
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
@@ -3053,6 +3064,7 @@ assertRouteCurrent();
       remoteCompactionProviderId = undefined;
       cindyRemoteCompactionProviderId = undefined;
       localCompactionProviderId = undefined;
+      defaultModelProviderId = undefined;
       codexCustomProviderRoutes = undefined;
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
@@ -3130,6 +3142,7 @@ assertRouteCurrent();
           codexOpenAiWebSocketsEnabled = cfg.codexOpenAiWebSocketsEnabled !== false;
           codexSubagentRoutingProfile = cfg.codexSubagentRoutingProfile ?? 'default';
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
+          defaultModelProviderId = codexProxyActive ? cfg.codexDefaultModelProviderId : undefined;
           // Remote daemons own their browser companion and its CODEX_HOME;
           // preserve the host-provided availability snapshot instead of
           // forcing every remote target into the local fail-closed state.
@@ -3247,7 +3260,7 @@ assertRouteCurrent();
     // 改由 desktop 侧在 session start 前置完成 (remote-ssh/codex-remote-mcp.ts):
     // 往远端 config.toml 写 mcp_servers 段, daemon 经 SSH remote-forward 直连
     // 本机 HTTP bridge, tool call 按 params._meta.threadId 路由(与本地一致)。
-    let createTransport: () => import('./app-server/transport.js').Transport;
+    let createTransport: (modelProvider?: string) => import('./app-server/transport.js').Transport;
     if (remoteHostId) {
       if (!this.deps.getRemoteCodexTransport) {
         throw new Error(
@@ -3258,10 +3271,12 @@ assertRouteCurrent();
       createTransport = () => provider(remoteHostId);
     } else {
       const binaryPath = this.deps.binaryPath;
-      createTransport = () => createStdioTransport({
+      createTransport = (modelProvider) => createStdioTransport({
         binaryPath,
         env,
-        extraArgs,
+        extraArgs: modelProvider
+          ? [...extraArgs, '-c', `model_provider=${JSON.stringify(modelProvider)}`]
+          : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
         onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
@@ -3276,6 +3291,8 @@ assertRouteCurrent();
 
     const host = new AppServerHost({
       createTransport,
+      supportsModelProviderSelection: codexProxyActive && !remoteHostId,
+      defaultModelProviderId,
       externalAuth,
       requireEphemeralAuth,
       logger: this.deps.logger,
@@ -5197,9 +5214,68 @@ assertRouteCurrent();
       });
       return true;
     };
+    let customProviderThreadConfig: Record<string, unknown> = {};
+    const hostUsesCodexProxy = host.isCodexProxyActive();
+
+    // Codex 只按 model provider 的 name="OpenAI" 判断远程压缩能力。Cindy 先按
+    // 产品来源 + openai-codex/* / codex/* 模型做语义路由，再选择同一 app-server 内固定 HTTP 的 identity。
+    const cindyProviderRemoteCompactionRequested = isCindyProviderCodexRemoteCompactionRoute({
+      providerId: mutableProviderId,
+      model: mutableModel,
+    });
+    const independentSubagentRoute = host.getSubagentRoute?.();
+    // 独立 Subagent 只在 proxy 层改写 Provider/model，Codex child thread 仍继承 root
+    // 的 model provider identity。若 child 不是同一 Cindy Codex 后端，给 root 打开
+    // remote compaction 会让 child 也错误调用不兼容上游；该组合保持本地压缩。
+    const cindyProviderRemoteCompactionCompatible = (
+      !independentSubagentRoute || isCindyProviderCodexRemoteCompactionRoute({
+        providerId: independentSubagentRoute.providerId,
+        model: independentSubagentRoute.catalogModel,
+      })
+    );
+    const cindyProviderRemoteCompaction =
+      cindyProviderRemoteCompactionRequested && cindyProviderRemoteCompactionCompatible;
+    const threadCredentialFamily =
+      credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+    const customProviderModelProvider = opts.remoteHostId
+      ? null
+      : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel);
+    const customProviderThreadPolicy = opts.remoteHostId
+      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false }
+      : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel) ?? {
+          dynamicIdentity: false,
+          disableSubagents: false,
+          disableModelOverrides: false,
+        };
+    if (customProviderThreadPolicy.dynamicIdentity) {
+      customProviderThreadConfig = {
+        web_search: 'disabled',
+        'features.standalone_web_search': false,
+        ...(customProviderThreadPolicy.disableSubagents
+          ? {
+              'features.multi_agent': false,
+              'features.multi_agent_v2': false,
+              'agents.enabled': false,
+            }
+          : customProviderThreadPolicy.disableModelOverrides
+            ? { 'features.multi_agent_v2.expose_spawn_agent_model_overrides': false }
+            : {}),
+      };
+    }
+    let threadModelProvider = opts.remoteHostId
+      ? undefined
+      : customProviderModelProvider
+        ? customProviderModelProvider
+        : cindyProviderRemoteCompaction
+          ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
+          : threadCredentialFamily === 'oauth-bearer'
+            ? host.getRemoteCompactionProviderId?.() ?? host.getDefaultModelProviderId?.()
+            : host.getDefaultModelProviderId?.();
+
     let initResp: Awaited<ReturnType<AppServerHost['ensureStarted']>>;
     try {
       assertCurrentHost('initialize');
+      await host.selectModelProvider?.(threadModelProvider);
       // 直调也必须有上界 (codex R13 P1): 冷启动 / transport 重建时
       // bootstrap 挂死 (远端 daemon 无响应 / SSH 通道死) 会让 startSession
       // 永不返回, UI 无限卡初始化 — 与 request() 的 startup deadline 同款。
@@ -6299,7 +6375,6 @@ assertRouteCurrent();
       return JSON.stringify({ profile, writableDirs: mutableWritableDirs });
     }
 
-    let customProviderThreadConfig: Record<string, unknown> = {};
     const currentCompactionPct = () => this.deps.resolveModelCompactionPct?.(
       mutableProviderId, mutableCatalogModel ?? mutableModel,
     ) ?? null;
@@ -6684,63 +6759,6 @@ assertRouteCurrent();
       }
     };
 
-    const hostUsesCodexProxy = host.isCodexProxyActive();
-
-    // Codex 只按 model provider 的 name="OpenAI" 判断远程压缩能力。Cindy 先按
-    // 产品来源 + openai-codex/* / codex/* 模型做语义路由，再选择同一 app-server 内固定 HTTP 的 identity。
-    const cindyProviderRemoteCompactionRequested = isCindyProviderCodexRemoteCompactionRoute({
-      providerId: mutableProviderId,
-      model: mutableModel,
-    });
-    const independentSubagentRoute = host.getSubagentRoute?.();
-    // 独立 Subagent 只在 proxy 层改写 Provider/model，Codex child thread 仍继承 root
-    // 的 model provider identity。若 child 不是同一 Cindy Codex 后端，给 root 打开
-    // remote compaction 会让 child 也错误调用不兼容上游；该组合保持本地压缩。
-    const cindyProviderRemoteCompactionCompatible = (
-      !independentSubagentRoute || isCindyProviderCodexRemoteCompactionRoute({
-        providerId: independentSubagentRoute.providerId,
-        model: independentSubagentRoute.catalogModel,
-      })
-    );
-    const cindyProviderRemoteCompaction =
-      cindyProviderRemoteCompactionRequested && cindyProviderRemoteCompactionCompatible;
-    const threadCredentialFamily =
-      credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
-    const customProviderModelProvider = opts.remoteHostId
-      ? null
-      : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel);
-    const customProviderThreadPolicy = opts.remoteHostId
-      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false }
-      : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel) ?? {
-          dynamicIdentity: false,
-          disableSubagents: false,
-          disableModelOverrides: false,
-        };
-    if (customProviderThreadPolicy.dynamicIdentity) {
-      customProviderThreadConfig = {
-        web_search: 'disabled',
-        'features.standalone_web_search': false,
-        ...(customProviderThreadPolicy.disableSubagents
-          ? {
-              'features.multi_agent': false,
-              'features.multi_agent_v2': false,
-              'agents.enabled': false,
-            }
-          : customProviderThreadPolicy.disableModelOverrides
-            ? { 'features.multi_agent_v2.expose_spawn_agent_model_overrides': false }
-            : {}),
-      };
-    }
-    let threadModelProvider = opts.remoteHostId
-      ? undefined
-      : customProviderModelProvider
-        ? customProviderModelProvider
-        : cindyProviderRemoteCompaction
-          ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
-          : threadCredentialFamily === 'oauth-bearer'
-            ? host.getRemoteCompactionProviderId?.() ?? undefined
-            : undefined;
-
     const isLikelyValidThreadId = (id: string | undefined): id is string =>
       typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
     // Resolve the canonical history before asking a new account host about a thread
@@ -6813,6 +6831,10 @@ assertRouteCurrent();
       }
     }
 
+    // A persisted summary fallback can differ from the initial route. No task
+    // writer/subscription exists yet, so align the process before loading it.
+    await host.selectModelProvider?.(threadModelProvider);
+
     /**
      * 本 thread 的 Responses 请求是否走 WebSocket。
      *
@@ -6827,6 +6849,7 @@ assertRouteCurrent();
       && !customProviderThreadPolicy.dynamicIdentity
       && !cindyProviderRemoteCompaction
       && !!threadModelProvider
+      && threadModelProvider === host.getRemoteCompactionProviderId?.()
       && (host.getOpenAiWebSocketsEnabled?.() ?? true);
 
     /**
@@ -7113,15 +7136,33 @@ assertRouteCurrent();
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        const resume = () => withMcpDiscoveryContext(() => {
+        let providerHistoryFork = false;
+        const resume = () => withMcpDiscoveryContext(async () => {
           assertCurrentHost('thread/resume dispatch');
-          return host.request<ThreadResumeResponse>(Method.ThreadResume, params, {
+          const requestOptions = {
             ...criticalThreadRpcOptions(),
             beforeDispatch: () => {
               assertCurrentHost('thread/resume write');
               startup.threadDispatched = true;
             },
-          });
+          };
+          try {
+            return await host.request<ThreadResumeResponse>(Method.ThreadResume, params, requestOptions);
+          } catch (error) {
+            if (!hostUsesCodexProxy || opts.remoteHostId || indexedRolloutMissing
+              || !isSavedModelProviderMismatch(error, threadModelProvider)) throw error;
+            // New native versions forbid changing a saved thread's provider.
+            // Fork the complete canonical history, keeping the Cindy task and
+            // source rollout intact. Older versions retain their native resume.
+            startup.threadDispatched = false;
+            assertCurrentHost('provider history fork');
+            const fork = await host.request<ThreadResumeResponse>(Method.ThreadFork, params, requestOptions);
+            if (fork.thread.id === opts.resumeSessionId || fork.modelProvider !== threadModelProvider) {
+              throw new Error('Codex did not preserve the selected provider on the history fork');
+            }
+            providerHistoryFork = true;
+            return fork;
+          }
         });
         let resp: ThreadResumeResponse;
         try {
@@ -7155,7 +7196,7 @@ assertRouteCurrent();
           // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
           mutableCatalogModel = resp.model;
         }
-        if ((preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
+        if (!providerHistoryFork && (preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
           throw new Error('Codex resumed an unexpected thread');
         }
         // A missing indexed path is not permission to select an older copy by ID.
@@ -7411,6 +7452,12 @@ assertRouteCurrent();
       acquireHostBindingLeaseIfNeeded();
       try {
         assertCurrentHost('workspace permission profile replacement');
+        if (retainHistory) {
+          const released = await releaseCurrentThreadSubscription('summary provider transition', { retireHostOnFailure: false });
+          if (!released) throw staleHostError('summary provider transition');
+          await host.selectModelProvider?.(threadModelProvider);
+          assertCurrentHost('summary provider transition');
+        }
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
@@ -10654,6 +10701,9 @@ assertRouteCurrent();
             if (threadId === previousThread) {
               threadModelProvider = previousProvider;
               threadUsesWebSocket = previousWebSocket;
+              // A failed fork must not leave the next send on the summary
+              // process while this handle still points at the original thread.
+              await host.selectModelProvider?.(previousProvider);
             }
             throw error;
           }
@@ -10712,6 +10762,9 @@ assertRouteCurrent();
       if (!compactingTurnIds.has(deadTurnId)) return false;
       // In-memory exec continuations cannot be moved to another native thread.
       if (activeYieldContinuationClaim() || cellsForCompletedTurn(deadTurnId).length > 0) return false;
+      // The provider transition replaces this task's process. Keep running
+      // native children alive instead of interrupting them for an automatic retry.
+      if (subagentLiveCards.hasRunning) return false;
       const text = `${error?.message ?? ''}\n${typeof error?.additionalDetails === 'string' ? error.additionalDetails : ''}`;
       const signals = extractNonSecretErrorSignals(text);
       // A compact endpoint can exhaust its own retries while ordinary generation works.
@@ -13039,6 +13092,22 @@ assertRouteCurrent();
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────
+    const requestUserInterrupt = (turnId: string) => {
+      let cancelTools: (() => void) | undefined;
+      try {
+        if (sid && opts.sessionInstanceId) {
+          cancelTools = this.deps.prepareCodexMcpToolCancellation?.({
+            sessionId: sid, sessionInstanceId: opts.sessionInstanceId, threadId,
+          });
+        }
+      } catch { log.warn('Could not capture Codex MCP calls for user stop'); }
+      return host.request(Method.TurnInterrupt, { threadId, turnId }).then(result => {
+        // The ACK is a definite stop signal. Do not wait for tool completion or retry.
+        try { cancelTools?.(); } catch { log.warn('Could not cancel Codex MCP calls after user stop'); }
+        return result;
+      });
+    };
+
     const handle: AgentSessionHandle = {
       disabledSkillPaths: disabledSkillSnapshot,
       getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
@@ -13663,10 +13732,9 @@ assertRouteCurrent();
               // 找不到 handler 全部 silent drop, UI 永远转圈 (currentTurnId 从未被 set,
               // isTurnInFlight 永远 false, token 流也没人消费)。
               // 用同一个 handlers 对象 re-subscribe (host.subscribers.set 覆盖语义),
-              // 顶层 startSession 拿到的原 subscription 句柄仍能正确清理当前 entry,
-              // 无需在这里管理新返回的 subscription 句柄。
+              // 保存当前订阅句柄，确保重建后的关闭路径仍会释放原生线程。
               assertCurrentHost('thread/resume retry subscribe');
-              host.subscribeThread(threadId, handlers);
+              subscription = host.subscribeThread(threadId, handlers);
               const resumeModel = mutableModel;
               const resumeServiceTierGeneration = serviceTierMutationGeneration;
               const resumeParams: ThreadResumeParams = {
@@ -14077,7 +14145,7 @@ assertRouteCurrent();
         resetUpstreamIdleForTurnEnd();
         watchdogActivityVersionAtStop = watchdogActivityVersion;
         try {
-          const interruptRequest = host.request(Method.TurnInterrupt, { threadId, turnId });
+          const interruptRequest = requestUserInterrupt(turnId);
           await new Promise<void>((resolve, reject) => {
             const onAbort = () => {
               cleanup();
@@ -14151,7 +14219,7 @@ assertRouteCurrent();
         resetUpstreamIdleForTurnEnd();
         dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
         try {
-          await host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId });
+          await requestUserInterrupt(currentTurnId);
         } catch (e) {
           log.warn('turn/interrupt threw', { error: String(e) });
         }

@@ -36,6 +36,8 @@
   HTML-first 工序、四格式统一视觉语言、Session 作品卡和插件增强层边界。
 - [`input-handoff.md`](input-handoff.md)：代输入——Agent 把需要主人的一步（登录、密码、验证码、
   授权、未知选项）交给主人逐步完成，值不留痕；兜底、提醒、结束判定与已知边界。
+- [`mail-card.md`](mail-card.md)：邮件卡的收件人与编辑、发送确认、浅色还原与深色参照 Gmail、
+  已读标记，以及头像来源与 Google 通讯录权限范围。
 - [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、
   推理强度与 Fast 的统一控制面，baseline/effective/pending 状态和自动降级边界。
 - [`archive-pauses-automations.md`](archive-pauses-automations.md)：运行中的自动化会恢复已归档的

@@ -1,0 +1,442 @@
+{
+  "permission": {
+    "mode": {
+      "default": "Permissões padrão",
+      "acceptEdits": "Permitir edições",
+      "plan": "Modo de planejamento",
+      "auto": "Aprovar automaticamente",
+      "bypass": "Acesso total"
+    },
+    "pickerSelect": "Selecionar modo de permissão {{mode}}",
+    "armedRiskWarning": "A decisão só é enviada ao seu computador após sua confirmação.",
+    "armedHighRiskTitle": "Confirmar ação de alto risco",
+    "kind": "Permissão",
+    "deny": "Negar",
+    "denyAccessibility": "Negar solicitação de permissão",
+    "alwaysAllow": "Sempre permitir nesta sessão",
+    "alwaysAllowAccessibility": "Sempre permitir solicitações de permissão nesta sessão",
+    "alwaysAllowConfirm": "Confirmar permissão para esta sessão",
+    "allowOnce": "Permitir uma vez",
+    "allowOnceAccessibility": "Permitir solicitação de permissão uma vez",
+    "allowOnceConfirm": "Confirmar permissão única",
+    "highRisk": "Alto risco",
+    "autoReviewUnavailable": "A análise automática não pôde ser concluída. Confirme se deseja permitir esta ação.",
+    "autoReviewReason": "A análise automática precisa da sua decisão: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "Ativar acesso total?",
+      "description": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. {{appName}} pode modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; operações de alto risco integradas ainda exigirão confirmação.",
+      "confirm": "Ativar acesso total",
+      "cancel": "Manter permissões atuais"
+    }
+  },
+  "planMode": {
+    "label": "Modo de planejamento",
+    "exit": "Sair do modo de planejamento"
+  },
+  "panel": {
+    "readOnlyKind": "Pendente",
+    "readOnlyTitle": "Aguardando confirmação no seu computador",
+    "pendingRequests": "Solicitações pendentes",
+    "queueSwitchTo": "Alternar para a solicitação pendente {{position}}: {{label}}",
+    "queueSwitchGeneric": "Alternar solicitação pendente",
+    "queuePositionCurrent": "atual",
+    "queuePositionNext": "próxima",
+    "queuePositionNth": "nº {{index}}",
+    "composerBlockedByPending": "Resolva a solicitação pendente no seu computador antes de digitar novamente.",
+    "missingRequestId": "Esta interação remota não tem requestId, então não é possível enviar a decisão de volta.",
+    "desktopConfirmUnsupported": "Esta confirmação é feita apenas no computador remoto. Volte ao aplicativo para desktop para continuar.",
+    "unsupportedType": "Este tipo de interação remota ainda não é compatível com dispositivos móveis.",
+    "unsupportedKind": "Não compatível",
+    "desktopOnlyKind": "No computador",
+    "cancelRequest": "Cancelar esta solicitação",
+    "cancelRequestAccessibility": "Cancelar esta solicitação remota",
+    "awaitingAnswer": "Aguardando resposta",
+    "continueAccessibility": "Continuar a pergunta remota",
+    "continue": "Continuar",
+    "askOptionCount": "{{count}} opções",
+    "askFreeInput": "Texto livre",
+    "askModeMulti": "Seleção múltipla",
+    "askModeSingle": "Seleção única",
+    "askMetaCaption": "{{options}} · {{mode}} · Outras respostas permitidas",
+    "collapse": "Recolher",
+    "collapsePendingCard": "Recolher a solicitação pendente para ler primeiro a saída do seu computador",
+    "expandPendingCard": "Expandir a solicitação pendente para responder: {{title}}",
+    "collapsedHint": "Toque para responder",
+    "selectAnswer": "Selecionar resposta {{label}}",
+    "submittingHint": "Enviando a decisão ao seu computador. Não envie novamente.",
+    "decisionNotAccepted": "Sua resposta não foi aceita. Tente novamente.",
+    "customAnswerInputAccessibility": "Digite uma resposta personalizada",
+    "customAnswerPlaceholder": "Digite outra resposta",
+    "customAnswerButtonText": "Digite outra resposta…",
+    "answerInput": "Digite uma resposta",
+    "previous": "Voltar",
+    "skipAccessibility": "Pular pergunta",
+    "skip": "Pular",
+    "submitAnswerAccessibility": "Enviar resposta",
+    "next": "Próximo",
+    "answerRequired": "Selecione ou digite uma resposta para continuar.",
+    "submit": "Enviar",
+    "sendAndContinue": "Enviar e continuar",
+    "closeAnswer": "Fechar",
+    "planReviewTitle": "Revisar o plano do Claude",
+    "planExpand": "Expandir plano",
+    "planEditHint": "Use o modo de edição para ajustar o plano",
+    "planBrowseHint": "Toque em uma seção para ir até ela",
+    "planEditToggle": "Editar plano",
+    "planEditExit": "Sair da edição do plano",
+    "planCollapse": "Recolher plano",
+    "planExpandArea": "Expandir navegador do plano",
+    "planHalf": "Exibir plano em meia tela",
+    "planEditorAccessibility": "Editor do plano",
+    "planEditorPlaceholder": "Editar o plano",
+    "planOutline": "Estrutura",
+    "planJumpTo": "Ir para a seção do plano {{title}}",
+    "planEmpty": "O plano está vazio.",
+    "planApproveAccessibility": "Aprovar e executar o plano",
+    "planApprove": "Aprovar o plano do Claude e começar a programar",
+    "planFeedbackLabel": "Feedback do plano",
+    "planFeedbackPlaceholder": "Diga ao Claude o que fazer",
+    "planFeedbackRequired": "Digite seu feedback antes de enviar.",
+    "planFeedbackSubmit": "Enviar feedback do plano",
+    "planFeedbackAccessibility": "Dar feedback para alterar o plano"
+  },
+  "kinds": {
+    "permission": {
+      "title": "Permissão necessária no seu computador",
+      "label": "Permissão"
+    },
+    "ask_user_question": {
+      "title": "O Agent precisa de uma resposta",
+      "label": "Pergunta"
+    },
+    "plan_review": {
+      "title": "O plano precisa da sua revisão",
+      "label": "Plano"
+    },
+    "issue_confirm": {
+      "title": "O problema precisa de confirmação",
+      "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "Os nomes das sessões precisam de confirmação",
+      "label": "Renomear"
+    },
+    "ghost_grant_confirm": {
+      "title": "O acesso a arquivos precisa de confirmação",
+      "label": "Acesso a arquivos"
+    },
+    "plugin_setup": {
+      "title": "Configuração de plugin necessária no seu computador",
+      "label": "Plugin"
+    },
+    "fallback": {
+      "title": "A solicitação remota precisa de atenção",
+      "label": "Solicitação"
+    },
+    "input_handoff": {
+      "title": "Transferência de controle de entrada necessária",
+      "label": "Transferência de controle de entrada"
+    }
+  },
+  "rewind": {
+    "readError": "Não foi possível ler a prévia da reversão. Sincronize e tente novamente.",
+    "noFilesNote": "Nenhuma alteração nos arquivos do projeto foi detectada após esta mensagem. Continuar removerá a conversa posterior.",
+    "conversationOnlyNote": "Não é possível restaurar os arquivos do projeto porque não há um ponto de restauração do Git disponível. Continuar removerá a conversa após esta mensagem; os arquivos não voltarão ao estado anterior.",
+    "gitSafetyDisabledNote": "Os pontos de restauração de segurança do Git estão desativados, então não é possível restaurar os arquivos do projeto. Ative-os nas Configurações do seu computador; continuar removerá a conversa após esta mensagem.",
+    "moreFiles": "Mais {{count}} arquivos",
+    "stats": "{{count}} arquivos · +{{insertions}} / -{{deletions}} linhas",
+    "gotIt": "Entendi",
+    "cancel": "Cancelar",
+    "cancelAccessibility": "Cancelar reversão",
+    "confirm": "Confirmar reversão",
+    "confirming": "Revertendo",
+    "titleLoading": "Verificando o impacto da reversão",
+    "titleDefault": "Reverter até esta mensagem?",
+    "titleEmpty": "Reverter apenas a conversa",
+    "titleError": "Não é possível reverter",
+    "detailLoading": "Lendo a prévia da reversão de arquivos do seu computador.",
+    "detailDefault": "Isso reverte os arquivos abaixo e remove a conversa após esta mensagem.",
+    "detailEmpty": "Nenhuma alteração nos arquivos do projeto foi detectada após esta mensagem.",
+    "detailConversationOnly": "Os arquivos do projeto não voltarão ao estado anterior.",
+    "detailError": "Seu computador recusou esta reversão."
+  },
+  "collab": {
+    "dispatchSummaryItem": "{{label}}: {{task}}",
+    "batchTitle": "Enviado para {{count}} Workers",
+    "batchTitleGeneric": "Enviado para vários Workers",
+    "batchBodyFallback": "Criar Workers",
+    "dispatchTitle": "Enviado para o Worker {{who}}",
+    "dispatchRole": "Função {{meta}}",
+    "dispatchBodyFallback": "Criar Worker",
+    "sendTitle": "Mensagem para o Worker",
+    "sendBodyFallback": "Enviar mensagem",
+    "fromLead": "Mensagem do Lead",
+    "fromWorkerNamed": "Mensagem do Worker “{{role}}”",
+    "fromWorker": "Mensagem do Worker",
+    "emptyMessageBody": "(Mensagem vazia)"
+  },
+  "contextSheet": {
+    "backAccessibility": "Voltar ao painel de contexto",
+    "goalStatus": {
+      "active": "Em andamento",
+      "paused": "Em pausa",
+      "blocked": "Pendente",
+      "complete": "Concluído",
+      "budgetLimited": "Limite atingido",
+      "usageLimited": "Uso limitado",
+      "capacityLimited": "Serviço do modelo ocupado"
+    },
+    "goalLabel": "Objetivo",
+    "goalObjectiveAccessibility": "Conteúdo do objetivo",
+    "goalPlaceholder": "O que você quer alcançar? O Agent continua trabalhando nesse objetivo até concluí-lo ou atingir um limite.",
+    "advancedSettings": "Configurações avançadas",
+    "limitsHint": "Se não forem alterados, serão usados os limites padrão do computador remoto; o objetivo para automaticamente quando qualquer limite é atingido e pode ser interrompido manualmente a qualquer momento; \"Ilimitado\" significa que nenhum limite foi definido.",
+    "maxTurns": "Máximo de turnos",
+    "tokenBudget": "Limite de tokens",
+    "noProgressLimit": "Limite sem progresso",
+    "startGoal": "Iniciar objetivo",
+    "goalMeta": "{{turns}} turnos · {{tokens}} tokens",
+    "goalCapacityHint": "O serviço upstream está sem capacidade no momento — tentando novamente automaticamente",
+    "pause": "Pausar",
+    "resume": "Retomar",
+    "clearGoal": "Parar objetivo",
+    "unlimited": "Ilimitado",
+    "noScreenshots": "Nenhuma captura de tela encontrada.",
+    "mediaRemove": "Remover foto anexada {{name}}",
+    "mediaDeselect": "Desmarcar foto {{name}}",
+    "mediaSelect": "Selecionar foto {{name}}",
+    "photoPermissionHint": "O acesso às fotos está desativado. Ative-o para adicionar fotos recentes rapidamente.",
+    "enablePhotoPermission": "Ativar acesso às fotos",
+    "enable": "Ativar",
+    "icloudTimeout": "A foto ainda está sendo baixada do iCloud e o tempo limite foi excedido. Verifique sua rede e tente novamente.",
+    "photoNotReadable": "Não é possível ler esta foto agora (talvez o download do iCloud ainda não tenha terminado). Tente novamente mais tarde."
+  },
+  "pluginSetup": {
+    "remoteDesktop": "Abrir aplicativo de computador",
+    "completeOnDesktop": "Use a área de trabalho remota para concluir a configuração no computador. O login, a autorização e as credenciais permanecem nesse computador; este cartão é atualizado automaticamente.",
+    "chooseOne": "Escolha um método de configuração",
+    "progress": "{{satisfied}}/{{total}} concluídos",
+    "desktopActionHint": "No seu computador: {{action}}",
+    "a11ySeparator": ", ",
+    "phase": {
+      "pending": "Pendente",
+      "action_running": "Em andamento…",
+      "waiting_external": "Aguardando autorização…",
+      "verifying": "Verificando…",
+      "satisfied": "Concluído",
+      "failed": "Falhou",
+      "cancelled": "Cancelado"
+    },
+    "error": {
+      "ACTION_FAILED": "Não foi possível concluir esta ação de configuração. Tente novamente.",
+      "ACTION_STALE": "Esta configuração mudou. Escolha a ação de configuração novamente.",
+      "AUTH_CANCELLED": "A autorização foi cancelada. Autorize a conta novamente quando estiver pronto.",
+      "AUTH_FAILED": "Não foi possível autorizar a conta. Tente novamente.",
+      "AUTH_NETWORK": "Não foi possível acessar o serviço de autorização. Verifique sua rede e tente novamente.",
+      "AUTH_SERVICE_UNAVAILABLE": "O serviço de autorização está temporariamente indisponível. Tente novamente mais tarde.",
+      "INLINE_INVALID": "Esta configuração é inválida. Verifique-a e tente novamente.",
+      "INLINE_UNAVAILABLE": "Esta versão do Cindy não pode salvar esta configuração na conversa. Atualize o Cindy e tente novamente.",
+      "SAVE_FAILED": "Não foi possível salvar esta configuração. Tente novamente.",
+      "WINDOW_CLOSED": "A janela que iniciou a configuração foi fechada. Volte à sessão e tente novamente.",
+      "TARGET_UNAVAILABLE": "Este plugin está desativado, desinstalado ou indisponível. Verifique o plugin e tente novamente.",
+      "ASSESSMENT_FAILED": "Não foi possível atualizar o status da configuração. Tente novamente.",
+      "TIMEOUT": "O tempo limite da configuração foi excedido. Tente novamente."
+    },
+    "action": {
+      "oauth_connect": "Autorizar",
+      "open_plugin_settings": "Abrir configurações",
+      "manage_connection": "Gerenciar conexões",
+      "open_client_settings": "Abrir configurações do modelo"
+    },
+    "inlineFormAction": "Insira {{label}} no seu computador",
+    "inlineFormActionGeneric": "Insira uma configuração no seu computador"
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "Esta página não usa uma conexão segura. O que você inserir pode ser lido por outras pessoas.",
+      "ip-address": "Esta página usa um endereço IP em vez de um domínio. Verifique se é o site esperado.",
+      "local-host": "Esta página vem de um serviço neste computador. Verifique se é o aplicativo esperado.",
+      "local-file": "Esta página é um arquivo local. Verifique se é o que você espera.",
+      "punycode": "Este endereço contém caracteres incomuns e pode imitar outro site. Verifique-o com atenção.",
+      "embedded-frame": "Estes campos estão em outro site incorporado à página. Verifique se a origem é confiável."
+    },
+    "agentControlled": "O Agent abriu esta tela. Verifique se é realmente onde você quer entrar antes de preenchê-la.",
+    "agentPicture": "Este código vem de uma captura de tela feita pelo Agent, então o Cindy não pode ver a tela original nem saber quando você terminou. Verifique se ele leva ao site em que você pretende entrar e escolha Devolver ao Agent após escanear.",
+    "error": {
+      "decision": "Não deu certo. Tente novamente.",
+      "stale": "A tela mudou. Use a versão mais recente.",
+      "submit": "Sua entrada não foi enviada. Tente novamente."
+    },
+    "terminal": {
+      "succeeded": "Controle devolvido ao Agent.",
+      "cancelled": "Transferência de controle de entrada cancelada.",
+      "failed": "Transferência de controle de entrada encerrada.",
+      "expired": "Transferência de controle de entrada encerrada por tempo de espera excedido."
+    },
+    "failure": {
+      "permission": "O Cindy não consegue ler a tela deste computador. Permita o acesso do Cindy em Acessibilidade nas Configurações do Sistema.",
+      "target_gone": "A janela de destino foi fechada.",
+      "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
+      "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",
+      "timeout": "Transferência de controle de entrada encerrada por tempo de espera excedido.",
+      "unsupported": "Este computador ainda não oferece transferência de entrada.",
+      "origin_changed": "A página mudou antes que Cindy pudesse preenchê-la, então nada foi inserido. Verifique a página atual e tente novamente.",
+      "picture_unavailable": "Não foi possível mostrar esta etapa como imagem. Permita que Cindy grave a tela nas Configurações do Sistema e verifique se a janela não está minimizada.",
+      "screen_locked": "A tela deste computador está bloqueada (a suspensão da tela também a bloqueia). Ative e desbloqueie a tela e peça ao Agent para tentar novamente.",
+      "nothing_to_fill": "Nada nesta tela precisa ser digitado, então o Agent continua sozinho."
+    },
+    "phase": {
+      "reading": "Lendo a tela…",
+      "working": "Preenchendo…",
+      "finishing": "Parece concluído. Devolvendo o controle ao Agent em {{count}}s.",
+      "finishingNow": "Parece concluído. Devolvendo o controle ao Agent…"
+    },
+    "action": {
+      "stay": "Ainda não concluí",
+      "done": "Devolver ao Agent",
+      "cancel": "Cancelar transferência",
+      "claim": "Resolver aqui",
+      "picture": "Mostrar tela",
+      "backToForm": "Voltar ao formulário",
+      "liveView": "Visualização ao vivo",
+      "fill": "Preencher",
+      "skip": "Pular",
+      "continue": "Continuar",
+      "close": "Cancelar",
+      "showPassword": "Mostrar senha",
+      "hidePassword": "Ocultar senha",
+      "scan": "Escanear"
+    },
+    "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
+    "unnamedField": "Campo",
+    "passwordField": "Senha",
+    "codeField": "Código de verificação",
+    "filledHint": "Já tem conteúdo. Deixe vazio para mantê-lo.",
+    "record": {
+      "doneOn_one": "O proprietário concluiu {{count}} etapa de entrada em {{device}}",
+      "doneOn_other": "O proprietário concluiu {{count}} etapas de entrada em {{device}}",
+      "doneHost_one": "O proprietário concluiu {{count}} etapa de entrada no computador host",
+      "doneHost_other": "O proprietário concluiu {{count}} etapas de entrada no computador host",
+      "donePhone_one": "O proprietário concluiu {{count}} etapa de entrada em um celular",
+      "donePhone_other": "O proprietário concluiu {{count}} etapas de entrada em um celular",
+      "doneElsewhere_one": "O proprietário concluiu {{count}} etapa de entrada em outro dispositivo",
+      "doneElsewhere_other": "O proprietário concluiu {{count}} etapas de entrada em outro dispositivo",
+      "done": "Transferência de entrada concluída",
+      "nothingToFill": "Nada para digitar; controle devolvido ao Agent",
+      "cancelled": "Transferência de entrada cancelada",
+      "expired": "O tempo da transferência de entrada esgotou",
+      "failed": "A transferência de entrada não foi concluída",
+      "doneOn_many": "O proprietário concluiu {{count}} etapas de entrada em {{device}}",
+      "doneHost_many": "O proprietário concluiu {{count}} etapas de entrada no computador host",
+      "donePhone_many": "O proprietário concluiu {{count}} etapas de entrada em um celular",
+      "doneElsewhere_many": "O proprietário concluiu {{count}} etapas de entrada em outro dispositivo"
+    },
+    "holder": {
+      "elsewhere": "Sendo resolvido em {{device}}. Você pode assumir o controle aqui.",
+      "host": "o computador host",
+      "phone": "um celular",
+      "otherDevice": "outro dispositivo"
+    },
+    "agentNote": "Nota do Agent: {{note}}",
+    "picture": {
+      "hint": "Toque em um ponto da imagem e Cindy tocará no mesmo ponto no computador host.",
+      "open": "Mostrar esta etapa",
+      "openHint": "Esta etapa não pode ser exibida como formulário. A imagem é enviada criptografada apenas para este dispositivo e não é salva.",
+      "alt": "Imagem da janela de destino",
+      "loading": "Obtendo a imagem…",
+      "error": "Não foi possível obter a imagem. Tente novamente.",
+      "field": "Campo em foco",
+      "type": "Digitar",
+      "typeEnter": "Digitar e pressionar Return"
+    },
+    "liveViewHint": "Veja apenas esta janela ao vivo por aqui. Cliques e digitação ficam restritos a ela.",
+    "deviceCode": {
+      "prompt": "Entre com este código",
+      "copy": "Copiar código",
+      "copied": "Código copiado",
+      "copyFailed": "Não foi possível copiar o código",
+      "open": "Abrir neste dispositivo",
+      "openFailed": "Não foi possível abrir o link",
+      "then": "Insira o código nessa página e conclua o login. Depois, escolha Devolver ao Agent."
+    },
+    "sheetNote": "Inserido apenas aqui no computador. Não é compartilhado com o Agent nem salvo.",
+    "nothingLeft": "Nada aqui precisa ser digitado.",
+    "qr": {
+      "open": "Abrir {{site}} aqui",
+      "openApp": "Abrir link de {{site}} aqui",
+      "share": "Salvar ou compartilhar imagem",
+      "copyLink": "Copiar link",
+      "copyText": "Copiar texto",
+      "copied": "Copiado.",
+      "copyFailed": "Não foi possível copiar. Tente novamente.",
+      "openFailed": "Este dispositivo não consegue abrir o link. Salve a imagem e selecione-a em Fotos no scanner do aplicativo.",
+      "shareFailed": "Não foi possível abrir o compartilhamento. Tente novamente.",
+      "hintLink": "Abrir aqui transfere o login para o aplicativo que gerencia o link. Ou salve a imagem e selecione-a em Fotos no scanner do aplicativo. Cindy continuará após o login.",
+      "hint": "Salve a imagem e selecione-a em Fotos no scanner do aplicativo ou escaneie este código em outro dispositivo. Cindy continuará após o login.",
+      "alt": "Código QR no computador. Tocar nele toca no código no computador.",
+      "loading": "Obtendo o código QR…",
+      "failed": "Não foi possível obter o código QR. Toque para tentar novamente.",
+      "scanned": "Escaneado. Confirme no celular; Cindy continuará após a confirmação."
+    }
+  },
+  "presentation": {
+    "action": {
+      "submitting": "Enviando"
+    },
+    "permission": {
+      "highRiskTitle": "Permissão de alto risco exige confirmação",
+      "highRiskDetail": "Revise o comando e confirme novamente para permiti-lo. Negue se não tiver certeza.",
+      "sessionAllowTitle": "Permitir uma vez ou sempre permitir nesta tarefa",
+      "allowTitle": "O computador continuará após sua permissão",
+      "tool": "Ferramenta: {{tool}}",
+      "title": "Permitir {{tool}}?",
+      "risk": "Este comando pode alterar o sistema, o repositório ou um serviço externo. Antes de permitir, confirme que você confia na tarefa e no comando atuais.",
+      "titleCommand": "Permitir a execução deste comando?",
+      "titleFileRead": "Permitir a leitura de arquivos?",
+      "titleFileWrite": "Permitir a alteração de arquivos?",
+      "titleBrowser": "Permitir esta etapa no navegador?",
+      "titlePlugin": "Permitir o plugin {{plugin}}?"
+    },
+    "ask": {
+      "progress": "Pergunta {{current}} de {{total}}",
+      "multiSelect": "Você pode selecionar várias respostas ou inserir outra resposta.",
+      "singleSelect": "Selecione uma resposta ou insira outra resposta.",
+      "emptyTitle": "Nenhuma pergunta específica",
+      "emptyDetail": "Você pode enviar uma resposta vazia para que o computador continue.",
+      "waiting": "Agent está aguardando confirmação"
+    },
+    "plan": {
+      "outlineCount": "{{count}} seções",
+      "noOutline": "Sem estrutura",
+      "hasFile": "Arquivo do plano disponível",
+      "noFile": "Sem caminho do arquivo do plano",
+      "editedTitle": "Plano editado; a aprovação executa a versão atual",
+      "approveTitle": "Após a aprovação, o computador continua com este plano"
+    },
+    "queue": {
+      "count": "{{count}} solicitações",
+      "empty": "Nenhuma solicitação pendente",
+      "hint": {
+        "plan_review": "Revise o plano e solicite alterações se necessário. O computador só continua após a aprovação.",
+        "permission": "Apenas esta decisão é enviada de volta à tarefa atual no computador.",
+        "ask_user_question": "As respostas são salvas como rascunho; o computador continua após o envio.",
+        "issue_confirm": "Confirme o título e o corpo antes de enviar.",
+        "plugin_setup": "A configuração deve ser concluída no computador; você pode cancelar esta solicitação aqui.",
+        "fallback": "O celular processa as solicitações remotas na ordem enviada pelo computador."
+      }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} precisa da sua autorização",
+    "operation": "Operação",
+    "details": "Detalhes",
+    "fields": {
+      "path": "Arquivo",
+      "file_path": "Arquivo",
+      "url": "Endereço",
+      "command": "Comando",
+      "ghost_id": "Plugin",
+      "tool": "Ferramenta"
+    }
+  }
+}

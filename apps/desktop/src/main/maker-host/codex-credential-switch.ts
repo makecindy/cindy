@@ -19,7 +19,9 @@ import {
 } from './codex-gateway-config.js';
 import {
   crossesCodexAppliedCustomProviderIdentity,
+  deriveCodexCustomProviderRoutes,
   isAppliedCodexCustomProviderIdentity,
+  resolveCodexCustomProviderModelProviderId,
 } from './codex-custom-provider-route.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
@@ -164,6 +166,46 @@ function normalizeProviderId(providerId: string | null | undefined): string | nu
 }
 
 /**
+ * 本地 proxy 模式下，新 thread 在该路由上会被 Cindy 赋予的内置 model provider 身份。
+ * 与 Codex 侧 startSession 的选择一致：Cindy codex/* → cindy_codex（子代理路由不兼容时
+ * cindy_gateway），订阅直连 → cindy_openai，其它已知凭证家族 → cindy_gateway；
+ * 推不出凭证家族时返回 null。自定义供应商身份不在此列。
+ */
+function expectedCodexBuiltinThreadModelProviderId(input: {
+  providerId: string | null;
+  model: string;
+  codexAuthInjection?: CodexProxyAuthInjection | null;
+  cindyRemoteCompactionCompatible?: boolean | null;
+}): string | null {
+  if (isCindyProviderCodexRemoteCompactionRoute({ providerId: input.providerId, model: input.model })) {
+    return input.cindyRemoteCompactionCompatible === false
+      ? CODEX_GATEWAY_PROVIDER_ID
+      : CODEX_CINDY_COMPACT_PROVIDER_ID;
+  }
+  const mode = resolveAgentCredentialMode({ agentKind: 'codex', providerId: input.providerId, model: input.model })
+    ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
+  if (mode === 'oauth-bearer') return CODEX_OPENAI_COMPACT_PROVIDER_ID;
+  return mode !== undefined ? CODEX_GATEWAY_PROVIDER_ID : null;
+}
+
+/**
+ * 导入到 Cindy 的 Codex thread 应记录的 model provider 身份。外部 Codex 记录的是
+ * 它自己的身份（如 openai），Cindy 的 app-server 按当前路由的身份恢复，两者不同会被
+ * 拒绝；导入副本归 Cindy 所有，按导入时的路由写成 Cindy 会用的身份。
+ */
+export function codexImportedThreadModelProviderId(input: {
+  providerId: string | null;
+  model: string;
+  codexAuthInjection?: CodexProxyAuthInjection | null;
+}): string {
+  return resolveCodexCustomProviderModelProviderId(
+    deriveCodexCustomProviderRoutes(getActiveCatalog()),
+    input.providerId,
+    input.model,
+  ) ?? expectedCodexBuiltinThreadModelProviderId(input) ?? CODEX_GATEWAY_PROVIDER_ID;
+}
+
+/**
  * app-server 已确认的 Codex thread provider 是否与指定路由期望的身份冲突。
  *
  * 调用方可把「下一目标路由」传进来判断是否需要重建，也可把「当前 provider store
@@ -194,25 +236,17 @@ export function isCodexThreadModelProviderIdentityMismatch(
   if (input.currentCodexThreadModelProviderId === CODEX_SUMMARY_COMPACT_PROVIDER_ID) return false;
 
   const nextProviderId = normalizeProviderId(input.nextProviderId);
-  const nextMode = resolveAgentCredentialMode({
+  const effectiveNextMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: nextProviderId,
     model: input.nextModel,
+  }) ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
+  const expectedThreadModelProviderId = expectedCodexBuiltinThreadModelProviderId({
+    providerId: nextProviderId,
+    model: input.nextModel,
+    codexAuthInjection: input.codexAuthInjection,
+    cindyRemoteCompactionCompatible: input.currentCodexCindyRemoteCompactionCompatible,
   });
-  const effectiveNextMode = nextMode ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
-  const expectedThreadModelProviderId =
-    isCindyProviderCodexRemoteCompactionRoute({
-      providerId: nextProviderId,
-      model: input.nextModel,
-    })
-      ? input.currentCodexCindyRemoteCompactionCompatible === false
-        ? CODEX_GATEWAY_PROVIDER_ID
-        : CODEX_CINDY_COMPACT_PROVIDER_ID
-      : effectiveNextMode === 'oauth-bearer'
-      ? CODEX_OPENAI_COMPACT_PROVIDER_ID
-      : effectiveNextMode !== undefined
-        ? CODEX_GATEWAY_PROVIDER_ID
-        : null;
   const actualThreadModelProviderId = normalizeProviderId(input.currentCodexThreadModelProviderId);
   const actualIsAppliedCustomProviderIdentity = isAppliedCodexCustomProviderIdentity(
     actualThreadModelProviderId,

@@ -56,7 +56,13 @@ function sameRefList(
 ): a is SessionPrRef[] {
   if (!a || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i].id !== b[i].id || a[i].lastSeenAt !== b[i].lastSeenAt) return false;
+    if (
+      a[i].id !== b[i].id ||
+      a[i].lastSeenAt !== b[i].lastSeenAt ||
+      a[i].pinned !== b[i].pinned ||
+      a[i].priority !== b[i].priority
+    )
+      return false;
   }
   return true;
 }
@@ -494,9 +500,16 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }).current;
 
   const invalidateRemotePrRefs = useRef((sessionId: string) => {
-    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
-    if (!deviceId) return;
     remoteRefsFetchedAt.current.delete(sessionId);
+    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
+    if (!deviceId) {
+      // A late read must not restore the invalidated TTL after the last consumer
+      // leaves. Its existing finally path consumes this marker without refetching.
+      if (remoteRefsInFlight.current.get(sessionId) === ownerGenRef.current) {
+        remoteRefsInvalidated.current.add(sessionId);
+      }
+      return;
+    }
     remoteRefsInvalidated.current.add(sessionId);
     fetchRefsForRemoteSession(sessionId, deviceId);
   }).current;

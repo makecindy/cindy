@@ -1,0 +1,355 @@
+{
+  "localLogs": {
+    "upload": "Envoyer les journaux",
+    "uploadResult": {
+      "unavailable": "L'envoi des journaux n'est pas disponible dans cette version.",
+      "consentRequired": "Acceptez la Politique de confidentialité avant d'envoyer les journaux.",
+      "empty": "Aucun journal récent. Activez l'enregistrement et reproduisez d'abord le problème.",
+      "failed": "Échec de l'envoi. Les journaux restent enregistrés sur ce téléphone."
+    },
+    "title": "Journaux de débogage",
+    "record": "Enregistrer les journaux",
+    "export": "Exporter les journaux",
+    "clear": "Effacer les journaux",
+    "busy": "Traitement…",
+    "failed": "Impossible d'enregistrer ou de partager les journaux. Veuillez réessayer.",
+    "clearHint": "Supprimer les journaux de diagnostic enregistrés ?",
+    "cancel": "Annuler",
+    "uploadCopied": "Journaux envoyés. Code {{code}} copié",
+    "uploadSucceeded": "Journaux envoyés. Code {{code}}",
+    "footer": "Les journaux restent sur ce téléphone jusqu'à 7 jours ou 8 Mo et ne sont jamais envoyés automatiquement. Les journaux exportés excluent le texte des conversations et les identifiants ; les envois ne transmettent que des enregistrements d'exécution filtrés et des informations de version."
+  },
+  "title": "Paramètres",
+  "appearance": {
+    "title": "Apparence",
+    "modeLabel": "Mode d'apparence",
+    "options": {
+      "system": "Auto (suivre le système)",
+      "light": "Clair",
+      "dark": "Sombre"
+    },
+    "saveFailed": "Échec de l'enregistrement du mode d'apparence. Le réglage précédent sera rétabli au redémarrage.",
+    "userBubble": {
+      "title": "Couleur de mes bulles",
+      "presets": "Couleur",
+      "default": "Par défaut",
+      "peach": "Premier jet",
+      "yellow": "Point du jour",
+      "sage": "Étincelle",
+      "blue": "Rêverie",
+      "lavender": "Chat de nuit",
+      "red": "Col rouge",
+      "custom": "Couleur personnalisée",
+      "hue": "Teinte",
+      "preview": "Aperçu du message",
+      "sampleUser": "Aide-moi à organiser mes idées du jour.",
+      "sampleAssistant": "Bien sûr, examinons vos idées ensemble.",
+      "hint": "S'adapte aux modes clair et sombre pour que le texte reste lisible. Enregistré uniquement sur cet appareil.",
+      "customHint": "Faites glisser la bande de couleur pour choisir une teinte. S'adapte aux modes clair et sombre ; enregistré uniquement sur cet appareil.",
+      "saveFailed": "La couleur est appliquée pour l'instant mais n'a pas pu être enregistrée.",
+      "retry": "Réessayer",
+      "cancel": "Annuler",
+      "reset": "Réinitialiser",
+      "apply": "Appliquer",
+      "hex": "Valeur de couleur"
+    }
+  },
+  "language": {
+    "title": "Langue",
+    "hint": "Utilisée pour l'interface et les rapports d'erreur de l'IA. Les autres réponses suivent la langue de votre message ou celle que vous demandez.",
+    "options": {
+      "system": "Auto (suivre le système)",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "Écriture et style",
+      "hint": "L’IA répond dans le style choisi. Avec « Réponses habituelles », l’interface reste en chinois classique et les réponses suivent votre langue.",
+      "scriptAriaLabel": "Écriture du chinois classique",
+      "styleAriaLabel": "Style de réponse de l’IA",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Prose classique (par défaut)",
+        "tang-poetry": "Poésie Tang",
+        "song-ci": "Ci des Song",
+        "yuan-qu": "Qu des Yuan",
+        "chu-ci": "Chuci",
+        "parallel-prose": "Prose parallèle",
+        "pre-qin": "Maîtres pré-Qin",
+        "historian": "Style du Grand Historien",
+        "ming-qing-essay": "Essais Ming–Qing",
+        "plain": "Réponses habituelles"
+      }
+    }
+  },
+  "version": {
+    "sectionTitle": "Version",
+    "updateMethodInApp": "Les mises à jour s'installent dans l'application et s'appliquent après un redémarrage.",
+    "updateMethodPackage": "Téléchargez et installez la nouvelle version pour mettre à jour.",
+    "updateMethodUnavailable": "Les versions de développement ne peuvent pas se mettre à jour dans l'application.",
+    "checkAction": "Rechercher des mises à jour",
+    "testFlightCheckAction": "Rechercher des mises à jour de contenu",
+    "checking": "Vérification",
+    "checkingAccessibility": "Recherche de mises à jour",
+    "testFlightCheckingAccessibility": "Recherche de mises à jour de contenu",
+    "testFlightUpdateManaged": "Installez les nouvelles versions de test depuis TestFlight.",
+    "testFlightNoContentUpdate": "Aucune mise à jour de contenu disponible.",
+    "testFlightContentUpdateUnavailable": "Cette version ne peut pas rechercher de mises à jour de contenu.",
+    "googlePlayUpdateManaged": "Mettez à jour vers les nouvelles versions depuis Google Play.",
+    "googlePlayNoContentUpdate": "Aucune mise à jour de contenu disponible.",
+    "googlePlayContentUpdateUnavailable": "Cette version ne peut pas rechercher de mises à jour de contenu.",
+    "bundleUpdateFound": "Mise à jour du paquet de l'application disponible",
+    "upToDate": "Déjà à jour",
+    "bundleUpToDateNoOta": "À jour. Cette version ne prend pas en charge les mises à jour à chaud.",
+    "downloadedRestarting": "Mise à jour téléchargée, redémarrage",
+    "downloadedRestartRequired": "Mise à jour téléchargée. Quittez complètement l'application puis rouvrez-la pour l'appliquer.",
+    "bundleCheckFailed": "Impossible de rechercher les mises à jour du paquet de l'application. Réessayez plus tard.",
+    "checkFailedDetail": "Échec de la recherche de mises à jour : {{detail}}",
+    "checkFailed": "Échec de la recherche de mises à jour. Réessayez plus tard.",
+    "currentLabel": "Version actuelle",
+    "pairedDesktopLabel": "Version du bureau associé"
+  },
+  "betaChannel": {
+    "title": "Canal bêta",
+    "badge": "Bêta",
+    "description": "Recevez en avance les prochaines mises à jour du client. Les mises à jour de contenu sont téléchargées lors de la prochaine recherche de mises à jour et prennent effet après un redémarrage de l'application.",
+    "saveFailed": "Échec de l'enregistrement du réglage du canal bêta",
+    "unavailable": "Le canal bêta est indisponible : impossible de joindre le serveur de mises à jour bêta."
+  },
+  "notifications": {
+    "sectionTitle": "Notifications",
+    "taskDone": "Messages et tâches",
+    "taskDoneHint": "Soyez averti des messages de conversation et des tâches terminées, en échec ou qui attendent votre réponse.",
+    "permissionDenied": "Autorisez les notifications de Cindy dans les paramètres du système.",
+    "unregisterQueued": "Désactivé. La désinscription se terminera dès que vous serez de nouveau en ligne.",
+    "preview": "Aperçus des conversations",
+    "background": "Rester connecté en arrière-plan",
+    "backgroundActive": "Réception des messages en arrière-plan",
+    "backgroundStop": "Arrêter la réception",
+    "backgroundHint": "La connexion en arrière-plan fonctionne sans Google et affiche une notification permanente. Vous pouvez l'arrêter depuis cette notification.",
+    "googleUnavailable": "Les notifications push Google sont indisponibles. Activez la connexion de conversation en arrière-plan pour recevoir les messages."
+  },
+  "about": {
+    "sectionTitle": "À propos de ce téléphone",
+    "deviceName": "Nom de l'appareil",
+    "deviceNameDetail": "Affiché dans la liste des autorisations de l'ordinateur.",
+    "platform": "Plateforme",
+    "editAccessibility": "Modifier {{label}}"
+  },
+  "relay": {
+    "online": "Relais connecté",
+    "connecting": "Connexion au relais",
+    "stopped": "Relais non connecté",
+    "lastSynced": "Dernière synchronisation : {{time}}",
+    "canSync": "Les sessions distantes peuvent se synchroniser.",
+    "reconnectHint": "Les sessions distantes se réabonneront automatiquement au rétablissement du réseau.",
+    "resumeHint": "La connexion reprend lorsque vous revenez dans l'application ou vous reconnectez."
+  },
+  "header": {
+    "notSignedIn": "Non connecté",
+    "thisPhone": "Ce téléphone"
+  },
+  "debug": {
+    "sectionTitle": "Débogage / Développeur",
+    "userId": "ID utilisateur",
+    "notSynced": "Non synchronisé",
+    "deviceId": "ID de l'appareil",
+    "initializing": "Initialisation",
+    "authServer": "Serveur d'authentification",
+    "authRegion": "Région de connexion"
+  },
+  "devServerEnvironment": {
+    "title": "Environnement serveur",
+    "description": "Affecte uniquement le backend auquel CindyDev se connecte",
+    "accessibility": "Changer d'environnement serveur",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "Passer à {{environment}} ?",
+    "confirmBody": "Le changement vous déconnecte et redémarre l'application.",
+    "cancel": "Annuler",
+    "switchAction": "Changer",
+    "switching": "Changement en cours",
+    "switchFailed": "Impossible de changer d'environnement serveur. Réessayez."
+  },
+  "updateInfo": {
+    "embedded": "Avec le paquet de l'application",
+    "embeddedFallback": "Avec le paquet de l'application (OTA non appliquée)",
+    "unknown": "Inconnu",
+    "source": "Source exécutée",
+    "sourceEmbedded": "Intégrée (avec le paquet de l'application)",
+    "sourceEmergencyFallback": "Intégrée (lancement de secours ; OTA non appliquée)",
+    "sourceOta": "Mise à jour OTA",
+    "updateId": "ID de mise à jour",
+    "updatedAt": "Mis à jour le",
+    "channel": "Canal",
+    "runtime": "Runtime",
+    "otaMarker": "Marqueur OTA",
+    "emergencyLaunch": "Lancement de secours",
+    "emergencyLaunchYes": "Oui (l'OTA ne peut pas s'appliquer lors de cette exécution)",
+    "otaVersion": "Version OTA"
+  },
+  "legal": {
+    "sectionTitle": "Mentions légales",
+    "privacyPolicy": "Politique de confidentialité",
+    "userAgreement": "Contrat d'utilisation",
+    "view": "Voir",
+    "openPrivacyPolicy": "Ouvrir la politique de confidentialité",
+    "openUserAgreement": "Ouvrir le contrat d'utilisation",
+    "appFilingNumber": "Numéro d'enregistrement",
+    "analytics": "Statistiques d'utilisation",
+    "analyticsHint": "Nous aide à comprendre les lancements et la fidélisation. Transmet des informations sur l'appareil (modèle, système d'exploitation, version de l'application) et un identifiant d'appareil, ainsi que l'ID de votre compte une fois connecté ; jamais les conversations, les fichiers ni les prompts.",
+    "analyticsSaveFailed": "Impossible d'enregistrer ce réglage ; il pourrait être rétabli après un redémarrage.",
+    "analyticsReset": "Réinitialiser",
+    "analyticsResetAction": "Réinitialiser"
+  },
+  "account": {
+    "logoutConfirmTitle": "Se déconnecter ?",
+    "logoutConfirmRunning": "Certaines sessions sont encore en cours d'exécution. Elles continuent sur votre ordinateur, mais ce téléphone cesse de les recevoir et de les contrôler, et tous les comptes et miroirs locaux enregistrés sur ce téléphone sont effacés.",
+    "logoutHint": "Efface tous les comptes et le miroir distant de ce téléphone. Les sessions sur votre ordinateur ne sont pas affectées.",
+    "logout": "Se déconnecter",
+    "loggingOut": "Déconnexion",
+    "loggingOutAccessibility": "Déconnexion en cours"
+  },
+  "copyRow": {
+    "action": "Copier",
+    "done": "Copié",
+    "accessibility": "Copier {{label}}"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "Dictionnaire vocal",
+    "label": "Voir le dictionnaire",
+    "hint": "Modifiez le dictionnaire sur un ordinateur ; il se synchronise automatiquement. Lecture seule sur ce téléphone.",
+    "openAccessibility": "Voir le dictionnaire vocal",
+    "screenTitle": "Dictionnaire vocal",
+    "entryCount": "{{count}} termes",
+    "aliasSeparator": ", ",
+    "aliases": "Souvent mal reconnu comme : {{aliases}}",
+    "refresh": "Actualiser",
+    "refreshing": "Actualisation…",
+    "refreshAccessibility": "Actualiser le dictionnaire",
+    "readOnlyHint": "Consultez-le sur votre téléphone ; ajoutez ou supprimez des entrées sur un ordinateur.",
+    "offlineHint": "Vos ordinateurs sont hors ligne. Affichage du dernier dictionnaire synchronisé.",
+    "noDesktops": "Connectez-vous au même compte sur un ordinateur pour synchroniser votre dictionnaire."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "Impossible d'enregistrer la modification. Veuillez réessayer.",
+    "title": "Reconnaître ma voix",
+    "sectionTitle": "Filtre par empreinte vocale",
+    "label": "Reconnaître ma voix",
+    "entryHint": "Coupe les autres voix pendant la saisie vocale. Votre empreinte vocale reste sur ce téléphone.",
+    "openAccessibility": "Ouvrir les paramètres de reconnaissance de ma voix",
+    "on": "Activé",
+    "off": "Désactivé",
+    "hint": "Coupe les autres voix pendant la saisie vocale afin que seule votre parole soit transcrite ; les paroles qui se superposent aux vôtres ne peuvent pas être entièrement supprimées. Votre empreinte vocale est chiffrée sur ce téléphone et n'est jamais envoyée ni synchronisée.",
+    "unsupported": "Cette version de l'application ne prend pas en charge les empreintes vocales. Installez la dernière version.",
+    "model": {
+      "title": "Modèle de reconnaissance",
+      "needed": "La première utilisation télécharge un modèle de reconnaissance d'environ {{size}}. Wi-Fi recommandé.",
+      "download": "Télécharger le modèle de reconnaissance",
+      "downloading": "Téléchargement ({{done}} / {{total}})",
+      "cancel": "Annuler le téléchargement",
+      "retry": "Télécharger à nouveau",
+      "failed": {
+        "network": "Échec du téléchargement du modèle de reconnaissance. Vérifiez votre connexion réseau et réessayez.",
+        "disk": "Impossible d'enregistrer le modèle de reconnaissance. Vérifiez l'espace de stockage disponible sur votre téléphone et réessayez.",
+        "checksum": "Le modèle de reconnaissance téléchargé n'a pas passé la vérification. Réessayez.",
+        "unavailable": "Le modèle de reconnaissance est indisponible pour le moment. Réessayez plus tard."
+      }
+    },
+    "profile": {
+      "title": "Empreinte vocale",
+      "missing": "Aucune empreinte vocale",
+      "missingHint": "Enregistrez votre empreinte vocale pour activer le filtrage.",
+      "enrolled": "Empreinte vocale enregistrée",
+      "enrolledAt": "Enregistrée le {{date}}",
+      "enroll": "Enregistrer l'empreinte vocale",
+      "reenroll": "Réenregistrer",
+      "delete": "Supprimer l'empreinte vocale",
+      "deleteConfirm": {
+        "title": "Supprimer l'empreinte vocale ?",
+        "description": "La saisie vocale cessera de filtrer les autres personnes jusqu'à ce que vous enregistriez à nouveau votre empreinte vocale.",
+        "confirm": "Supprimer",
+        "cancel": "Annuler"
+      }
+    },
+    "strictness": {
+      "label": "Sévérité",
+      "hint": "Un réglage plus strict écarte davantage de voix, mais peut aussi couper certains de vos mots dans les endroits bruyants.",
+      "restoreDefault": "Réinitialiser",
+      "options": {
+        "relaxed": "Souple",
+        "standard": "Standard",
+        "strict": "Strict"
+      }
+    },
+    "enroll": {
+      "description": "Lisez les {{clips}} passages ci-dessous avec votre voix habituelle. Chaque enregistrement dure au maximum {{seconds}} secondes ; arrêtez l'enregistrement une fois la lecture terminée. Enregistrez à l'endroit où vous utilisez habituellement la saisie vocale, sans personne d'autre qui parle.",
+      "step": "Passage {{current}} sur {{total}}",
+      "record": "Commencer la lecture",
+      "stop": "Arrêter l'enregistrement",
+      "rerecord": "Réenregistrer ce passage",
+      "recording": "Enregistrement… {{seconds}} secondes restantes",
+      "saving": "Création de l'empreinte vocale…",
+      "submit": "Terminer",
+      "cancel": "Annuler",
+      "passages": {
+        "p1": "Ce matin, je vais passer en revue le programme de la semaine, et cet après-midi je dresserai la liste des questions à aborder et je l'enverrai pour que chacun puisse la lire à l'avance.",
+        "p2": "S'il fait beau demain, nous pourrons partir un peu plus tôt, acheter des fruits et de quoi grignoter en chemin, et déjeuner dans le parc.",
+        "p3": "Merci de rendre ce texte plus concis, de conserver les chiffres clés et les conclusions, puis de résumer les points principaux en trois à cinq phrases."
+      },
+      "errors": {
+        "too_short": "Trop peu de parole détectée dans le passage {{index}}. Réenregistrez-le.",
+        "no_embedding": "Aucune empreinte vocale n'a pu être extraite du passage {{index}}. Réenregistrez-le.",
+        "inconsistent": "Le passage {{index}} ne semble pas prononcé par la même personne que les autres ; une autre voix ou du bruit a peut-être été capté. Réenregistrez-le.",
+        "models_missing": "Le téléchargement du modèle de reconnaissance n'est pas terminé. Réessayez dans un instant.",
+        "storage_unavailable": "Le trousseau du système est indisponible : l'empreinte vocale ne peut donc pas être stockée chiffrée. Réessayez plus tard.",
+        "failed": "Impossible de créer l'empreinte vocale. Réessayez.",
+        "microphone": "Le micro ne peut pas être utilisé. Vérifiez l'autorisation d'accès au micro et réessayez.",
+        "noAudio": "Aucun son ne provient du micro. Vérifiez-le et réessayez."
+      },
+      "stepChoice": "Passage {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Non enregistré",
+        "recorded": "Enregistré",
+        "retry": "Réenregistrer",
+        "recording": "Enregistrement"
+      },
+      "rerecordStep": "Réenregistrer le passage {{index}}",
+      "readHint": "Commencez quand vous êtes prêt. Arrêtez l'enregistrement une fois la lecture terminée.",
+      "otherClipsKept": "Vos autres enregistrements ont été conservés."
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "Nom de l'appareil",
+    "placeholder": "Nom du téléphone",
+    "resetAccessibility": "Rétablir le nom par défaut du téléphone",
+    "emptyError": "Le nom de l'appareil ne peut pas être vide.",
+    "deviceInitializing": "L'appareil est encore en cours d'initialisation. Réessayez plus tard.",
+    "restoredDefault": "Nom par défaut rétabli.",
+    "resetAction": "Rétablir le nom par défaut",
+    "clearAccessibility": "Effacer le nom",
+    "discardTitle": "Abandonner les modifications ?",
+    "discardBody": "Vos modifications du nom de l'appareil n'ont pas été enregistrées.",
+    "discardConfirm": "Abandonner",
+    "keepEditing": "Continuer l'édition"
+  },
+  "developer": {
+    "title": "Développeur",
+    "identity": "Identifiants",
+    "updateInfo": "Infos de mise à jour"
+  }
+}

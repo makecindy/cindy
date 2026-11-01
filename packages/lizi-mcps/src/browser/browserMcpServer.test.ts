@@ -1484,7 +1484,7 @@ describe('createBrowserMcpServer', () => {
     expect(parsed.ok).toBe(true);
     if (password) {
       expect(text.startsWith('{"loginWall"')).toBe(true);
-      expect(parsed.loginWall).toMatchObject({ fields: ['password'], hint: expect.stringContaining('request_input_handoff') });
+      expect(parsed.loginWall).toMatchObject({ fields: ['password'], hint: expect.stringContaining('ask_owner') });
     } else {
       expect(parsed.loginWall).toBeUndefined();
     }

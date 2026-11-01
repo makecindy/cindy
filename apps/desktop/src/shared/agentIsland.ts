@@ -865,6 +865,7 @@ export interface AgentIslandRemoteSessionInput {
   deviceName: string | null;
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** DB 形态('cc' | 'codex' | 'pi')。 */
   agentKind: string | null;
@@ -930,6 +931,8 @@ export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteS
       deviceName: readBoundedString(record.deviceName, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       title: readBoundedString(record.title, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
       workingDir: readBoundedString(record.workingDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4),
+      ...(record.projectDir !== undefined
+        ? { projectDir: readBoundedString(record.projectDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4) } : {}),
       workspaceKind: readBoundedString(record.workspaceKind, 64),
       agentKind: readBoundedString(record.agentKind, 64),
       phase: phase as AgentIslandSessionPhase,

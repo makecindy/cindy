@@ -96,7 +96,7 @@ const service = {
   continuePlan: vi.fn(),
   retryPlan: vi.fn(),
   editPlanStep: vi.fn(),
-  chatServer: { manage: vi.fn(), mask: vi.fn(), mentions: vi.fn() },
+  chatServer: { manage: vi.fn(), mask: vi.fn(), mentions: vi.fn(), ownedBots: vi.fn() },
 };
 
 describe('bot group remote resources', () => {
@@ -113,6 +113,10 @@ describe('bot group remote resources', () => {
     h.ownerCurrent = () => true;
     for (const fn of Object.values(service)) if (typeof fn === 'function') fn.mockReset();
     service.chatServer.manage.mockReset().mockResolvedValue({ ok: true });
+    service.chatServer.ownedBots.mockReset().mockResolvedValue({ ok: true, bots: [
+      { actorId: 'actor-linux', botId: 'linux', name: 'Linux' },
+      { actorId: 'actor-hidden', botId: 'ghost', name: 'Hidden' },
+    ] });
     service.getGroup.mockResolvedValue({ ok: true, group: detail() });
     for (const name of ['updateGroup', 'setMembers', 'deleteGroup', 'continueRound', 'stopRound', 'startPlan', 'dismissPlan', 'continuePlan', 'retryPlan', 'editPlanStep'] as const) {
       service[name].mockResolvedValue({ ok: true });
@@ -149,8 +153,8 @@ describe('bot group remote resources', () => {
   it('passes the edited revision to the server and adds just one visible companion', async () => {
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
-      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5 } });
-    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5 });
+      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false } });
+    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'abu', expectedRevision: 5 } });
     expect(service.setMembers).toHaveBeenCalledWith({ groupId: 'g1', botIds: ['abu'], addOnly: true });
@@ -161,6 +165,29 @@ describe('bot group remote resources', () => {
     await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'ghost', expectedRevision: 5 } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(service.setMembers).not.toHaveBeenCalled();
+  });
+
+  it('creates and adds an owned remote companion without a local profile', async () => {
+    service.createGroup.mockResolvedValue({ ok: true, groupId: 'g9' });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'create', input: { name: 'Remote', botIds: ['mimi', 'linux'] } });
+    expect(service.createGroup).toHaveBeenCalledWith({ name: 'Remote', botIds: ['mimi', 'linux'] });
+    service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'linux', expectedRevision: 5 } });
+    expect(service.setMembers).toHaveBeenCalledWith({ groupId: 'g1', botIds: ['linux'], addOnly: true });
+  });
+
+  it('rejects unknown remote IDs and fences an account switch during discovery', async () => {
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'create', input: { name: 'Unknown', botIds: ['unknown'] } })).rejects.toMatchObject({ message: 'MEMBER_UNAVAILABLE' });
+    service.chatServer.ownedBots.mockImplementationOnce(async () => {
+      h.ownerCurrent = () => false;
+      return { ok: true, bots: [{ actorId: 'actor-linux', botId: 'linux', name: 'Linux' }] };
+    });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'create', input: { name: 'Old owner', botIds: ['linux'] } })).rejects.toBeTruthy();
+    expect(service.createGroup).not.toHaveBeenCalled();
   });
 
   it('archives with the edited revision and never turns a settings delete into leaving', async () => {
@@ -244,6 +271,10 @@ describe('bot group remote resources', () => {
     expect(preview).toEqual({ fallback: 'Taylor joined the group', translations: {
       'zh-CN': 'Taylor加入了群聊', 'zh-TW': 'Taylor加入了群聊',
       ja: 'Taylorさんがグループに参加しました', ko: 'Taylor 님이 그룹에 참여했습니다',
+      es: 'Taylor se unió al grupo', fr: 'Taylor a rejoint le groupe', de: 'Taylor ist der Gruppe beigetreten',
+      'pt-PT': 'Taylor juntou-se ao grupo', 'pt-BR': 'Taylor se juntou ao grupo',
+      'zh-Hant-x-lzh': 'Taylor入群議',
+      'zh-Hans-x-lzh': 'Taylor入群议',
     } });
   });
 

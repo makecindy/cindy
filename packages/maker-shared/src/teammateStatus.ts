@@ -1,5 +1,6 @@
 /** Shared roster geometry and state precedence for Desktop, iOS and Android. */
-export const TEAMMATE_AVATAR = { strip: 48, row: 44, dot: 10, border: 2, gap: 8 } as const;
+// Keep touch targets independent of the portrait; the inset also holds corner dots and selection rings.
+export const TEAMMATE_AVATAR = { strip: 36, stripTarget: 48, row: 44, dot: 10, border: 2, gap: 8 } as const;
 export type TeammateStatus = 'awaiting' | 'error' | 'running' | 'done' | 'unread' | 'idle';
 export interface TeammateActivity { phase: string }
 export const TEAMMATE_STATUS_ORDER: readonly TeammateStatus[] = ['awaiting', 'error', 'running', 'done', 'unread', 'idle'];

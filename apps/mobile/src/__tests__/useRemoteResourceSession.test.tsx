@@ -155,7 +155,7 @@ describe('companion task visibility refresh', () => {
   });
 });
 
-it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('sends the viewing locale %s and reloads when it changes', async (locale) => {
+it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('sends the viewing locale %s and reloads when it changes', async (locale) => {
   h.get.mockImplementation(async () => ({ revision: 'same', links: [], display: { title: h.language } }));
   h.language = locale;
   await render();

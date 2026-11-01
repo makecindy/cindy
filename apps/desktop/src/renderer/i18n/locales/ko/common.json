@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
   "sharedTask": {
+    "officialRelayNote": "내 중계를 사용 중입니다. 공유 작업 내용은 계속 Cindy 공식 중계를 거칩니다.",
     "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
   "providerShare": {
+    "officialRelayNote": "내 중계를 사용 중입니다. 제공자 공유 내용은 계속 Cindy 공식 중계를 거칩니다.",
     "owned": {
       "title": "내가 공유한 제공자"
     },
@@ -1088,7 +1090,8 @@
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
     "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
-    "controlUnavailable": "원격 컴퓨터에서 입력을 받을 수 없습니다. 제어 권한과 연결을 확인한 다음 다시 연결하세요.",
+    "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
+    "controlUnavailable": "원격 키보드 및 마우스 제어를 일시적으로 사용할 수 없습니다. 다시 연결해 주세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
     "beingViewed": "데스크톱을 원격으로 보는 중",
     "controlledByDevice": "{{name}}에서 데스크톱을 원격으로 제어 중",
@@ -1213,7 +1216,6 @@
     "clipboardSyncSkipped": "클립보드 동기화에서 지원하지 않는 형식이라 건너뛰었습니다.",
     "clipboardSyncTooLarge": "클립보드 동기화 크기 제한을 초과하여 건너뛰었습니다.",
     "clipboardSyncPermission": "클립보드 동기화에는 붙여넣기 권한이 필요합니다. 허용한 후 이 창으로 돌아오면 재개됩니다.",
-    "clipboardSyncWaiting": "원격 컴퓨터의 클립보드에 지금은 접근할 수 없습니다(잠겨 있을 수 있음). 자동으로 동기화를 재개합니다.",
     "lockingOnExit": "컴퓨터를 잠그는 중…",
     "idleLock": "미사용 시 연결 해제 및 잠금",
     "idleNever": "안 함",
@@ -1674,7 +1676,9 @@
     }
   },
   "settings": {
-    "newChatDefaults": { "title": "새 작업의 기본 권한" },
+    "newChatDefaults": {
+      "title": "새 작업의 기본 권한"
+    },
     "imConnection": {
       "reconnect": "다시 연결",
       "savedNote": "연결 정보가 저장되어 있습니다. 바로 다시 연결할 수 있습니다.",
@@ -2269,7 +2273,7 @@
         "title": "Cindy 닫기",
         "message": "기본 창을 닫을 때 어떻게 할까요?",
         "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다.",
-        "linuxDetail": "창을 최소화해도 작업은 계속 실행됩니다. 작업 표시줄이나 창 개요에서 Cindy를 복원할 수 있으며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
+        "linuxDetail": "창이 화면에 보이지 않아도 작업은 계속 실행됩니다. Cindy를 다시 열면 창이 복원되며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
       },
       "trayMenu": {
         "show": "Cindy 열기",
@@ -2381,7 +2385,35 @@
         "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
-        "ko": "한국어"
+        "ko": "한국어",
+        "es": "Español",
+        "fr": "Français",
+        "de": "Deutsch",
+        "pt-PT": "Português (Portugal)",
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "간체·번체와 문체",
+        "hint": "AI가 선택한 문체로 답합니다. ‘일반 답변’을 고르면 화면은 문언문 그대로 두고 답변은 사용자의 언어를 따릅니다.",
+        "scriptAriaLabel": "문언문 간체·번체",
+        "styleAriaLabel": "AI 답변 문체",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "문언문(기본)",
+          "tang-poetry": "당시",
+          "song-ci": "송사",
+          "yuan-qu": "원곡",
+          "chu-ci": "초사",
+          "parallel-prose": "변문",
+          "pre-qin": "선진 제자",
+          "historian": "사기 문체",
+          "ming-qing-essay": "명청 소품",
+          "plain": "일반 답변"
+        }
       }
     },
     "userProfile": {
@@ -2463,7 +2495,7 @@
         "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
         "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
-        "item3": "Linux x64는 Beta 채널을 지원하며 arm64는 아직 지원하지 않습니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
+        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "답을 찾지 못했나요? 하고 싶은 일을 질문하세요.",
@@ -2850,7 +2882,8 @@
         "hint": "자동은 말한 언어를 감지합니다. 언어를 지정하면 다국어 환경의 오인식을 줄일 수 있습니다.",
         "ariaLabel": "언어 선택",
         "options": {
-          "auto": "자동"
+          "auto": "자동",
+          "es": "Español"
         },
         "optionDescriptions": {
           "auto": "인식 서비스가 자동 감지",
@@ -2858,7 +2891,8 @@
           "zh-TW": "중국어 번체(대만)",
           "en": "영어",
           "ja": "일본어",
-          "ko": "한국어"
+          "ko": "한국어",
+          "es": "스페인어"
         }
       },
       "shortcut": {
@@ -3121,49 +3155,89 @@
       }
     },
     "sessionImport": {
-      "title": "로컬 세션 가져오기",
-      "description": "로컬 Claude Code / Codex 기록을 읽기 전용으로 스캔합니다. 목록에서 선택한 세션만 가져오며, 건너뛴 내부 세션은 표시되지 않고 가져올 수 없습니다.",
-      "scan": "스캔",
-      "scanning": "스캔 중",
-      "emptyTitle": "먼저 로컬 기록을 스캔하세요",
-      "emptyDescription": "스캔은 데이터베이스에 기록하거나 사이드바를 변경하지 않습니다.",
-      "noCandidates": "현재 필터에서 가져올 수 있는 세션이 없습니다.",
-      "collapse": "그룹 접기",
-      "expand": "그룹 펼치기",
-      "selectGroup": "그룹 전체 선택",
-      "sessions": "개 세션",
-      "selected": "{{count}}개 선택됨",
-      "importSelected": "선택 항목 가져오기",
-      "importing": "가져오는 중",
+      "title": "세션 가져오기",
+      "description": "다른 AI 코딩 도구의 세션을 Cindy로 가져와 이어서 작업하세요. 원본 기록은 읽기만 하고 변경하지 않습니다.",
+      "rescan": "다시 검색",
+      "allSources": "모든 출처",
+      "search": "세션 또는 폴더 검색",
+      "projectFilter": "{{name}}만 보기",
+      "clearProjectFilter": "모든 프로젝트 보기",
+      "hiddenCount_other": "{{count}}개 숨김",
+      "hidden": {
+        "head": "목록에 없는 항목",
+        "hint": "선택한 항목은 목록에 표시됩니다",
+        "cindy": "Cindy가 직접 실행한 세션",
+        "temp": "임시 폴더의 세션",
+        "internal": "Agent 내부 세션(자동 검토, 하위 Agent)",
+        "imported": "이미 가져온 세션",
+        "sourceError": "{{name}} 기록을 읽을 수 없습니다"
+      },
+      "missingDir": "원래 폴더 없음",
+      "groupTasks_other": "세션 {{count}}개",
+      "dialogue": "대화",
       "archived": "보관됨",
+      "unsupported": "지원하지 않는 형식",
       "untitled": "제목 없는 세션",
-      "noWorkingDir": "작업 디렉터리 없음",
-      "summary": {
-        "total": "표시됨",
-        "totalHint": "가져오기로 선택 가능",
-        "projects": "기존 프로젝트 세션",
-        "projectsHint": "현재 사이드바 프로젝트에 속한 세션",
-        "dialogue": "새 폴더 세션",
-        "dialogueHint": "프로젝트 그룹을 생성할 세션",
-        "filtered": "건너뜀",
-        "filteredHint": "내부 세션이거나 이미 앱에 있음"
+      "selectAll": "모두 선택",
+      "selectGroup": "그룹 전체 선택",
+      "expand": "펼치기",
+      "collapse": "접기",
+      "selectedSummary_other": "{{count}}개 선택됨 · {{size}}",
+      "pickHint": "Cindy로 가져올 세션을 선택하세요",
+      "importCount_other": "세션 {{count}}개 가져오기",
+      "import": "가져오기",
+      "scanning": "이 컴퓨터에서 세션을 찾는 중…",
+      "scanFailed": "검색을 완료하지 못했습니다. 다시 시도하세요.",
+      "emptyTitle": "이 컴퓨터에 가져올 세션이 없습니다",
+      "emptyDescription": "Cindy는 아래 도구의 세션을 가져올 수 있습니다. 도구를 사용한 뒤 다시 검색하세요.",
+      "noMatch": "조건에 맞는 세션이 없습니다",
+      "allHidden": "모두 숨겨져 있습니다. 오른쪽 위 「숨김」에서 표시할 수 있습니다.",
+      "confirm": {
+        "title_other": "세션 {{count}}개를 가져올까요?",
+        "body": "약 {{minutes}}분 걸리며 디스크 공간을 최대 {{size}} 사용합니다. 백그라운드에서 진행되며 언제든 중지할 수 있고, 이미 가져온 세션은 유지됩니다.",
+        "cancel": "취소"
       },
-      "filters": {
-        "source": "소스",
-        "placement": "위치",
-        "all": "전체",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "기존 프로젝트",
-        "dialogue": "새 폴더"
+      "progress": {
+        "title_other": "세션 {{count}}개 가져오는 중",
+        "background": "이 페이지를 떠나도 가져오기는 백그라운드에서 계속됩니다.",
+        "stop": "중지",
+        "queued": "대기 중",
+        "copy": "원본 기록 복사 중",
+        "messages_other": "메시지 {{count}}개 저장 중",
+        "verify": "이어서 작업할 수 있는지 확인 중"
       },
-      "toast": {
-        "scanFailed": "스캔 실패",
-        "importFailed": "가져오기 실패",
-        "imported": "가져오기 완료: 신규 {{inserted}}개, 업데이트 {{updated}}개"
+      "result": {
+        "title_other": "세션 {{count}}개를 가져왔습니다",
+        "stoppedTitle": "가져오기를 중지했습니다",
+        "ready_other": "{{count}}개 바로 이어서 작업 가능",
+        "action_other": "{{count}}개 확인 필요",
+        "failed_other": "{{count}}개 실패",
+        "readyGroup": "바로 이어서 작업 가능 ({{count}})",
+        "readyNative": "이어서 작업 가능 · {{harness}}에서 그대로 계속",
+        "readyHandoff": "이어서 작업 가능 · {{harness}}(으)로 이어받음, 언제든 변경 가능",
+        "missingDir": "원래 폴더가 없습니다. 폴더를 선택하면 이어서 작업할 수 있습니다.",
+        "chooseFolder": "폴더 선택",
+        "relocateFailed": "이 폴더로 바꾸지 못했습니다. 다시 시도하세요.",
+        "cancelled": "가져오기 전에 중지됨",
+        "retry": "다시 시도",
+        "open": "열기",
+        "done": "완료"
       },
-      "selectAll": "현재 필터 결과 모두 선택({{count}}개)",
-      "selectedOutsideFilter": "(그중 {{count}}개는 현재 필터 밖)"
+      "failure": {
+        "read-failed": "가져오지 못함: 원본 기록을 읽을 수 없습니다",
+        "unsupported-version": "가져오지 못함: 이 버전의 기록 형식은 아직 지원하지 않습니다",
+        "empty": "가져오지 못함: 원본 기록에 메시지가 없습니다",
+        "not-found": "가져오지 못함: 원본 기록이 없습니다",
+        "disk-full": "가져오지 못함: 디스크 공간이 부족합니다",
+        "native-unloadable": "가져오지 못함: 원본 기록을 불러올 수 없습니다"
+      },
+      "marker": {
+        "from": "{{source}}에서 가져옴 · {{date}}",
+        "folder": "원래 폴더 {{path}}",
+        "end": "위 내용은 {{source}}에서 가져온 기록입니다",
+        "endHandoff": "위 내용은 {{source}}에서 가져온 기록입니다. 여기부터 {{harness}}(으)로 이어서 작업합니다."
+      },
+      "projectMenu": "이 프로젝트의 다른 도구 세션 가져오기…"
     },
     "connections": {
       "codex": {
@@ -3600,6 +3674,7 @@
           "nameRequired": "표시 이름을 입력하세요",
           "runtimeRequired": "Runtime을 하나 이상 구성하세요(기본 URL과 모델)",
           "baseUrlInvalid": "기본 URL은 유효한 http(s) 주소여야 합니다",
+          "baseUrlRequired": "이 Runtime의 기본 URL을 입력하거나 프로토콜을 기본값으로 되돌리세요",
           "contextWindowInvalid": "컨텍스트 윈도우는 유효한 양의 정수여야 합니다(숫자 그룹 사이에 구분 기호 사용 가능)",
           "requestPathInvalid": "정확한 요청 경로는 단일 /로 시작해야 하며 프래그먼트나 . 또는 .. 경로 세그먼트를 포함하면 안 됩니다. 공백과 안전하지 않은 문자는 퍼센트 인코딩하세요.",
           "modelRequired": "모델을 하나 이상 추가하세요",
@@ -3840,7 +3915,7 @@
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
           "restoreDefault": "기본값 복원",
           "engines": "엔진 지원",
-          "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
+          "enginesHint": "호환 모드에서는 Cindy가 로컬에서 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
           "engineNotConfigured": "설정되지 않음",
           "engineNoFast": "Fast 없음",
@@ -3879,10 +3954,10 @@
           "protocol": {
             "reference": "기본 API",
             "compatibility": "호환 모드",
-            "compatibilityHint": "호환 모드에서는 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
-            "matching": "기본 지원",
+            "compatibilityHint": "Cindy가 로컬에서 요청을 변환합니다. 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
             "unknown": "프로토콜 미확인",
-            "automatic": "자동 선택"
+            "automatic": "자동 선택",
+            "upstream": "업스트림 API"
           },
           "lifecycle": {
             "alpha": "체험판",
@@ -4008,9 +4083,7 @@
         "metaOAuth": "구독 계정",
         "metaApiKey": "API key",
         "metaNoAuth": "로컬 / 자체 호스팅 · 인증 없음",
-        "customTitle": "사용자 지정 엔드포인트",
-        "customMeta": "OpenAI / Anthropic 호환 모델 소스를 연결",
-        "pickHint": "연결할 계정이나 서비스를 선택하세요.",
+        "customAction": "찾는 항목이 없나요? 직접 추가",
         "oauthDesc": "브라우저에서 로그인합니다. API key는 필요하지 않습니다.",
         "deviceOAuthDesc": "일회용 기기 코드를 사용해 제공자 인증 페이지에서 인증하세요",
         "authorizeInBrowser": "브라우저에서 인증",
@@ -5301,7 +5374,6 @@
         "title": "내 브라우저 로그인 사용",
         "description": "Chrome, Edge, Brave에 로그인한 계정으로 사이트에 접근합니다.",
         "toggleAria": "내 브라우저 로그인 사용",
-        "unavailableEmbedded": "독립 브라우저에서만 적용됩니다. 끄면 복사한 로그인 파일이 삭제됩니다.",
         "confirmTitle": "Agent가 브라우저 로그인을 사용하도록 할까요?",
         "confirmDescription": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. 언제든 끌 수 있으며 복사본은 삭제됩니다.",
         "confirmDescriptionMac": "Agent가 이메일, 클라우드, 업무 콘솔 등 이미 로그인한 사이트에서 사용자 계정으로 동작할 수 있습니다. Chrome 로그인 파일을 읽으려면 ‘전체 디스크 접근 권한’도 필요합니다. 언제든 끌 수 있으며, 복사본은 삭제됩니다.",
@@ -5673,7 +5745,7 @@
         "current": "사용 중",
         "ownerName": "이 컴퓨터",
         "unavailable": "내 중계를 사용하려면 Cindy에 로그인하고 시스템 키체인을 사용할 수 있어야 합니다.",
-        "limits": "내 중계를 사용하는 동안에는 휴대폰 푸시 알림, 제공자 공유, 공유 작업을 사용할 수 없습니다.",
+        "limits": "내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다.",
         "actions": {
           "join": "다른 중계에 참여",
           "useOfficial": "공식 중계로 돌아가기",
@@ -5682,7 +5754,7 @@
         },
         "host": {
           "title": "이 컴퓨터에서 중계 시작",
-          "hint": "다른 기기가 이 컴퓨터에 접속할 수 있어야 합니다. 같은 로컬 네트워크, 공유기 포트 포워딩, 터널, 메시 VPN 등으로 직접 확보해 주세요. 이 컴퓨터가 잠자기 상태가 되거나 Cindy를 종료하면 모든 기기의 연결이 끊어지므로 \"컴퓨터 깨어 있게 하기\"를 켭니다.",
+          "hint": "다른 기기가 이 컴퓨터에 접속할 수 있어야 합니다. 같은 로컬 네트워크, 공유기 포트 포워딩, 터널, 메시 VPN 등으로 직접 확보해 주세요. 이 컴퓨터가 잠자기 상태가 되거나 Cindy를 종료하면 모든 기기의 연결이 끊어지므로 \"컴퓨터를 절전 모드로 전환하지 않기\"를 켭니다.",
           "port": "포트",
           "scope": "연결 허용 범위",
           "scopeLocal": "이 컴퓨터만",
@@ -5889,7 +5961,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림, 제공자 공유, 공유 작업을 사용할 수 없습니다."
+          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
         },
         "dialog": {
           "steps": {
@@ -7410,6 +7482,20 @@
         "unknownPublisher": "알 수 없는 게시자",
         "unknownReviewerDetail": "검토 정보가 있지만 현재 Cindy가 검토 키를 알지 못하므로 검토 완료로 표시하지 않습니다."
       },
+      "controlPoints": {
+        "title": "실행 전 확인",
+        "description": "이 플러그인은 자동화나 루틴이 실행되기 전에 확인할 수 있습니다. 실행을 건너뛰거나 중지할 수는 있지만 대신 승인할 수는 없습니다.",
+        "titleWithStartTask": "플러그인이 관여하는 시점",
+        "descriptionWithStartTask": "선택한 작업에만 관여합니다. 실행 전에는 건너뛰거나 중지만 할 수 있고, 새 작업에서는 첫 메시지에서 한 번만 모델을 고릅니다. 대신 승인할 수는 없습니다.",
+        "usage": "사용하려면 자동화나 루틴을 편집할 때 '사전 검사'에서 선택하세요.",
+        "usageStartTask": "사용 방법: 새 작업의 모델 선택기에서 이 플러그인이 제공하는 모델을 고르세요.",
+        "points": {
+          "will-schedule-run": "자동화 실행 전",
+          "will-routine-run": "동료의 루틴 실행 전",
+          "will-start-task": "새 작업을 시작할 때"
+        },
+        "inactive": "아직 사용할 수 없습니다. 이 플러그인을 업데이트하거나 다시 설치할 때 허용하세요."
+      },
       "perm": {
         "mail": "메일 초안 및 전송 카드 사용",
         "mailDetail": "카드에서 초안을 편집하고 동기화하며, 전송 전에 확인 및 실행 취소 카운트다운을 표시합니다.",
@@ -7444,6 +7530,9 @@
         "agentDelegationDetail": "위임 범위 내에서 자동 검토를 거쳐 실행합니다. 소유자를 사칭하거나 파트너 권한을 변경하지 않습니다。",
         "agentTargets": "프로젝트, 기존 세션 및 파트너에 메시지를 보낼 수 있음",
         "agentTargetsDetail": "로컬 프로젝트 디렉터리와 세션 및 파트너의 이름과 ID를 확인하고, 프로젝트에 세션을 만들거나 기존 세션 및 파트너에 텍스트와 이미지를 보낼 수 있습니다. AI 실행과 모델 비용이 발생할 수 있습니다. 이 전송 API 자체로는 다른 세션의 기록을 읽거나 설정을 변경하거나 중지할 수 없습니다.",
+        "agentObserve": "로컬 프로젝트의 세션 목록과 상태를 볼 수 있음",
+        "agentObserveDetail": "등록된 로컬 프로젝트에 있는 세션의 제목, Agent 종류, 보관 여부와 상태(실행 중, 확인 필요, 최근 활동 시간)를 확인하고 메인 창에서 세션을 열 수 있습니다. 메시지, 계획, 파일을 읽거나 메시지를 보내거나 세션을 변경할 수는 없습니다.",
+        "agentObserveRequest": "세션 보기 권한 확인",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
@@ -7476,6 +7565,12 @@
         "subscribeHooksDetail": "전송 전에 각 메시지를 검토합니다. 차단하거나 본문을 고쳐 쓴 뒤 전송할 수 있으며, 차단된 메시지는 수정 후 다시 보낼 수 있습니다.",
         "subscribeAssistantReply": "AI의 답변을 읽고 다시 쓸 수 있음",
         "subscribeAssistantReplyDetail": "AI 답변이 완료될 때마다 처리합니다. 본문을 다듬거나 고쳐 쓸 수 있고(직접 교체되어 원문은 남지 않음), 답변 말풍선을 직접 렌더링한 카드로 교체할 수도 있습니다(카드로 교체된 경우 원문이 보존되며 한 번의 탭으로 확인할 수 있습니다).",
+        "subscribeScheduleRun": "선택한 자동화가 실행되기 전에 확인할 수 있음",
+        "subscribeScheduleRunDetail": "'사전 검사'에서 이 플러그인을 선택한 자동화는 실행 전에 먼저 확인합니다. 자동화의 이름과 지시를 볼 수 있고 이번 실행을 건너뛰거나 중지할 수 있지만 대신 승인할 수는 없습니다.",
+        "subscribeRoutineRun": "선택한 팀원 루틴이 실행되기 전에 확인할 수 있음",
+        "subscribeRoutineRunDetail": "'사전 검사'에서 이 플러그인을 선택한 루틴은 실행될 때마다 먼저 확인합니다. 루틴의 지시와 이를 실행한 이벤트 내용을 볼 수 있고 이번 실행을 건너뛰거나 중지할 수 있지만 대신 승인할 수는 없습니다.",
+        "subscribeStartTask": "새 작업의 모델을 선택할 수 있음",
+        "subscribeStartTaskDetail": "새 작업에서 이 플러그인의 모델을 고르면 첫 메시지를 읽고 연결된 모델 중 하나를 고릅니다. 한 번만 고르며 작업 중에는 모델이 바뀌지 않습니다.",
         "card": "메시지 카드 렌더링",
         "cardExternalLink": "카드에서 외부 링크를 선언할 수 있으며, 확인 후 브라우저에서 열립니다",
         "cardExternalLinkDetail": "카드의 링크를 클릭하면 확인 대화 상자가 표시되며, 승인 후에만 시스템 브라우저에서 열립니다. http/https 주소만 허용됩니다.",
@@ -7511,8 +7606,8 @@
         "updated": "업데이트됨",
         "unchanged": "그 외 {{count}}개 권한은 변경 없음",
         "noChange": "권한 변경이 없습니다.",
-        "pick": "폴더 선택을 요청할 수 있습니다",
-        "pickDetail": "요청 시 Cindy가 시스템 폴더 선택 창을 띄웁니다. 어떤 폴더를 넘길지는 직접 결정하며, 취소하면 아무것도 전달되지 않습니다.",
+        "pick": "파일 또는 폴더 선택을 요청할 수 있습니다",
+        "pickDetail": "플러그인이 요청하면 Cindy가 시스템 선택 창을 엽니다. 공유할 항목은 직접 선택하며, 취소하면 아무것도 전달되지 않습니다.",
         "workspace": "프로젝트 폴더의 세션 항목을 사이드바에 만들도록 요청할 수 있습니다",
         "workspaceDetail": "요청 시 직접 폴더를 선택하거나 확인 카드에서 전체 경로를 본 뒤 허용 여부를 결정합니다. 사용자가 시작한 호출을 처리하는 동안에는 현재 세션 작업 디렉터리 안의 하위 폴더는 추가 확인 없이 사용됩니다. 이미 세션이 있는 폴더는 재사용되어 중복 생성되지 않습니다. 만들어지는 것은 빈 세션뿐이며 스스로 작업을 시작하지 않습니다.",
         "sessionContext": "현재 세션이 사용 중인 프로젝트 폴더 위치를 알 수 있습니다",
@@ -7526,7 +7621,11 @@
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
         "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
-        "routineEvents": "루틴 이벤트"
+        "routineEvents": "루틴 이벤트",
+        "mcpUi": "대화에 인터랙티브 페이지 표시",
+        "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
+        "mcpAppOnly": "페이지 전용",
+        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -7662,6 +7761,22 @@
         "reveal": "세션 목록에 표시",
         "revealed": "세션을 세션 목록에 표시했습니다",
         "revealFailed": "세션을 세션 목록에 표시하지 못했습니다"
+      },
+      "handoff": {
+        "title": "대화에서 플러그인에 넘긴 파일",
+        "description": "대화에서 이 플러그인에 넘긴 파일의 사본입니다. 7일 동안 사용되지 않으면 자동으로 삭제됩니다.",
+        "empty": "대화에서 이 플러그인에 넘긴 파일이 아직 없습니다.",
+        "loadFailed": "파일 목록을 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
+        "refresh": "새로고침",
+        "openInFinder": "Finder에서 열기",
+        "openInExplorer": "파일 탐색기에서 열기",
+        "meta": "{{size}} · {{handedAt}}에 넘김 · {{expiresAt}}에 자동 삭제",
+        "delete": "삭제",
+        "deleteNamed": "{{name}} 삭제",
+        "deleteTitle": "이 파일을 삭제할까요?",
+        "deleteDescription": "삭제하면 플러그인과 열려 있는 페이지에서 “{{name}}”을(를) 더 이상 사용할 수 없으며 되돌릴 수 없습니다.",
+        "deleteFailed": "삭제하지 못했습니다. 잠시 후 다시 시도하세요.",
+        "cancel": "취소"
       },
       "library": {
         "title": "영구 라이브러리",
@@ -7905,8 +8020,9 @@
         "usesExplanation": "허용된 공유 범위의 모든 버전에서 누적된 도구 호출 수입니다. 아래 내 호출은 이 컴퓨터의 현재 계정만 집계합니다."
       },
       "contribution": {
-        "unreadReview": "새 심사 결과가 있습니다",
+        "unreadReview": "새 처리 결과가 있습니다",
         "viewReviewResult": "{{version}} 심사 결과 보기",
+        "viewMarketResult": "마켓 처리 결과 보기",
         "anonymous": "익명으로 게시",
         "anonymousHint": "플러그인 전체의 공개 작성자 이름을 숨깁니다. 끄면 각 버전의 심사 제출 시 저장된 원작자 이름이 표시됩니다.",
         "anonymousAuthorOnly": "원작자만 변경할 수 있습니다",
@@ -8002,6 +8118,7 @@
           "rejected": "반려됨",
           "enabled": "게시 시작",
           "disabled": "게시 중단",
+          "archived": "보관됨",
           "current_changed": "게시 버전 변경",
           "revoked": "버전 철회됨",
           "cancelled": "취소됨"
@@ -8099,6 +8216,14 @@
         "viewPendingVersion": "심사 중인 버전 보기",
         "submitFailed": "제출 실패",
         "viewDetails": "상세 보기"
+      },
+      "fileTransfer": {
+        "reading": "파일 읽는 중",
+        "uploading": "업로드 중",
+        "saving": "파일 저장 중",
+        "importing": "파일 가져오는 중",
+        "finished": "파일 작업 종료",
+        "importFinished": "파일 가져오기 종료"
       }
     },
     "mcp": {
@@ -10264,6 +10389,7 @@
       "backToBot": "{{name}}(으)로 돌아가기"
     },
     "collab": {
+      "deliveryFailed": "원래 채팅에 결과를 전달하지 못했습니다. 결과는 이 세션에 저장되어 있습니다.",
       "backgroundTask": "백그라운드 작업",
       "trackedTask": "독립적으로 실행하고 결과를 자동 반환",
       "stopTask": "작업 중지",
@@ -10398,7 +10524,9 @@
         "digestSent": "파트너 채팅으로 보냈어요",
         "digestFailed": "정리하지 못했어요. 다시 시도하세요.",
         "digestEmpty": "새로 정리할 내용이 없어요",
-        "joinSetup": "참여 후 AI 대신 답장 설정"
+        "joinSetup": "참여 후 AI 대신 답장 설정",
+        "hours": "대신 답장 시간",
+        "ownerOnly": "이 설정은 나만 보고 바꿀 수 있어요."
       },
       "migrationPending": "이전 기록 일부가 아직 업로드되지 않았습니다. 자동으로 다시 시도하며 채팅은 계속 사용할 수 있습니다.",
       "memberSeparator": ", ",
@@ -10424,6 +10552,7 @@
       "header": {
         "stepRunning": "{{name}} 님이 {{step}}단계 작업 중",
         "speaking": "{{name}} 님이 답하는 중…",
+        "queued": "{{name}} 대기 중",
         "planning": "{{name}} 님이 역할을 나누는 중…"
       },
       "memberCount_one": "멤버 {{count}}명",
@@ -10470,8 +10599,10 @@
       },
       "mention": {
         "all": "모두",
-        "allHint": "모두 답변",
-        "label": "동료 멘션"
+        "allHint": "사람만",
+        "label": "동료 멘션",
+        "allBots": "모든 동료",
+        "allBotsHint": "동료만"
       },
       "composer": {
         "label": "그룹 채팅 메시지",
@@ -10582,7 +10713,7 @@
         "speakingMode": "발언 순서",
         "speakingModeAuto": "자동",
         "speakingModeSequential": "항상 차례대로",
-        "speakingModeAutoNote": "멘션이 없거나 @모두이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
+        "speakingModeAutoNote": "멘션이 없거나 @모든 동료이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
         "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
         "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
         "setOrganizer": "담당자로 지정",
@@ -10595,10 +10726,10 @@
         "projectDirChange": "폴더 변경",
         "projectDirClear": "지우기",
         "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
-        "handoff": "단계 넘기기",
-        "autoContinueNote": "켜 두면 이 그룹에서 내가 시작한 역할 분담은 한 단계가 끝날 때마다 자동으로 다음 단계로 넘어갑니다. 끄면 단계마다 ‘다음 단계 시작’을 누를 때까지 기다립니다. 이 컴퓨터에서만 적용됩니다.",
         "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
-        "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요"
+        "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
+        "allowMentionAllBots": "모든 동료 멘션 허용",
+        "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동료가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
       },
       "errors": {
         "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
@@ -10608,6 +10739,9 @@
         "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
         "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
         "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다",
+        "revisionConflict": "작업 상태가 변경되어 작업을 완료하지 못했습니다",
+        "stopOwnershipUnknown": "요청자를 확인할 수 없어 일부 작업을 중지하지 못했습니다.",
+        "nothingToStop": "현재 중지할 수 있는 작업이 없습니다.",
         "invalidAttachment": "첨부 파일을 읽을 수 없어요. 다시 선택한 후 보내 주세요.",
         "attachmentUnavailable": "휴대폰에서 첨부 파일을 가져오지 못했어요. 기기 연결을 확인하고 다시 시도해 주세요.",
         "attachmentTooLarge": "첨부 파일이 100 MB를 초과해요. 더 작은 파일을 선택해 주세요.",
@@ -10622,7 +10756,8 @@
         "quoteUnavailable": "인용한 메시지가 삭제되었거나 더 이상 볼 수 없습니다. 인용을 해제했으니 다시 보내세요.",
         "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
-        "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
+        "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
+        "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다."
       },
       "organizer": "담당자",
       "plan": {
@@ -10792,12 +10927,7 @@
           "member": "멤버",
           "guest": "게스트",
           "companionOf": "{{name}}의 파트너",
-          "guestAccess": "다른 멤버의 사용 권한",
           "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
-          "chatHint": "그룹 메시지만 사용하며 소유자의 기억, 개인 정보, 도구는 사용하지 않습니다.",
-          "none": "소유자만 사용",
-          "chat": "그룹 내 대화만",
-          "tools": "도구와 정보 사용 승인됨",
           "ownerOnly": "파트너 소유자만 이 권한을 변경할 수 있습니다.",
           "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
           "makeAdmin": "관리자로 지정",
@@ -10807,7 +10937,6 @@
           "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
-          "addCompanion": "내 파트너 초대",
           "leave": "그룹 나가기",
           "leaveHint": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
@@ -10819,10 +10948,78 @@
           "unarchive": "그룹 보관 해제",
           "unarchiveHint": "보관을 해제하면 모든 멤버의 메시지와 파트너 실행이 재개돼요.",
           "archived": "보관된 그룹입니다. 기록은 계속 볼 수 있습니다.",
-          "noneHint": "이 그룹에서는 동료의 소유자만 응답을 요청할 수 있습니다.",
-          "companionPermissions": "동료 권한",
-          "configureCapabilities": "도구 및 사용 권한 설정",
-          "capabilityScope": "이것은 {{name}}의 도구와 사용 권한이며, 이 그룹에만 적용되는 설정이 아닙니다."
+          "capabilityScope": "이것은 {{name}}의 도구와 사용 권한이며, 이 그룹에만 적용되는 설정이 아닙니다.",
+          "tabSettings": "설정",
+          "youAreOwner": "내가 그룹 소유자",
+          "youAreAdmin": "내가 관리자",
+          "inviteEntry": "초대",
+          "inviteFriendsItem": "사람 초대",
+          "inviteFriendsItemHint": "공유할 링크 만들기",
+          "inviteFriendsLocked": "그룹 소유자와 관리자만 사람을 초대할 수 있어요",
+          "inviteBotsItem": "동료 추가",
+          "inviteBotsItemHint": "내 동료를 골라 바로 추가",
+          "searchTeammates": "동료 검색",
+          "inviteBotsCount": "추가할 수 있는 동료 {{count}}명",
+          "inviteBotsAllIn": "내 동료가 모두 이미 들어와 있어요",
+          "inviteBotsNoMatch": "‘{{query}}’와 일치하는 동료가 없어요",
+          "inviteBotsAdded": "{{name}}을(를) 그룹에 추가했어요",
+          "noTeammates": "아직 동료가 없어요",
+          "createTeammate": "동료 만들기",
+          "back": "그룹 설정으로 돌아가기",
+          "about": "그룹 소개",
+          "edit": "편집",
+          "add": "추가",
+          "aboutEmpty": "주제와 소개를 추가하면 새 멤버가 이 그룹에서 무엇을 이야기하는지 바로 알 수 있어요.",
+          "showMore": "더 보기",
+          "showLess": "접기",
+          "you": "나",
+          "searchMembers": "멤버 검색",
+          "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
+          "teammateTag": "동료",
+          "paused": "일시 중지됨",
+          "accessNone": "소유자만 사용",
+          "accessChat": "그룹 내 대화만",
+          "accessTools": "도구와 정보 사용 가능",
+          "replies": "동료 답변 방식",
+          "replyModeMentionedNote": "@하지 않으면 동료가 답하지 않아요.",
+          "work": "역할 분담",
+          "ownFolder": "그룹 전용 폴더",
+          "projectDirHint": "역할 분담 때 동료가 여기서 작업해요.",
+          "projectDirClearHint": "그룹 전용 폴더를 대신 사용해요",
+          "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동료예요.",
+          "autoContinueHint": "끄면 단계마다 ‘계속’을 누를 때까지 기다려요.",
+          "workCaption": "git 프로젝트를 고르면 역할 분담마다 새 브랜치를 만들어 내 코드는 건드리지 않아요. 프로젝트 폴더와 자동 넘기기는 이 컴퓨터에서만 적용돼요.",
+          "me": "이 그룹에서의 나",
+          "profileHint": "이 그룹에서만 보이는 닉네임과 사진",
+          "maskHint": "누가 나를 @하면 내 동료가 대신 답해요",
+          "myTeammates": "내 동료",
+          "myTeammatesCaption": "다른 멤버가 내 동료를 어떻게 쓸 수 있는지 정해요.",
+          "manage": "그룹 관리",
+          "manageHintOwner": "답변 방식, 담당자, 역할 분담, 보관과 해산",
+          "manageHintAdmin": "답변 방식, 담당자, 역할 분담, 보관",
+          "manageCaption": "이 페이지는 그룹 소유자와 관리자만 볼 수 있어요.",
+          "hideHint": "나가지 않고 내 목록에서만 숨겨요",
+          "leaveRowHint": "내 동료도 함께 나가요",
+          "leaveRowHintAlone": "새 메시지를 받지 않고 기록도 볼 수 없어요",
+          "leaveBlocked": "나가려면 먼저 그룹 소유자를 넘겨주세요",
+          "archiveRowHint": "모두에게 그룹을 멈추고 기록은 남겨요",
+          "unarchiveRowHint": "메시지와 동료 작업을 다시 시작해요",
+          "dissolveRowHint": "되돌릴 수 없고 아무도 메시지를 보낼 수 없어요",
+          "editTitle": "그룹 정보 편집",
+          "topicHint": "그룹 소개 맨 위에 표시돼요",
+          "descriptionHint": "동료는 답할 때마다 최신 소개를 참고해요.",
+          "companionTitle": "이 그룹의 {{name}}",
+          "yourTeammate": "내 동료",
+          "accessQuestion": "다른 멤버가 {{name}}을(를) 어떻게 쓸 수 있나요?",
+          "defaultTag": "기본",
+          "accessNoneTitle": "나만",
+          "accessNoneHint": "이 그룹에서는 나만 {{name}}에게 답을 요청할 수 있어요.",
+          "accessChatTitle": "그룹 대화만",
+          "accessChatHint": "그룹 메시지만 보고 답해요. 내 기억과 개인 정보를 읽지 않고 도구도 쓰지 않아요.",
+          "accessToolsTitle": "도구와 정보도 사용",
+          "accessToolsHint": "{{name}}의 기존 도구와 내 개인 정보를 쓸 수 있고 결과는 모두에게 보여요. 기존 승인 규칙은 그대로이며, 권한을 거둬도 이미 끝난 작업은 되돌릴 수 없어요.",
+          "capabilitiesRow": "{{name}}의 도구와 권한",
+          "accessMenu": "이 그룹 권한"
         }
       },
       "lifecycle": {
@@ -12410,6 +12607,13 @@
         "busy": "저장소가 사용 중입니다. 잠시 후 다시 시도하세요",
         "changed": "체크아웃된 브랜치가 변경되었습니다. 다시 시도하세요."
       }
+    },
+    "pluginUi": {
+      "title": "플러그인 “{{name}}”에 대화형 페이지가 추가되었습니다. 사용하려면 확인해 주세요.",
+      "enable": "검토 후 활성화",
+      "later": "나중에",
+      "ready": "대화형 페이지가 활성화되었습니다. 다음 플러그인 도구 호출부터 표시됩니다.",
+      "updateHost": "여기서 대화형 페이지를 승인하려면 실행 컴퓨터의 Cindy를 업데이트하세요."
     }
   },
   "onboarding": {
@@ -12493,6 +12697,7 @@
     "cindyServiceUnavailable": "Cindy 음성 서비스를 사용할 수 없습니다. 네트워크를 확인하거나 서비스 소스를 전환하세요.",
     "asrServiceUnavailable": "음성 인식 서비스에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도하세요.",
+    "speakerFiltered": "다른 사람의 목소리를 제외했습니다",
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
@@ -12518,6 +12723,15 @@
     "verificationFailed": "ChatGPT 로그인이 복구되었는지 확인할 수 없습니다. 다시 확인해 주세요."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "이(가) 이 작업에 선택한 모델:",
+      "kept": {
+        "no-opinion": "{{plugin}}이(가) 이번에는 모델을 바꾸지 않아 이 작업은",
+        "failed": "{{plugin}}이(가) 제때 응답하지 않아 이 작업은",
+        "unavailable-route": "{{plugin}}이(가) 고른 모델을 쓸 수 없어 이 작업은"
+      }
+    },
+    "teammateProcess": {"record":"작업 내역","operations":"작업 기록","elapsed":"처리 중 {{duration}}","took":"소요 시간 {{duration}}","processing":"처리 중","worked":"작업 내역","thinking":"생각 중","thought":"생각함","failed_other":"호출 {{count}}회 실패","separator":" · ","actions":{"running":{"read":"파일 확인 중","edit":"파일 수정 중","search":"검색 중","web":"웹 확인 중","command":"명령 실행 중","tools":"도구 사용 중","delegate":"작업 위임 중","plan":"계획 정리 중"},"done":{"read":"파일 확인함","edit":"파일 수정함","search":"검색함","web":"웹 확인함","command":"명령 실행함","tools":"도구 사용함","delegate":"작업 위임함","plan":"계획 정리함"}}},
     "imageDelivery": {
       "stored": "이미지 전달 완료",
       "failed": "이미지 전달에 실패했습니다. 기존 이미지 전송을 다시 시도할 수 있습니다.",
@@ -14252,11 +14466,6 @@
         "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
         "removeFromSidebarConfirmAction": "프로젝트 제거",
         "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
-        "syncCodex": "이 프로젝트의 Codex 세션 동기화",
-        "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
-        "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",
-        "syncCodexNone": "이 프로젝트의 Codex 세션을 찾을 수 없습니다",
-        "syncCodexFailed": "Codex 동기화 실패: {{error}}",
         "showFiles": "파일 보기",
         "archivedAll": "모두 보관",
         "unarchiveAll": "모두 보관 해제",
@@ -14329,8 +14538,8 @@
         "ghMissing": "GitHub CLI(gh)를 찾을 수 없어 PR 상태를 볼 수 없습니다",
         "notFound": "PR이 없거나 현재 계정으로는 볼 수 없습니다",
         "statusUnknown": "상태를 가져오지 못했습니다",
+        "statusNotFetched": "아직 상태 정보가 없습니다",
         "openAria": "브라우저에서 PR #{{number}} 열기",
-        "clickToOpen": "클릭하여 브라우저에서 PR 열기",
         "guidance": {
           "login": {
             "hint": "클릭하여 GitHub 연결",
@@ -14418,7 +14627,40 @@
             "otherMethods": "다른 연결 방법"
           }
         },
-        "unresolved": "미해결 리뷰 코멘트: {{count}}건"
+        "unresolved": "미해결 리뷰 코멘트: {{count}}건",
+        "summaryAria": "PR #{{number}} 요약 보기",
+        "unresolvedLabel": "미해결 리뷰 코멘트",
+        "checks": "검사",
+        "checksTotal": "총 {{count}}개",
+        "failed": "실패",
+        "passed": "통과",
+        "pending": "진행 중",
+        "skippedLabel": "건너뜀 또는 중립",
+        "manage": {
+          "title": "PR 링크 관리",
+          "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
+          "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
+          "removed": "제거됨: {{count}}개",
+          "addLabel": "PR 링크 추가",
+          "add": "PR 추가",
+          "loading": "불러오는 중…",
+          "restore": "PR 복원",
+          "pin": "상단에 고정",
+          "unpin": "고정 해제",
+          "pinLimit": "PR은 최대 3개까지 고정할 수 있습니다",
+          "reorderHint": "Alt+↑/↓ 키로 고정 또는 고정되지 않은 그룹 안에서 순서를 변경합니다.",
+          "dragHandle": "{{repo}} #{{number}} 끌어서 순서 변경",
+          "remove": "PR 제거",
+          "errors": {
+            "duplicate": "이미 연결된 PR입니다. 제거한 링크는 목록에서 복원할 수 있습니다",
+            "notFound": "PR을 찾을 수 없거나 접근 권한이 없습니다",
+            "invalidUrl": "유효한 GitHub PR 링크를 입력하세요",
+            "reorderFailed": "순서가 저장되지 않았습니다. 다시 시도하세요.",
+            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 로그인과 접근 권한을 확인하세요",
+            "unsupported": "이 컴퓨터의 버전은 PR 링크 관리를 지원하지 않습니다",
+            "failed": "PR 링크를 업데이트할 수 없습니다"
+          }
+        }
       }
     },
     "schedule": {
@@ -15007,6 +15249,25 @@
         },
         "browse": "스크립트 파일 선택(입력란으로 드래그해도 됩니다)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "확인 방법",
+        "source": {
+          "script": "스크립트",
+          "plugin": "플러그인"
+        },
+        "tooltip": "실행할 때마다 선택한 플러그인에 먼저 확인합니다. 플러그인은 실행 진행, 이번 실행 건너뛰기, 중지 중 하나를 고를 수 있지만 사용자의 확인이 필요한 일을 대신 승인할 수는 없습니다.",
+        "choose": "플러그인 선택",
+        "unavailable": "사용할 수 없는 플러그인",
+        "unavailableHint": "이 플러그인은 더 이상 사용할 수 없습니다. 다른 플러그인을 고르기 전까지는 '플러그인 오류 시' 설정대로 처리합니다.",
+        "hint": "플러그인은 실행 진행, 이번 실행 건너뛰기, 중지 중 하나를 고를 수 있습니다. 대신 승인할 수는 없습니다.",
+        "empty": "사전 검사에 쓸 수 있는 플러그인이 아직 없습니다. 사전 검사를 지원하는 플러그인을 설치하고, 설치하거나 업데이트할 때 허용하세요.",
+        "onFailureLabel": "플러그인 오류 시",
+        "onFailure": {
+          "allow": "평소대로 실행",
+          "skip": "이번 실행 건너뛰기",
+          "block": "중지하고 실패로 기록"
+        }
+      },
       "validation": {
         "nameRequired": "이름은 필수입니다",
         "promptRequired": "프롬프트는 필수입니다",
@@ -15019,6 +15280,7 @@
         "modelUnavailable": "모델 {{model}}을 더 이상 사용할 수 없습니다. 다른 모델을 선택하세요.",
         "reasoningInvalid": "Reasoning은 {{values}} 중 하나여야 합니다",
         "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요",
+        "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",
         "templateParamRequired": "{{label}}을(를) 입력하세요",
         "templateApplyFailed": "템플릿을 적용할 수 없습니다. 매개변수를 확인한 후 다시 시도하세요."
       }
@@ -15504,6 +15766,7 @@
       "titleRevealPath": "이 미디어 파일의 로컬 경로를 Agent에 전달할까요?",
       "count": "파일 {{count}}개",
       "descriptionAttachments": "아래 파일은 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 이 플러그인에 전달됩니다(콘텐츠 지문만 전달되며 경로는 전달되지 않습니다).",
+      "descriptionHandoff": "아래 파일은 현재 작업의 작업 디렉터리 밖에 있습니다. 허용하면 플러그인이 이 파일들의 사본을 받습니다(경로는 받지 않음). 사본은 7일 동안 사용되지 않으면 자동으로 삭제됩니다.",
       "descriptionDir": "아래 디렉터리/파일은 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 그 안의 파일이 업로드를 위해 이 플러그인에 전달됩니다(일회용 티켓만 전달되며 경로는 전달되지 않습니다).",
       "descriptionSaveDir": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 이 플러그인이 다운로드한 파일을 여기에 저장할 수 있습니다(기존 파일은 덮어쓰지 않습니다).",
       "descriptionRevealPath": "이 경로는 허용한 뒤에만 현재 Agent로 반환되며 대화 기록에 남습니다. 페어링된 기기에도 해당 기록이 동기화될 수 있습니다. 이 작업은 플러그인에 파일 읽기 권한을 부여하지 않습니다.",
@@ -15533,6 +15796,7 @@
       "embedded-frame": "입력란이 페이지에 삽입된 다른 사이트 안에 있습니다. 출처를 신뢰할 수 있는지 확인하세요."
     },
     "agentControlled": "이 화면은 Agent가 열었습니다. 입력하기 전에 실제로 로그인하려는 곳인지 확인하세요.",
+    "agentPicture": "이 코드는 Agent가 찍은 스크린샷에서 가져온 것이라 Cindy는 원래 화면을 볼 수 없고, 스캔해도 자동으로 계속하지 않습니다. 로그인하려는 사이트로 연결되는지 확인하고, 스캔한 뒤 \"Agent에게 넘기기\"를 누르세요.",
     "error": {
       "decision": "요청이 전달되지 않았습니다. 다시 시도하세요.",
       "stale": "화면이 바뀌었습니다. 최신 내용으로 진행하세요.",
@@ -17237,6 +17501,18 @@
     "compression": "긴 내용을 간결하게 줄입니다."
   },
   "routines": {
+    "deliveryLabel": "최종 전달",
+    "deliveryDirect": "파트너 채팅에 바로 표시",
+    "deliveryProcess": "파트너가 처리한 후 답장",
+    "deliveryIm": "메시지 봇으로 전송",
+    "deliveryNone": "실행 작업에만 보관",
+    "deliveryHint": "바로 표시는 모델을 추가 호출하지 않습니다. 조용한 확인에서는 변화가 없으면 전달하지 않습니다.",
+    "deliveryRecipient": "받는 곳",
+    "deliveryUnavailable": "전달할 수 없는 대상",
+    "deliveryNoRecipients": "메시지 봇을 연결하고 한 번 대화한 다음 이 설정을 다시 여세요.",
+    "deliveryFailed": "실행 완료, 전달 실패",
+    "deliveryFailedHint": "결과가 저장되었습니다. 전달 설정을 확인하세요. 재전송을 위해 작업을 다시 실행하지 마세요.",
+    "deliveryDelivered": "결과 전달 완료",
     "onEvent": "이벤트: {{source}} · {{event}}",
     "triggerDetails": "실행 조건 보기 ({{count}}개 중 하나 충족 시 실행)",
     "noTriggers": "설정된 실행 조건 없음",
@@ -17312,6 +17588,7 @@
     "sessionModeFresh": "트리거마다 새로 만들기 (문맥 분리)",
     "sessionModeHint": "영구 세션은 하나의 루틴 대화를 이어 갑니다. 새로 만들기는 트리거마다 독립 대화를 만들고 닫습니다.",
     "quietHint": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
+    "checkSource": "확인 방법",
     "checkCommand": "사전 확인 명령",
     "checkHint": "선택 사항입니다. 컴퓨터에서 먼저 확인합니다. 종료 코드 2는 이번 실행을 건너뛰고, 0은 계속합니다. 오류는 보고됩니다. 비우면 제거됩니다.",
     "timeoutMs": "확인 제한 시간(ms, 비우면 제한 없음)",
@@ -17320,9 +17597,8 @@
       "name": "담당 세션 후속 확인 (기본)",
       "hint": "담당 세션이 멈추거나 응답을 기다릴 때, 오류·사용량 한도·완료 시 후속 확인합니다."
     },
-    "builtinTodoCheck": {
-      "name": "매일 할 일 확인(기본 제공)",
-      "hint": "평일 9:00에 연결된 소스에서 새 할 일을 찾고, 없으면 알리지 않습니다. 근황에서 켜고 끌 수 있으며 일시 중지와 재개만 할 수 있습니다."
+    "todoCheck": {
+      "name": "매일 할 일 확인"
     },
     "builtinNightlyLearning": {
       "name": "야간 학습(기본 제공)",
@@ -17378,6 +17654,14 @@
         "skillDisabled": "스킬 「{{title}}」 끔",
         "skillMerged": "스킬 「{{title}}」를 「{{into}}」에 합치고 끔"
       }
+    },
+    "remote": {
+      "pause": "루틴 일시 중지",
+      "resume": "루틴 재개",
+      "addSchedule": "일정 추가",
+      "addInterval": "간격 추가",
+      "addEvent": "이벤트 트리거 추가",
+      "filterField": "필터 필드"
     }
   },
   "cindyMakeDoctor": {
@@ -18384,7 +18668,18 @@
     "cardTitle": "{{title}} · $t(mcpApps.appName)",
     "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
     "serverId": "MCP 서버 ID: {{id}}",
-    "exitFullscreen": "전체 화면 종료"
+    "exitFullscreen": "전체 화면 종료",
+    "pluginTrust": {
+      "unverified": "미검증",
+      "cindy-official": "Cindy 공식",
+      "reviewed": "검토됨",
+      "verified-publisher": "확인된 게시자"
+    },
+    "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
+    "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
+    "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
+    "awaitingApproval": "승인을 기다리고 있어요",
+    "pendingApprovals": "승인 대기 {{count}}개"
   },
   "richAnswer": {
     "send": "메시지 보내기",
@@ -18455,5 +18750,47 @@
     "groupHint": "끄면 이 그룹을 통해 실행하는 모든 작업이 일반 속도로 실행됩니다. Ultrafast에도 적용됩니다.",
     "pending": "일부 컴퓨터가 설정을 확인하지 않았습니다. 연결을 유지하고 이 설정을 지원하지 않는 그룹 컴퓨터를 업데이트하세요.",
     "saveFailed": "설정은 저장되었을 수 있지만 일부 실행 중인 작업이 일반 속도 전환을 확인하지 않았습니다. 연결을 확인한 후 다시 시도하세요."
+  },
+  "usageCost": {
+    "title": "비용 내역",
+    "conversation": "채팅",
+    "additional": "추가 비용",
+    "unknownModel": "모델 미기록",
+    "estimate": "추정 가치",
+    "charged": "사용량 요금",
+    "loading": "내역 불러오는 중…",
+    "unavailable": "이 기록의 내역을 확인할 수 없습니다.",
+    "explanation": "모델과 경로별로 집계합니다. 구독 가치는 추정치이며 추가 청구 금액이 아닙니다. 기록된 비용만 포함되며 과거 내역은 불완전할 수 있습니다.",
+    "source": {
+      "subscription": "구독 계정",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 제공자",
+      "unknown": "경로 미기록"
+    }
+  },
+  "performanceTrace": {
+    "title": "성능 기록",
+    "start": "기록 시작",
+    "stop": "기록 중지",
+    "description": "시작한 후 느려지는 동작을 재현하고 기록을 중지하세요. 60초 후 자동으로 종료됩니다. 로컬 추적 파일에는 경로 등 민감한 정보가 포함될 수 있습니다.",
+    "localScope": "이 컴퓨터만 기록합니다. 다른 컴퓨터와 휴대폰은 포함되지 않습니다.",
+    "recording": "기록 중 · {{seconds}}초",
+    "saving": "기록 저장 중…",
+    "result": "성능 보고서",
+    "previous": "이전 보고서 보기",
+    "previousResult": "이전 성능 보고서",
+    "previousSummary": "마지막 기록: {{time}}, {{seconds}}초.",
+    "resultDescription": "느려지는 원인을 조사하기 위해 전체 성능 보고서, CPU 프로파일, Chromium 추적 파일과 입력한 설명을 제출합니다. 식별 가능한 인증 정보, 이메일 주소 등의 민감한 정보는 업로드 전에 가려집니다. 파일에 로컬 경로와 성능 마커가 남아 있을 수 있습니다. 로컬 원본 파일은 7일간 보관됩니다.",
+    "summary": "{{seconds}}초 동안 기록했습니다.",
+    "partial": "일부 데이터를 수집하지 못했거나 한도에 도달했습니다. 수집한 기록은 보관되어 있습니다.",
+    "note": "당시 무엇을 하고 있었나요? (선택 사항)",
+    "submit": "보고서 제출",
+    "keepLocal": "로컬 파일 보기",
+    "close": "닫기",
+    "new": "다시 기록",
+    "uploaded": "성능 보고서 파일이 업로드되었습니다. 보고서 번호: {{id}}. 문제를 제보할 때 이 번호를 알려 주세요.",
+    "unavailable": "이 빌드에는 보고서 업로드 대상이 설정되어 있지 않습니다. 로컬 파일을 열어 지원 담당자에게 공유할 수 있습니다.",
+    "consent": "설정에서 개인정보 처리방침에 동의한 후 제출하세요. 로컬 파일은 보관되어 있습니다.",
+    "failed": "작업이 완료되지 않았습니다. 다시 시도하거나 로컬 파일을 확인하세요."
   }
 }

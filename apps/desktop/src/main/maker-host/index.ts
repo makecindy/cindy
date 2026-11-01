@@ -1,3 +1,4 @@
+import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
@@ -24,7 +25,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
-import { setPluginModelPickerAgentProvider } from '../cindy-brain/ghostModelPicker.js';
+import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -199,6 +200,7 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
+import { createDesktopInputShellGuardHooks } from './claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -318,6 +320,7 @@ import {
   getActiveCodexBridgeServerNames,
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
@@ -356,6 +359,7 @@ import {
 import {
   buildCodexProxySpawnArgs,
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -420,6 +424,7 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
+setPluginRouteAgentStatusProvider(async (agent) => _maker?.getAgentStatus(agent as AgentKind));
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
 
 export function handleRemoteWorkerBridge(
@@ -1495,6 +1500,9 @@ export function getMaker(): Maker {
       //   (slack-empty-cursor-hook 已随 slack-official MCP 集成退役 2026-07-15:
       //    它只认老集成的 mcp__slack__* 工具名;空 cursor 清洗移入 cindy-slack
       //    意识的 slack_call_tool。)
+      //   - desktop-input-shell-guard-hook: Bash 里模拟桌面键鼠(osascript keystroke /
+      //     cliclick / CGEvent / cua-driver CLI)在 Computer Use 开启时一律拒绝,理由指向
+      //     cindy_computer;完全访问档同样生效(与能力路由守卫同一机制)。
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
@@ -1505,6 +1513,10 @@ export function getMaker(): Maker {
           ],
         },
         createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+        createDesktopInputShellGuardHooks(
+          () => getPluginRegistry().isEnabled('computer'),
+          desktopMakerLogger,
+        ),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
@@ -2203,6 +2215,7 @@ export function getMaker(): Maker {
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
           ...(smartSubagentConfig
@@ -2273,6 +2286,7 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
+      prepareCodexMcpToolCancellation,
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
@@ -2559,7 +2573,7 @@ export function getMaker(): Maker {
     // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
     // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
-    _initialCustomMcpRefresh = refreshCustomMcpProviders();
+    _initialCustomMcpRefresh = refreshCustomMcpProviders().then(() => { refreshInstalledPluginApps(); });
 
     // Store mutations are serialized; each settled callback consumes the exact
     // latest-byte-edge runtime snapshot for its durable mutation.

@@ -19,6 +19,35 @@ const CODEX_COMPUTER_USE_REPLACEMENT_ROUTE = {
   reason: 'Cindy owns desktop-control enablement, permissions, and execution.',
 } as const satisfies CapabilityRouteOverride;
 
+/**
+ * The user's own registrations of the same desktop driver that `cindy_computer`
+ * wraps. Claude Code reads them from `~/.claude.json`; left visible they win the
+ * model's choice (long server instructions) and skip every Cindy guard: target
+ * window, secure fields, remote-input and user-activity yield, result
+ * verification (2026-10-31 audit: 26 of 45 desktop sessions went this way).
+ * Applied unconditionally: Cindy's Computer Use setting is the one switch for
+ * whether an Agent may drive this desktop, and a raw driver server would bypass
+ * it exactly when it is off (2026-10-31 sandbox run: Computer Use off, the
+ * user's cua-driver connected with all 60 tools).
+ */
+const CLAUDE_USER_DESKTOP_DRIVER_SERVER_IDS = ['cua-driver', 'cua'] as const;
+
+const CLAUDE_USER_DESKTOP_DRIVER_ROUTES = CLAUDE_USER_DESKTOP_DRIVER_SERVER_IDS.map((id) => ({
+  capabilityId: 'computer-use',
+  source: {
+    kind: 'user-mcp',
+    harness: 'claude-code',
+    surface: 'mcp',
+    id,
+  },
+  invocation: 'disabled',
+  replacement: {
+    kind: 'cindy-host',
+    id: 'cindy_computer',
+  },
+  reason: 'cindy_computer drives the same desktop driver with Cindy\'s session, guards and verification.',
+} as const satisfies CapabilityRouteOverride));
+
 const HARNESS_OUTPUT_UNAVAILABLE_REASON =
   'Its result is shown only in the vendor app, not in Cindy; Cindy delivers files, images, and pages itself.';
 
@@ -204,6 +233,7 @@ export const DESKTOP_CAPABILITY_ROUTING_POLICY = {
       reason: 'The bundled Skill requires node_repl, which is unavailable in Cindy.',
     },
     ...HARNESS_OUTPUT_SURFACE_OVERRIDES,
+    ...CLAUDE_USER_DESKTOP_DRIVER_ROUTES,
   ],
 } as const satisfies CapabilityRoutingPolicy;
 
@@ -290,7 +320,10 @@ function withoutUnprovisionedNodeReplRoute(
 
 /** Freeze workspace-scoped capability arbitration for one new runtime. */
 export function buildDesktopCapabilityRoutingPolicy(opts: {
-  /** Whether the current Codex bridge exposes Cindy's Computer Use host. */
+  /**
+   * Whether Cindy's Computer Use host is applied to this runtime: the Codex
+   * bridge exposes it, or (Claude) the Computer Use plugin is enabled.
+   */
   cindyComputerAvailable?: boolean;
   /** Workspace-scoped Cindy Browser ownership snapshot. */
   cindyBrowserEnabled?: boolean;

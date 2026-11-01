@@ -130,6 +130,18 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
   };
   // Nine members from three accounts: the header shows a member count, not every name.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-process-history') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'process-1', display: { title: 'Design review' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
+      id: request.ref.id, name: 'Design review', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active', isOwned: true, homeDeviceId: 'cindy-visual-mock-mac' }],
+      messages: [{ id: 'fixture-group-answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+        content: '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', createdAt: now,
+        process: { groupId: request.ref.id, executionId: 'fixture-process-execution', sessionId: 'visual-teammate-process', clientId: 'fixture-process-source', durationMs: 60000 } }],
+      plans: [], createdAt: now, updatedAt: now, round: { status: 'idle', canContinue: false, speakers: [] },
+    } }],
+  };
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id === 'visual-crowded-group') return {
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
     revision: 'visual-1', display: { title: 'Design review' }, actions: [], links: [],

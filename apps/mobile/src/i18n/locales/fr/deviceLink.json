@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Ordinateur non connecté",
+    "hint": "Le contenu enregistré est disponible. Connectez votre ordinateur pour en charger davantage."
+  },
+  "recovery": {
+    "syncing": "Synchronisation…",
+    "recovered": "Restauré",
+    "syncingHint": "Mise à jour du contenu depuis votre ordinateur."
+  },
+  "syncFailed": "Échec de la synchro",
+  "resync": "Resynchroniser",
+  "resyncing": "Resynchronisation",
+  "syncShort": "Synchroniser",
+  "deviceUnresponsiveTitle": "Pas encore de réponse",
+  "deviceUnresponsiveHint": "Aucune réponse reçue pour l'instant. Nouvelle tentative automatique.",
+  "localNetwork": {
+    "title": "Téléphone hors ligne",
+    "hint": "Vérifiez le réseau de votre téléphone. La reconnexion se fera automatiquement dès son rétablissement."
+  },
+  "serviceConnection": {
+    "title": "Service injoignable",
+    "hint": "Votre téléphone ne parvient pas à joindre le service pour le moment. Reconnexion automatique en cours."
+  },
+  "connectStep1": "Installez et ouvrez {{appName}} sur votre ordinateur",
+  "connectStep2": "Connectez-vous avec le même compte que sur votre téléphone",
+  "connectStep3": "Dans Paramètres → Connexion à distance, activez « Autoriser les appareils du même compte à contrôler cet ordinateur »",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} dans le cloud, bientôt disponible",
+  "cloudTeaserCopy": "Dès son lancement, l'app mobile fonctionnera de manière autonome, sans ordinateur.",
+  "sectionFirstRun": "Premiers pas",
+  "sectionOffline": "Appareils connectés",
+  "sectionRemoteDisabled": "Sur votre ordinateur",
+  "sectionAccessRevoked": "Autoriser à nouveau l'accès",
+  "retryAccess": "Réessayer l'accès",
+  "recheck": "Vérifier à nouveau",
+  "deviceRemovedTitle": "Appareil retiré",
+  "deviceRemovedHint": "Déconnectez-vous puis reconnectez-vous pour réintégrer la liste des appareils.",
+  "authFailedTitle": "Connexion expirée",
+  "authFailedHint": "Votre connexion a expiré. Déconnectez-vous puis reconnectez-vous.",
+  "replacedTitle": "Connexion remplacée",
+  "replacedHint": "La connexion de cet appareil a été remplacée ailleurs. Reconnexion en cours.",
+  "tooManyConnectionsTitle": "Trop de connexions",
+  "tooManyConnectionsHint": "Trop d'appareils sont en ligne pour ce compte. Déconnectez un autre appareil et réessayez.",
+  "versionMismatchTitle": "Version incompatible",
+  "versionMismatchHint": "Cette version de l'app est incompatible avec le service. Installez la dernière version et réessayez.",
+  "unstableTitle": "Connexion instable",
+  "unstableHint": "La connexion est instable. Vérifiez votre réseau et attendez que la connexion se rétablisse.",
+  "relay": {
+    "label": {
+      "online": "Relais connecté",
+      "connecting": "Connexion au relais",
+      "stopped": "Relais déconnecté"
+    },
+    "hint": {
+      "online": "Les tâches distantes peuvent être synchronisées.",
+      "lastSynced": "Dernière synchronisation {{time}}",
+      "connecting": "Les tâches distantes se réabonneront automatiquement au rétablissement du réseau.",
+      "stopped": "La connexion reprendra lorsque vous reviendrez dans l'app ou vous reconnecterez."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} ne peut pas être utilisé, car aucune clé API n'est configurée sur l'ordinateur. Configurez-en une dans {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles, puis réessayez.",
+    "noOauth": "{{agent}} ne peut pas être utilisé, car l'autorisation du compte n'est pas finalisée sur l'ordinateur. Reconnectez le compte dans {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles, puis réessayez.",
+    "noCredentials": "{{agent}} ne peut pas être utilisé, car il n'est pas connecté sur l'ordinateur. Connectez-vous via {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles, puis réessayez.",
+    "noEncryption": "{{agent}} ne peut pas être utilisé, car le stockage système sécurisé de l'ordinateur est indisponible. Vérifiez le Trousseau sous macOS ou le chiffrement du compte sous Windows, puis redémarrez {{appName}} sur l'ordinateur.",
+    "proxyNotReady": "{{agent}} n'est pas encore prêt sur l'ordinateur. Réessayez dans un instant ; si le problème persiste, redémarrez {{appName}} sur l'ordinateur.",
+    "default": "{{agent}} ne peut pas être utilisé, car sa connexion sur l'ordinateur est indisponible. Reconnectez-vous via {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "L'ordinateur distant a désactivé le contrôle à distance.",
+    "channelNotAllowed": "La version actuelle de l'app de bureau ne prend pas en charge cette fonction à distance.",
+    "accessRevoked": "Cet ordinateur a révoqué l'accès mobile.",
+    "deviceUnresponsive": "Aucune réponse reçue pour l'instant. Nouvelle tentative automatique.",
+    "versionMismatch": "La version du protocole du service ne correspond pas. Mettez à jour l'app et réessayez.",
+    "payloadTooLarge": "Ce transfert est trop volumineux. Divisez-le en parties plus petites et réessayez.",
+    "mediaFetchFailed": "Impossible de récupérer le fichier depuis l'ordinateur. Réessayez plus tard.",
+    "voiceTranscribeFailed": "Échec de la transcription vocale. Réessayez ou utilisez le clavier.",
+    "linkNotOpen": "La liaison de contrôle avec l'ordinateur a été coupée et se reconnecte.",
+    "accountChanged": "Le compte ou l'espace de travail Codex a changé. Actualisez le quota et confirmez à nouveau.",
+    "offerExpired": "L'offre de réinitialisation Codex a expiré. Actualisez le quota et confirmez à nouveau.",
+    "preconditionFailed": "Les conditions de l'opération ont changé. Actualisez et confirmez à nouveau.",
+    "transient": "Le réseau ou l'ordinateur distant est temporairement indisponible. Resynchronisez plus tard.",
+    "callFailed": "L'appel distant n'a pas abouti. Réessayez dans un instant.",
+    "unclassified": "Cette action n'a pas abouti. Réessayez dans un instant.",
+    "notFound": "Cet élément n'existe plus. Revenez à la liste et actualisez-la avant de réessayer."
+  }
+}

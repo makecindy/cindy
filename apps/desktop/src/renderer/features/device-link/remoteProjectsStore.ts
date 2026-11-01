@@ -159,6 +159,17 @@ function invalidateDeviceSnapshotEpochs(deviceId: string): void {
   }
 }
 
+/** Includes reads/loading that have not produced a shard yet. */
+function knownDeviceIds(): Set<string> {
+  return new Set([
+    ...shards.keys(), ...detailDeviceEpoch.keys(),
+    ...[...snapshotEpoch.keys()].map((key) => key.slice(0, key.indexOf('\u0000'))),
+    ...bootstrapLoadingDeviceIds, ...bootstrapFailedDeviceIds,
+    ...archivedLoadingDeviceIds, ...archivedFailedDeviceIds,
+    ...sessionDeviceIndex.values(), ...[...pendingStatuses.values()].map((entry) => entry.token.deviceId),
+  ]);
+}
+
 /**
  * 重拉实现注入点:listing tier(useDeviceLinkRemoteProjects)挂载时注册一个「(防抖)重拉该
  * 设备会话列表」的实现,卸载时清。`requestRemoteReseed` 供 push 消费侧(makerChatStore 的
@@ -969,7 +980,13 @@ const actions = {
   },
 
   /** 标记全部已缓存远程设备暂不可达,但不清空侧边栏会话快照。 */
-  markAllDisconnected(): void {
+  markAllDisconnected(matchesDevice?: (deviceId: string) => boolean): void {
+    if (matchesDevice) {
+      for (const deviceId of knownDeviceIds()) {
+        if (matchesDevice(deviceId)) actions.markDeviceDisconnected(deviceId);
+      }
+      return;
+    }
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
     for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     const bootstrapStateChanged =
@@ -1030,11 +1047,25 @@ const actions = {
   },
 
   /** 清空所有远端项目(登出 / device-link stopped / 卸载)。 */
-  clear(): void {
+  clear(matchesDevice?: (deviceId: string) => boolean): void {
     // Logout, stopped and unmount cancel initialization as well as snapshots.
     const initialDiscoveryChanged = !initialDiscoverySettled;
     initialDiscoveryGeneration += 1;
     initialDiscoverySettled = true;
+    if (matchesDevice) {
+      for (const sessionId of new Set([
+        ...pendingTitlePreview.keys(), ...landedSystemTitles.keys(),
+        ...synthesizedPreviewSessions, ...pendingFirstSendAt.keys(),
+      ])) {
+        const deviceId = sessionDeviceIndex.get(sessionId);
+        if (deviceId && matchesDevice(deviceId)) dropSessionOverlays(sessionId);
+      }
+      for (const deviceId of knownDeviceIds()) {
+        if (matchesDevice(deviceId)) actions.removeDevice(deviceId);
+      }
+      if (initialDiscoveryChanged) subs.forEach((fn) => fn());
+      return;
+    }
     // 所有设备 epoch 无条件**自增**(不 clear-to-0,见 snapshotEpoch 注释的 ABA):清空时在途
     // 首拉立即失效;下一轮 bootstrap 拿到更高 epoch,不会与清空前的 epoch 撞值把陈旧 snapshot 盖回。
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);

@@ -64,6 +64,19 @@ it('omits Reply when the composer action is unavailable', async () => {
   expect(container.querySelector('[data-testid="companion.messageReply"]')).toBeNull();
 });
 
+it.each([false, true])('copies either side directly and disables repeated copying (user=%s)', async user => {
+  const onCopy = vi.fn();
+  const props = { user, copied: false, copying: false, disabled: false, actions, onAction, onCopy };
+  await act(async () => root.render(<CompanionMessageActions {...props} />));
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="message.copyButton"]')!.click());
+  expect(onCopy).toHaveBeenCalledOnce();
+  await act(async () => root.render(<CompanionMessageActions {...props} copying />));
+  const copy = container.querySelector<HTMLButtonElement>('[data-testid="message.copyButton"]')!;
+  expect(copy.disabled).toBe(true);
+  await act(async () => copy.click());
+  expect(onCopy).toHaveBeenCalledOnce();
+});
+
 it('also removes the duplicate composer action from the fallback sheet', async () => {
   h.native = false;
   await render(false, [...actions, { id: 'add-to-chat', title: 'Add to chat' }]);

@@ -27,6 +27,10 @@ import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { MarkdownBody } from './MessageRenderer';
+import { ImageLightbox } from './ImageLightbox';
+import { lightboxImagesForPayload } from './messageGallery';
+import type { MessagePayload } from './messagePayload';
+import { isDirectPreviewableMediaUrl } from './remoteMedia';
 import { buildMessageContentLayout } from './messageContentLayout';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from './ChatIdentityHeader';
@@ -65,7 +69,14 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
   const answerLayout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, accountGeneration } = useAuth();
+  const [openMedia, setOpenMedia] = useState<Extract<MessagePayload, { kind: 'media' }> | null>(null);
+  const openPayload = useCallback((payload: MessagePayload) => {
+    if (payload.kind === 'media' && (payload.media.kind === 'image' || payload.media.kind === 'video')
+      && isDirectPreviewableMediaUrl(payload.media.url)) setOpenMedia(payload);
+  }, []);
+  useEffect(() => { setOpenMedia(null); }, [actorId, accountGeneration]);
+  const gallery = useMemo(() => openMedia ? lightboxImagesForPayload([], openMedia) : [], [openMedia]);
   const { readDeviceList } = useDeviceLink();
   const revoked = useRevokedDevices();
   const navigation = useTeammateNavigation();
@@ -230,7 +241,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
           {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>{avatar(BOT_GROUP_MESSAGE_AVATAR_SIZE)}</View>}
           <View style={styles.replyColumn}>
             {!message.text ? null : hasRichAnswer(message.text)
-              ? <MarkdownBody renderRichAnswers markdownImageCacheKey={`cloud:${actorId}:${message.id}`} layout={answerLayout} text={message.text} selectable />
+              ? <MarkdownBody renderRichAnswers markdownImageCacheKey={`cloud:${actorId}:${message.id}`} layout={answerLayout} text={message.text} selectable onOpenPayload={openPayload} />
               : <BotGroupMarkdownText content={message.text} />}
             {attachments}
           </View>
@@ -263,6 +274,8 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
       </CompanionCardActions>}
     </View>
     {timeline}
+    {openMedia ? <ImageLightbox images={gallery} initialUrl={openMedia.media.url}
+      onClose={() => setOpenMedia(null)} onResolveRemoteMedia={noRemoteMedia} /> : null}
     <View style={styles.footer} testID="cloudCompanion.composerHint">
       <Text style={styles.footerText}>{t('devices.cloudCompanion.composerHint')}</Text>
     </View>

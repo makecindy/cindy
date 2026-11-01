@@ -143,6 +143,77 @@ describe('PiRpcProcess response envelope validation', () => {
     }
   });
 
+  // 测试价值
+  // - 生产入口与结果：PiRpcProcess.request；慢恢复成功、60s 超时和迟到响应会影响启动结果。
+  // - Bug／缺口：#7740；原有 RPC 测试只验证自定义预算，未覆盖 31.3s 恢复或超时后的响应。
+  // - 最小失败输入：switch_session 在 31.3s 回应，或在 60s 截止后回应。
+  // - tier／实测耗时：unit；本文件单跑 0.66s。
+  it('accepts a startup resume response after 31.3 seconds within its absolute budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, written } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.request({ type: 'switch_session' }, { timeoutMs: 60_000 });
+      const sentFrame = JSON.parse(written[0]!.line) as { id: string };
+
+      await vi.advanceTimersByTimeAsync(31_300);
+      emitLine(JSON.stringify({
+        type: 'response', id: sentFrame.id, command: 'switch_session', success: true,
+      }));
+
+      await expect(pending).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out startup resume at 60 seconds and discards a late success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, emitLine, written } = makeFakeTransport();
+      const { proc, logger } = makeProc({ transport });
+      const pending = proc.request({ type: 'switch_session' }, { timeoutMs: 60_000 });
+      const sentFrame = JSON.parse(written[0]!.line) as { id: string };
+      const rejected = expect(pending).rejects.toEqual(expect.objectContaining({
+        name: 'PiRpcRequestTimeoutError',
+        code: 'PI_RPC_TIMEOUT',
+        commandType: 'switch_session',
+        timeoutMs: 60_000,
+      } satisfies Partial<PiRpcRequestTimeoutError>));
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await rejected;
+      emitLine(JSON.stringify({
+        type: 'response', id: sentFrame.id, command: 'switch_session', success: true,
+      }));
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('unmatched response'), expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the default timeout for ordinary RPC requests at 30 seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport } = makeFakeTransport();
+      const { proc } = makeProc({ transport });
+      const pending = proc.request({ type: 'get_state' });
+      const rejected = expect(pending).rejects.toEqual(expect.objectContaining({
+        name: 'PiRpcRequestTimeoutError',
+        code: 'PI_RPC_TIMEOUT',
+        commandType: 'get_state',
+        timeoutMs: 30_000,
+      } satisfies Partial<PiRpcRequestTimeoutError>));
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refreshes a request idle timeout on matching progress events', async () => {
     vi.useFakeTimers();
     try {

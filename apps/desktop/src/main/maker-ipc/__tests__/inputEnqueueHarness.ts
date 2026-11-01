@@ -54,7 +54,9 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
       ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
       : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
     readClaimedUiLanguage: noop,
+    readClaimedClassicalStyle: noop,
     getResolvedMainLocale: () => 'zh-CN',
+    getMainClassicalStyle: () => 'prose',
     getInputSessionRow: async () => ({ clearedAt: null }),
     getMakerIfReady: () => null,
     beginRemoteSendTrace: noop,

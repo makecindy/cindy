@@ -1,3 +1,4 @@
+import { MCP_APP_MAX_HEIGHT } from '@cindy/maker-shared/mcp-app-controller';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -38,7 +39,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
   const context = useMemo(() => ({
     platform: 'mobile', theme: mode, locale: i18n.resolvedLanguage ?? i18n.language,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    deviceCapabilities: { touch: true, hover: false }, containerDimensions: { maxHeight: 1_200 },
+    deviceCapabilities: { touch: true, hover: false }, containerDimensions: { maxHeight: MCP_APP_MAX_HEIGHT },
     styles: { variables: {
       '--color-background-primary': colors.surface, '--color-background-secondary': colors.surfaceElevated,
       '--color-text-primary': colors.textPrimary, '--color-text-secondary': colors.textSecondary,
@@ -76,7 +77,7 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
     };
   }, [open, hasHost, foreground, deviceId, sessionId, clientId, attempt, active]);
   useEffect(() => { if (!view?.closing) void view?.controller.context(context).catch(() => {}); }, [view, context]);
-  const { error, loading, height } = state;
+  const { error, loading, height, filesUnavailable } = state;
   return (
     <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       <View style={styles.header}>
@@ -87,8 +88,9 @@ function InteractiveMcpAppCard({ deviceId, sessionId, clientId, title, active = 
         </Pressable>}
       </View>
       {error && <Text style={[styles.error, { color: colors.textSecondary }]}>{t(error)}</Text>}
-      {error && fallbackText ? <Text selectable style={[styles.historyText, { color: colors.textPrimary }]}>{fallbackText}</Text> : null}
-      {!error && <View style={{ height }} onLayout={(event) => {
+      {filesUnavailable && <Text style={[styles.error, { color: colors.textSecondary }]}>{t('mcpApps.filesOnExecutionComputer')}</Text>}
+      {(error || filesUnavailable) && fallbackText ? <Text selectable style={[styles.historyText, { color: colors.textPrimary }]}>{fallbackText}</Text> : null}
+      {!error && !filesUnavailable && <View style={{ height }} onLayout={(event) => {
         width.current = event.nativeEvent.layout.width; view?.setWidth(width.current);
       }}>
         {active && foreground && view && NativeMcpAppSlot ? <NativeMcpAppSlot surfaceId={view.id} style={{ flex: 1 }} /> : null}

@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Partilhado por {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Partilha indisponível"
+  },
+  "link": {
+    "title": "Partilha de fornecedores",
+    "heading": "Abrir esta ligação num computador",
+    "body": "A partilha de fornecedores só pode ser pedida e usada em {{appName}} num computador. Envie a ligação para o seu computador e abra-a aí, ou cole-a em Definições → Fornecedores → Fornecedores partilhados comigo.",
+    "note": "As ligações de partilha expiram 5 minutos após a criação e só funcionam uma vez.",
+    "copy": "Copiar ligação de partilha",
+    "copied": "Ligação de partilha copiada",
+    "copyFailed": "Não foi possível copiar a ligação de partilha. Tente novamente dentro de momentos."
+  }
+}

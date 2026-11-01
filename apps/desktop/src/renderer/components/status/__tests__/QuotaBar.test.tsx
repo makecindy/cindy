@@ -26,8 +26,8 @@ describe('QuotaBar', () => {
   });
 
   it.each([
-    { usedPercent: 70, expected: 'normal' },
-    { usedPercent: 71, expected: 'warn' },
+    { usedPercent: 69.9, expected: 'normal' },
+    { usedPercent: 70, expected: 'warn' },
     { usedPercent: 89.9, expected: 'warn' },
     { usedPercent: 90, expected: 'crit' },
     { usedPercent: 100, expected: 'crit' },
@@ -38,8 +38,8 @@ describe('QuotaBar', () => {
   });
 
   it.each([
-    { usedPercent: 70, expected: 'normal' },
-    { usedPercent: 71, expected: 'warn' },
+    { usedPercent: 69.9, expected: 'normal' },
+    { usedPercent: 70, expected: 'warn' },
     { usedPercent: 89.9, expected: 'warn' },
     { usedPercent: 90, expected: 'crit' },
     { usedPercent: 100, expected: 'crit' },

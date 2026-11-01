@@ -1,0 +1,5 @@
+"Data source" = "データ元のコンピュータ";
+"Choose which computer this widget shows." = "このウィジェットに表示するコンピュータを選びます。";
+"Computer" = "コンピュータ";
+"Automatic" = "自動";
+"The computer that answered last" = "最後に応答したコンピュータを優先";

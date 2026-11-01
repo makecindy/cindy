@@ -291,6 +291,7 @@ export interface SlackHookMcpDeps {
 
 /** Native routine service; only caller-bound companion tools expose it to agents. */
 export interface RoutineToolService {
+  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
   list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
   sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
   save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
@@ -834,6 +835,11 @@ export interface ComputerMcpDeps {
    * screen point of this app, or its focused element. Roles only, never values.
    */
   isSecureTarget?(target: { pid: number; point?: { x: number; y: number } }): Promise<boolean>;
+  /**
+   * Host-side desktop facts the driver cannot report: whether the screen is
+   * locked. Used to name the reason when an observation produces nothing.
+   */
+  describeDesktop?(): Promise<{ screen_locked?: boolean }>;
   logger?: LiziMcpLogger;
 }
 

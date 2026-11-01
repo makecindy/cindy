@@ -357,10 +357,12 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     },
     routineModels: input.ops.has('routines.saveWithModel'),
     routineSessionModes: input.ops.has('routines.saveWithSessionMode'),
+    routineDelivery: input.ops.has('routines.saveWithDelivery'),
     routines: {
       list: (id) => invokeBotSettings(deviceId, 'routines.list', id),
       save: (id, routine, routineId) => invokeBotSettings(deviceId,
-        input.ops.has('routines.saveWithSessionMode') ? 'routines.saveWithSessionMode'
+        input.ops.has('routines.saveWithDelivery') ? 'routines.saveWithDelivery'
+          : input.ops.has('routines.saveWithSessionMode') ? 'routines.saveWithSessionMode'
           : input.ops.has('routines.saveWithModel') ? 'routines.saveWithModel' : 'routines.save',
         id, { input: routine, ...(routineId ? { id: routineId } : {}) }),
       async remove(id, routineId) {
@@ -369,6 +371,8 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
       runNow: (id, routineId) => invokeBotSettings(deviceId, 'routines.runNow', id, { id: routineId }),
       history: (id, routineId) => invokeBotSettings(deviceId, 'routines.history', id, { id: routineId }),
       sources: () => invokeBotSettings(deviceId, 'routines.sources', null),
+      deliveryTargets: (id) => input.ops.has('routines.deliveryTargets')
+        ? invokeBotSettings(deviceId, 'routines.deliveryTargets', id) : Promise.resolve([]),
       onChanged(listener) {
         routineWatchers.add(listener);
         return () => void routineWatchers.delete(listener);

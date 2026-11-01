@@ -7,6 +7,7 @@
 
 | 场景 | 要保住的行为 | 现有回归入口 |
 | --- | --- | --- |
+| 导入 Codex 历史后继续发送 | 导入时一次性把历史复制进 Cindy，之后只走实时写入，打开或翻页都不再重读原 rollout，同一回复只显示一份；旧版按需导入留下的任务首次打开时接入新导入记录，不重复写消息 | [messagesListImportSideEffects](../../apps/desktop/src/main/localDb/ipc/__tests__/messagesListImportSideEffects.test.ts) 的接入场景；[codexLocalSessions](../../apps/desktop/src/main/__tests__/codexLocalSessions.test.ts) 的分页 rollout 接管与续跑准备 |
 | 新任务创建中继续输入，创建或发送失败后回编辑 | 第一条消息立即出现；后续文字和附件留在草稿；取消、删除和迟到的回复不复活任务 | [newSessionCreation](../../apps/mobile/src/__tests__/newSessionCreation.test.ts)、[真实恢复 hook](../../apps/mobile/src/__tests__/useNewSessionDraftRecovery.test.tsx)、[创建草稿落盘](../../apps/mobile/src/__tests__/newSessionCreationPersistence.test.ts) |
 | 断线时读历史，恢复连接后补齐 | 保留已显示的历史；遗漏 push 只标记需要补读；旧查询不能覆盖新的正文和删除状态 | [remoteSessionStore](../../apps/mobile/src/__tests__/remoteSessionStore.test.ts) 中 `requests history reconciliation after a dropped push without clearing cached messages` 与消息 authority 场景；[durableOutbox](../../apps/mobile/src/__tests__/durableOutbox.test.ts) 验证重复投递和账号归属 |
 | 归档先收起，后台未成功时恢复 | 预览阶段只隐藏列表行，详情元数据与正文保留；结束旧预览不影响新操作，不复活已删除任务 | [remoteSessionStore](../../apps/mobile/src/__tests__/remoteSessionStore.test.ts) 的两个 `archive preview` 场景；覆盖 store 行为，实际错误提示与滑动动画还需页面验收 |

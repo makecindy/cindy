@@ -469,6 +469,7 @@ describe("mobile maker transport", () => {
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",
       "maker:claude-session-route:get",
+      "device-link:usage-widget:snapshot:v1",
       "maker:api-key:present",
       "maker:list-agent-commands",
       "maker:list-agent-skills",

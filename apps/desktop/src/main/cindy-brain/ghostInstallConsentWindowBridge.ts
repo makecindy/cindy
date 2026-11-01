@@ -19,9 +19,10 @@ export class GhostInstallConsentWindowBridge extends WindowConfirmationBridge<Co
     super({ ...deps, unavailableMessage: '没有可显示安装确认的窗口' });
   }
 
-  override request(target: GhostInstallConsentWindowTarget, request: Consent): Promise<boolean> {
+  override request(target: GhostInstallConsentWindowTarget, request: Consent, options: { onDecision?(confirmed: boolean): void } = {}): Promise<boolean> {
     return super.request(target, request, {
-      key: request.purpose === 'task-capability' ? request.facts.ghostId : undefined,
+      onDecision: options.onDecision,
+      key: request.purpose ? `${request.purpose}:${request.facts.ghostId}` : undefined,
     });
   }
 }

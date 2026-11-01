@@ -22,6 +22,13 @@
 > （下节 5）对**所有**触及相关路径的改动都生效，不因是存量代码而豁免。作者契约同步
 > （下节 6）在改动命中作者可见契约时触发；不要求为统一形式专项重构无关存量。
 
+MCP Apps 交互页面的 iframe 使用 `allow-scripts allow-same-origin allow-forms`。
+`allow-forms` 只让页面收到 submit 事件；页面须 `preventDefault()` 后调用工具，由 Host 执行授权请求。
+宿主前置代码在 window 冒泡阶段兜底取消默认提交，并令 `form.submit()` 不执行；整页替换后恢复监听，
+避免未处理的表单把卡片导航到 CSP 错误页。此 JS 保护不替代 CSP 权限边界。
+Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 'none'`，原生提交到任何地址均被禁止，
+不增加网络或凭证权限。依赖此行为的页面要求执行端与查看端均为 `0.1.122-beta` 或更新版本。
+
 ## 事实来源
 
 | 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
@@ -127,7 +134,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
   `tools`、`card`、`panel`、`mainView`、`taskView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
-  `preview`、`browserExtension` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
+  `preview`、`mcpApps`、`browserExtension` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
 - `browserExtension` 是宿主承接随包浏览器扩展连接的直接字段（2026-10-27 由 Cindy Chrome
   插件自带接线进程迁入宿主）：`protocol` 必须是当前宿主实现的 `cindy-browser-extension/3`，
   `extensionIds` 是允许连接的扩展 id（装入时逐条展示并钉死），可选 `nativeHost{name,binary}`
@@ -142,7 +149,18 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `browser-extension-relay` 事件转交给声明插件，插件经 `browser-extension-request` 投递作业、
   推送配对身份。不设站点名单（2026-10-30 决定：安全交给任务的权限档位与自动审核，与专用浏览器
   一致）；旧插件仍推送的 `setPolicy` 照常应答但不生效。本机与私网地址和公网网站一样可访问
-  （2026-10-28 决定）。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
+  （2026-10-28 决定）。「我的浏览器」的能力对齐专用浏览器（截图、上传、evaluate、控制台、
+  网络事件、弹窗、坐标与拖拽、resize），底线只有不打扰用户（Agent 页面开在不抢焦点的 Cindy
+  窗口、截图不切走用户正在看的标签页、resize 只动 Cindy 窗口）和防冒充；不限制 Agent 能力：
+  扩展不按字段类型拦截，密码／支付／验证码输入框与其它输入框一样可以被执行端操作，其余风险交给
+  任务权限档位与自动审核（2026-10-30 决定，共同规则见 [Browser Use](browser-use.md)）。这不放宽
+  [代输入](../product-rules/input-handoff.md)边界：登录密码、验证码等需要主人填写的值仍由
+  `ask_owner` 交给主人，主人填的值只交给宿主执行、不进模型上下文、工具结果与日志，任务权限档位和
+  自动审核不能代替这条边界。Chrome 调试接口（PDF、读 Cookie、抓包等配方）
+  按需申请可选权限：首次需要时在用户窗口打开说明页、十分钟内最多一次、用后断开，开关放
+  扩展自己的选项页，不进 Cindy 设置；新增权限不得改变 Chrome 的安装提示（`<all_urls>` 可加，
+  `tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
+  标签，保持到最后一次动作后约 20 秒。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
@@ -151,6 +169,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   但当前 Host 不展示、不授权、也不因此阻止安装或发布。
   未来 Host 识别该字段后，才按正常的能力展示和运行时守门链路启用。不能把
   未知字段猜成现有权限，也不能让它意外获得能力。
+- `mcpApps.ui` 使用 `resources[]`（作者指定唯一 `ui://` URI、包内 `file`）与按原工具名声明的标准 `_meta.ui`。资源 `file` 不透传；`domain` / `permissions` 仅校验保留，不授予权限。资源 URI 单独改名不算扩权，新增资源、页面域名或 app 可调用工具仍按安装批准规则处理。旧宿主保留未知顶层 `mcpApps`，不授权。
+  新包上传、Forge 打包和本地包安装严格校验 UI 资源文件；已存储 Release（含市场默认下发）、
+  已安装快照分享及启动读取遇到缺失、目录、链接或超过 4 MiB 的资源时，只移除运行时/确认投影的 UI，普通工具继续可用。
+  原始清单与签名/摘要不改写；Host receipt 的可选 `unavailableUiResources:true` 仅记录历史包资源无效，
+  不授予权限，不改变 receipt 版本。旧 receipt 无该字段时仍读取，并按实际文件收窄 UI。
+  分享和导出已有插件沿用存量校验；重新上传提审仍严格校验并返回具体原因。页面不可用时，模型结果仍按原批准声明移除根 `_meta`，不恢复页面授权。
 - 顶层 `showTaskPreferences?: boolean` 由每个插件在自己的 manifest 声明。
   省略或 `true` 保持该插件的卡片配置、权限限制和执行规则；`false` 隐藏该插件的 Desktop/手机卡片，
   且运行期不读取、不使用、不回写其模型、目录和权限配置。旧数据保留，重新启用后恢复。
@@ -170,6 +194,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
+- `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
+  只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
+  旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见
@@ -226,6 +253,21 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   前再次复核同一 `callId`；直连与系统代理都只能连接该次守门确认的 IP，代理不得
   重新解析插件提供的域名。选中代理不构成私网授权；无法证明由当前代理生成的 fake-IP
   仍按特殊用途／私有地址拒绝。
+- **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
+  `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
+  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的
+  `preRunPlugin`），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
+  出错处理（没装、停用、超时、崩溃、熔断）由用户按任务设置，插件不能自报；只有 receipt
+  `approvedControlPoints` 记录的节点可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
+  旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
+  静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
+  `will-start-task`（新任务选模型）是唯一能回 `route` 的节点：只在本机新任务第一条消息发出前、
+  用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
+  Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
+  可用于新任务的模型核验（档位不合法先去掉档位），不合格、超时或出错都沿用用户原选的模型。
+- **插件提供的模型（2026-11-01）**：清单 `models.types` 声明能力，列表经 `PUT /models` 运行时发布，存在插件自己的
+  `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
+  不调用插件，文案全部来自插件。`route` 模型不进执行目录。
 - 安装／更新确认只决定这次落位是否进行，不以弹窗点击作为运行期能力授权事实；
   **prompt 和前端展示都不构成运行期安全边界**。确认结论由 Main 在安装锁内按真实包复核，
   不能由 Renderer 或 Agent 自报（第 3.1 节）。
@@ -279,6 +321,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     捕获的记录 compare-and-write 清除。未安装记录上的 opt-out 无法与真实卸载区分，一律保留；
     缺清单摘要的旧记录不足以证明包身份，也保留；记录在对账期间被并发卸载改变则不清除。修复
     逻辑幂等，不新增账本字段或持久标记。仍有 opt-out 的服务端插件扩权更新必须确认。
+    **交互页面同样随下发方静默授予**：合法默认首装、组织接管、同源更新和仍具默认资格的恢复，
+    在真实包的安装批准事务中一并写入 `uiCapabilityApproved`，不另弹页面确认、不出待确认提示条。
+    旧 Host 安装缺该事实时，只有当前默认资格、来源账本、已批准实例与包身份均匹配，才通过
+    同一市场更新事务重新校验当前 Release 并补齐；保留启停态和同来源数据。落位前复核 owner、
+    实例、批准 revision 与退订资格。没有有效安装 receipt 的后台恢复仍拒绝。
+    普通市场手动安装、自定义市场、本地 `.cindy`、Forge 以及已失去默认资格的插件仍走原确认流程；
+    市场审核结果、展示 manifest 或内置种子身份不能替代服务端默认下发资格。实现与真实 receipt
+    组合回归见 `main/plugin-market/service.ts`、`main/cindy-brain/ghostInstallConsent.ts` 及对应测试。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
   任一来源账本文件存在却损坏时，读写都必须拒绝，不得把其它来源的记录当成完整视图重写并覆盖损坏文件。
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
@@ -436,6 +486,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
   未命中目标 host 的托管凭证。
+- 沙箱 `cindy.fetch` 可由 Host 附加《Cindy MCP Apps 页面生成手册》的 `Cindy-MCP-Apps-Manual` /
+  `Cindy-MCP-Apps-Manual-Sha256` 请求头（`mcpAppsManualHeaders.ts`）：缺省仅当 callId 对应的在途工具在
+  `mcpApps.ui.tools` 中对模型可见时带上，`mcpAppsManual: true | false` 显式覆盖。它不是凭证，但与凭证头同样
+  逐跳只发往 `network.hosts` / 连接地址中已声明的主机，插件自带的同名头（不区分大小写）一律剥除；版本无关
+  （0.0.0）或找不到内置手册时不带。Node 工作进程的请求不带，只剥除同名头。
 - `source: "gh-cli"` 是只为官方 `cindy-github` 保留的宿主凭证来源：Host 优先读取
   本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
   均只在 Main 的 networkSlot 或受信本机账号检查中注入 `api.github.com` 的
@@ -576,6 +631,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
   再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
   TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
+- 对话文件交接：目标工具参数表把保留参数 `cindy_handoff_files` 声明为数组时，`ghost_call.attachments`
+  里的本地非媒体文件不进媒体仓，由 Host 存一份副本到 `owners/<账号>/ghost-handoff/<实例键>/`，
+  插件只收到 `handoff:<uuid>` 引用（`args.cindy_handoff_files`），未声明的工具行为不变。
+  该参数只由 Host 注入，模型或页面自带的同名值一律剥除。限额与配额（4 个／64 MiB／128 MiB；
+  每实例 512 MiB／200 个）在弹卡前判定；确认沿用附件两层策略（lane=`handoff`，不做目录会话
+  记忆，自动放行不写人工授权），落盘的是裁决前读入的字节。副本只能经 `upload.handoff` 出网（按交出时的大小有界读取，文件被改长或改短即拒绝），
+  或由本卡页面经签发的只读地址读取；插件不能读取字节或删除副本。副本连续 7 天未使用后由 Host 删除
+  （签发页面地址、页面读取、上传成功算使用，同一副本每小时最多续期写盘一次；`expiresAt` 是当前到期时间、
+  会顺延，不是固定截止时间；访问时、启动后延迟及切换账号时清理），用户可在插件详情页逐个删除，或在访达／资源管理器中打开副本目录（按清理后的原文件名存放）；卸载删除、换源随
+  归档实例键搬走（副本已落盘、派发未结束时换源等待；换源期间新的交接直接报错）。Node 工作进程不开放。回归见 `handoffStore.test.ts` 与 `ghostWorkdirGate.test.ts`。
 - 媒体模型接入分成两层：插件声明并封装业务能力，Cindy Core 提供低级目录和调用能力。
   插件设置页／panel 只能通过同源只读 `/media-models?type=image|video` 配置模型；Host 按
   Gateway `mode` 切图片／视频大类，并结合插件 `cindy.image/video` 声明、Gateway
@@ -775,7 +840,12 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 技能随应用内置 bundle 升级，不另建安装或权限流程。
 `forgeGuide.ts` 从这些 Markdown 构造兼容的 `FORGE_GUIDE`，供旧 `ghost_forge_guide`
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。
+修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+（`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
+[`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
+手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的
+`build-info.json` 读取版本号、区域与发版提交；开发版（0.0.0）没有发布的手册。客户端在 `cindy.fetch` 中自动带手册地址（见第 4 节）后，每个发版版本、每个区域都
+必须发布，否则该版本带出去的地址会 404，因此带地址的客户端上线前要先把发布接进发版流程。
 **手册过期 = AI 按旧规则写出过不了校验的插件包**（校验拒装只是兜底，用户体验是“AI
 反复打包反复被拒”）。
 

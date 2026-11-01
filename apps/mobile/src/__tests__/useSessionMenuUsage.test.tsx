@@ -284,7 +284,7 @@ describe("menu usage with a remote Agent account", () => {
     expect(value().estimate?.amount).toBe(12);
     expect(agent.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
     expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
-    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a");
+    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a", { includeBreakdown: true });
     expect(agent.getSessionEstimatedValue).not.toHaveBeenCalled();
   });
 

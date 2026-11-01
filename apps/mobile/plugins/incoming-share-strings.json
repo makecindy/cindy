@@ -1,4 +1,49 @@
 {
+  "es": {
+    "receivedTitle": "Contenido recibido",
+    "receivedMessage": "Abre Cindy manualmente para continuar.",
+    "failedTitle": "No se pudo recibir el contenido compartido",
+    "failedMessage": "Vuelve a compartirlo desde la aplicación de origen.",
+    "done": "Cerrar ventana de compartir",
+    "tooManyTitle": "Demasiados elementos",
+    "tooManyMessage": "Puedes compartir hasta 20 elementos a la vez. Vuelve a la aplicación de origen y selecciona menos elementos."
+  },
+  "fr": {
+    "receivedTitle": "Contenu reçu",
+    "receivedMessage": "Ouvrez Cindy manuellement pour continuer.",
+    "failedTitle": "Impossible de recevoir ce partage",
+    "failedMessage": "Réessayez de partager depuis l’application d’origine.",
+    "done": "Fermer le partage",
+    "tooManyTitle": "Trop d’éléments",
+    "tooManyMessage": "Vous pouvez partager jusqu’à 20 éléments à la fois. Revenez à l’application d’origine et sélectionnez moins d’éléments."
+  },
+  "de": {
+    "receivedTitle": "Inhalt empfangen",
+    "receivedMessage": "Öffne Cindy manuell, um fortzufahren.",
+    "failedTitle": "Geteilter Inhalt konnte nicht empfangen werden",
+    "failedMessage": "Teile den Inhalt erneut aus der ursprünglichen App.",
+    "done": "Teilen schließen",
+    "tooManyTitle": "Zu viele Elemente",
+    "tooManyMessage": "Du kannst bis zu 20 Elemente gleichzeitig teilen. Kehre zur ursprünglichen App zurück und wähle weniger Elemente aus."
+  },
+  "pt-PT": {
+    "receivedTitle": "Conteúdo recebido",
+    "receivedMessage": "Abra o Cindy manualmente para continuar.",
+    "failedTitle": "Não foi possível receber a partilha",
+    "failedMessage": "Tente partilhar novamente a partir da aplicação de origem.",
+    "done": "Fechar partilha",
+    "tooManyTitle": "Demasiados itens",
+    "tooManyMessage": "Pode partilhar até 20 itens de cada vez. Volte à aplicação de origem e selecione menos itens."
+  },
+  "pt-BR": {
+    "receivedTitle": "Conteúdo recebido",
+    "receivedMessage": "Abra o Cindy manualmente para continuar.",
+    "failedTitle": "Não foi possível receber o compartilhamento",
+    "failedMessage": "Tente compartilhar novamente a partir do aplicativo de origem.",
+    "done": "Fechar compartilhamento",
+    "tooManyTitle": "Itens demais",
+    "tooManyMessage": "Você pode compartilhar até 20 itens por vez. Volte ao aplicativo de origem e selecione menos itens."
+  },
   "en": {
     "receivedTitle": "Content received",
     "receivedMessage": "Open Cindy manually to continue.",

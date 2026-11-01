@@ -29,6 +29,7 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
+import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -1948,7 +1949,7 @@ async function requestProviderHttpText(input: {
         method: 'POST',
         signal: controller.signal,
         headers: {
-          ...(target.headers ?? {}),
+          ...withProviderAppAttribution(target.endpoint, target.headers),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),

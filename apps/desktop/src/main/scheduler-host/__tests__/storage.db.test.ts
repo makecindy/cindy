@@ -158,6 +158,8 @@ const SCHEDULER_DDL = [
       silent_when_idle INTEGER NOT NULL DEFAULT 0,
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
+      pre_run_plugin_id TEXT,
+      pre_run_plugin_on_failure TEXT,
       skip_log_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       notify_desktop INTEGER NOT NULL DEFAULT 1,
       notify_feishu INTEGER NOT NULL DEFAULT 0,
