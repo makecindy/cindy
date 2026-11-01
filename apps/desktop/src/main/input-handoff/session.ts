@@ -1009,7 +1009,10 @@ export class InputHandoffSession {
 
   /** Waiting on a form nobody has started answering through the card, so the window is the only news. */
   private watching(): boolean {
-    if (this.ended || this.busy || this.phase !== 'ready' || this.holder || this.qrState || !this.target) return false;
+    if (this.ended || this.busy || this.phase !== 'ready' || this.qrState || !this.target) return false;
+    // Another device holding the card is answering a form, whose fields must not change under it; a sign-in on
+    // the window has no form to protect, so taking it over does not stop the watching.
+    if (this.holder && !this.directSignInOffered()) return false;
     if (this.picture) return !this.pictureChosen;
     return !!this.step && actionable(this.step) && !this.step.deviceCode;
   }

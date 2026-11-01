@@ -439,8 +439,19 @@ describe('a waiting card watching its window', () => {
     run.session.cancel();
   });
 
-  it('stays out of the way while the owner is answering through the form', async () => {
+  it('keeps following a sign-in on the window after another device took the card over', async () => {
     const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected' });
+  });
+
+  it('stays out of the way while the owner is answering through the form', async () => {
+    const { driver, state } = desktop('address');
     const run = start(driver);
     await run.session.start();
     await run.session.decide(
