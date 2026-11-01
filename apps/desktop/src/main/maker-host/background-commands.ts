@@ -36,7 +36,7 @@ export const BACKGROUND_COMMAND_LOG_CAP_BYTES = 5 * 1024 * 1024;
 const TAIL_CAP_BYTES = 64 * 1024;
 /** 完成报告注入撞上排队暂停/快照未恢复时的重试间隔与次数(与 runner 顺延同量级)。 */
 const REPORT_RETRY_DELAY_MS = 60_000;
-const REPORT_RETRY_MAX = 10;
+const REPORT_RETRY_MAX_DELAY_MS = 300_000;
 /** 日志保留天数;过期文件在服务使用时清理(报告可能已消费,磁盘不应无限涨)。 */
 const LOG_RETENTION_DAYS = 14;
 /** exit 后等 pipe 收尾的宽限;shell 后代可能长期持有 pipe,不能等它们 EOF。 */
@@ -66,6 +66,10 @@ export interface BackgroundCommandServiceDeps {
   ) => Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
   /** 日志目录按当前账号解析(owner 隔离);每次 start 时现取,账号切换后落到新目录。 */
   resolveLogDir: () => string;
+  /** 报告 retry 首次间隔;仅测试注入,生产默认 60s 指数退避、封顶 5min。 */
+  reportRetryDelayMs?: number;
+  /** 报告 retry 间隔封顶;仅测试注入,与首间隔配套用。 */
+  reportRetryMaxDelayMs?: number;
   logger: {
     info?(message: string, data?: unknown): void;
     warn?(message: string, data?: unknown): void;
@@ -177,14 +181,14 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         return;
       }
       if (result && 'retry' in result) {
-        if (attempts > REPORT_RETRY_MAX) {
-          deps.logger.warn?.('[background-command] report delivery gave up after retries', {
-            runId: params.runId,
-            attempts,
-          });
-          return;
-        }
-        const timer = setTimeout(() => void attempt(), REPORT_RETRY_DELAY_MS);
+        // retry 是等待型(队列未恢复/用户暂停,只有用户显式操作解除):不按次数
+        // 放弃——旧上限 10 分钟会把暂停超时的完成报告永久丢掉。任务被删/归档
+        // 时 enqueueReport 会 throw,走上方的放弃分支,这里不会空转。60s 起步
+        // 指数退避、封顶 5min,避免长时间暂停时空转刷调用。
+        const base = deps.reportRetryDelayMs ?? REPORT_RETRY_DELAY_MS;
+        const cap = deps.reportRetryMaxDelayMs ?? REPORT_RETRY_MAX_DELAY_MS;
+        const delay = Math.min(base * 2 ** (attempts - 1), cap);
+        const timer = setTimeout(() => void attempt(), delay);
         timer.unref?.();
       }
     };

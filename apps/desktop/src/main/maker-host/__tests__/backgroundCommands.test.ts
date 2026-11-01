@@ -39,12 +39,21 @@ afterEach(async () => {
   await rm(logDir, { recursive: true, force: true });
 });
 
-function buildService(capture: ReturnType<typeof vi.fn>, resolveLogDir?: () => string) {
+function buildService(
+  capture: ReturnType<typeof vi.fn>,
+  resolveLogDir?: () => string,
+  depsOverride?: Partial<BackgroundCommandServiceDeps>,
+) {
+  // 用例自带实现时不覆盖(如 retry 序列);裸 vi.fn() 才兑默认成功实现。
+  if (capture.getMockImplementation() === undefined) {
+    capture.mockImplementation(async () => ({ clientId: 'c1' }));
+  }
   const deps: BackgroundCommandServiceDeps = {
     // 排队桥的最小形状:成功受理即返 clientId。
-    enqueueReport: capture.mockImplementation(async () => ({ clientId: 'c1' })),
+    enqueueReport: capture,
     resolveLogDir: resolveLogDir ?? (() => logDir),
     logger: noopLogger,
+    ...depsOverride,
   };
   return createBackgroundCommandService(deps);
 }
@@ -88,6 +97,31 @@ it('命令退出后回注一次完成报告:退出码、日志尾部、scheduler
   if (process.platform !== 'win32') {
     await vi.waitFor(() => expect(service.runningCount()).toBe(0), { timeout: 10_000 });
   }
+});
+
+it('队列暂停 retry 不按次数丢弃:退避轮询直到投递成功', async () => {
+  // 前 12 次返回 retry(超过旧上限 10 次 = 暂停超 10 分钟),之后恢复受理:
+  // 回归 Greptile P1——暂停中的队列会持续 retry,报告必须等恢复后投出去。
+  // 注入恒定 1ms 间隔(首间隔与封顶配套),13 次调用总真实等待 <100ms。
+  let calls = 0;
+  const capture = vi.fn(async () => {
+    calls += 1;
+    return calls <= 12 ? ({ retry: true } as const) : { clientId: 'c1' };
+  });
+  const service = buildService(capture, undefined, {
+    reportRetryDelayMs: 1,
+    reportRetryMaxDelayMs: 1,
+  });
+  const result = service.start({
+    sessionId: 'sess-1',
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    cwd: logDir,
+  });
+  expect(result.ok).toBe(true);
+  await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(13), { timeout: 10_000 });
+  const last = capture.mock.settledResults[12];
+  expect(last.type).toBe('fulfilled');
+  expect((last.value as { clientId?: string }).clientId).toBe('c1');
 });
 
 it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
