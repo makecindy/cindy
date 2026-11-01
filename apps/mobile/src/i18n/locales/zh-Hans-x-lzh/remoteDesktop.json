@@ -6,6 +6,7 @@
   "skin_compact": "窄边古式",
   "skin_edge": "极简大屏",
   "skin_modern": "今式",
+  "skin_keyboard": "键盘",
   "nextSkin": "次一外观",
   "retroSkin": "古风",
   "modernSkin": "今式",
@@ -183,5 +184,11 @@
   "hostMuteFailed": "远方之机之静音无从改",
   "handoffEnded": "此番代书已终，无可示之窗口。",
   "handoffUnavailable": "此机暂不能唯示此窗。请于彼机更新 Cindy，或启远程桌面。",
-  "handoffWindow": "代书 · {{app}}"
+  "handoffWindow": "代书 · {{app}}",
+  "keyUndo": "撤",
+  "keyRedo": "复",
+  "keyAppWindows": "诸窗",
+  "keySearch": "寻",
+  "keyTaskView": "诸务",
+  "keySpace": "空格"
 }

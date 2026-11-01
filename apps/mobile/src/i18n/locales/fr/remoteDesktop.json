@@ -6,6 +6,7 @@
   "skin_compact": "Classique fin",
   "skin_edge": "Rétro plein écran",
   "skin_modern": "Moderne",
+  "skin_keyboard": "Clavier",
   "nextSkin": "Apparence suivante",
   "retroSkin": "Rétro",
   "modernSkin": "Moderne",
@@ -184,5 +185,11 @@
   "handoffEnded": "Ce transfert de saisie est déjà terminé ; il n'y a donc aucune fenêtre à afficher.",
   "handoffUnavailable": "Cet ordinateur ne peut pas afficher uniquement cette fenêtre. Mettez-y Cindy à jour, ou activez-y le bureau à distance.",
   "handoffWindow": "Transfert de saisie · {{app}}",
-  "idleMinutes_many": "{{count}} minutes"
+  "idleMinutes_many": "{{count}} minutes",
+  "keyUndo": "Annuler",
+  "keyRedo": "Rétablir",
+  "keyAppWindows": "Fenêtres de l’app",
+  "keySearch": "Rechercher",
+  "keyTaskView": "Vue des tâches",
+  "keySpace": "Espace"
 }

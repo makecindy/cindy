@@ -6,6 +6,7 @@
   "skin_compact": "Clásico delgado",
   "skin_edge": "retro en pantalla completa",
   "skin_modern": "moderno",
+  "skin_keyboard": "Teclado",
   "nextSkin": "Próxima aparición",
   "retroSkin": "Retro",
   "modernSkin": "moderno",
@@ -184,5 +185,11 @@
   "handoffEnded": "Esta transferencia de entrada ya finalizó, por lo que no hay ninguna ventana para mostrar.",
   "handoffUnavailable": "Esta computadora no puede mostrar solo esta ventana. Actualice Cindy o active el escritorio remoto allí.",
   "handoffWindow": "Transferencia de entrada · {{app}}",
-  "idleMinutes_many": "minutos {{count}}"
+  "idleMinutes_many": "minutos {{count}}",
+  "keyUndo": "Deshacer",
+  "keyRedo": "Rehacer",
+  "keyAppWindows": "Ventanas de la app",
+  "keySearch": "Buscar",
+  "keyTaskView": "Vista de tareas",
+  "keySpace": "Espacio"
 }

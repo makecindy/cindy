@@ -6,6 +6,7 @@
   "skin_compact": "窄邊經典",
   "skin_edge": "極簡大螢幕",
   "skin_modern": "現代",
+  "skin_keyboard": "鍵盤",
   "nextSkin": "下一個外觀",
   "retroSkin": "復古",
   "modernSkin": "現代",
@@ -183,5 +184,11 @@
   "hostMuteFailed": "無法修改遠端電腦的靜音狀態",
   "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
   "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
-  "handoffWindow": "代輸入 · {{app}}"
+  "handoffWindow": "代輸入 · {{app}}",
+  "keyUndo": "還原",
+  "keyRedo": "重做",
+  "keyAppWindows": "應用程式視窗",
+  "keySearch": "搜尋",
+  "keyTaskView": "工作檢視",
+  "keySpace": "空白鍵"
 }

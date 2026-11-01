@@ -2,12 +2,14 @@ import { deviceDisplayName } from "@/device-link/deviceName";
 import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
+import { FoldDesktopKeyboard } from "./FoldDesktopKeyboard";
 import { FoldTouchpad } from "./FoldTouchpad";
 import {
   FoldDesktopBezel,
   FoldDesktopDeck,
   FoldDesktopKeycap,
   FoldDesktopSkinSwitch,
+  DEFAULT_FOLD_DESKTOP_SKIN,
   retroDesktopViewport,
   foldDesktopSkinColors,
   type FoldDesktopSkin,
@@ -577,14 +579,27 @@ export function RemoteDesktopSession({
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
+  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>(
+    DEFAULT_FOLD_DESKTOP_SKIN,
+  );
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
     foldSkin !== "modern" &&
+    foldSkin !== "keyboard" &&
     frameReady &&
     !keyboard &&
     !operations;
+  const keyboardDeck =
+    foldSkinAvailable &&
+    foldSkin === "keyboard" &&
+    frameReady &&
+    focused &&
+    !keyboard &&
+    !operations;
+  // The deck replaces the toolbar and, like hardware skins, covers the lower
+  // half up to the seam; only its interactive content stays in the safe region.
+  const physicalDeck = retroDesktop || keyboardDeck;
   const viewerColors = retroDesktop ? darkColors : colors;
   // Artwork covers both physical halves, including the division and system
   // reservations. Only interactive content is constrained to the safe regions.
@@ -3304,6 +3319,122 @@ export function RemoteDesktopSession({
       </Text>
     </Pressable>
   );
+  const openWindows = () => {
+    if (caps?.windowActions) {
+      setOperations(false);
+      Keyboard.dismiss();
+      setKeyboard(false);
+      setWindowsOpen(true);
+      return;
+    }
+    shortcut(
+      caps?.platform === "darwin"
+        ? ["ControlLeft", "ArrowUp"]
+        : ["MetaLeft", "Tab"],
+    );
+  };
+  const showDesktop = () =>
+    caps?.windowActions && lease && canInput
+      ? void request({
+          op: "windowAction",
+          action: "desktop",
+          lease: lease.lease,
+        }).catch(() =>
+          Alert.alert(
+            t("remoteDesktop.showDesktop"),
+            t("remoteDesktop.settingFailed"),
+          ),
+        )
+      : shortcut(
+          caps?.platform === "darwin" ? ["F11"] : ["MetaLeft", "KeyD"],
+        );
+  const toggleOperations = () => {
+    Keyboard.dismiss();
+    setKeyboard(false);
+    send({ type: "events", events: [{ kind: "release" }] });
+    setOperations(!operations);
+  };
+  const foldKeyInputAllowed = () =>
+    inputAllowed(Boolean(active.current?.controlling));
+  const openFoldInputMethod = () => {
+    setOperations(false);
+    setKeyboard(true);
+    selectKeyboardMode(false);
+  };
+  const foldUndo = () =>
+    shortcut([caps?.platform === "darwin" ? "MetaLeft" : "ControlLeft", "KeyZ"]);
+  const foldRedo = () =>
+    shortcut(
+      caps?.platform === "darwin"
+        ? ["MetaLeft", "ShiftLeft", "KeyZ"]
+        : ["ControlLeft", "KeyY"],
+    );
+  // Desktop-level shortcuts cannot reach anything in a single-window handoff.
+  const foldSystemActions = handoff
+    ? []
+    : caps?.workspaceNavigation
+      ? [
+          ...(caps.omarchyMenu
+            ? [
+                {
+                  id: "omarchyMenu",
+                  label: t("remoteDesktop.omarchyMenu"),
+                  press: () => workspaceAction("omarchyMenu"),
+                },
+              ]
+            : []),
+          {
+            id: "workspaceLeft",
+            label: t("remoteDesktop.workspaceLeft"),
+            press: () => workspaceAction("workspaceLeft"),
+          },
+          {
+            id: "workspaceRight",
+            label: t("remoteDesktop.workspaceRight"),
+            press: () => workspaceAction("workspaceRight"),
+          },
+        ]
+      : caps?.platform === "darwin"
+        ? [
+            {
+              id: "spotlight",
+              label: "Spotlight",
+              press: () => shortcut(["MetaLeft", "Space"]),
+            },
+            {
+              id: "missionControl",
+              label: "Mission Control",
+              press: () => shortcut(["ControlLeft", "ArrowUp"]),
+            },
+            {
+              id: "appWindows",
+              label: t("remoteDesktop.keyAppWindows"),
+              press: () => shortcut(["ControlLeft", "ArrowDown"]),
+            },
+          ]
+        : [
+            {
+              id: "search",
+              label: t("remoteDesktop.keySearch"),
+              press: () =>
+                shortcut(
+                  caps?.platform === "win32"
+                    ? ["MetaLeft", "KeyS"]
+                    : ["MetaLeft"],
+                ),
+            },
+            {
+              id: "taskView",
+              label: t("remoteDesktop.keyTaskView"),
+              press: () => shortcut(["MetaLeft", "Tab"]),
+            },
+          ];
+  const foldDeckInsets = {
+    top: Math.max(0, foldControls.y - hardwareControls.y),
+    bottom: Math.max(0, geometry.height - foldControls.y - foldControls.height),
+    left: foldControls.x,
+    right: Math.max(0, geometry.width - foldControls.x - foldControls.width),
+  };
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
     heldKeys.current.clear();
@@ -3659,6 +3790,12 @@ export function RemoteDesktopSession({
                   <RemoteDesktopDisconnect onPress={() => void leave()} />
                 }
               >
+                {foldSkinAvailable && controlPage === "controls" ? (
+                  <FoldDesktopSkinSwitch
+                    skin={foldSkin}
+                    onChange={setFoldSkin}
+                  />
+                ) : null}
                 <RemoteDesktopControls
                   page={controlPage}
                   onPage={setControlPage}
@@ -3757,36 +3894,50 @@ export function RemoteDesktopSession({
             testID="remoteDesktop.foldControls"
             style={{
               position: "absolute",
-              left: retroDesktop ? hardwareControls.x : foldControls.x,
-              top: retroDesktop ? hardwareControls.y : foldControls.y,
-              width: retroDesktop ? hardwareControls.width : foldControls.width,
-              height: retroDesktop
+              left: physicalDeck ? hardwareControls.x : foldControls.x,
+              top: physicalDeck ? hardwareControls.y : foldControls.y,
+              width: physicalDeck ? hardwareControls.width : foldControls.width,
+              height: physicalDeck
                 ? hardwareControls.height
                 : foldControls.height,
-              paddingBottom: retroDesktop
+              paddingBottom: physicalDeck
                 ? 0
                 : toolbarSize.height + (showMouseButtons ? 80 : 0),
             }}
           >
-            {retroDesktop ? (
+            {keyboardDeck ? (
+              <FoldDesktopKeyboard
+                platform={caps?.platform}
+                enabled={canInput}
+                allowInput={foldKeyInputAllowed}
+                send={send}
+                systemActions={foldSystemActions}
+                undo={foldUndo}
+                redo={foldRedo}
+                keyLabel={keyLabel}
+                onInputMethod={openFoldInputMethod}
+                onWindows={openWindows}
+                onDesktop={showDesktop}
+                onOperations={toggleOperations}
+                windowOnly={Boolean(handoff)}
+                clipboard={
+                  <RemoteDesktopClipboardButton
+                    enabled={!connectionPending && canInput}
+                    supported={caps?.clipboardText === true}
+                    transfer={transferClipboard}
+                  />
+                }
+                safeInsets={foldDeckInsets}
+                bottomReserve={showMouseButtons ? 80 : 0}
+              />
+            ) : retroDesktop ? (
               <FoldDesktopDeck
                 renderKey={(code) => heldKey(code, true)}
                 send={send}
                 enabled={canInput}
                 skin={foldSkin}
                 onChange={setFoldSkin}
-                safeInsets={{
-                  top: Math.max(0, foldControls.y - hardwareControls.y),
-                  bottom: Math.max(
-                    0,
-                    geometry.height - foldControls.y - foldControls.height,
-                  ),
-                  left: foldControls.x,
-                  right: Math.max(
-                    0,
-                    geometry.width - foldControls.x - foldControls.width,
-                  ),
-                }}
+                safeInsets={foldDeckInsets}
                 bottomReserve={toolbarSize.height + (showMouseButtons ? 80 : 0)}
               />
             ) : (
@@ -3808,7 +3959,7 @@ export function RemoteDesktopSession({
             {showMouseButtons && canInput ? (
               <RemoteDesktopMouseControls
                 send={send}
-                bottom={toolbarSize.height}
+                bottom={keyboardDeck ? 0 : toolbarSize.height}
                 right={0}
                 compact
                 labels={{
@@ -3820,7 +3971,7 @@ export function RemoteDesktopSession({
             ) : null}
           </View>
         ) : null}
-        {!keyboard && (
+        {!keyboard && !keyboardDeck && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
             testID="remoteDesktop.toolbarPosition"
@@ -3914,38 +4065,8 @@ export function RemoteDesktopSession({
               canControl={canInput}
               keyboard={keyboard}
               operations={operations}
-              onWindows={() => {
-                if (caps?.windowActions) {
-                  setOperations(false);
-                  Keyboard.dismiss();
-                  setKeyboard(false);
-                  setWindowsOpen(true);
-                  return;
-                }
-                shortcut(
-                  caps?.platform === "darwin"
-                    ? ["ControlLeft", "ArrowUp"]
-                    : ["MetaLeft", "Tab"],
-                );
-              }}
-              onDesktop={() =>
-                caps?.windowActions && lease && canInput
-                  ? void request({
-                      op: "windowAction",
-                      action: "desktop",
-                      lease: lease.lease,
-                    }).catch(() =>
-                      Alert.alert(
-                        t("remoteDesktop.showDesktop"),
-                        t("remoteDesktop.settingFailed"),
-                      ),
-                    )
-                  : shortcut(
-                      caps?.platform === "darwin"
-                        ? ["F11"]
-                        : ["MetaLeft", "KeyD"],
-                    )
-              }
+              onWindows={openWindows}
+              onDesktop={showDesktop}
               onKeyboard={() => {
                 setOperations(false);
                 if (keyboard) {
@@ -3954,12 +4075,7 @@ export function RemoteDesktopSession({
                 }
                 setKeyboard(!keyboard);
               }}
-              onOperations={() => {
-                Keyboard.dismiss();
-                setKeyboard(false);
-                send({ type: "events", events: [{ kind: "release" }] });
-                setOperations(!operations);
-              }}
+              onOperations={toggleOperations}
             />
           </Animated.View>
         )}

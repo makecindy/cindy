@@ -6,6 +6,7 @@
   "skin_compact": "Schlank klassisch",
   "skin_edge": "Vollbild-Retro",
   "skin_modern": "Modern",
+  "skin_keyboard": "Tastatur",
   "nextSkin": "Nächstes Design",
   "retroSkin": "Retro",
   "modernSkin": "Modern",
@@ -183,5 +184,11 @@
   "hostMuteFailed": "Die Stummschaltung des Remotecomputers konnte nicht geändert werden",
   "handoffEnded": "Diese Eingabeübergabe ist bereits abgeschlossen. Es gibt kein Fenster mehr zum Anzeigen.",
   "handoffUnavailable": "Dieser Computer kann nicht nur dieses Fenster anzeigen. Aktualisiere Cindy darauf oder aktiviere dort den Remotedesktop.",
-  "handoffWindow": "Eingabeübergabe · {{app}}"
+  "handoffWindow": "Eingabeübergabe · {{app}}",
+  "keyUndo": "Widerrufen",
+  "keyRedo": "Wiederholen",
+  "keyAppWindows": "App-Fenster",
+  "keySearch": "Suchen",
+  "keyTaskView": "Aufgabenansicht",
+  "keySpace": "Leertaste"
 }

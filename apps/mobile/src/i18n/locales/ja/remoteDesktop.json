@@ -6,6 +6,7 @@
   "skin_compact": "スリムクラシック",
   "skin_edge": "大画面レトロ",
   "skin_modern": "モダン",
+  "skin_keyboard": "キーボード",
   "nextSkin": "次の外観",
   "retroSkin": "レトロ",
   "modernSkin": "モダン",
@@ -183,5 +184,11 @@
   "hostMuteFailed": "リモートのパソコンのミュート状態を変更できません",
   "handoffEnded": "この代理入力はすでに終了しているため、表示するウィンドウがありません。",
   "handoffUnavailable": "このコンピュータではこのウィンドウだけを表示できません。そのコンピュータで Cindy を更新するか、リモートデスクトップをオンにしてください。",
-  "handoffWindow": "代理入力 · {{app}}"
+  "handoffWindow": "代理入力 · {{app}}",
+  "keyUndo": "取り消す",
+  "keyRedo": "やり直す",
+  "keyAppWindows": "アプリウインドウ",
+  "keySearch": "検索",
+  "keyTaskView": "タスクビュー",
+  "keySpace": "スペース"
 }

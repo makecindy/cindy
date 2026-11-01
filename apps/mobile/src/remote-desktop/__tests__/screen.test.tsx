@@ -296,6 +296,15 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  ArrowBigUp: () => null,
+  ArrowBigUpDash: () => null,
+  ArrowRightToLine: () => null,
+  ChevronUp: () => null,
+  Command: () => null,
+  CornerDownLeft: () => null,
+  Delete: () => null,
+  Ellipsis: () => null,
+  Option: () => null,
   createLucideIcon: () => () => null,
   Clipboard: () => null,
   ArrowLeft: () => null,
@@ -5617,21 +5626,58 @@ describe("remote desktop controls", () => {
     const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
     const starts = requests().filter((r) => r.op === "start").length;
     const stops = requests().filter((r) => r.op === "stop").length;
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
-    expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
-    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
-    act(() => letter.onPressOut());
-    expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
+    const deck = '[data-testid="remoteDesktop.foldKeyboard"]';
+    expect(host.querySelector(deck)).not.toBeNull();
+    act(() => fixture.views["remoteDesktop.foldKeys"].onLayout({
+      nativeEvent: { layout: { width: 680, height: 260 } },
+    }));
+    const keys = fixture.views["remoteDesktop.foldKeys"];
+    const keyCenter = (id: string) => {
+      const style = Object.assign({}, ...fixture.views[`remoteDesktop.foldKey.${id}`].style.flat(Infinity).filter(Boolean));
+      return { pageX: style.left + style.width / 2, pageY: style.top + style.height / 2 };
+    };
+    // Unit: Android reports a second finger against the first finger's view,
+    // so these touches reach the shared surface and are placed by coordinates.
+    const touch = (identifier: number, id: string) => ({ nativeEvent: { identifier, ...keyCenter(id) } });
+    act(() => keys.onTouchStart(touch(1, "MetaLeft.left")));
+    act(() => keys.onTouchStart(touch(2, "KeyC")));
+    expect(sent().filter((m) => m.type === "events").at(-1)).toEqual({
+      type: "events",
+      events: [{ kind: "key", code: "MetaLeft", down: true }, { kind: "key", code: "KeyC", down: true }],
+    });
+    act(() => keys.onTouchEnd(touch(2, "KeyC")));
+    act(() => keys.onTouchEnd(touch(1, "MetaLeft.left")));
+    expect(sent().filter((m) => m.type === "events").at(-1)).toEqual({
+      type: "events",
+      events: [{ kind: "key", code: "MetaLeft", down: false }],
+    });
+    // Unit: function-row shortcuts run when the finger lifts.
+    act(() => keys.onTouchStart(touch(3, "undo")));
+    act(() => keys.onTouchEnd(touch(3, "undo")));
+    expect(sent().filter((m) => m.type === "events").at(-1)).toEqual({
+      type: "events",
+      events: [
+        { kind: "key", code: "MetaLeft", down: true },
+        { kind: "key", code: "KeyZ", down: true },
+        { kind: "key", code: "KeyZ", down: false },
+        { kind: "key", code: "MetaLeft", down: false },
+      ],
+    });
     // Android IME resizes the window instead of adding an iOS keyboard inset.
     fixture.size = { width: 700, height: 550 };
     render({ ...geometry, ...fixture.size });
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(host.querySelector(deck)).toBeNull();
     fixture.size = { width: 700, height: 900 };
     render(geometry);
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(host.querySelector(deck)).not.toBeNull();
+    // Unit: the keyboard key hands off to the phone's input method.
+    const reopened = fixture.views["remoteDesktop.foldKeys"];
+    act(() => reopened.onTouchStart(touch(4, "inputMethod")));
+    act(() => reopened.onTouchEnd(touch(4, "inputMethod")));
+    expect(host.querySelector(deck)).toBeNull();
+    expect(host.querySelector('[data-testid="remoteDesktop.keyboardPanel"]')).not.toBeNull();
     render({ ...geometry, regions: [] });
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(host.querySelector(deck)).toBeNull();
     expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
     expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
@@ -5750,6 +5796,24 @@ describe("remote desktop controls", () => {
       barEdge: "none",
       regions: [{ kind: "division", x: 0, y: 400, width: 700, height: 30 }],
     });
+    // Unit: the default deck replaces the toolbar and leaves the viewer in the upper half.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
+    ).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.toolbarPosition"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroBezel"]'),
+    ).toBeNull();
+    const chooseMacintoshII = () => {
+      act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
+      // The deck has no rail; its appearance moves to Controls. Keyboard → classic → … → Macintosh II.
+      for (let index = 0; index < 4; index++)
+        act(() => fixture.views["remoteDesktop.skinSwitch"].onPress());
+      act(() => fixture.views["remoteDesktop.operations"].onPress());
+    };
+    chooseMacintoshII();
     expect(
       sent()
         .filter((m) => m.type === "mouseButtons")
@@ -5902,18 +5966,16 @@ describe("remote desktop controls", () => {
     expectHostAspect();
     swipe(100); // Compact → classic.
     expectHostAspect();
-    swipe(100); // Classic wraps to modern.
+    swipe(100); // Classic wraps to the default keyboard.
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).toBeNull();
-    act(() =>
-      fixture.views["remoteDesktop.skinSwipe"].onStartShouldSetResponderCapture(
-        {
-          nativeEvent: { pageX: 100, pageY: 440 },
-        },
-      ),
-    );
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
+    ).not.toBeNull();
+    act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
     act(() => fixture.views["remoteDesktop.skinSwitch"].onPress()); // Next tap wraps to classic.
+    act(() => fixture.views["remoteDesktop.operations"].onPress());
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();

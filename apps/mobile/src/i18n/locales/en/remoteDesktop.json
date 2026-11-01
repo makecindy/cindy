@@ -6,6 +6,7 @@
   "skin_compact": "Slim classic",
   "skin_edge": "Full-screen retro",
   "skin_modern": "Modern",
+  "skin_keyboard": "Keyboard",
   "nextSkin": "Next appearance",
   "retroSkin": "Retro",
   "modernSkin": "Modern",
@@ -183,5 +184,11 @@
   "hostMuteFailed": "Couldn't change the remote computer's mute setting",
   "handoffEnded": "This input handoff has already finished, so there is no window to show.",
   "handoffUnavailable": "This computer can't show just this window. Update Cindy on it, or turn on remote desktop there.",
-  "handoffWindow": "Input handoff · {{app}}"
+  "handoffWindow": "Input handoff · {{app}}",
+  "keyUndo": "Undo",
+  "keyRedo": "Redo",
+  "keyAppWindows": "App Windows",
+  "keySearch": "Search",
+  "keyTaskView": "Task View",
+  "keySpace": "Space"
 }

@@ -24,9 +24,11 @@ export const FOLD_DESKTOP_SKINS = [
   "powerbook",
   "thinkpad",
   "modern",
+  "keyboard",
 ] as const;
 export type FoldDesktopSkin = (typeof FOLD_DESKTOP_SKINS)[number];
-export type RetroDesktopSkin = Exclude<FoldDesktopSkin, "modern">;
+export type RetroDesktopSkin = Exclude<FoldDesktopSkin, "modern" | "keyboard">;
+export const DEFAULT_FOLD_DESKTOP_SKIN: FoldDesktopSkin = "keyboard";
 export function foldDesktopSkinColors(skin: FoldDesktopSkin) {
   return skin === "powerbook" || skin === "thinkpad" ? darkColors : lightColors;
 }
@@ -219,7 +221,7 @@ export function FoldDesktopSkinSwitch({
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const retro = skin !== "modern";
+  const retro = skin !== "modern" && skin !== "keyboard";
   const start = useRef<{ x: number; y: number } | null>(null);
   return (
     <View

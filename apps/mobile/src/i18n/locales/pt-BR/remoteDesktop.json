@@ -6,6 +6,7 @@
   "skin_compact": "Clássico compacto",
   "skin_edge": "Retrô em tela cheia",
   "skin_modern": "Moderno",
+  "skin_keyboard": "Teclado",
   "nextSkin": "Próxima aparência",
   "retroSkin": "Retrô",
   "modernSkin": "Moderno",
@@ -184,5 +185,11 @@
   "handoffEnded": "Esta transferência de controle de entrada já terminou, então não há janela para mostrar.",
   "handoffUnavailable": "Este computador não pode mostrar apenas esta janela. Atualize o Cindy nele ou ative a área de trabalho remota.",
   "handoffWindow": "Transferência de controle de entrada · {{app}}",
-  "idleMinutes_many": "{{count}} minutos"
+  "idleMinutes_many": "{{count}} minutos",
+  "keyUndo": "Desfazer",
+  "keyRedo": "Refazer",
+  "keyAppWindows": "Janelas do app",
+  "keySearch": "Buscar",
+  "keyTaskView": "Visão de tarefas",
+  "keySpace": "Espaço"
 }
