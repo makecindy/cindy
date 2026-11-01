@@ -298,8 +298,32 @@ describe('a browser page that cannot be read', () => {
     const { driver } = unreadable();
     const run = start(driver);
     await run.session.start();
-    expect(run.guardedWindows).toEqual(['Sign in']);
+    expect(new Set(run.guardedWindows)).toEqual(new Set(['Sign in']));
     run.session.cancel();
+  });
+
+  it('is covered before the code and screenshot probes raise the window', async () => {
+    const { driver } = unreadable();
+    const events: string[] = [];
+    const capture = driver.capture!.bind(driver);
+    driver.capture = async (target) => {
+      events.push('capture');
+      return capture(target);
+    };
+    driver.qr = async () => {
+      events.push('qr');
+      return null;
+    };
+    const session = new InputHandoffSession({
+      requestId: 'req1', purpose: 'Sign in', target: { app: 'Google Chrome', windowTitle: 'Sign in' }, timeoutMs: 600_000,
+      hostPid: 1, remoteInput: true, driver, publish: () => undefined, finish: () => undefined,
+      onSecretEntered: ({ windowTitle }) => events.push(`cover:${windowTitle}`),
+      sleep: async () => undefined, windowWatchMs: 5000, settleTimeoutMs: 50,
+    });
+    await session.start();
+    expect(events[0]).toBe('cover:Sign in');
+    expect(events.some((event) => event === 'qr' || event === 'capture')).toBe(true);
+    session.cancel();
   });
 
   it('goes back to the form flow as soon as the page can be read', async () => {

@@ -434,6 +434,8 @@ export class InputHandoffSession {
       if (target.minimized) await this.coverBeforeRestoring(target);
       const restored = await this.restoreTarget(target);
       const step = await this.readFirstStep(restored);
+      // The code and screenshot probes below raise the window: an unreadable page is covered before them.
+      if (!step || step.pageMissing) this.coverUnreadablePage(target);
       if (step && actionable(step)) {
         // A sign-in happens on the window itself, wherever the owner answers from.
         if (step.signIn && !restored) {
@@ -1153,6 +1155,11 @@ export class InputHandoffSession {
       this.guardSignInPage(before);
       return;
     }
+    this.coverUnreadablePage(target);
+  }
+
+  /** A browser page nothing could be read from may well be a sign-in: cover it by its window title before any probe can raise it. */
+  private coverUnreadablePage(target: HandoffTarget): void {
     if (isBrowserBundle(target.bundleId)) {
       this.options.onSecretEntered?.({ pid: target.pid, windowTitle: target.window.title });
     }
