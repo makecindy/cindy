@@ -11310,6 +11310,26 @@
         "archiveAria": "「{{lane}}」 보관",
         "archiveFailed": "작업을 보관하지 못했습니다"
       },
+      "guests": {
+        "title": "게스트",
+        "hint": "나 외에 {{name}}에게 DM을 보내는 사람입니다. 게스트마다 연결된 프로젝트를 지정하면, 해당 메시지는 그 프로젝트 안에서만 실행되고 게스트 전용 메모리를 사용합니다.",
+        "unboundLabel": "프로젝트가 없는 게스트",
+        "unbound": {
+          "shared": "공유",
+          "refuse": "거절"
+        },
+        "unboundHint": {
+          "shared": "이전처럼 {{name}}의 작업 디렉터리와 메모리를 사용합니다.",
+          "refuse": "짧은 안내만 받고 {{name}}은(는) 답하지 않습니다."
+        },
+        "noProject": "프로젝트 없음",
+        "projectLabel": "{{guest}}의 프로젝트",
+        "projectMissing": "프로젝트 연결이 해제되어 메시지가 거절됩니다",
+        "empty": "아직 게스트가 없습니다. 처음 DM을 보낸 게스트가 여기에 표시됩니다.",
+        "noProjects": "게스트를 지정하려면 먼저 '연결된 프로젝트'에서 프로젝트를 연결하세요.",
+        "loadFailed": "게스트를 불러오지 못했습니다",
+        "saveFailed": "저장되지 않았습니다. 다시 시도하세요."
+      },
       "add": {
         "button": "플랫폼 추가",
         "title": "{{name}}에게 플랫폼 추가",

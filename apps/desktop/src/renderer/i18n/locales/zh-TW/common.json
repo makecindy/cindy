@@ -11310,6 +11310,26 @@
         "archiveAria": "歸檔「{{lane}}」",
         "archiveFailed": "無法歸檔任務"
       },
+      "guests": {
+        "title": "訪客",
+        "hint": "除你之外私聊 {{name}} 的人。把每位訪客綁定到一個關聯專案：之後對方的訊息只在該專案裡執行，並使用自己的記憶。",
+        "unboundLabel": "未綁定專案的訪客",
+        "unbound": {
+          "shared": "共用",
+          "refuse": "拒絕"
+        },
+        "unboundHint": {
+          "shared": "沿用 {{name}} 的工作目錄和記憶，與以前一樣。",
+          "refuse": "只會收到一句簡短提示，{{name}} 不回覆。"
+        },
+        "noProject": "不綁定專案",
+        "projectLabel": "{{guest}} 的專案",
+        "projectMissing": "專案已不再關聯，訊息會被拒絕",
+        "empty": "還沒有訪客。訪客第一次私聊後會出現在這裡。",
+        "noProjects": "先在「關聯專案」裡關聯一個專案，才能綁定訪客。",
+        "loadFailed": "訪客讀取失敗",
+        "saveFailed": "沒有儲存成功，請重試。"
+      },
       "add": {
         "button": "新增平台",
         "title": "為 {{name}} 新增平台",

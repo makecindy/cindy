@@ -11450,6 +11450,26 @@
         "archiveFailed": "Impossible d'archiver la tâche",
         "messageCount_many": "{{count}} messages dans le contexte"
       },
+      "guests": {
+        "title": "Invités",
+        "hint": "Les personnes autres que vous qui écrivent en privé à {{name}}. Associez chacune à un projet lié : ses messages s'exécutent alors uniquement dans ce projet, avec sa propre mémoire.",
+        "unboundLabel": "Invités sans projet",
+        "unbound": {
+          "shared": "Partagé",
+          "refuse": "Refuser"
+        },
+        "unboundHint": {
+          "shared": "Ils utilisent le répertoire de travail et la mémoire de {{name}}, comme avant.",
+          "refuse": "Ils reçoivent un court avis et {{name}} ne répond pas."
+        },
+        "noProject": "Aucun projet",
+        "projectLabel": "Projet de {{guest}}",
+        "projectMissing": "Le projet n'est plus lié ; les messages sont refusés",
+        "empty": "Aucun invité pour l'instant. Un invité apparaît ici après son premier message privé.",
+        "noProjects": "Liez d'abord un projet dans Projets liés pour y associer un invité.",
+        "loadFailed": "Impossible de charger les invités",
+        "saveFailed": "Non enregistré. Réessayez."
+      },
       "add": {
         "button": "Ajouter une plateforme",
         "title": "Ajouter une plateforme pour {{name}}",

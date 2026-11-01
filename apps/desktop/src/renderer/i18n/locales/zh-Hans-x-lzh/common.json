@@ -11310,6 +11310,26 @@
         "archiveAria": "封存「{{lane}}」",
         "archiveFailed": "不能封存差事"
       },
+      "guests": {
+        "title": "宾客",
+        "hint": "汝以外私语 {{name}} 者。各系于一相关之案：此后其讯唯行于彼案，自有其记。",
+        "unboundLabel": "未系案之宾客",
+        "unbound": {
+          "shared": "共用",
+          "refuse": "谢绝"
+        },
+        "unboundHint": {
+          "shared": "仍用 {{name}} 之工作目录与记，如旧。",
+          "refuse": "唯得一短告，{{name}} 不答。"
+        },
+        "noProject": "不系案",
+        "projectLabel": "{{guest}} 之案",
+        "projectMissing": "案已不相关，讯皆谢绝",
+        "empty": "尚无宾客。宾客初私语后现于此。",
+        "noProjects": "先于「相关之案」系一案，乃可系宾客。",
+        "loadFailed": "未能读宾客",
+        "saveFailed": "未能存，请再试。"
+      },
       "add": {
         "button": "增平台",
         "title": "为 {{name}} 增平台",

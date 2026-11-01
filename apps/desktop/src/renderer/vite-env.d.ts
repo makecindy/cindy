@@ -2426,6 +2426,10 @@ interface ElectronAPI {
       chatId: string;
       mode: import('../shared/botImConnection').BotImGroupActivationMode;
     }) => Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload>;
+    /** Owner-only guest isolation (#8359); older preloads lack it. */
+    setGuestAccess?: (
+      payload: import('../shared/botImConnection').BotImGuestAccessUpdate,
+    ) => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
     /** 这条连接下有任务的落点(主人私聊 + 群 / 话题 / 其他人私聊的隐藏任务)。 */
     listLanes: (payload: {
       id: string;
