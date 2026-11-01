@@ -70,3 +70,15 @@ CINDY_MEASURE_NODE=/absolute/runtime/node python3 apps/cindy-terminal/scripts/me
 中国大陆版通过 CINDY_AUTH_REGION=cn 构建，build-info 已核对为 cn，启动和全部生命周期 smoke 通过，后台保持存活；正式资源对照为 Global 未登录环境。任何在线替换均不属于本轮交付。
 
 大陆版交付包 SHA256：`7a29142fde65f26d867e6cbc47f7686534d8437e52179403f1924f0cc974486e`。包为本次本地验证构建，不等同于上游正式发行版或已通过完整 CI 的版本。
+
+## 后续迁移门禁复核（2026-11-01）
+
+替代草稿 PR #8342 已包含入口优化和 Codex 空闲回收。对主干 `96cc30181e` 的只读 `git merge-tree` 预演报告 364 处冲突；没有在当前 worktree 发起合并，也没有修改原工作区的未完成合并。GitHub 标记 CONFLICTING；当前仅 DCO 检查成功，不能将没有运行的 client-ci 视为通过。
+
+Desktop 全量类型检查确认仍有共享提取后的接口缺失与宿主适配错误。本次先修复六处诊断：两个共享翻译接口按实际调用收窄为只接受 key，Desktop 适配器保持默认语言；通知宿主导入共享 payload 类型；调度接口按实际调用收窄 provider / Fast 输入，并允许 worktree 释放返回结果（调用方只等待完成，不消费结果）。没有删除断言、添加类型强转或改变工作区回收行为。
+
+最终定向回归：generatedImageDelivery、runnerShared、runnerSessionClose 三文件 36 项通过（30.55 秒，收集 24.26 秒、执行 5.25 秒）。没有新增测试，沿用真实图片交付入口和调度生命周期覆盖。完整 Desktop 类型检查与主干合并仍是未完成门禁；本轮不部署在线 VPS。
+
+最终 app-runtime 和 cindy-terminal 类型检查通过；Desktop 按项目 12 GB 堆预算执行完整检查后仍有 270 条其它诊断，本次涉及的六处诊断已消除。文档检查 10 项通过，diff 检查通过。Desktop 增量缓存仅写入本机临时目录，不进入仓库。
+
+后续整合应按行为迁移，而非给旧类型补空字段：优先核对 maker-ipc 的宿主回调与任务生命周期，其次供应商组／分享的 Fast 策略、插件模拟安装证据与迁移、伙伴云端能力应用与到达提示。冲突中的 Desktop 转发文件需与对应共享包一起检查，不能只保留转发语句而丢掉主干新增实现。各模块继续遵循专项权限、插件兼容和协议规则，未完成前维持草稿。

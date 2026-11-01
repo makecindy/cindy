@@ -127,15 +127,15 @@ export interface MakerScheduleRunnerHost
   shouldApplyExclusiveProviderRerouteLive(provider: string | null | undefined): boolean;
   getSessionProvider(id: string): string | null;
   setSessionProvider(id: string, provider: string | null): void;
-  hydrateSessionProvider(id: string, provider: string | null | undefined): void;
+  hydrateSessionProvider(id: string, provider: string | null): void;
   setSessionEffort(id: string, effort: Effort | null | undefined): void;
-  setSessionFastMode(id: string, fast: boolean | 'ultrafast' | undefined): void;
+  setSessionFastMode(id: string, fast: boolean | 'ultrafast'): void;
   wireSessionToIpc(session: Session): void;
   isSessionInTurn(id: string): boolean;
   noteSilentStopUserSend(id: string): void;
   onSilentStopSettled(id: string, listener: (id: string, reason: 'exhausted' | 'skip' | 'send-failed') => void): () => void;
   resolveWorkingDir: ReturnType<typeof createScheduledWorkdirResolver>;
-  WorktreePool: { releaseWorktree(id: string): Promise<void> };
+  WorktreePool: { releaseWorktree(id: string): Promise<unknown> };
   beginHeadlessGhostSetupTurn(id: string): () => void;
 }
 

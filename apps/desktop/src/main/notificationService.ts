@@ -142,7 +142,7 @@ export function showDeviceSessionDesktopEvent(
   });
 }
 
-import { createSessionNotificationDelivery, type NotificationServiceDeps as SharedNotificationDeps } from '@cindy/app-runtime/sessionNotificationDelivery';
+import { createSessionNotificationDelivery, type ShowSessionEventPayload, type NotificationServiceDeps as SharedNotificationDeps } from '@cindy/app-runtime/sessionNotificationDelivery';
 export type NotificationServiceDeps = SharedNotificationDeps<BrowserWindow>;
 const notificationDelivery = createSessionNotificationDelivery({
   log, getMobileNotifyGeneration, sendMobileSessionNotify, getSessionNotificationTurnSignal,

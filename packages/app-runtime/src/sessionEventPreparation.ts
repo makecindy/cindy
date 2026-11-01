@@ -45,7 +45,7 @@ export interface SessionEventPreparationHost extends Pick<ReturnType<typeof crea
  markSessionTurnStarted:ReturnType<typeof createSessionActiveTurn>['markSessionTurnStarted'];
  finalizeTurnChangeSet:ReturnType<typeof createTurnChangeSetStore>['finalizeTurnChangeSet'];
  isQuietScheduledOutput(event:AgentEvent):boolean;
- t(key:string, params?:Record<string,string|number>):string;
+ t(key:string):string;
  isCcMgrUpgradeInFlight(sessionId:string|null|undefined):boolean;
  clearPromptPredictionSessionStopped(sessionId:string):void;
  readonly MAKER_PUSH:{readonly INTERACTION_DISMISSED:string};

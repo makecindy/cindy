@@ -17,7 +17,7 @@ export interface GeneratedImageDeliveryHost extends Pick<ReturnType<typeof creat
  Pick<OwnerBroadcastTap,'captureDataOwnerBroadcastScope'>,
  Pick<ReturnType<typeof createChatAttachments>,'commitChatImageUrls'> {
  MAX_GENERATED_IMAGE_BYTES:number;
- t(key:string,params?:Record<string,string|number>):string;
+ t(key:string):string;
 }
 
 
