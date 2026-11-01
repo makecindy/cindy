@@ -33,7 +33,7 @@ let rendererUtilities: Promise<{ css: string; aliases: Map<string, string> }> | 
 export async function installRendererClipboardStyles(root: Element): Promise<HTMLStyleElement> {
   rendererUtilities ??= postcss([tailwindcss({
     ...rendererTailwindConfig,
-    content: ['MarkdownMermaidBlock', 'VideoSitePreview', 'GhostSummonCard', 'GeneratedFilesCard'].map(name =>
+    content: ['MarkdownMermaidBlock', 'VideoSitePreview', 'GhostSummonCard', 'GeneratedFilesCard', 'SystemCard'].map(name =>
       resolve(__dirname, `../../renderer/components/chat/${name}.tsx`)),
   })]).process('@tailwind utilities;', { from: undefined }).then(result => {
     // jsdom leaves gap custom properties unresolved. Use the actual generated

@@ -20,6 +20,7 @@ import { MarkdownMermaidBlock } from '../MarkdownMermaidBlock';
 import { UserMessageImageLink } from '../UserMessageImageLink';
 import { GeneratedFilesCard, _clearLocalGeneratedFileStatCache } from '../GeneratedFilesCard';
 import { SystemCard } from '../SystemCard';
+import { BotAvatar } from '../../../features/bots/BotAvatar';
 import { VideoSitePreview } from '../VideoSitePreview';
 import { GhostSummonCard } from '../GhostSummonCard';
 
@@ -344,7 +345,7 @@ describe('chat selection clipboard', () => {
   // Review #4359639062: media-only button unwrapping misses selectable card
   // summaries. Render the actual context card and copy across its header;
   // unit/jsdom verifies plain summary content without a dead pasted button.
-  it('copies a production context header as ordinary text while excluding marked controls', () => {
+  it('copies a production context header as ordinary text while excluding marked controls', async () => {
     productionSelectionCss();
     const { root, select, copy } = setup(<>
       <p>before context</p>
@@ -356,7 +357,11 @@ describe('chat selection clipboard', () => {
       <p>after context</p>
     </>);
     const header = root.querySelector('button[aria-expanded]')!;
-    const summary = header.textContent!;
+    // Review4434400851: real gap-2, no JSX whitespace between labels.
+    await installRendererClipboardStyles(root);
+    const labels = [...header.querySelectorAll(':scope > span')].map(e => e.textContent!);
+    expect(labels).toHaveLength(2);
+    const summary = labels.join(' ');
     select();
     const { clipboardData } = copy();
     const html = clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
@@ -372,6 +377,32 @@ describe('chat selection clipboard', () => {
     expect(pasted.textContent).toContain('after context');
     expect(header.isConnected).toBe(true);
     expect(header.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // Review4434400853: unit through the real decorative BotAvatar between
+  // message bodies; a real message attachment remains copyable alongside it.
+  it.each([false, true])('omits decorative bot artwork without losing content images (select-text=%s)', async selectable => {
+    productionSelectionCss();
+    const { root, select, copy } = setup(<div className={selectable ? 'select-text' : undefined}><p>first message body</p>
+      <BotAvatar bot={{ name: 'Bot', avatar: 'https://example.com/bot-artwork.png' }} size="sm" />
+      <p>second message body</p>
+      <ChatImageView src="https://example.com/content.png" filename="Content attachment" variant="user-attached" />
+    </div>);
+    const avatar = root.querySelector('img[src="https://example.com/bot-artwork.png"]')!;
+    expect(avatar.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(getComputedStyle(avatar).userSelect).toBe(selectable ? 'text' : 'none');
+    fireEvent.load(root.querySelector('img[alt="Content attachment"]')!);
+    await waitFor(() => expect((root.querySelector('img[alt="Content attachment"]') as HTMLImageElement).style.display).not.toBe('none'));
+    select();
+    const formats = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = formats.find(([type]) => type === 'text/html')![1];
+    expect(pasted.querySelector('img[src="https://example.com/bot-artwork.png"]')).toBeNull();
+    expect(pasted.querySelector('img[alt="Content attachment"]')).toBeTruthy();
+    for (const value of [pasted.textContent!, formats.find(([type]) => type === 'text/plain')![1]]) {
+      expect(value).toContain('first message body');
+      expect(value).toContain('second message body');
+    }
   });
 
   // Review #4334258580: real RichAnswer shapes/chart store presentation in

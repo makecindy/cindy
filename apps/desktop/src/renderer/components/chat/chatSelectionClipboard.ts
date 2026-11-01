@@ -50,6 +50,12 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     return '';
   };
   const unselectable = (element: Element): boolean => {
+    // Empty-alt artwork in an explicitly hidden, nonselectable identity mark
+    // is decoration, even if a selectable ancestor overrides its computed CSS.
+    if (element.matches('img[alt=""]') && element.closest('[aria-hidden="true"].select-none')) {
+      needsRenderedPlainText = true;
+      return true;
+    }
     if (inheritedStyle(element, 'user-select') !== 'none') return false;
     // These renderers identify message content inside preview/navigation
     // controls. Global control CSS must not erase their selected content.
@@ -151,7 +157,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     }
     return copy;
   };
-  const preserveTextBoundaries = (source: Element, copy: Element): void => {
+  const preserveTextBoundaries = (source: Element, copy: Element | DocumentFragment): void => {
     if (!copy.textContent?.trim()) return;
     const style = styleOf(source);
     const gap = style.columnGap && style.columnGap !== 'normal'
@@ -384,6 +390,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
         const selected = cloneSelected(child);
         if (selected) children.appendChild(selected);
       }
+      preserveTextBoundaries(element, children);
       return children.hasChildNodes() ? children : null;
     }
     const copy = shell(element);
