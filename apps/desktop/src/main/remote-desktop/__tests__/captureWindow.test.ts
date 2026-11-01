@@ -302,3 +302,43 @@ it.each(['files', 'direct'] as const)('keeps %s transport separate and denies ca
   expect(result).toHaveBeenCalledWith(false);
   owner.dispose();
 });
+
+// Regression: denying Chromium's media permission check suppresses physical
+// interface discovery for data-only WebRTC under a VPN. Actual media requests
+// must remain denied. Entry: DesktopCaptureWindow.start and session handlers.
+// Existing coverage only tested denial, not the check/request distinction.
+// Minimal input: trusted data-window audio/video check. Tier: unit.
+it.each(['files', 'direct'] as const)('allows interface discovery only for the trusted %s frame, without capture', async (mode) => {
+  const owner = new DesktopCaptureWindow(vi.fn(), mode);
+  const ready = owner.start();
+  const win = fake.windows[0], ses = fake.sessions[0];
+  owner.registered(event(win));
+  await ready;
+  const check = ses.setPermissionCheckHandler.mock.calls[0][0];
+  const request = ses.setPermissionRequestHandler.mock.calls[0][0];
+  const origin = 'http://localhost:9988';
+  const details = { isMainFrame: true, requestingUrl: win.webContents.mainFrame.url };
+  for (const mediaType of ['audio', 'video']) {
+    expect(check(win.webContents, 'media', origin, { ...details, mediaType })).toBe(true);
+    expect(check(win.webContents, 'media', `${origin}/`, { ...details, mediaType })).toBe(true);
+  }
+  for (const [candidate, permission, requestingOrigin, extra] of [
+    [null, 'media', origin, { mediaType: 'audio' }],
+    [{ ...win.webContents }, 'media', origin, { mediaType: 'audio' }],
+    [win.webContents, 'media', 'https://foreign.invalid', { mediaType: 'audio' }],
+    [win.webContents, 'media', origin, { mediaType: 'unknown' }],
+    [win.webContents, 'media', origin, { mediaType: 'audio', isMainFrame: false }],
+    [win.webContents, 'media', origin, { mediaType: 'audio', requestingUrl: `${origin}/other.html` }],
+    [win.webContents, 'display-capture', origin, { mediaType: 'video' }],
+  ] as const) {
+    expect(check(candidate, permission, requestingOrigin, { ...details, ...extra })).toBe(false);
+  }
+  for (const mediaTypes of [[], ['audio'], ['video'], ['audio', 'video']]) {
+    const reply = vi.fn();
+    request(win.webContents, 'media', reply, { ...details, mediaTypes });
+    expect(reply).toHaveBeenCalledWith(false);
+  }
+  win.webContents.mainFrame.url = 'https://foreign.invalid/';
+  expect(check(win.webContents, 'media', origin, { ...details, mediaType: 'audio' })).toBe(false);
+  owner.dispose();
+});

@@ -280,6 +280,13 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 - 新增加载远程内容的 session 时，必须同时设置 `setPermissionRequestHandler` 与
   `setPermissionCheckHandler`，按最小权限默认拒绝；需要放行时必须校验真实来源与权限类型。
 
+文件和局域网直连的独立传输窗口（`DesktopCaptureWindow` 的 `files` / `direct` 模式）
+只对本窗口、精确来源、主 frame 和当前页面 URL 的 `media` audio/video **检查**返回允许。
+Chromium 用这项检查决定 WebRTC 是否可枚举物理接口；全部拒绝会让 VPN 下的 ICE 只看见
+默认隧道接口，遗漏可用的局域网。实际的麦克风、摄像头和桌面采集**请求**仍全部拒绝，
+不把这项检查扩展到其他窗口、frame 或权限。实现与权限回归见
+`main/remote-desktop/captureWindow.ts` 和同目录 `__tests__/captureWindow.test.ts`。
+
 ### 正文视频网站播放器
 
 YouTube 视频组件复用内置浏览器的 `BROWSER_PARTITION` 持久会话、标准 WebView

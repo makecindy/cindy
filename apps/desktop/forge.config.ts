@@ -216,6 +216,9 @@ const NATIVE_RUNTIME_DEPS = [
   // 无需带闭包。注: 这是 vendored runtime 里仅有的两个运行时外部 require 之一
   // (另一个是 playwright-core),已全覆盖。
   'undici',
+  // Turndown's bundled CJS DOM fallback retains this runtime require. Browser
+  // recipes load it during bootstrap, before packaged smoke can reach ready.
+  '@mixmark-io/domino',
 ];
 
 /**
