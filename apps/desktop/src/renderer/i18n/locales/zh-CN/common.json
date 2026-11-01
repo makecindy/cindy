@@ -843,6 +843,7 @@
         "pausedLocal": "已暂停接收外部新任务",
         "cooling": "冷却中",
         "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "quotaExhausted": "配额已用完",
         "offline": "不在线",
         "unreachableHere": "从这台电脑连不上",
         "unavailable": {

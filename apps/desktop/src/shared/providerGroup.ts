@@ -110,6 +110,8 @@ export interface ProviderGroupMemberStatus {
   paused: boolean;
   /** 冷却到何时(unix ms)。 */
   coolingUntil?: number;
+  /** 可信配额快照确认已耗尽；仅展示原因与配额重置时刻，不从普通冷却推断。只发给同账号电脑。 */
+  usageLimit?: ProviderGroupUsageLimit;
   /**
    * 选电脑时排序用的那个配额窗口(provider-groups.md §5)：本机与同账号电脑的订阅才有，读不到时省略。
    * 发给同账号电脑，用来提议任务进行中换号(§6.2)，界面不显示；不进受邀者的匿名状态。
@@ -504,7 +506,7 @@ export interface ProviderGroupRemoteSessionGroup {
 
 /** Only verified subscription exhaustion; never inferred from a generic cooldown. */
 export interface ProviderGroupUsageLimit {
-  /** Earliest reset of an otherwise eligible member; null when no reset is known. */
+  /** Required quota reset; pick replies use the earliest eligible member's reset. Null when unknown. */
   resetAtMs: number | null;
 }
 
@@ -740,6 +742,11 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     const guestSupport = ['supported', 'needs-update', 'unknown'].includes(item.guestSupport as string)
       ? item.guestSupport as ProviderGroupGuestSupport : undefined;
     const coolingUntil = typeof item.coolingUntil === 'number' && Number.isFinite(item.coolingUntil) ? item.coolingUntil : undefined;
+    const limit = item.usageLimit as Partial<ProviderGroupUsageLimit> | null | undefined;
+    const reset = limit?.resetAtMs;
+    const usageLimit = member.kind !== 'share' && state === 'cooling' && limit
+      && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0))
+      ? { resetAtMs: reset } as ProviderGroupUsageLimit : undefined;
     // 分享来的电脑不读配额(provider-groups.md §5「分享边界」)：回包里有也不收。
     const quota = member.kind === 'share' ? undefined : readProviderGroupMemberQuota(item.quota);
     const fiveHourTight = quota !== undefined && item.fiveHourTight === true;
@@ -758,6 +765,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       weight: member.weight,
       paused: member.paused,
       ...(coolingUntil !== undefined ? { coolingUntil } : {}),
+      ...(usageLimit ? { usageLimit } : {}),
       ...(quota ? { quota } : {}),
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];

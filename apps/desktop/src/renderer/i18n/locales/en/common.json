@@ -851,6 +851,7 @@
         "pausedLocal": "Not accepting new tasks from other computers",
         "cooling": "Cooling down",
         "coolingUntil": "Cooling down · back around {{time}}",
+        "quotaExhausted": "Quota exhausted",
         "offline": "Offline",
         "unreachableHere": "Can’t reach it from this computer",
         "unavailable": {

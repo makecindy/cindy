@@ -65,6 +65,27 @@ describe('group detail diagnostics compatibility', () => {
       .members[0].quota).toEqual({ usedPercent: 0, resetAtMs: null, windowMs: week });
   });
 
+  // Unit protocol: confirmed exhaustion must survive remote viewing; old/malformed
+  // replies must not turn a generic cooldown into a claim that the quota is spent.
+  it('preserves confirmed quota exhaustion only for a cooling own-account member', () => {
+    expect(parseProviderGroupRemoteView(payload({ state: 'cooling', usageLimit: { resetAtMs: 5_000 } }), 'anthropic')
+      .members[0]).toMatchObject({ state: 'cooling', usageLimit: { resetAtMs: 5_000 } });
+    expect(parseProviderGroupRemoteView(payload({ state: 'cooling', usageLimit: { resetAtMs: null } }), 'anthropic')
+      .members[0].usageLimit).toEqual({ resetAtMs: null });
+    for (const extra of [
+      { state: 'cooling' }, { state: 'cooling', usageLimit: { resetAtMs: '5000' } },
+      { state: 'cooling', usageLimit: { resetAtMs: -1 } }, { state: 'cooling', usageLimit: { resetAtMs: Infinity } },
+      { usageLimit: { resetAtMs: 5_000 } },
+    ]) {
+      expect(parseProviderGroupRemoteView(payload(extra), 'anthropic').members[0]).not.toHaveProperty('usageLimit');
+    }
+    const shared = {
+      config: { members: [{ kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' }] },
+      members: [{ key: 'share:s1:anthropic', state: 'cooling', usageLimit: { resetAtMs: 5_000 } }],
+    };
+    expect(parseProviderGroupRemoteView(shared, 'anthropic').members[0]).not.toHaveProperty('usageLimit');
+  });
+
   it.each([
     'full', { usedPercent: '40', resetAtMs: 5_000, windowMs: 1 }, { usedPercent: 40, windowMs: 1 },
     { usedPercent: 40, resetAtMs: -1, windowMs: 1 }, { usedPercent: 40, resetAtMs: 5_000, windowMs: 0 },
