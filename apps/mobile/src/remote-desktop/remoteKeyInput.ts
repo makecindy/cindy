@@ -1,11 +1,11 @@
-export type FoldKeyEvent = { kind: "key"; code: string; down: boolean };
-export type FoldKeyLatch = "held" | "once" | "locked";
+export type RemoteKeyEvent = { kind: "key"; code: string; down: boolean };
+export type KeyLatch = "held" | "once" | "locked";
 
 const REMOTE_MODIFIERS = ["ControlLeft", "AltLeft", "ShiftLeft", "MetaLeft"];
 /** Fn only changes which code a key sends; hosts never receive it. */
-export const FOLD_FN = "Fn";
+export const KEY_FN = "Fn";
 /** Hosts cannot toggle a real Caps Lock, so letters send Shift instead. */
-export const FOLD_CAPS = "CapsLock";
+export const KEY_CAPS = "CapsLock";
 const FN_LAYER: Record<string, string> = {
   ...Object.fromEntries(
     [..."1234567890"].map((key, index) => [`Digit${key}`, `F${index + 1}`]),
@@ -19,12 +19,12 @@ const FN_LAYER: Record<string, string> = {
   ArrowDown: "PageDown",
 };
 
-export function foldFnCode(code: string) {
+export function fnLayerCode(code: string) {
   return FN_LAYER[code] ?? code;
 }
 
 function isLatchable(code: string) {
-  return code === FOLD_FN || REMOTE_MODIFIERS.includes(code);
+  return code === KEY_FN || REMOTE_MODIFIERS.includes(code);
 }
 
 /**
@@ -33,15 +33,15 @@ function isLatchable(code: string) {
  * chords with the keys pressed meanwhile; tapping it applies to the next key,
  * tapping again locks it, and a third tap clears it.
  */
-export class FoldKeyInput {
+export class RemoteKeyInput {
   private held = new Map<string | number, { code: string; used: boolean }>();
   private presses = new Map<string | number, string[]>();
   private latches = new Map<string, "once" | "locked">();
   private remote: string[] = [];
   private caps = false;
 
-  latch(code: string): FoldKeyLatch | null {
-    if (code === FOLD_CAPS) return this.caps ? "locked" : null;
+  latch(code: string): KeyLatch | null {
+    if (code === KEY_CAPS) return this.caps ? "locked" : null;
     for (const key of this.held.values()) if (key.code === code) return "held";
     return this.latches.get(code) ?? null;
   }
@@ -51,9 +51,9 @@ export class FoldKeyInput {
     return (this.latch("ShiftLeft") !== null) !== this.caps;
   }
 
-  press(touch: string | number, code: string): FoldKeyEvent[] {
+  press(touch: string | number, code: string): RemoteKeyEvent[] {
     if (this.held.has(touch) || this.presses.has(touch)) return [];
-    if (code === FOLD_CAPS) {
+    if (code === KEY_CAPS) {
       this.caps = !this.caps;
       return [];
     }
@@ -66,7 +66,7 @@ export class FoldKeyInput {
       key.used = true;
       active.add(key.code);
     }
-    const resolved = active.has(FOLD_FN) ? foldFnCode(code) : code;
+    const resolved = active.has(KEY_FN) ? fnLayerCode(code) : code;
     if (this.caps && /^Key[A-Z]$/.test(resolved)) {
       if (active.has("ShiftLeft")) active.delete("ShiftLeft");
       else active.add("ShiftLeft");
@@ -85,7 +85,7 @@ export class FoldKeyInput {
     return events;
   }
 
-  release(touch: string | number, cancelled = false): FoldKeyEvent[] {
+  release(touch: string | number, cancelled = false): RemoteKeyEvent[] {
     const key = this.held.get(touch);
     if (key) {
       this.held.delete(touch);

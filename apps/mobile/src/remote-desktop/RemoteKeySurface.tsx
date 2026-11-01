@@ -1,0 +1,522 @@
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { StyleSheet, View, type GestureResponderEvent } from "react-native";
+import {
+  ArrowBigUp,
+  ArrowBigUpDash,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Command,
+  CornerDownLeft,
+  Delete,
+  Keyboard,
+  Option,
+  Redo2,
+  Undo2,
+  ArrowRightToLine,
+  type LucideIcon,
+} from "lucide-react-native";
+import { useTranslation } from "react-i18next";
+import { Text } from "@/components/AppText";
+import {
+  fontWeight,
+  iconSize,
+  iconStroke,
+  lineHeight,
+  radius,
+  spacing,
+  typeScale,
+  useTheme,
+  type ThemeColors,
+} from "@/theme";
+import {
+  KEY_CAPS,
+  KEY_FN,
+  RemoteKeyInput,
+  fnLayerCode,
+  type RemoteKeyEvent,
+  type KeyLatch,
+} from "./remoteKeyInput";
+import {
+  ESCAPE_CELL,
+  FN_CELL,
+  KEY_PAGE,
+  keyAt,
+  keyRects,
+  keyboardRows,
+  type HostPlatform,
+  type KeyCell,
+  type KeyRect,
+} from "./remoteKeyLayout";
+
+export type SystemKeyAction = {
+  id: string;
+  label: string;
+  Icon: LucideIcon;
+  press(): void;
+};
+
+const INPUT_METHOD = "inputMethod";
+const HINT_WIDTH = 160;
+const FN_LEGENDS: Record<string, string> = {
+  Delete: "Del",
+  Home: "Home",
+  End: "End",
+  PageUp: "PgUp",
+  PageDown: "PgDn",
+};
+const KEY_ICONS: Record<string, LucideIcon> = {
+  Backspace: Delete,
+  Tab: ArrowRightToLine,
+  [KEY_CAPS]: ArrowBigUpDash,
+  Enter: CornerDownLeft,
+  ShiftLeft: ArrowBigUp,
+  ArrowLeft: ChevronLeft,
+  ArrowRight: ChevronRight,
+  ArrowUp: ChevronUp,
+  ArrowDown: ChevronDown,
+};
+const MAC_ICONS: Record<string, LucideIcon> = {
+  ControlLeft: ChevronUp,
+  AltLeft: Option,
+  MetaLeft: Command,
+};
+const PC_LEGENDS: Record<string, string> = {
+  ControlLeft: "Ctrl",
+  AltLeft: "Alt",
+};
+
+const Keycap = memo(function Keycap({
+  rect,
+  styles,
+  palette,
+  stripPalette,
+  legend,
+  shifted,
+  Icon,
+  label,
+  subdued,
+  pressed,
+  latch,
+  artwork,
+  onActivate,
+}: {
+  rect: KeyRect;
+  styles: ReturnType<typeof makeStyles>;
+  palette: ThemeColors;
+  stripPalette: ThemeColors;
+  legend?: string;
+  shifted?: string;
+  Icon?: LucideIcon;
+  label: string;
+  subdued: boolean;
+  pressed: boolean;
+  latch: KeyLatch | null;
+  artwork: ReactNode;
+  onActivate(id: string): void;
+}) {
+  const selected = latch !== null;
+  const own = rect.bare ? stripPalette : palette;
+  const foreground = selected
+    ? own.ctaText
+    : rect.bare || (subdued && !artwork)
+      ? own.textSecondary
+      : own.textPrimary;
+  const small = (legend?.length ?? 0) > 1;
+  return (
+    <View
+      testID={`remoteDesktop.key.${rect.id}`}
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
+      accessibilityActions={[{ name: "activate" }]}
+      onAccessibilityAction={() => onActivate(rect.id)}
+      style={[
+        styles.key,
+        subdued && styles.keySubdued,
+        rect.bare && styles.keyBare,
+        artwork ? styles.keyArtwork : null,
+        pressed && (artwork ? styles.keyArtworkPressed : styles.keyPressed),
+        selected && styles.keySelected,
+        rect.bare && pressed && { backgroundColor: own.border },
+        rect.bare && selected && { backgroundColor: own.cta },
+        {
+          left: rect.x,
+          top: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+      ]}
+    >
+      {selected ? null : artwork}
+      {shifted ? (
+        <Text
+          numberOfLines={1}
+          style={[styles.shiftedLegend, selected && { color: foreground }]}
+        >
+          {shifted}
+        </Text>
+      ) : null}
+      {Icon ? (
+        <Icon
+          size={rect.half ? iconSize.sm : iconSize.action}
+          strokeWidth={iconStroke.regular}
+          color={foreground}
+        />
+      ) : legend ? (
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+          style={[
+            small || shifted ? styles.smallLegend : styles.legend,
+            { color: foreground },
+          ]}
+        >
+          {legend}
+        </Text>
+      ) : null}
+      {latch === "locked" ? (
+        <View style={[styles.lockMark, { backgroundColor: foreground }]} />
+      ) : null}
+    </View>
+  );
+});
+
+/**
+ * The one remote keyboard: its layout, multi-finger input and function strip are
+ * shared, while callers supply the size, compact layout and material around it.
+ */
+export function RemoteKeySurface({
+  platform,
+  enabled,
+  allowInput,
+  send,
+  systemActions,
+  undo,
+  redo,
+  keyLabel,
+  onInputMethod,
+  compact = false,
+  palette,
+  stripPalette,
+  renderKeycap,
+  renderOverlay,
+  testID = "remoteDesktop.keys",
+}: {
+  platform: HostPlatform;
+  enabled: boolean;
+  allowInput(): boolean;
+  send(message: object): void;
+  systemActions: SystemKeyAction[];
+  undo(): void;
+  redo(): void;
+  keyLabel(code: string): string;
+  /** Adds the strip's key for the phone's input method. */
+  onInputMethod?: () => void;
+  compact?: boolean;
+  /** Hardware skins keep their own colors in either app theme. */
+  palette?: ThemeColors;
+  /** The strip sits on a different material from the keycaps on hardware skins. */
+  stripPalette?: ThemeColors;
+  renderKeycap?: (rect: KeyRect) => ReactNode;
+  renderOverlay?: (rects: KeyRect[]) => ReactNode;
+  testID?: string;
+}) {
+  const { t } = useTranslation();
+  const { colors: themeColors } = useTheme();
+  const colors = palette ?? themeColors;
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const input = useRef(new RemoteKeyInput()).current;
+  const touches = useRef(new Map<string | number, KeyRect>());
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const [pressed, setPressed] = useState<ReadonlySet<string>>(new Set());
+  const [symbols, setSymbols] = useState(false);
+  const [, refresh] = useState(0);
+
+  const actions = useMemo(() => {
+    const entries: Record<string, () => void> = {
+      undo,
+      redo,
+      [KEY_PAGE]: () => setSymbols((value) => !value),
+    };
+    if (onInputMethod) entries[INPUT_METHOD] = onInputMethod;
+    for (const action of systemActions) entries[action.id] = action.press;
+    return entries;
+  }, [undo, redo, onInputMethod, systemActions]);
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+
+  const systemKey = systemActions.map((action) => action.id).join();
+  const hasInputMethod = Boolean(onInputMethod);
+  const rects = useMemo(() => {
+    const gap = compact ? 0.3 : 0.6;
+    const strip: KeyCell[] = [
+      ESCAPE_CELL,
+      ...(compact ? [{ id: "Tab", code: "Tab", weight: 1, bare: true }] : []),
+      ...systemKey
+        .split(",")
+        .filter(Boolean)
+        .map((id, index) => ({
+          id,
+          weight: 1,
+          bare: true,
+          groupGap: index === 0 ? gap : 0,
+        })),
+      { id: "undo", weight: 1, bare: true, groupGap: gap },
+      { id: "redo", weight: 1, bare: true },
+      { ...FN_CELL, groupGap: gap },
+      ...(hasInputMethod ? [{ id: INPUT_METHOD, weight: 1, bare: true }] : []),
+    ];
+    return keyRects(
+      keyboardRows(platform, strip, compact, symbols),
+      size.width,
+      size.height,
+    );
+  }, [platform, systemKey, hasInputMethod, compact, symbols, size]);
+  const rectsRef = useRef(rects);
+  rectsRef.current = rects;
+
+  const emit = (events: RemoteKeyEvent[]) => {
+    if (events.length) send({ type: "events", events });
+  };
+  const showPressed = () => {
+    setPressed(new Set([...touches.current.values()].map((rect) => rect.id)));
+    refresh((value) => value + 1);
+  };
+  const begin = (touch: string | number, rect: KeyRect) => {
+    if (touches.current.has(touch)) return;
+    touches.current.set(touch, rect);
+    if (rect.code && allowInput()) emit(input.press(touch, rect.code));
+    showPressed();
+  };
+  const finish = (touch: string | number, cancelled: boolean) => {
+    const rect = touches.current.get(touch);
+    if (!rect) return;
+    touches.current.delete(touch);
+    emit(input.release(touch, cancelled));
+    if (!rect.code && !cancelled && (rect.id === KEY_PAGE || allowInput()))
+      actionsRef.current[rect.id]?.();
+    showPressed();
+  };
+  const touchId = (event: GestureResponderEvent) =>
+    event.nativeEvent.identifier ?? "touch";
+
+  // Keys never outlive the surface: a skin change, unfold or disconnect lets go.
+  useEffect(() => {
+    if (enabled) return;
+    input.reset();
+    touches.current.clear();
+    setPressed(new Set());
+    send({ type: "releaseInput" });
+  }, [enabled, input, send]);
+  useEffect(
+    () => () => {
+      input.reset();
+      touches.current.clear();
+      send({ type: "releaseInput" });
+    },
+    [input, send],
+  );
+
+  const label = (rect: KeyRect) => {
+    if (rect.id === INPUT_METHOD) return t("remoteDesktop.inputMethod");
+    if (rect.id === "undo") return t("remoteDesktop.keyUndo");
+    if (rect.id === "redo") return t("remoteDesktop.keyRedo");
+    if (rect.id === KEY_PAGE)
+      return symbols ? "ABC" : t("remoteDesktop.functionKeys");
+    const system = systemActions.find((action) => action.id === rect.id);
+    if (system) return system.label;
+    if (rect.id === KEY_FN) return "Fn";
+    if (rect.id === KEY_CAPS) return "Caps Lock";
+    if (rect.id === "Space") return t("remoteDesktop.keySpace");
+    return keyLabel(rect.code ?? rect.id);
+  };
+  const legend = (rect: KeyRect, fn: boolean, uppercase: boolean) => {
+    if (fn && rect.code) {
+      const resolved = fnLayerCode(rect.code);
+      if (resolved !== rect.code) return FN_LEGENDS[resolved] ?? resolved;
+    }
+    if (rect.legend)
+      return /^Key/.test(rect.id) && !uppercase
+        ? rect.legend.toLowerCase()
+        : rect.legend;
+    if (rect.id === "Escape") return "esc";
+    if (rect.id === KEY_FN) return "fn";
+    if (rect.code === "MetaLeft") return platform === "win32" ? "Win" : "Super";
+    return rect.code ? PC_LEGENDS[rect.code] : undefined;
+  };
+  const icon = (rect: KeyRect, fn: boolean) => {
+    if (rect.id === INPUT_METHOD) return Keyboard;
+    if (rect.id === "undo") return Undo2;
+    if (rect.id === "redo") return Redo2;
+    const system = systemActions.find((action) => action.id === rect.id);
+    if (system) return system.Icon;
+    if (!rect.code) return undefined;
+    if (fn && fnLayerCode(rect.code) !== rect.code) return undefined;
+    return (
+      KEY_ICONS[rect.code] ??
+      (platform === "darwin" ? MAC_ICONS[rect.code] : undefined)
+    );
+  };
+  // Icons carry no words, so holding one names it before the finger lifts.
+  const hint = rects.find(
+    (rect) => rect.bare && !rect.code && pressed.has(rect.id),
+  );
+  const fn = input.latch(KEY_FN) !== null;
+  const uppercase = input.uppercase();
+  const activateRef = useRef((_id: string) => {});
+  activateRef.current = (id) => {
+    const rect = rectsRef.current.find((item) => item.id === id);
+    if (!rect) return;
+    begin("accessibility", rect);
+    finish("accessibility", false);
+  };
+  const activate = useCallback((id: string) => activateRef.current(id), []);
+
+  return (
+    // box-only keeps every finger's target and location on this one surface:
+    // Android reports later fingers against the first finger's view.
+    <View
+      testID={testID}
+      pointerEvents="box-only"
+      style={styles.surface}
+      onLayout={({ nativeEvent: { layout } }) =>
+        setSize({ width: layout.width, height: layout.height })
+      }
+      onTouchStart={(event) => {
+        if (!enabled) return;
+        const { locationX, locationY } = event.nativeEvent;
+        const rect = keyAt(rectsRef.current, locationX, locationY);
+        if (rect) begin(touchId(event), rect);
+      }}
+      onTouchEnd={(event) => finish(touchId(event), false)}
+      onTouchCancel={(event) => finish(touchId(event), true)}
+    >
+      {rects.map((rect) => (
+        <Keycap
+          key={rect.id}
+          rect={rect}
+          styles={styles}
+          palette={colors}
+          stripPalette={stripPalette ?? colors}
+          legend={legend(rect, fn, uppercase)}
+          shifted={
+            fn && rect.code && fnLayerCode(rect.code) !== rect.code
+              ? undefined
+              : rect.shifted
+          }
+          Icon={icon(rect, fn)}
+          label={label(rect)}
+          subdued={
+            !rect.bare &&
+            (Boolean(rect.control) || (!rect.legend && rect.id !== "Space"))
+          }
+          pressed={pressed.has(rect.id)}
+          latch={rect.code ? input.latch(rect.code) : null}
+          artwork={rect.bare ? null : renderKeycap?.(rect)}
+          onActivate={activate}
+        />
+      ))}
+      {renderOverlay?.(rects)}
+      {hint ? (
+        <View
+          testID="remoteDesktop.keyHint"
+          style={[
+            styles.hint,
+            {
+              top: hint.y + hint.height + 2,
+              left: Math.max(
+                0,
+                Math.min(
+                  size.width - HINT_WIDTH,
+                  hint.x + (hint.width - HINT_WIDTH) / 2,
+                ),
+              ),
+            },
+          ]}
+        >
+          <Text numberOfLines={1} style={styles.hintText}>
+            {label(hint)}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    surface: { flex: 1, minHeight: 0 },
+    key: {
+      position: "absolute",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+      borderRadius: radius.control,
+      backgroundColor: colors.surfaceChip,
+    },
+    keySubdued: {
+      backgroundColor: colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderTranslucent,
+    },
+    keyBare: { backgroundColor: "transparent", borderRadius: radius.pill },
+    keyArtwork: {
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      paddingBottom: spacing.xs,
+    },
+    keyPressed: { backgroundColor: colors.border },
+    keyArtworkPressed: { opacity: 0.55 },
+    keySelected: { backgroundColor: colors.cta },
+    legend: {
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.regular,
+    },
+    smallLegend: {
+      fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
+      fontWeight: fontWeight.regular,
+      paddingHorizontal: 2,
+    },
+    shiftedLegend: {
+      fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
+      fontWeight: fontWeight.regular,
+      color: colors.textTertiary,
+    },
+    lockMark: {
+      position: "absolute",
+      bottom: 3,
+      width: 12,
+      height: 2,
+      borderRadius: radius.pill,
+    },
+    hint: {
+      position: "absolute",
+      width: HINT_WIDTH,
+      alignItems: "center",
+    },
+    hintText: {
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      color: colors.textSecondary,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      overflow: "hidden",
+      backgroundColor: colors.surfaceGlassPanel,
+    },
+  });

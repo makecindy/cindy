@@ -1,17 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { FOLD_CAPS, FOLD_FN, FoldKeyInput } from "../foldKeyboardInput";
-import {
-  foldKeyAt,
-  foldKeyRects,
-  foldKeyboardRows,
-} from "../foldKeyboardLayout";
+import { KEY_CAPS, KEY_FN, RemoteKeyInput } from "../remoteKeyInput";
+import { keyAt, keyRects, keyboardRows } from "../remoteKeyLayout";
 
 const down = (code: string) => ({ kind: "key", code, down: true });
 const up = (code: string) => ({ kind: "key", code, down: false });
 
-describe("FoldKeyInput", () => {
+describe("RemoteKeyInput", () => {
   it("keeps overlapping fingers independent while typing fast", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     expect(input.press(1, "KeyA")).toEqual([down("KeyA")]);
     expect(input.press(2, "KeyB")).toEqual([down("KeyB")]);
     expect(input.release(1)).toEqual([up("KeyA")]);
@@ -19,14 +15,14 @@ describe("FoldKeyInput", () => {
   });
 
   it("does not send a modifier tapped alone, so Win or Alt opens no host menu", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     expect(input.press(1, "MetaLeft")).toEqual([]);
     expect(input.release(1)).toEqual([]);
     expect(input.latch("MetaLeft")).toBe("once");
   });
 
   it("applies a tapped modifier to the next key only", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     input.press(1, "MetaLeft");
     input.release(1);
     expect(input.press(2, "KeyC")).toEqual([down("MetaLeft"), down("KeyC")]);
@@ -36,7 +32,7 @@ describe("FoldKeyInput", () => {
   });
 
   it("locks on the second tap and clears on the third", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     const tap = () => {
       input.press("m", "ShiftLeft");
       input.release("m");
@@ -52,7 +48,7 @@ describe("FoldKeyInput", () => {
   });
 
   it("holds a modifier across repeated keys, as Command-Tab needs", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     input.press("cmd", "MetaLeft");
     expect(input.press(1, "Tab")).toEqual([down("MetaLeft"), down("Tab")]);
     expect(input.release(1)).toEqual([up("Tab")]);
@@ -63,16 +59,16 @@ describe("FoldKeyInput", () => {
   });
 
   it("maps the Fn layer locally and keeps the press's code through release", () => {
-    const input = new FoldKeyInput();
-    input.press("fn", FOLD_FN);
+    const input = new RemoteKeyInput();
+    input.press("fn", KEY_FN);
     expect(input.press(1, "Digit1")).toEqual([down("F1")]);
     expect(input.release("fn")).toEqual([]);
     expect(input.release(1)).toEqual([up("F1")]);
   });
 
   it("types capitals through Shift for letters only while Caps Lock is on", () => {
-    const input = new FoldKeyInput();
-    input.press("caps", FOLD_CAPS);
+    const input = new RemoteKeyInput();
+    input.press("caps", KEY_CAPS);
     input.release("caps");
     expect(input.uppercase()).toBe(true);
     expect(input.press(1, "KeyA")).toEqual([down("ShiftLeft"), down("KeyA")]);
@@ -81,18 +77,60 @@ describe("FoldKeyInput", () => {
   });
 
   it("does not latch a modifier whose touch was cancelled", () => {
-    const input = new FoldKeyInput();
+    const input = new RemoteKeyInput();
     input.press(1, "AltLeft");
     input.release(1, true);
     expect(input.latch("AltLeft")).toBeNull();
   });
 });
 
-describe("foldKeyRects", () => {
-  const rows = foldKeyboardRows("darwin", [
+describe("compact keyboard", () => {
+  const strip = [{ id: "Escape", code: "Escape", weight: 1 }];
+  const edge = (rects: ReturnType<typeof keyRects>, id: string) => {
+    const rect = rects.find((item) => item.id === id)!;
+    return rect.x + rect.width;
+  };
+
+  it("fits ten letters across a phone and keeps every row at the edge", () => {
+    const rects = keyRects(keyboardRows("darwin", strip, true), 370, 276);
+    for (const id of ["Digit0", "KeyP", "Backspace", "Enter"])
+      expect(edge(rects, id)).toBeCloseTo(370, 3);
+    expect(edge(rects, "KeyL")).toBeLessThan(370);
+    expect(rects.find((item) => item.id === "KeyA")!.x).toBeGreaterThan(0);
+    expect(rects.find((item) => item.id === "KeyQ")!.width).toBeGreaterThan(30);
+  });
+
+  it("puts every remaining host key on the symbol page", () => {
+    const codes = keyboardRows("darwin", strip, true, true)
+      .flat()
+      .map((cell) => cell.code);
+    for (const code of [
+      "Backquote",
+      "Minus",
+      "Equal",
+      "BracketLeft",
+      "BracketRight",
+      "Backslash",
+      "Semicolon",
+      "Quote",
+      "Comma",
+      "Period",
+      "Slash",
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      "Insert",
+    ])
+      expect(codes).toContain(code);
+  });
+});
+
+describe("keyRects", () => {
+  const rows = keyboardRows("darwin", [
     { id: "Escape", code: "Escape", weight: 1 },
   ]);
-  const rects = foldKeyRects(rows, 700, 300);
+  const rects = keyRects(rows, 700, 300);
 
   it("fills the available width on every row", () => {
     for (const code of [
@@ -108,7 +146,7 @@ describe("foldKeyRects", () => {
   });
 
   it("keeps group gaps inside the row width, with the last key at the edge", () => {
-    const [esc, undo] = foldKeyRects(
+    const [esc, undo] = keyRects(
       [
         [
           { id: "a", weight: 1, bare: true },
@@ -134,13 +172,13 @@ describe("foldKeyRects", () => {
   it("finds the key under a finger, and the nearest key from a gap", () => {
     const a = rects.find((item) => item.id === "KeyA")!;
     const s = rects.find((item) => item.id === "KeyS")!;
-    expect(foldKeyAt(rects, a.x + 2, a.y + 2)?.id).toBe("KeyA");
-    expect(foldKeyAt(rects, s.x - 1, s.y + 2)?.id).toBe("KeyS");
+    expect(keyAt(rects, a.x + 2, a.y + 2)?.id).toBe("KeyA");
+    expect(keyAt(rects, s.x - 1, s.y + 2)?.id).toBe("KeyS");
   });
 
   it("orders the bottom modifiers for the host", () => {
     const ids = (platform: "darwin" | "win32") =>
-      foldKeyboardRows(platform, [])[5]
+      keyboardRows(platform, [])[5]
         .slice(0, 3)
         .map((cell) => cell.code);
     expect(ids("darwin")).toEqual(["ControlLeft", "AltLeft", "MetaLeft"]);

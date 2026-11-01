@@ -1,5 +1,5 @@
 import { useRef, type ReactNode } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Image, Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import {
@@ -14,7 +14,10 @@ import {
 } from "@/theme";
 import type { LayoutRect } from "@/platform/windowGeometry";
 import { retroMacArtwork } from "./retroMacArtwork";
+import { FoldDeckOperations } from "./FoldDesktopKeyboard";
 import { FoldTouchpad } from "./FoldTouchpad";
+import { RemoteKeySurface } from "./RemoteKeySurface";
+import type { KeyRect } from "./remoteKeyLayout";
 
 export const FOLD_DESKTOP_SKINS = [
   "classic",
@@ -281,95 +284,29 @@ export function FoldDesktopSkinSwitch({
   );
 }
 
-const ROWS = [
-  [
-    "Escape",
-    ..."1234567890".split("").map((key) => `Digit${key}`),
-    "Backspace",
-  ],
-  ["Tab", ..."QWERTYUIOP".split("").map((key) => `Key${key}`)],
-  [..."ASDFGHJKL".split("").map((key) => `Key${key}`), "Enter"],
-  [
-    "ShiftLeft",
-    ..."ZXCVBNM".split("").map((key) => `Key${key}`),
-    "Comma",
-    "Period",
-    "ArrowUp",
-  ],
-  [
-    "ControlLeft",
-    "AltLeft",
-    "MetaLeft",
-    "Space",
-    "ArrowLeft",
-    "ArrowDown",
-    "ArrowRight",
-  ],
-];
-
-export function FoldDesktopKeys({
-  renderKey,
-  fill = false,
-  trackpoint = false,
-}: {
-  renderKey(code: string): ReactNode;
-  fill?: boolean;
-  trackpoint?: boolean;
-}) {
-  return (
-    <View
-      testID="remoteDesktop.retroKeys"
-      style={[styles.keys, fill && { flex: 1 }]}
-    >
-      {ROWS.map((row, index) => (
-        <View key={index} style={[styles.keyRow, fill && { flex: 1 }]}>
-          {row.map(renderKey)}
-        </View>
-      ))}
-      {trackpoint && (
-        <View
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "60%",
-            width: 18,
-            height: 18,
-            marginLeft: -9,
-            marginTop: -9,
-          }}
-        >
-          <Image
-            source={retroMacArtwork.trackpoint}
-            style={styles.artwork}
-            resizeMode="contain"
-          />
-        </View>
-      )}
-    </View>
-  );
-}
-
 /** Hardware keeps its historical material in either theme; its palmrest is a larger invisible input surface. */
 export function FoldDesktopDeck({
-  renderKey,
-  send,
-  enabled,
+  keys,
   skin,
   onChange,
+  onOperations,
+  clipboard,
   safeInsets = { top: 0, bottom: 0, left: 0, right: 0 },
   bottomReserve = 0,
 }: {
-  renderKey(code: string): ReactNode;
-  send(message: object): void;
-  enabled: boolean;
+  keys: Omit<
+    Parameters<typeof RemoteKeySurface>[0],
+    "compact" | "palette" | "renderKeycap" | "renderOverlay" | "testID"
+  >;
   skin: RetroDesktopSkin;
   onChange(value: FoldDesktopSkin): void;
+  onOperations(): void;
+  clipboard: ReactNode;
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   bottomReserve?: number;
 }) {
+  const { send, enabled } = keys;
+  const palette = foldDesktopSkinColors(skin);
   const artwork = heritageArtwork(skin);
   const darkHardware = skin === "powerbook" || skin === "thinkpad";
   // These two source images include a narrow white exterior along their
@@ -409,7 +346,7 @@ export function FoldDesktopDeck({
             style={deckArtwork}
           />
         </View>
-        <ScrollView
+        <View
           style={{
             flex: 1,
             marginHorizontal: artwork ? "5%" : "3.2%",
@@ -417,15 +354,26 @@ export function FoldDesktopDeck({
             paddingLeft: safeInsets.left,
             paddingRight: safeInsets.right,
           }}
-          contentContainerStyle={{ flexGrow: 1 }}
-          bounces={false}
         >
-          <FoldDesktopKeys
-            renderKey={renderKey}
-            fill
-            trackpoint={skin === "thinkpad"}
+          <RemoteKeySurface
+            {...keys}
+            testID="remoteDesktop.retroKeys"
+            palette={palette}
+            // Every hardware keyboard sits in a dark well, even in a beige case.
+            stripPalette={darkColors}
+            renderKeycap={(rect) => (
+              <FoldDesktopKeycap
+                skin={skin}
+                wide={rect.width > rect.height * 1.3}
+              />
+            )}
+            renderOverlay={
+              skin === "thinkpad"
+                ? (rects) => <Trackpoint rects={rects} />
+                : undefined
+            }
           />
-        </ScrollView>
+        </View>
       </View>
       <View style={{ height: 68 + safeInsets.bottom + bottomReserve }}>
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
@@ -474,7 +422,53 @@ export function FoldDesktopDeck({
         >
           <FoldTouchpad send={send} enabled={enabled} bare />
         </View>
+        {/* After the palmrest, so these two stay above its pointer surface. */}
+        <View
+          pointerEvents="box-none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              bottom: safeInsets.bottom + bottomReserve,
+              paddingLeft: safeInsets.left + spacing.md,
+              paddingRight: safeInsets.right + spacing.md,
+            },
+          ]}
+        >
+          <View style={styles.corner}>{clipboard}</View>
+          <FoldDeckOperations
+            onPress={onOperations}
+            color={palette.textPrimary}
+          />
+        </View>
       </View>
+    </View>
+  );
+}
+
+/** Sits where the G, H and B keys meet, as on the original keyboard. */
+function Trackpoint({ rects }: { rects: KeyRect[] }) {
+  const g = rects.find((rect) => rect.id === "KeyG");
+  if (!g) return null;
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{
+        position: "absolute",
+        left: g.x + g.width - 9,
+        top: g.y + g.height - 7,
+        width: 18,
+        height: 18,
+      }}
+    >
+      <Image
+        source={retroMacArtwork.trackpoint}
+        style={styles.artwork}
+        resizeMode="contain"
+      />
     </View>
   );
 }
@@ -564,9 +558,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     justifyContent: "center",
   },
-  keys: {
-    padding: 2,
-    gap: 2,
+  corner: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  keyRow: { flexDirection: "row", gap: 2 },
 });

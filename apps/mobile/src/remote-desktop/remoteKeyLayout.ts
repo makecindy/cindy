@@ -1,6 +1,6 @@
-import { FOLD_CAPS, FOLD_FN } from "./foldKeyboardInput";
+import { KEY_CAPS, KEY_FN } from "./remoteKeyInput";
 
-export type FoldKeyCell = {
+export type KeyCell = {
   id: string;
   /** Host key code; absent on function-row actions. */
   code?: string;
@@ -14,14 +14,18 @@ export type FoldKeyCell = {
   bare?: boolean;
   /** Empty width before this key, in key units, separating groups. */
   groupGap?: number;
+  /** Empty width after this key, in key units. */
+  trailingGap?: number;
+  /** Non-typing keys use the quieter key treatment. */
+  control?: boolean;
 };
-export type FoldKeyRect = FoldKeyCell & {
+export type KeyRect = KeyCell & {
   x: number;
   y: number;
   width: number;
   height: number;
 };
-export type FoldHostPlatform = string | undefined;
+export type HostPlatform = string | undefined;
 
 const GAP = 5;
 const FUNCTION_ROW_HEIGHT = 0.74;
@@ -41,7 +45,7 @@ const symbol = (code: string, legend: string, shifted: string) => ({
   shifted,
 });
 
-function bottomModifiers(platform: FoldHostPlatform) {
+function bottomModifiers(platform: HostPlatform) {
   const mac = platform === "darwin";
   const left = mac
     ? ["ControlLeft", "AltLeft", "MetaLeft"]
@@ -50,18 +54,99 @@ function bottomModifiers(platform: FoldHostPlatform) {
   return { left, right };
 }
 
-export function foldKeyboardRows(
-  platform: FoldHostPlatform,
-  functionRow: FoldKeyCell[],
-): FoldKeyCell[][] {
+const DIGIT_SYMBOLS = "!@#$%^&*()";
+const digitRow = () =>
+  [..."1234567890"].map((key, index) =>
+    symbol(`Digit${key}`, key, DIGIT_SYMBOLS[index]),
+  );
+const control = (code: string, weight: number): KeyCell => ({
+  id: code,
+  code,
+  weight,
+  control: true,
+});
+
+/** Phone width cannot fit a laptop's 15 columns, so symbols move to a second page. */
+export const KEY_PAGE = "page";
+function compactRows(
+  platform: HostPlatform,
+  functionRow: KeyCell[],
+  symbols: boolean,
+): KeyCell[][] {
+  const { left } = bottomModifiers(platform);
+  const bottom: KeyCell[] = [
+    ...left.map((code) => ({ ...control(code, 1.2), id: `${code}.left` })),
+    {
+      id: KEY_PAGE,
+      weight: 1.2,
+      legend: symbols ? "abc" : "#+=",
+      control: true,
+    },
+    { id: "Space", code: "Space", weight: 3 },
+    control("Enter", 2),
+  ];
+  if (symbols)
+    return [
+      functionRow,
+      digitRow(),
+      [
+        symbol("Backquote", "`", "~"),
+        symbol("Minus", "-", "_"),
+        symbol("Equal", "=", "+"),
+        symbol("BracketLeft", "[", "{"),
+        symbol("BracketRight", "]", "}"),
+        symbol("Backslash", "\\", "|"),
+      ],
+      [
+        symbol("Semicolon", ";", ":"),
+        symbol("Quote", "'", '"'),
+        symbol("Comma", ",", "<"),
+        symbol("Period", ".", ">"),
+        symbol("Slash", "/", "?"),
+        { id: "Insert", code: "Insert", weight: 1, legend: "Ins" },
+      ],
+      [
+        control("ShiftLeft", 1.5),
+        control("ArrowLeft", 1),
+        control("ArrowUp", 1),
+        control("ArrowDown", 1),
+        control("ArrowRight", 1),
+        control("Backspace", 1.5),
+      ],
+      bottom,
+    ];
+  const middle = letters("ASDFGHJKL");
+  return [
+    functionRow,
+    digitRow(),
+    letters("QWERTYUIOP"),
+    [
+      { ...middle[0], groupGap: 0.5 },
+      ...middle.slice(1, -1),
+      { ...middle[middle.length - 1], trailingGap: 0.5 },
+    ],
+    [
+      control("ShiftLeft", 1.5),
+      ...letters("ZXCVBNM"),
+      control("Backspace", 1.5),
+    ],
+    bottom,
+  ];
+}
+
+export function keyboardRows(
+  platform: HostPlatform,
+  functionRow: KeyCell[],
+  compact = false,
+  symbols = false,
+): KeyCell[][] {
+  if (compact) return compactRows(platform, functionRow, symbols);
   const { left, right } = bottomModifiers(platform);
   return [
     functionRow,
     [
       symbol("Backquote", "`", "~"),
-      ...[..."1234567890"].map((key, index) =>
-        symbol(`Digit${key}`, key, "!@#$%^&*()"[index]),
-      ),
+      ...digitRow(),
       symbol("Minus", "-", "_"),
       symbol("Equal", "=", "+"),
       { id: "Backspace", code: "Backspace", weight: 2 },
@@ -74,7 +159,7 @@ export function foldKeyboardRows(
       { ...symbol("Backslash", "\\", "|"), weight: 1.5 },
     ],
     [
-      { id: FOLD_CAPS, code: FOLD_CAPS, weight: 1.75 },
+      { id: KEY_CAPS, code: KEY_CAPS, weight: 1.75 },
       ...letters("ASDFGHJKL"),
       symbol("Semicolon", ";", ":"),
       symbol("Quote", "'", '"'),
@@ -103,15 +188,15 @@ export function foldKeyboardRows(
   ];
 }
 
-export const FOLD_ESCAPE: FoldKeyCell = {
+export const ESCAPE_CELL: KeyCell = {
   id: "Escape",
   code: "Escape",
   weight: 1,
   bare: true,
 };
-export const FOLD_FN_CELL: FoldKeyCell = {
-  id: FOLD_FN,
-  code: FOLD_FN,
+export const FN_CELL: KeyCell = {
+  id: KEY_FN,
+  code: KEY_FN,
   weight: 1,
   bare: true,
   groupGap: 0.6,
@@ -121,21 +206,22 @@ export const FOLD_FN_CELL: FoldKeyCell = {
  * One geometry for drawing and hit-testing: Android reports a later finger
  * against the view under the first one, so a key cannot find its own touches.
  */
-export function foldKeyRects(
-  rows: FoldKeyCell[][],
+export function keyRects(
+  rows: KeyCell[][],
   width: number,
   height: number,
-): FoldKeyRect[] {
+): KeyRect[] {
   const units = rows.length - 1 + FUNCTION_ROW_HEIGHT;
   const rowHeight = Math.max(0, height - GAP * (rows.length - 1)) / units;
-  const rects: FoldKeyRect[] = [];
+  const rects: KeyRect[] = [];
   let y = 0;
   rows.forEach((row, rowIndex) => {
     const currentHeight =
       rowIndex === 0 ? rowHeight * FUNCTION_ROW_HEIGHT : rowHeight;
     const slots = row.filter((cell) => cell.half !== "bottom");
     const total = slots.reduce(
-      (sum, cell) => sum + cell.weight + (cell.groupGap ?? 0),
+      (sum, cell) =>
+        sum + cell.weight + (cell.groupGap ?? 0) + (cell.trailingGap ?? 0),
       0,
     );
     const unit = Math.max(0, width - GAP * (slots.length - 1)) / total;
@@ -157,7 +243,7 @@ export function foldKeyRects(
       } else {
         rects.push({ ...cell, x, y, width: cellWidth, height: currentHeight });
       }
-      x += cellWidth + GAP;
+      x += cellWidth + (cell.trailingGap ?? 0) * unit + GAP;
     }
     y += currentHeight + GAP;
   });
@@ -165,8 +251,8 @@ export function foldKeyRects(
 }
 
 /** The nearest key wins, so the gaps between keys never swallow a press. */
-export function foldKeyAt(rects: FoldKeyRect[], x: number, y: number) {
-  let best: FoldKeyRect | null = null;
+export function keyAt(rects: KeyRect[], x: number, y: number) {
+  let best: KeyRect | null = null;
   let bestDistance = Infinity;
   for (const rect of rects) {
     const dx = Math.max(rect.x - x, 0, x - rect.x - rect.width);

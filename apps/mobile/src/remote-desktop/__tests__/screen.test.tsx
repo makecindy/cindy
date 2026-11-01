@@ -3432,15 +3432,22 @@ describe("remote desktop controls", () => {
       await connect();
       act(() => button("keyboard").click());
       act(() => button("computerKeyboard").click());
-      const style = fixture.views["remoteDesktop.keyPageViewport"].style;
-      expect(style).toEqual({
-        flexShrink: 1,
-        maxHeight: landscape ? 156 : 300,
-      });
-      act(() => button("functionKeys").click());
-      expect(fixture.views["remoteDesktop.keyPageViewport"].style).toEqual(
-        style,
-      );
+      const keys = fixture.views["remoteDesktop.keys"];
+      expect(keys).toBeDefined();
+      // Unit: a phone-width portrait panel uses the compact page; landscape has room for all keys.
+      const width = landscape ? 780 : 370;
+      act(() => keys.onLayout({ nativeEvent: { layout: { width, height: 200 } } }));
+      expect(Boolean(fixture.views["remoteDesktop.key.page"])).toBe(!landscape);
+      expect(Boolean(fixture.views["remoteDesktop.key.Backquote"])).toBe(landscape);
+      if (!landscape) {
+        const center = (id: string) => {
+          const style = Object.assign({}, ...fixture.views[`remoteDesktop.key.${id}`].style.flat(Infinity).filter(Boolean));
+          return { nativeEvent: { identifier: 1, locationX: style.left + style.width / 2, locationY: style.top + style.height / 2 } };
+        };
+        act(() => keys.onTouchStart(center("page")));
+        act(() => keys.onTouchEnd(center("page")));
+        expect(fixture.views["remoteDesktop.key.Backquote"]).toBeDefined();
+      }
       expect(sent()).toContainEqual({
         type: "events",
         events: [{ kind: "release" }],
@@ -5632,13 +5639,13 @@ describe("remote desktop controls", () => {
     const stops = requests().filter((r) => r.op === "stop").length;
     const deck = '[data-testid="remoteDesktop.foldKeyboard"]';
     expect(host.querySelector(deck)).not.toBeNull();
-    act(() => fixture.views["remoteDesktop.foldKeys"].onLayout({
+    act(() => fixture.views["remoteDesktop.keys"].onLayout({
       nativeEvent: { layout: { width: 680, height: 260 } },
     }));
-    const keys = fixture.views["remoteDesktop.foldKeys"];
+    const keys = fixture.views["remoteDesktop.keys"];
     const keyCenter = (id: string) => {
-      const style = Object.assign({}, ...fixture.views[`remoteDesktop.foldKey.${id}`].style.flat(Infinity).filter(Boolean));
-      return { pageX: style.left + style.width / 2, pageY: style.top + style.height / 2 };
+      const style = Object.assign({}, ...fixture.views[`remoteDesktop.key.${id}`].style.flat(Infinity).filter(Boolean));
+      return { locationX: style.left + style.width / 2, locationY: style.top + style.height / 2 };
     };
     // Unit: Android reports a second finger against the first finger's view,
     // so these touches reach the shared surface and are placed by coordinates.
@@ -5657,7 +5664,7 @@ describe("remote desktop controls", () => {
     });
     // Unit: function-row shortcuts run when the finger lifts.
     act(() => keys.onTouchStart(touch(3, "undo")));
-    expect(fixture.views["remoteDesktop.foldKeyHint"]).toBeDefined();
+    expect(fixture.views["remoteDesktop.keyHint"]).toBeDefined();
     act(() => keys.onTouchEnd(touch(3, "undo")));
     expect(sent().filter((m) => m.type === "events").at(-1)).toEqual({
       type: "events",
@@ -5676,7 +5683,7 @@ describe("remote desktop controls", () => {
     render(geometry);
     expect(host.querySelector(deck)).not.toBeNull();
     // Unit: the keyboard key hands off to the phone's input method.
-    const reopened = fixture.views["remoteDesktop.foldKeys"];
+    const reopened = fixture.views["remoteDesktop.keys"];
     act(() => reopened.onTouchStart(touch(4, "inputMethod")));
     act(() => reopened.onTouchEnd(touch(4, "inputMethod")));
     expect(host.querySelector(deck)).toBeNull();
@@ -5887,8 +5894,25 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
     fixture.post.mockClear();
-    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
+    act(() =>
+      fixture.views["remoteDesktop.retroKeys"].onLayout({
+        nativeEvent: { layout: { width: 600, height: 300 } },
+      }),
+    );
+    const retroKeys = fixture.views["remoteDesktop.retroKeys"];
+    const letterStyle = Object.assign(
+      {},
+      ...fixture.views["remoteDesktop.key.KeyA"].style.flat(Infinity).filter(Boolean),
+    );
+    act(() =>
+      retroKeys.onTouchStart({
+        nativeEvent: {
+          identifier: 1,
+          locationX: letterStyle.left + 2,
+          locationY: letterStyle.top + 2,
+        },
+      }),
+    );
     expect(sent()).toContainEqual({
       type: "events",
       events: [{ kind: "key", code: "KeyA", down: true }],
@@ -5943,12 +5967,10 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).toBeNull();
     expect(sent()).toContainEqual({ type: "releaseInput" });
-    act(() => letter.onPressOut());
-    expect(
-      sent()
-        .filter((m) => m.type === "events")
-        .at(-1),
-    ).toEqual({ type: "events", events: [] });
+    // Unit: a surface that was replaced has already released its keys; a late lift sends nothing.
+    const eventCount = sent().filter((m) => m.type === "events").length;
+    act(() => retroKeys.onTouchEnd({ nativeEvent: { identifier: 1 } }));
+    expect(sent().filter((m) => m.type === "events")).toHaveLength(eventCount);
     expect(sent().some((m) => m.type === "nativeTouchpad")).toBe(false);
     expect(
       sent()
