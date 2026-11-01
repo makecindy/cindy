@@ -8,6 +8,8 @@ import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDev
 import { toast } from '@/lib/toast';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 
+import { clearRemoteDesktopAvailability } from '@/features/remote-desktop/useRemoteDesktopAvailability';
+
 const fixture = vi.hoisted(() => ({ devices: [] as DeviceLinkDeviceView[] }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => fixture.devices,
@@ -40,19 +42,30 @@ const device = (): DeviceLinkDeviceView => ({
 
 beforeEach(async () => {
   vi.useFakeTimers();
+  clearRemoteDesktopAvailability();
   vi.clearAllMocks();
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
   fixture.devices = [device()];
   invoke.mockReset().mockResolvedValue(capabilities);
   open.mockReset().mockResolvedValue(undefined);
-  Object.assign(window, { electronAPI: { deviceLink: { invoke }, openRemoteDesktop: open } });
+  Object.assign(window, {
+    electronAPI: {
+      deviceLink: {
+        invoke,
+        onStatusChanged: vi.fn(() => () => {}),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+      openRemoteDesktop: open,
+    },
+  });
   await i18n.changeLanguage('en');
 });
 afterEach(() => {
   cleanup();
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
+  clearRemoteDesktopAvailability();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -204,6 +217,7 @@ it.each([
     }),
   });
   expect(invoke).toHaveBeenCalledOnce();
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
   await hover();
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBe(action);
@@ -215,13 +229,16 @@ it('rechecks an interrupted probe on keyboard focus and keeps retrying while it 
   invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'));
   render(header());
   await act(async () => {});
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
   act(() => screen.getByRole('button', { name: 'Machine' }).focus());
   await act(async () => {});
   expect(invoke).toHaveBeenCalledTimes(2);
   fireEvent.mouseLeave(row());
+  await act(async () => vi.advanceTimersByTimeAsync(4_000));
   await hover();
   expect(invoke).toHaveBeenCalledTimes(3);
   invoke.mockResolvedValue(capabilities);
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
   fireEvent.mouseLeave(row());
   await hover();
   expect(invoke).toHaveBeenCalledTimes(4);
@@ -238,6 +255,7 @@ it('reports a relay offline reply as offline and checks again when revealed', as
   expect(
     screen.getByRole('button', { name: /^Remote desktop unavailable:/ }).getAttribute('aria-label'),
   ).toContain('This computer is offline.');
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
   await hover();
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
