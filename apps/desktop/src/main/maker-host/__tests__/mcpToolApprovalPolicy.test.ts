@@ -558,6 +558,23 @@ describe('teammate pre-run command approval', () => {
 });
 
 describe('cross-device actions use the task permission mode', () => {
+  // agent-user-parity.md: an objective edit can resume work and must use normal
+  // permissions. Existing cases cover other task mutations, not this new tool.
+  it('reviews Goal edits through direct and progressive tools while leaving reads quiet', () => {
+    const name = 'update_goal';
+    const args = { objective: 'revised objective' };
+    for (const context of [
+      { toolName: name, toolParams: args },
+      { toolName: 'call_tool', toolParams: { name, args } },
+      { toolParams: { name, args } },
+      { toolName: 'call_tool', toolParams: JSON.stringify({ name, args: JSON.stringify(args) }) },
+    ]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', ...context })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool',
+      toolParams: { name: 'get_goal', args: {} } })).toBe('auto-approve');
+  });
+
   it.each(['archive_sessions', 'unarchive_sessions'])('reviews remote %s in direct and progressive calls', (name) => {
     for (const session_ids of [['studio::s1'], ['s1', 'studio::s2']]) {
       const args = { session_ids };

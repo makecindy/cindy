@@ -84,6 +84,7 @@ vi.mock('../../maker-host/index.js', () => ({
 vi.mock('../../scheduler-host/index.js', () => ({
   getScheduler: () => null,
 }));
+vi.mock('../../goal-host/index.js', () => ({ getGoalController: () => null }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,

@@ -133,6 +133,8 @@ import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
+import { getGoalController } from '../goal-host/index.js';
+import { createSessionGoalCallbacks } from './sessionGoal.js';
 import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
@@ -385,6 +387,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     authorizeAction: createDesktopTaskActionAuthorizer({
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
       capturePermissionRequest: captureTaskActionPermissionRequest,
+      getGoal: async (sessionId) => {
+        const controller = getGoalController();
+        if (!controller) throw new Error('HOST_NOT_READY');
+        const goal = await controller.getStatus(sessionId);
+        return goal ? { status: goal.status, objective: goal.objective } : null;
+      },
       getSessionWorkDir: resolveHookSessionWorkDir,
       getScheduleDefinition: async (id, hookInstallation, device) => {
         let schedule: Schedule | null;
@@ -785,6 +793,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       getSessionProject: readCurrentSessionProject,
       runtimeCapabilities: deps.runtimeCapabilities,
       productHelpDocs: HELP_KNOWLEDGE,
+      sessionGoal: createSessionGoalCallbacks({
+        getController: getGoalController,
+        withAccess: withAccountDataAccess,
+        isCurrentSession: (context) => !!context.sessionId && !!context.sessionInstanceId
+          && getTaskActionSession(context.sessionId)?.instanceId === context.sessionInstanceId,
+      }),
       // Install / auto-update requests become owner-only Host cards (see agent-app-update/).
       appUpdate: createAgentAppUpdateCallbacks((sessionId, sessionInstanceId) =>
         deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true),
