@@ -34,6 +34,7 @@ import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
+import remarkRepairLocalMarkdownLinks from './remarkRepairLocalMarkdownLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -239,6 +240,7 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkRepairLocalMarkdownLinks,
   remarkSessionLinks,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
