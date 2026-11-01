@@ -176,9 +176,14 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
   }
   if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
   if (!app) return null;
-  const visibleWindows = app.windows.filter((window) => !window.minimized);
   const title = spec.windowTitle?.toLowerCase();
   const named = (w: { title: string }) => !!title && w.title.toLowerCase().includes(title);
+  // The same browser can run as several processes (profiles, an automation copy): the named window may be in any of them.
+  if (title && spec.pid === undefined && !app.windows.some(named)) {
+    const sameApp = candidates.filter((entry) => entry.bundleId === app!.bundleId && entry.windows.some(named));
+    app = sameApp.find((entry) => entry.windows.some((w) => named(w) && !w.minimized)) ?? sameApp[0] ?? app;
+  }
+  const visibleWindows = app.windows.filter((window) => !window.minimized);
   const window = visibleWindows.find(named)
     ?? app.windows.find(named)
     ?? visibleWindows.find((w) => w.focused)

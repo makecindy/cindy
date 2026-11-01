@@ -226,7 +226,18 @@ export class InputHandoffService {
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
     if (resolved) {
-      if (target.windowTitle || (target.pid === undefined && !target.app)) return null;
+      if (target.windowTitle) {
+        const title = target.windowTitle.toLowerCase();
+        if (resolved.window.title.toLowerCase().includes(title)) return null;
+        const titles = list.apps.filter((app) => app.bundleId === resolved.bundleId).flatMap((app) => app.windows.map((w) => w.title)).filter(Boolean);
+        return {
+          errorCode: 'TARGET_NOT_FOUND',
+          message: `${resolved.app} has no window titled ${JSON.stringify(target.windowTitle)}. `
+            + (titles.length ? `Its windows: ${[...new Set(titles)].slice(0, 8).map((t) => JSON.stringify(t)).join(', ')}. ` : '')
+            + 'Pages change their titles: read the current one and ask again.',
+        };
+      }
+      if (target.pid === undefined && !target.app) return null;
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       const titles = list.apps.find((app) => app.pid === resolved.pid)?.windows.map((w) => w.title).filter(Boolean) ?? [];
       if (titles.length < 2) return null;

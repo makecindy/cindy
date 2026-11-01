@@ -217,6 +217,15 @@ describe('resolveHandoffTarget with minimized windows', () => {
     expect(target?.pid).toBe(20);
   });
 
+  it('finds a named window in any process of the same browser', () => {
+    const second = { ...chrome, pid: 21 };
+    const apps = [{ ...chrome, windows: [window(0, 'X', false)] }, { ...second, windows: [window(0, 'Login', true), window(1, 'Other', false)] }];
+    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'login' }, 1)).toMatchObject({ pid: 21, minimized: true });
+    // A pid is exact, and with no name to look for the first process stands.
+    expect(resolveHandoffTarget(list(apps), { pid: 20, windowTitle: 'login' }, 1)?.pid).toBe(20);
+    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)?.pid).toBe(20);
+  });
+
   it('still never picks Cindy, minimized or not', () => {
     expect(
       resolveHandoffTarget(

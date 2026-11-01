@@ -207,6 +207,10 @@ describe('代输入 requests the agent makes', () => {
     expect(problem?.errorCode).toBe('TARGET_AMBIGUOUS');
     expect(problem?.message).toContain('"App Store Connect"');
     expect(await h.service.checkTarget({ app: 'Google Chrome', windowTitle: 'App Store Connect' })).toBeNull();
+    // A name that matches nothing is reported, not answered with whichever window has focus.
+    const missing = await h.service.checkTarget({ app: 'Google Chrome', windowTitle: 'Gone' });
+    expect(missing?.errorCode).toBe('TARGET_NOT_FOUND');
+    expect(missing?.message).toContain('"Home"');
   });
 
   // Seen in a real run: a Chinese desktop lists Finder as 访达, and a dev build
