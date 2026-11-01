@@ -500,8 +500,12 @@ test("compareWithBaseline only lets counts stay or shrink", () => {
 			assert.match(output(removed), /baseline.*missing|baseline.*removed/i);
 			assert.equal(fs.existsSync(baselinePath), false);
 		}
-		writeBaseline({ [relativeTestPath]: { sourceReads: 1 } });
+		// PR #8342: repair source while retaining the old excessive branch baseline.
+		// The real CLI must generate a tighter file, but ordinary checks still reject
+		// the old JSON. The earlier matrix proves remaining excess cannot be updated.
+		writeBaseline({ [relativeTestPath]: { sourceReads: 2 } });
 		writeReads(0);
+		assert.notEqual(cli().status, 0);
 		const tightened = cli(["--update"]);
 		assert.equal(tightened.status, 0, output(tightened));
 		assert.deepEqual(JSON.parse(fs.readFileSync(baselinePath, "utf8")).files, {});

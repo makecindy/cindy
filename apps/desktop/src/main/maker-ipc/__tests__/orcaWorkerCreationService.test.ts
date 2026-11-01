@@ -1,10 +1,6 @@
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
-import { captureTaskActionGuard } from '../taskActionAuthorization.js';
-import { assertPluginWorkerDirectoryScope } from '../pluginWorkerDirectory.js';
+import { createOrcaPluginAuthority } from '@cindy/app-runtime/orcaPluginAuthority';
 import { runAcceptedCallback } from '../acceptedCallbackRunner.js';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
 import { PluginTaskError } from '../pluginTaskService.js';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -31,16 +27,17 @@ import { resolveSessionGitDir, resolveWorkerInheritedDirectory } from '../../git
 
 vi.mock('electron-store', () => ({ default: class {} }));
 
+// Inject the small storage fixture at the real production authority boundary;
+// no Electron or live owner database is needed for the existing revocation matrix.
+function authorityFixture(deps: Record<string, unknown>) {
+  return createOrcaPluginAuthority({
+    getSession: () => null, getAcceptedInputProvenance: () => null,
+    getSelfDeviceId: () => 'local', readSessionAgentDeviceId: async () => null,
+    ...deps,
+  } as unknown as Parameters<typeof createOrcaPluginAuthority>[0]);
+}
+
 describe('Host provenance across Orca creation waits', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  function callback(start: string, end: string, bindings: Record<string, unknown>) {
-    const from = source.indexOf(start), to = source.indexOf(end, from);
-    expect(from).toBeGreaterThan(0);
-    expect(to).toBeGreaterThan(from);
-    const js = ts.transpileModule(`${helper}\nreturn ({${source.slice(from, to)}});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-    return new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', 'assertPluginWorkerDirectoryScope', ...Object.keys(bindings), js)(captureTaskActionGuard, hasAcceptedUserTaskInput, assertPluginWorkerDirectoryScope, ...Object.values(bindings));
-  }
   type Action = 'createWorker' | 'enableTeam' | 'startNew' | 'startExisting';
   const phases: Record<Action, string[]> = {
     createWorker: ['team-query', 'worker-list', 'bootstrap', 'renewal', 'worker-write'],
@@ -74,8 +71,7 @@ describe('Host provenance across Orca creation waits', () => {
       else if (change === 'pick') picked = false;
     };
     const bindings = {
-      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      PluginTaskError, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
+      readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {
         if (directoryResolved) {
@@ -93,7 +89,8 @@ describe('Host provenance across Orca creation waits', () => {
         return directoryCase ? candidate : task.workingDir;
       }), isGhostPickedDir: () => picked,
     };
-    const { deps, service: creation } = createDeps(callback('    validateCreationPlan: async (', '    getLeadSessionRow: async (', bindings));
+    const authority = authorityFixture(bindings);
+    const { deps, service: creation } = createDeps({ validateCreationPlan: authority.validateCreationPlan });
     for (const [key, point] of [
       ['listWorkersByLead', 'worker-list'], ['bootstrapSession', 'bootstrap'],
       ['renewWorkerCreationReservation', 'renewal'], ['addOrUpdateWorker', 'worker-write'],
@@ -125,8 +122,8 @@ describe('Host provenance across Orca creation waits', () => {
     // dependencies remain absent so the test cannot silently use another path.
     const queuedTeam = createOrcaTeamService(queuedTeamDeps as unknown as OrcaTeamServiceDeps);
     const lifecycleDeps: OrcaLifecycleDeps = {
-      ...callback('    getWorkerPermissionModeOverride: async (', '    setWorkerPermissionMode: applyWorkerPermissionModePreference,', bindings),
-      ...callback('    createWorkerInTeam: (params', '    dispatchWorkerTask: (params', { ...bindings, orcaWorkerCreationService: creation }),
+      getWorkerPermissionModeOverride: authority.captureOrcaPluginAuthority,
+      createWorkerInTeam: (params, assertCurrent, onCreated) => creation.createWorkerInTeam(params, assertCurrent, onCreated),
       getActiveTeamByLead: vi.fn(async () => { mutate('team-query'); return action === 'createWorker' || action === 'startExisting' ? { id: 'team-1', leadSessionId: 'lead-1' } : null; }),
       createActiveTeam: vi.fn(async () => { mutate('team-create'); return { id: 'new-team', leadSessionId: 'lead-1' }; }),
       isOrphanedTeamInit: vi.fn(async () => false), getWorkerPermissionMode: () => 'bypassPermissions', setWorkerPermissionMode: vi.fn(),
@@ -3534,13 +3531,6 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
 });
 
 describe('production plugin Auto admission after reservation', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const callback = source.slice(source.indexOf('    validateCreationPlan: async ('), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
-  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const override = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
-  const overrideJs = ts.transpileModule(`${helper}\nreturn ({${override}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-
   it.each([false, true].flatMap(planned => ['bootstrap', 'renewal'].flatMap(stage =>
     ['disabled', 'uninstalled', 'reinstalled', 'account', 'owner', 'missing', 'downgraded', 'plan', 'archived', 'storage', 'healthy'].map(change => ({ planned, stage, change })),
   )))('rechecks $change after $stage with planned=$planned before persistence and dispatch', async ({ planned, stage, change }) => {
@@ -3552,9 +3542,7 @@ describe('production plugin Auto admission after reservation', () => {
         route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false } }] },
     } : {}) };
     const callbackDeps = {
-      captureTaskActionGuard,
-      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      readPluginTaskPlanReceipt: JSON.parse, assertPluginWorkerDirectoryScope, getCurrentDbClientSnapshot: () => epoch,
+      readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => {
         if (storageFailed) throw new Error('storage unavailable');
         return missing ? null : structuredClone(receipt);
@@ -3566,9 +3554,9 @@ describe('production plugin Auto admission after reservation', () => {
       readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async () => task.workingDir,
-      isGhostPickedDir: () => false, PluginTaskError,
+      isGhostPickedDir: () => false,
     };
-    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { validateCreationPlan } = authorityFixture(callbackDeps);
     const { deps, service } = createDeps({ validateCreationPlan });
     const mutate = () => {
       if (change === 'disabled') enabled = false;
@@ -3588,7 +3576,7 @@ describe('production plugin Auto admission after reservation', () => {
     deps.bootstrapSession = vi.fn(async opts => { const result = await bootstrap(opts); if (stage === 'bootstrap') mutate(); return result; });
     deps.renewWorkerCreationReservation = vi.fn(async () => { if (stage === 'renewal') mutate(); return true; });
     const markTeamEnded = vi.fn(async () => undefined);
-    const getWorkerPermissionModeOverride = new Function('hasAcceptedUserTaskInput', ...Object.keys(callbackDeps), overrideJs)(hasAcceptedUserTaskInput, ...Object.values(callbackDeps));
+    const getWorkerPermissionModeOverride = authorityFixture(callbackDeps).captureOrcaPluginAuthority;
     const lifecycle = createOrcaLifecycleService({
       getWorkerPermissionModeOverride,
       getActiveTeamByLead: async () => planned ? null : { id: 'team-1', leadSessionId: 'lead-1' },
@@ -3624,12 +3612,12 @@ describe('production plugin Auto admission after reservation', () => {
 
   it.each(['uninstalled', 'reinstalled', 'malformed'])('keeps ordinary Worker creation separate from %s plugin receipts', async state => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned'); });
-    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginWorkerDirectoryScope,
+    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
       readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
     };
-    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { validateCreationPlan } = authorityFixture(callbackDeps);
     const { deps, service } = createDeps({ validateCreationPlan });
     const result = service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex' });
     if (state === 'malformed') {
@@ -3663,7 +3651,6 @@ describe('production plugin Auto admission after reservation', () => {
     const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
     const depsForCallback = {
       readPluginTaskPlanReceipt: JSON.parse,
-      assertPluginWorkerDirectoryScope,
       getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return structuredClone(receipt); } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
@@ -3687,9 +3674,8 @@ describe('production plugin Auto admission after reservation', () => {
       resolvePluginWorkerDirectory: async ({requested}: {requested: string}) => { if (reserved && point === 'directory') revoke(); return requested === path.resolve('other') ? requested : path.resolve('repo'); },
       realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),
       isGhostPickedDir: () => false,
-      PluginTaskError,
     };
-    const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
+    const { validateCreationPlan } = authorityFixture(depsForCallback);
     const { deps, service } = createDeps({ validateCreationPlan, withLeadSendLock: async (_id, operation) => {
       if (point === 'archive-admission') taskStatus = 'archived';
       return operation();

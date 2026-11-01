@@ -1415,7 +1415,7 @@ export async function main(args = process.argv.slice(2)) {
   if (trusted.files === null) console.log('[test-hygiene] bootstrap: trusted base ' + trusted.commit + ' has no baseline yet');
   else {
     const raised = compareWithBaseline(baseline, trusted.files).violations;
-    if (raised.length > 0) {
+    if (raised.length > 0 && !args.includes('--update')) {
       for (const item of raised) console.error('[test-hygiene] baseline cannot increase ' + item.file + ' ' + item.rule + ': ' + item.limit + ' -> ' + item.current);
       return 1;
     }
@@ -1423,6 +1423,16 @@ export async function main(args = process.argv.slice(2)) {
   const counts = await scanRepository();
   const { violations, tightenable } = compareWithBaseline(counts, baseline);
   if (args.includes('--update')) {
+    // A repaired branch may still carry its old, excessive baseline. Validate
+    // the generated replacement against the trusted base before writing it;
+    // neither that old baseline nor --update may legitimize remaining debt.
+    if (trusted.files !== null) {
+      const raised = compareWithBaseline(counts, trusted.files).violations;
+      if (raised.length > 0) {
+        for (const item of raised) console.error('[test-hygiene] baseline cannot increase ' + item.file + ' ' + item.rule + ': ' + item.limit + ' -> ' + item.current);
+        return 1;
+      }
+    }
     // The very first run records the existing debt; afterwards --update only tightens.
     if (violations.length > 0 && existsSync(BASELINE_PATH)) {
       for (const v of violations) console.error(`refusing to raise ${v.rule} for ${v.file}: ${v.limit} -> ${v.current}`);
