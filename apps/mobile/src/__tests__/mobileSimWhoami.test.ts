@@ -306,6 +306,7 @@ describe('mobile:sim simulator choice', () => {
     expect(resolve('system')).toEqual([system]);
     expect(resolve('cindy')).toEqual([cindy]);
     expect(resolve('/tmp/devices')).toEqual([{ name: '/tmp/devices', path: '/tmp/devices' }]);
+    expect(resolve(cindy.path)).toEqual([cindy]);
     expect(() => resolve('cindy', settings('{"enabled":false,"idleMinutes":15}'))).toThrow(/关闭了运行/);
     expect(() => resolve('cindy', settings(), () => false)).toThrow(/没有找到 Cindy 模拟器/);
     expect(() => resolve('relative/devices')).toThrow(/绝对路径/);
@@ -336,13 +337,14 @@ describe('mobile:sim simulator choice', () => {
     expect(selectBootedSimulator([cindy, system], () => '', null)).toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
   });
 
-  it('skips an unreadable Cindy set in auto mode but still reports a pinned set', () => {
+  it('fails closed when Cindy cannot be listed, unless an exact UDID may live elsewhere', () => {
     const line = `iPhone B (${SIMULATOR_UDID}) (Booted)`;
     const listBooted = (set: { name: string }) => {
       if (set.name === 'cindy') throw new Error('cannot read device set');
       return line;
     };
-    expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: system, targetBooted: [line] });
+    expect(() => selectBootedSimulator([cindy, system], listBooted, null)).toThrow(/cannot read.*不改用其他模拟器/);
+    expect(selectBootedSimulator([cindy, system], listBooted, SIMULATOR_UDID)).toMatchObject({ deviceSet: system, targetBooted: [line] });
     expect(() => selectBootedSimulator([cindy], listBooted, null)).toThrow(/cannot read/);
   });
 

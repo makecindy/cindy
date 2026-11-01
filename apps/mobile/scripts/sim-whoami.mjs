@@ -136,7 +136,10 @@ if (!jsonOutput) {
 }
 const { deviceSet, booted, targetBooted } = timedCheck('simulator', () => selectBootedSimulator(
   deviceSets,
-  (set) => shFile("xcrun", simctlArgs(set, ["list", "devices", "booted"])),
+  // A failed listing must stay a failure: "" would read as "nothing booted" and pick a backend.
+  (set) => execFileSync("xcrun", simctlArgs(set, ["list", "devices", "booted"]), {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL",
+  }).trim(),
   simulatorUdid,
 ));
 if (!jsonOutput) console.log(`==== booted 模拟器(${deviceSet.name})====`);

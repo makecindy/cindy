@@ -98,6 +98,8 @@ export function resolveSimulatorDeviceSets({
   }
   if (!isAbsolute(choice))
     throw new Error("CINDY_MOBILE_SIMULATOR 只能是 auto、cindy、system 或设备目录的绝对路径");
+  // The same directory by path is still Cindy's simulator: it must get the same notices.
+  if (resolve(choice) === resolve(cindy.path)) return [cindy];
   return [{ name: choice, path: choice }];
 }
 
@@ -109,7 +111,9 @@ export function simctlArgs(deviceSet, args) {
 /**
  * Use the set holding the exact UDID, otherwise the first readable set, even with nothing booted:
  * an idle Cindy simulator must not silently hand the task to whatever the system set is running.
- * An unreadable candidate is skipped; a pinned (single) set still reports its error.
+ * A set that cannot be listed is not an empty set: without an exact UDID, selecting another
+ * backend because of a transient failure would defeat the Cindy-first rule, so it fails closed.
+ * With an exact UDID the owner may be another set, so an unreadable one is skipped.
  */
 export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
   for (const deviceSet of deviceSets) {
@@ -117,7 +121,8 @@ export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
     try {
       lines = listBooted(deviceSet).split("\n");
     } catch (error) {
-      if (deviceSets.length === 1) throw error;
+      if (deviceSets.length === 1 || !simulatorUdid)
+        throw new Error(`无法读取 ${deviceSet.name} 模拟器的设备列表（${error.message}）；不改用其他模拟器，请排查 CoreSimulator 后重试，或用 --udid 指定设备。`);
       continue;
     }
     const booted = bootedSimulatorLinesForTarget(lines, null);
