@@ -30,16 +30,19 @@ request still requires fresh bundle logs and visible page verification.
 ### Which iOS Simulator
 
 The repository does not pin a simulator; each developer chooses locally. By default
-(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` first use a booted device in
-Cindy's own simulator — the official Baguette plugin's private device set at
-`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall
-back to the system (Xcode) simulator when Cindy's has no booted device, is not installed, or
-its plugin setting has paused running. `--udid` uses whichever of those sets holds that
-device. Keep a personal choice outside the repository, e.g. in your shell profile:
+(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` use Cindy's own simulator — the
+official Baguette plugin's private device set at
+`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall back
+to the system (Xcode) simulator only when Cindy's is not installed or its plugin setting has
+paused running. With nothing booted in Cindy's simulator they report `cindy-idle` with its
+reusable devices instead of picking a system device; boot one through the plugin. `--udid` uses
+whichever of those sets holds that device. Using the system simulator while Cindy's is available
+reports `system-while-cindy-available` (`simulatorNotice` in `whoami --json`). Keep a personal
+choice outside the repository, e.g. in your shell profile:
 
 | `CINDY_MOBILE_SIMULATOR` | Effect |
 |---|---|
-| `auto` (default) | Cindy first, then system |
+| `auto` (default) | Cindy while it is available, otherwise system |
 | `cindy` | Only Cindy's simulator; error when unavailable |
 | `system` | Only the system simulator |
 | absolute path | Only that CoreSimulator device set |
@@ -88,10 +91,15 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
    后端和 mock 开关。
    Cindy 模拟器经已安装的 `baguette-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
-   操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 在
+   操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
    插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
-   启用插件。
+   启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
+   一台。Agent 不自行设置 `CINDY_MOBILE_SIMULATOR=system`，也不用 `simctl create` 在系统模拟器
+   里建设备，除非用户明确要求或插件不可用。任务跨回合、rebase 或换提交后继续测试时，按当前
+   流程和个人选择重新选设备，不因上次用过就沿用。
 2. 先运行 `mobile:sim:whoami`，再决定是否需要启动设备、接管 Metro 或准备原生包。
+   `simulatorNotice` 非空时先按其提示处理；`native.reason` 为 `target-not-unique` 表示还没有
+   唯一目标、未检查安装情况，先确定 `--udid`，不要因此 `rebuild`。
    只检查 UI 时对 `whoami/start/rebuild` 都加 `--mock`。命令保留退出码；`pnpm` 的前后日志
    不属于 JSON，解析时从 stdout 末尾向前找最后一行合法 JSON 对象，不用 `grep | tail` 吞掉失败。
 3. 若 `native-matched`，复用已安装包；缺包、不兼容或包本身无可验证指纹时运行普通
@@ -115,8 +123,9 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    `mobile:sim:open` 并以 `whoami --viewer` 检查；两者都需要实际截图/目检页面，窗口进程不等于画面。
 
 截图和 `mobile-identity.json`、本次 bundle 日志放进同一任务产物目录，记录页面/场景、设备
-UDID、方向、主题及未验证项。交付时简要说明设备/方向/主题、区域与 bundle ID、worktree/分支、
-是否复用 Metro、身份与页面验证结果，并附实际图片；失败时指出具体失败层级和下一步，不把
+UDID、方向、主题及未验证项。交付时简要说明模拟器后端（Cindy 或系统）与机型、设备/方向/主题、
+区域与 bundle ID、worktree/分支、是否复用 Metro、身份与页面验证结果，并附实际图片；后端或机型
+不是默认选择时写明原因；失败时指出具体失败层级和下一步，不把
 device-link 故障说成模拟器故障。旧 checkout 缺少本流程所需入口（`--udid`、`--mock`、
 `--takeover`、原生身份检查、查看器）时报告具体差距，不手工绕过。布局问题按本次要求覆盖横竖屏与深浅色；截图必须来自目标
 版本的实际界面。身份未通过就报告未完成；仅缺目检则报告“版本及 bundle 已验证，画面未目检”。
@@ -250,9 +259,12 @@ Consequences:
 When `8081` serves another task and you are not authorized to take it over, give
 this task its own device and port instead of waiting or taking over:
 
-1. Use a device no other task is using: create one with `xcrun simctl create`,
-   or `xcrun simctl clone` a shut-down device to keep its login. One device
-   follows one Metro; never repoint a device another task is testing on.
+1. Use a device no other task is using, in the backend this task already selected:
+   for Cindy's simulator create or reuse one through the `baguette-simulator` plugin;
+   only for the system simulator use `xcrun simctl create`. Either set can
+   `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
+   `--set` below). One device follows one Metro; never repoint a device another task
+   is testing on.
 2. Boot it and wait until ready: `xcrun simctl boot <UDID> && xcrun simctl bootstatus <UDID> -b`
    (for a device in Cindy's simulator, add `--set "$HOME/Library/Application Support/BaguetteCindy/devices"`
    after `simctl`). `rebuild` only accepts a booted device and exits before

@@ -12460,6 +12460,7 @@
         "titleLocal": "改回此机运行 Agent？",
         "titleOther": "改于「{{device}}」运行 Agent？",
         "description": "原机之言谈录不能携来，将撰为交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
+        "descriptionNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改撰交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
         "confirm": "换机运行",
         "cancel": "一仍其旧"
       }

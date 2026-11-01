@@ -12603,6 +12603,7 @@
         "titleLocal": "Executar o Agent neste computador novamente?",
         "titleOther": "Executar o Agent em “{{device}}”?",
         "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
+        "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
         "confirm": "Trocar de computador",
         "cancel": "Manter como está"
       }

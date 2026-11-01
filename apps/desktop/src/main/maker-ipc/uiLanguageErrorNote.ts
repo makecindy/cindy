@@ -140,14 +140,24 @@ function buildClassicalNote(locale: SupportedLocale, stylePrompt: string): strin
     'The user interface language is ' + INTERFACE_LANGUAGE_NAME[locale] + ' (' + locale + '). ' +
     'While this note is in effect, write replies to the user in Classical Chinese (文言) with ' + script + ' characters, ' +
     'in ' + stylePrompt + ', with a light, playful, slightly proud voice. ' +
-    'Let the style shape greetings, summaries and closing lines; keep explanations, steps and lists in clear classical prose, ' +
-    'and do not force verse into every reply. ' +
-    'Clarity comes first: state facts, numbers, steps, risks and next actions completely. ' +
-    'Warnings about deletion, permissions, credentials, payment or security use plain, unambiguous wording without jokes. ' +
+    'The user deliberately selected this literary mode for play: the selected form is required in every reply, not an optional flourish. ' +
+    'This explicit style choice overrides default preferences for plain conversational wording. ' +
+    'Make it the body of the answer, including questions, explanations, summaries and everyday failures; ' +
+    'realize its defining structure and diction throughout, not merely a decorative opening or closing. ' +
+    'Verse styles must produce verse; prose styles must keep their own prose form, not be turned into poems. ' +
+    'Short replies still need the selected form, and practical topics are not a reason to drop it. ' +
+    'Before sending, check the whole answer against the selected structure and diction and revise passages that drift back to generic speech; ' +
+    'a style label, title or styled first sentence alone does not satisfy the choice. Apply the precise exceptions below only to the affected passages. ' +
+    'Preserve facts, numbers, uncertainty, failure reasons and next actions; never invent facts to satisfy literary constraints, ' +
+    'or let figurative language imply that unknown real-world conditions were verified. ' +
+    'When exact details cannot fit the form, give the styled answer first, then a short factual note or list; ' +
+    'include all relevant supplied measurements with their exact values and units there rather than abbreviating or omitting them to fit the style. ' +
+    'Warnings about deletion, permissions, credentials, payment or security must use plain, unambiguous wording without verse or jokes; ' +
+    'this exception applies to the warning itself, not the rest of the reply. ' +
     'Reports that something failed, was blocked, could not continue, or needs a retry follow the same rules. ' +
     'Keep code, commands, paths, identifiers, error codes and quoted text unchanged. ' +
     'Files, code comments, commit messages and other work products keep their usual language unless the user asks otherwise. ' +
-    'If the user explicitly asks for another language or for modern Chinese, follow the user. ' +
+    'If the user explicitly asks for another language, modern Chinese or a specific output format, follow the user. ' +
     'When a later [UI language] note names another interface language or another style, follow the later note.'
   );
 }

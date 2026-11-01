@@ -155,6 +155,15 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   `cindy`，伙伴提示词与 helper 工具描述应保留 `ghost_list` / `ghost_info` /
   `ghost_call`；花名册 system 段仍 fail-closed（远端路径对不上本地停用记录，
   伙伴会话也不注入全量花名册，按需 `ghost_list`）。
+- 设备托管（远程供应商、供应商分享的受邀者、供应商组，`deviceHosted`）：Agent 在另一台
+  电脑运行，`ghost_*` 经隧道回到**任务所在电脑**。花名册由任务所在电脑在打开任务时按真实
+  工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
+  `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
+  从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
+  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
+  与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
+  回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。
 - 空花名册 = 零注入（不留空壳标签）。
 
 ## 4. 安全设计（威胁模型：插件作者不守约）
@@ -202,6 +211,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 | --------------------------------------------------------------------------- | ------------------------------------------------ |
 | 本地普通会话                                                                | 是                                               |
 | device-link 手机发起/接管（agent 真身在被控端）                             | 是                                               |
+| 远程供应商 / 供应商分享 / 供应商组（Agent 在另一台电脑，`deviceHosted`）    | 是——用任务所在电脑带来的快照（§3.4）            |
 | Orca worker（含 bridge 对 dormant worker/lead 的 rehydrate）                | 是                                               |
 | scheduler 定时任务（heartbeat / persistent / ephemeral）                    | 是                                               |
 | send_to_session 新建与 lazy-resume、IM/飞书会话、hook-control、Goal restore | 是                                               |

@@ -12577,6 +12577,7 @@
         "titleLocal": "Run the Agent on this computer again?",
         "titleOther": "Run the Agent on “{{device}}”?",
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
         "cancel": "Keep as is"
       }

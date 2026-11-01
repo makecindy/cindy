@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 import { resolvePnpmInvocation, usablePnpmExecPath } from '../../../../scripts/shared/pnpm-invocation.mjs';
 import { extractMobileDevRegionArgs, withLocalMobileRegionConfig } from '../../scripts/lib/mobile-dev-region.mjs';
-import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from '../../scripts/lib/sim-whoami.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs, simulatorBackendNotice } from '../../scripts/lib/sim-whoami.mjs';
 import { inspectIOSBuildTools, withUserGemPodOnPath, COCOAPODS_SETUP_HINT } from '../../scripts/sim-pod-install.mjs';
 
 const source = readFileSync(resolve(process.cwd(), 'scripts/sim-rebuild.mjs'), 'utf8');
@@ -71,6 +71,7 @@ async function rebuild(options: {
     process: processStub, console: { log, error: log, warn: log }, execFileSync, spawnSync,
     mobileClientBundleEnv, extractMobileDevRegionArgs, withLocalMobileRegionConfig,
     extractSimWhoamiUdidArgs, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs,
+    simulatorBackendNotice: (input: object) => simulatorBackendNotice({ cindyAvailable: true, ...input } as never),
     resolveSimulatorDeviceSets: () => [cindySet, { name: 'system', path: null }],
     resolveMobileSimulatorBundleId: (region: string) => resolveMobileSimulatorBundleId(region, { execFile: () => JSON.stringify({ ios: { bundleIdentifier: 'com.xd.cindy' } }) }),
     resolvePnpmInvocation: (args: string[], opts: object) => resolvePnpmInvocation(args, { ...opts, platform: processStub.platform, execPath: '/node' }),
@@ -196,15 +197,23 @@ describe('sim-rebuild workflow', () => {
     expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', 'generic/platform=iOS Simulator']), expect.any(Object));
   });
 
-  it('falls back to the system simulator when Cindy has no booted device', async () => {
+  it('refuses to pick a system device while Cindy is idle', async () => {
+    const result = await rebuild();
+    expect(result.error).toMatchObject({ message: 'exit:1' });
+    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('baguette-simulator'));
+    expect(result.execFileSync.mock.calls.some(([command]) => command === 'xcodebuild')).toBe(false);
+  });
+
+  it('uses a system device named by --udid and flags it while Cindy is available', async () => {
     const result = await rebuild({ args: ['--udid', udid] });
+    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('正在使用系统模拟器'));
     expect(result.error).toBeUndefined();
     expect(result.execFileSync).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-destination', `platform=iOS Simulator,id=${udid}`]), expect.any(Object));
     expect(result.execFileSync).toHaveBeenCalledWith('xcrun', ['simctl', 'launch', udid, 'com.xd.cindy'], expect.any(Object));
   });
 
   it('rejects incompatible build architecture before installing on the simulator', async () => {
-    const result = await rebuild({ builtArch: 'x86_64' });
+    const result = await rebuild({ builtArch: 'x86_64', args: ['--udid', udid] });
     expect(result.error).toMatchObject({ message: expect.stringContaining('Simulator 产物架构错误') });
     expect(result.execFileSync.mock.calls.some(([, args]) => args.includes('install'))).toBe(false);
   });

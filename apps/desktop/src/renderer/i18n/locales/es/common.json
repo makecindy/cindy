@@ -12603,6 +12603,7 @@
         "titleLocal": "¿Volver a ejecutar el Agent en esta computadora?",
         "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
         "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
+        "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envía el siguiente mensaje.",
         "confirm": "Cambiar de computadora",
         "cancel": "Dejar como está"
       }

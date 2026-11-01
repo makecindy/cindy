@@ -2046,6 +2046,11 @@ export interface StartSessionOptions {
    */
   makerMemoryIndexSnapshot?: string;
   /**
+   * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
+   * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
+   */
+  ghostRosterSnapshot?: string;
+  /**
    * Host-owned Cindy Review policy. This is not a user permission preset:
    * adapters must keep the session local, fresh, memory-free and hard
    * read-only even if a later control request tries to widen permissions.

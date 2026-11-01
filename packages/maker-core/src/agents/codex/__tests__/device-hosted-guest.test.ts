@@ -126,6 +126,10 @@ interface Fixture {
   noFeatureList?: boolean;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
+  /** 任务所在电脑带来的插件花名册快照。 */
+  ghostRosterSnapshot?: string;
+  /** 经隧道的 Cindy MCP；默认只有通讯录。 */
+  mcpServers?: string[];
 }
 
 /** app-server 的功能清单，分两页返回。 */
@@ -311,7 +315,7 @@ async function startHosted(fixture: Fixture) {
     isGitRepo: false,
     tunnelUrl: 'http://127.0.0.1:4000/',
     tunnelToken: 'tok',
-    mcpServers: ['cindy_contacts'],
+    mcpServers: fixture.mcpServers ?? ['cindy_contacts'],
     mirrorRoot,
     ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
@@ -324,6 +328,7 @@ async function startHosted(fixture: Fixture) {
     workingDir,
     permissionMode: 'acceptEdits',
     deviceHosted,
+    ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
@@ -494,6 +499,18 @@ describe('Codex device-hosted guest sessions', () => {
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
     expect(fixture.getContactsPromptState).not.toHaveBeenCalled();
     expect(fixture.getDisabledSkillPaths).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // 插件工具经隧道回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
+  it('gives a shared user the roster from its own computer', async () => {
+    const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
+    const fixture = await startHosted({ guest: true, ghostRosterSnapshot: ownerRoster, mcpServers: ['cindy'] });
+    const handle = await fixture.started;
+    const instructions = String(threadParams(fixture.request, Method.ThreadStart).developerInstructions ?? '');
+    expect(instructions).toContain(ownerRoster);
+    expect(instructions).not.toContain(GHOST_ROSTER);
+    expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
     await handle.close();
   });
 

@@ -2953,6 +2953,8 @@ export function getMaker(): Maker {
         mcpProviders: () => _mcpProviders.pi ?? _mcpProviders.codex ?? [],
         prepareMcpBridge: getPiExtraSpawnConfig,
         makerMemory: () => makerMemoryManager,
+        // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
+        ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。

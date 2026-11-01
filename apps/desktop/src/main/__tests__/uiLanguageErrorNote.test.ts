@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { CLASSICAL_REPLY_STYLES } from '@cindy/maker-shared/classical-reply';
+import { SUPPORTED_LOCALES } from '../../shared/locale';
 import {
   buildUiLanguageErrorNote,
   readClaimedClassicalStyle,
@@ -54,6 +56,21 @@ describe('ui language error note', () => {
     expect(stampTurnUiLanguage(item, base).classicalStyle).toBe('prose');
     expect(stampTurnUiLanguage(item, { ...base, remote: false }).classicalStyle).toBe('historian');
     expect(turnClassicalStyleFromSendOpts({ classicalStyle: 'nope' }, 'prose')).toBe('prose');
+  });
+
+  // The stronger literary requirement must remain scoped to an active classical
+  // choice. Exercise the actual outbound note, including every ordinary locale,
+  // retained style selection, and IM opt-out; do not infer model behavior from text.
+  it('keeps inactive literary styles byte-identical to the ordinary or IM note', () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      for (const { id } of CLASSICAL_REPLY_STYLES.lzh) {
+        const im = buildUiLanguageErrorNote(locale, { replyStyle: false, classicalStyle: id });
+        expect(im).toBe(buildUiLanguageErrorNote(locale, { classicalStyle: 'plain' }));
+        if (locale !== 'zh-Hans-x-lzh' && locale !== 'zh-Hant-x-lzh') {
+          expect(buildUiLanguageErrorNote(locale, { classicalStyle: id })).toBe(buildUiLanguageErrorNote(locale));
+        }
+      }
+    }
   });
 
   it('ignores arbitrary claimed text and only accepts a supported locale', () => {
