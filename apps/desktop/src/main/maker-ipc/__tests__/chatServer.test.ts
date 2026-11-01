@@ -171,6 +171,70 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+  // Unit transport regression (bot-group-chat.md notifications): the shared adapter
+  // previously never forwarded message.created. Exercise socket -> authorized snapshot
+  // -> notify, including replay, remote reads/mute and owner changes; no real waits.
+  it('delivers live chat notices but suppresses replay, read, muted and stale-owner messages', async () => {
+    service.dispose();
+    const notify = vi.fn();
+    let ownerCurrent = true;
+    deps.onChatMessageNotification = notify;
+    deps.captureOwnerScope = () => ({}) as ReturnType<NonNullable<BotGroupChatServiceDeps['captureOwnerScope']>>;
+    deps.isOwnerScopeCurrent = () => ownerCurrent;
+    const message = (seq: string) => ({
+      id: `50000000-0000-4000-8000-${seq.padStart(12, '0')}`, seq, authorId: botId,
+      author: { kind: 'human', name: 'Chris' }, content: [{ type: 'text', text: `Message ${seq}` }],
+      createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null,
+    });
+    const snapshot = { room: room(roomId), members: [], messages: [message('3')], cursor: '3',
+      reads: [{ thread_key: 'main', read_seq: '0', muted: false }] };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/conversations?limit=100') return { body: [snapshot.room] };
+      if (route === '/executions/claim') return { body: { execution: null } };
+      if (route.endsWith('/snapshot')) return { body: snapshot };
+      return response(route);
+    });
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    expect((await service.listGroups()).ok).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    let socket = fixture.sockets.at(-1)!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    // Establish this connection's quiet snapshot before replay/live messages.
+    await service.getGroup(roomId);
+    const received = (seq: string) => socket.emit('message', JSON.stringify({ type: 'changes',
+      scope: `conversation:${roomId}`, cursor: seq, changes: [{ type: 'message.created', entityId: message(seq).id }] }));
+    received('3');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).not.toHaveBeenCalled();
+    snapshot.messages.unshift(message('4')); received('4');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify.mock.calls[0][0]).toMatchObject({ groupId: roomId, messageId: message('4').id, preview: 'Message 4' });
+    const stillCurrent = notify.mock.calls[0][1] as () => boolean;
+    socket.emit('close');
+    snapshot.messages.unshift(message('5'));
+    await vi.advanceTimersByTimeAsync(500);
+    socket = fixture.sockets.at(-1)!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await service.getGroup(roomId);
+    received('5');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    snapshot.messages.unshift(message('6')); received('6');
+    snapshot.reads[0].read_seq = '6';
+    await vi.advanceTimersByTimeAsync(1200);
+    snapshot.messages.unshift(message('7')); received('7');
+    snapshot.reads[0].muted = true;
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    snapshot.reads[0].muted = false;
+    snapshot.messages.unshift(message('8')); received('8'); ownerCurrent = false;
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(stillCurrent()).toBe(false);
+  });
   describe('分工 auto-continue on this computer (bot-group-chat.md §7.4)', () => {
     const planId = '80000000-0000-4000-8000-000000000009';
     const otherHuman = '30000000-0000-4000-8000-000000000002';

@@ -194,3 +194,11 @@ app-runtime 类型检查通过；Desktop 完整检查 220 条诊断（此前 223
 Desktop 群聊通知展示入口从主干迁回，保留主群可见抑制、话题例外、600ms 头像预算和点击前 owner 复核；群聊生产端 onChatMessageNotification／onChatGroupAttention 尚未接回，因此仅完成展示适配，不能声称群聊通知链已恢复。
 
 既有 notificationService、sessionNotificationPreview、sessionNotificationCopy 三文件 78 项全部通过（9.02 秒），未修改断言或增加测试文件。Terminal 真实持久化通知与代输入隐私回归定向 1 passed、124 skipped（41.80 秒，收集 39.07 秒、执行 2.34 秒），使用长路径 TEMP/TMP。app-runtime、Terminal 类型检查通过；Desktop 完整检查 218 条诊断（此前 220），本批文件无诊断；test-hygiene 通过（349 files within baseline）。主干冲突、完整 CI、夜间学习及群聊生产端迁移仍未完成，PR 保持草稿，在线 VPS 未修改。
+
+### 群聊原生通知生产链（2026-11-01）
+
+Chat Server 的 message.created 接入共享通知消费者，Desktop 注入上一批的原生展示入口。消费者从主干迁入 app-runtime，Desktop 原路径保留转发；以服务器精确序号、读位、静音、关注／点名和隐藏状态判断，异步摘要完成后再次校验连接及群代次。每次连接的首次快照建立静默基线，重放历史不弹窗；停止宿主时清理等待队列。Terminal 未注入原生展示端，不额外发云推送。灵动岛群聊未读提示及其通知分流尚未迁入，本批只完成原生通知链，不声称实际 OS 横幅或手机云推送送达已验证。
+
+在既有 chatServer 测试加入真实生产 transport 回归：最小输入是已订阅群收到一条新的 message.created，之前共享适配器不通知。覆盖首次历史、重连历史、实时消息、已读／静音及切账号；使用模拟 HTTP／WebSocket 和 fake timers，属于 unit transport tier，无真实等待或新增测试文件。修改前源码运行时新增用例失败；修改后定向 1 passed、366 skipped（7.66 秒，收集 7.19 秒、执行 43ms），存量巨型文件导入超过五秒预算。既有消费者文件补入摘要生成期间读位变化的竞态，5 项全部通过，单文件 458ms。
+
+两文件完整运行 335 passed、37 failed（9.03 秒）；用 HEAD 的 chatServer 原生产源码对照为 329 passed、38 failed（仅 Chat Server 文件），失败名称集合比较仅新增通知用例由失败转通过，其余 37 项完全一致。失败涉及分工自动继续、个人资料投影、私聊等尚未迁入的主干行为，未删改断言。app-runtime、Terminal 类型检查通过；Desktop 仍 218 条诊断，本批通知接线无新增诊断；test-hygiene 通过。主干冲突、完整 CI 与剩余迁移仍待解决，在线 VPS 未修改。

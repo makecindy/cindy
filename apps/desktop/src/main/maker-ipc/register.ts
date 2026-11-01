@@ -1,3 +1,4 @@
+import { getDesktopNotificationsEnabled, showDesktopChatMessage } from '../notificationService';
 import {
   createPiIdleReleaseWatcher,
   piIdleReleaseCandidateWhere,
@@ -11389,6 +11390,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return result.ok ? { ok: true as const } : { ok: false as const, errorCode: result.errorCode };
       },
     }),
+    onChatMessageNotification: (event, current) => {
+      if (!current() || !getDesktopNotificationsEnabled()) return;
+      void showDesktopChatMessage(event, current)
+        .catch(() => log.warn('Chat notification unavailable'));
+    },
     onStepSettled: createBotGroupStepNotification({
       isDataOwnerBroadcastScopeCurrent,getMobileNotifyGeneration,botGroupMembersVisibleRemotely,
       sendMobileBotGroupNotify,getBotGroupStepNotificationBody,log,

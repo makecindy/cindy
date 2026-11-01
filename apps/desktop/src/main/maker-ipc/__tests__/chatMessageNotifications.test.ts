@@ -2,6 +2,32 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createChatMessageNotifications, type ChatNotificationMessage } from '../chatMessageNotifications.js';
 
 afterEach(() => vi.useRealTimers());
+
+// Unit: a read update during asynchronous presentation must fence delivery.
+// Existing cases only changed reads before snapshot lookup, missing this race.
+it('rechecks a changed room after asynchronous presentation before notifying', async () => {
+  vi.useFakeTimers();
+  let revision = 0;
+  const snapshot = { room: { name: 'Team' }, messages: [message('peer')],
+    reads: [{ thread_key: 'main', read_seq: '0' }] };
+  let finishPresentation!: () => void;
+  const notify = vi.fn();
+  const present = vi.fn(() => new Promise<{ senderName: string; avatar: string; preview: string }>(resolve => {
+    finishPresentation = () => resolve({ senderName: 'Peer', avatar: '', preview: 'Hello' });
+  }));
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me',
+    revision: () => revision, snapshot: async () => snapshot, present, notify });
+  service.enqueue('room', 'peer');
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(present).toHaveBeenCalledOnce();
+  snapshot.reads[0].read_seq = snapshot.messages[0].seq;
+  revision++;
+  finishPresentation();
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(notify).not.toHaveBeenCalled();
+  expect(present).toHaveBeenCalledOnce();
+  service.dispose();
+});
 const message = (id: string, extra: Partial<ChatNotificationMessage> = {}): ChatNotificationMessage => ({
   id, seq: '9007199254740993', authorId: id, deleted: false, threadRootId: null, ...extra,
 });

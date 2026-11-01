@@ -165,6 +165,7 @@ export interface BotGroupChatServiceDeps {
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
+  onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('@cindy/companion-core').CompanionCloudHost;
   now?: () => number;

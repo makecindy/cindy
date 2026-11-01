@@ -1,3 +1,5 @@
+import { createChatMessageNotifications } from './chatMessageNotifications.js';
+import { notificationPreview } from './notificationPreview.js';
 import type { BotGroupTaskPostSnapshot } from './botGroupTaskPostSnapshot.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** Production chat transport. The server owns messages and execution leases;
@@ -54,7 +56,7 @@ interface Room {
   created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
 }
 /** `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it. */
-interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean }> }
+interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }> }
 interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
   requester_id?: string;
@@ -501,6 +503,50 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Local writes always notify: HTTP can finish before the server handles subscribe,
   // even on an open socket. Nearby realtime echoes join the same bounded window.
   const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
+  // The first snapshot of each connection is a quiet baseline; use server sequences, not device clocks.
+  const notificationBaselines = new Map<string, bigint>();
+  const chatNotifications = deps.onChatMessageNotification ? createChatMessageNotifications<Message>({
+    current, selfId: () => selfId,
+    message: (groupId, messageId) => api<Message>(`/conversations/${groupId}/messages/${messageId}`),
+    snapshot: async groupId => {
+      const version = generation(groupId);
+      const connection = snapshotConnection;
+      const snapshot = await api<Snapshot>(`/conversations/${groupId}/snapshot`);
+      if (personalList.hidden(groupId)) throw new Error('CHAT_HIDDEN');
+      if (current() && generation(groupId) === version && snapshotConnection === connection) recordNotificationBaseline(snapshot);
+      return snapshot;
+    },
+    // Replayed group history is not a new popup. Direct chats keep their existing delivery policy.
+    shouldAlert: (message, snapshot, groupId) => snapshot.room.kind === 'direct'
+      || BigInt(message.seq) > (notificationBaselines.get(groupId) ?? BigInt(message.seq)),
+    revision: groupId => `${snapshotConnection}:${generation(groupId)}:${personalList.hidden(groupId)}`,
+    present: async (groupId, message) => {
+      const snapshot = await recentSnapshot(groupId);
+      const member = snapshot.members.find(member => member.id === message.authorId);
+      const view = messageView(message, snapshot.members);
+      const words = (key: string) => t(`settings.notifications.chat.${key}`);
+      const name = notificationPreview(view.authorName) || words('sender');
+      const senderName = message.author.kind === 'bot' ? `${name} (${words('teammate')})` : name;
+      const attachments = await Promise.all(bodyBlocks(message).filter(block => block.type === 'media').map(async block => {
+        if (block.caption?.trim()) return notificationPreview(block.caption);
+        const file = block.mediaId ? await api<{ name: string; type: string }>(`/conversations/${groupId}/media/${block.mediaId}`).catch(() => null) : null;
+        const kind = file?.type.startsWith('image/') ? 'image' : file?.type.startsWith('audio/') ? 'audio' : file?.type.startsWith('video/') ? 'video' : 'file';
+        return kind === 'file' && file?.name ? `${words(kind)}: ${notificationPreview(file.name)}` : words(kind);
+      }));
+      const readContext = async (messageId: string) => snapshot.messages.find(item => item.id === messageId)
+        ?? await api<Message>(`/conversations/${groupId}/messages/${messageId}`).catch(() => undefined);
+      const root = message.threadRootId ? await readContext(message.threadRootId) : undefined;
+      const quote = view.quote ? await readContext(view.quote.messageId) : undefined;
+      const reason = message.mentions?.includes(selfId) ? words('mention')
+        : quote && !quote.deleted && quote.authorId === selfId ? words('reply') : message.threadRootId ? words('threadReply') : '';
+      const preview = notificationPreview([botGroupMessageSummaryText(view), ...attachments].filter(Boolean).join(' '), 240, words('image')) || words('message');
+      return { senderName, avatar: member?.avatar ?? localBot(message.authorId)?.avatar ?? '',
+        conversationKind: snapshot.room.kind === 'direct' ? 'direct' as const : 'group' as const,
+        ...(message.threadRootId ? { threadName: root && !root.deleted ? notificationPreview(displayText(root), 48) || words('thread') : words('thread') } : {}),
+        preview: [reason,preview].filter(Boolean).join(': ') };
+    },
+    notify: deps.onChatMessageNotification,
+  }) : undefined;
   const changed = (roomId: string) => {
     if (!current()) return;
     invalidate(roomId);
@@ -888,6 +934,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       try {
         const event = JSON.parse(String(raw));
         if (event.type === 'ready') {
+          notificationBaselines.clear();
           memberJoinedClaims = true;
           reconnectDelay = 500; connected = true;
           threads.reset();
@@ -907,6 +954,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if ((event.changes ?? []).some((change: { type?: string; data?: { dissolvedAt?: unknown } }) => change.type === 'conversation.updated' && change.data?.dissolvedAt)) retirePlanning(roomId);
             if (rooms.has(roomId)) advanceRoom(roomId, event.cursor);
             for (const change of event.changes ?? []) {
+              if (change.type === 'message.created' && typeof change.entityId === 'string' && id.safeParse(change.entityId).success)
+                chatNotifications?.enqueue(roomId, change.entityId);
               if (change.type === 'message.updated' || change.type === 'message.deleted') threads.invalidate(roomId, change.entityId);
               if (change.type === 'reaction.changed' && typeof change.entityId === 'string') bumpMessageReactions(roomId, change.entityId);
             }
@@ -989,9 +1038,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const value = await api<Snapshot>(`/conversations/${roomId}/snapshot`);
     if (value.room.dissolved_at) retirePlanning(roomId);
     // A prior connection or room change makes this answer ineligible for reuse.
-    if (current() && snapshotConnection === connection && generation(roomId) === read)
+    if (current() && snapshotConnection === connection && generation(roomId) === read) {
       snapshots.set(roomId, { value, generation: read, at: Date.now() });
+      recordNotificationBaseline(value);
+    }
     return value;
+  }
+  function recordNotificationBaseline(snapshot: Snapshot): void {
+    if (!current() || !deps.onChatMessageNotification || !isGroupRoom(snapshot.room)) return;
+    if (!notificationBaselines.has(snapshot.room.id)) notificationBaselines.set(snapshot.room.id,
+      snapshot.messages.reduce((max, message) => BigInt(message.seq) > max ? BigInt(message.seq) : max, 0n));
   }
   async function snapshot(roomId: string) {
     const value = await readSnapshot(roomId);
@@ -2730,6 +2786,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     continuePlan: input => safe(() => actPlan(input, 'continue')), retryPlan: input => safe(() => actPlan(input, 'retry')),
     editPlanStep: input => safe(() => actPlan(input, 'reassign')),
     dispose: () => {
+      chatNotifications?.dispose();
       disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
