@@ -183,7 +183,8 @@ Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*
 ### 开发深链与系统关联
 
 打包产物使用 `--smoke-test` 时，在执行 smoke 前跳过全部启动时系统集成：协议注册、
-Windows 文件夹右键菜单、`.cindy` 文件关联与 MIME 登记、Windows 快捷方式自愈。
+Windows 文件夹右键菜单、`.cindy` 文件关联与 MIME 登记、Windows 快捷方式自愈及
+旧开发快捷方式清理（已知 `.lnk` 删除与 PowerShell 扫描）。
 开发版的 `XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE` smoke 入口也共用此判断。
 人工测试打包实例可在直接启动可执行文件时加 `--no-system-integration`，并另传独立的
 `--user-data-dir=<临时目录的绝对路径>`。该开关仅对本次进程生效，不保存偏好；省略时
