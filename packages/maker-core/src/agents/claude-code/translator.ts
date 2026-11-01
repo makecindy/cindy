@@ -40,7 +40,6 @@ import type { UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
-  beginClaudeGeneration,
   beginClaudeGenerationAtRequestStart,
   finalizeClaudeGeneration,
   markClaudeGenerationUnreliable,
@@ -2355,15 +2354,15 @@ function handleResult(
       source: 'claude-code',
     });
   }
-  // silent-stop 判定: turn 内干过活(有 tool 调用),或整轮没有任何用户可见正文,且最后
-  // 一条 assistant 消息没有实质内容(典型: 只有 thinking 块),result 也没兜出可补的
-  // 文本 —— 上游把 turn 静默收了尾,用户侧表现为"干着干着停了、看起来像正常结束"。已知
+  // silent-stop 判定: 整轮没有任何用户可见正文,且最后一条 assistant 消息没有实质内容
+  // (典型: 只有 thinking 块),result 也没兜出可补的文本 —— 上游把 turn 静默收了尾,
+  // 用户侧表现为"干着干着停了、看起来像正常结束"。末尾不可见 reasoning 不能推翻前面
+  // 已交付的正文；否则工具调用后的正常回答会被误判并触发额外自动执行 (#8240)。已知
   // 上游形态: 模型偶发 thinking-only 空响应(anthropics/claude-code#50597,
   // stop_reason=end_turn)与 SSE 流被静默中断后 SDK 按正常结束处理(#38905, 此形态
   // stop_reason 常缺失)。与 isEmptyResponseTurn(整轮 0 产出 + usage 全 0)互斥:
-  // 零 tool 但零可见正文也必须命中:第一次自动补发「继续」后,上游可能再次只返回
-  // thinking；旧的 toolUses > 0 守卫会把第二次当正常完成。已有可见正文的零 tool turn
-  // 则不扩张判定。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
+  // 零 tool 且零可见正文也要命中:第一次自动补发「继续」后,上游可能再次只返回
+  // thinking。沿用 turn 收尾同款排除项: is_error(另有 error 收尾)、
   // interruptRequested(用户停止/watchdog)、sawCompactBoundary(compact 轮合法空)。
   // 命中后事件流仍走正常 Done/done 收尾(记账/收口零变更), 只在 done.data 附加
   // silentStop 标记交给 host 的自动续跑守卫决策; WARN 日志保留作 dev 排查。
@@ -2372,7 +2371,7 @@ function handleResult(
     !ctx.turn.interruptRequested &&
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
-    (ctx.turn.toolUses > 0 || ctx.turn.uiEmittedText.length === 0) &&
+    ctx.turn.uiEmittedText.length === 0 &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
