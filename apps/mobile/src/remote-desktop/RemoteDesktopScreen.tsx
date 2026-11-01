@@ -894,7 +894,8 @@ export function RemoteDesktopSession({
     lease,
     !connectionPending && !error,
     focused,
-    caps,
+    // A device screen leaves the computer alone: no privacy mask, mute or clipboard sync.
+    screenPlugin ? null : caps,
     request,
     exitLock.current,
   );
