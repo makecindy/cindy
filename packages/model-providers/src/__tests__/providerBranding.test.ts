@@ -94,13 +94,18 @@ describe('provider branding', () => {
     'https://us-central1-aiplatform.googleapis.com',
     'https://aiplatform.us.rep.googleapis.com',
     'https://aiplatform.eu.rep.googleapis.com',
-  ])('brands official Vertex hosts as Google: %s', upstream => {
+    'https://daily-cloudcode-pa.googleapis.com',
+    'https://cloudcode-pa.googleapis.com',
+  ])('brands official Vertex and Cloud Code Assist hosts as Google: %s', upstream => {
     expect(resolveProviderLogoKind('renamed-vertex', { pi: { upstream } })).toBe('google');
   });
 
-  it('does not brand a lookalike Vertex host as Google', () => {
+  it('does not brand a lookalike Vertex or Cloud Code Assist host as Google', () => {
     expect(resolveProviderLogoKind('lookalike', {
       pi: { upstream: 'https://aiplatform.googleapis.com.evil.test' },
+    })).toBeNull();
+    expect(resolveProviderLogoKind('google-antigravity', {
+      pi: { upstream: 'https://daily-cloudcode-pa.googleapis.com.evil.test' },
     })).toBeNull();
   });
 
