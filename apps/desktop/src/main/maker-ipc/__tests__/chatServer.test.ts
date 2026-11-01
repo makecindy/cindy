@@ -3017,6 +3017,32 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
+  // #7394, unit: keep the active lane and its eventual result through a failed heartbeat.
+  // The pending-terminal tests below cannot detect an abort before any result is ready.
+  it.each([0, 401, 408, 429, 503])('retains the running turn after a temporary heartbeat %s failure', async status => {
+    let failing = false, failedHeartbeats = 0;
+    fixture.refresh.mockResolvedValue(false);
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'heartbeat' && failing) {
+        failedHeartbeats++;
+        if (!status) throw new Error('REQUEST_TIMEOUT');
+        return { status, body: { error: { code: status === 401 ? 'TOKEN_EXPIRED' : 'TEMPORARILY_UNAVAILABLE' } } };
+      }
+      return response(route);
+    });
+    await start();
+    failing = true;
+    await vi.advanceTimersByTimeAsync(13000);
+    expect(failedHeartbeats).toBe(1);
+    expect(deps.abortLane).not.toHaveBeenCalled();
+    failing = false;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(await service.settleLaneTurn(terminal)).toBe(true);
+    expect(deliveries()).toHaveLength(1);
+    expect(deliveries()[0][2]).toMatchObject({ action: 'complete' });
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
   it('does not let an earlier heartbeat failure delete a pending terminal result', async () => {
     let rejectHeartbeat: (error: Error) => void = () => {};
     let heartbeatCount = 0, completes = 0;
