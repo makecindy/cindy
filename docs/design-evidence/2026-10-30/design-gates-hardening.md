@@ -8,7 +8,7 @@
 
 圆角阻断只在确认的样式语境里生效（class 属性、`cn()` 等调用、纯类名字符串、样式对象 `borderRadius:`、CSS 文件）；写在普通文案里的 `rounded-md` 只报告。
 
-**近期命中**：main 最近 100 个 first-parent 合并（`8ee428cca0..cf8bc1e3e8`，窗口随 main 前进，JSON 里是最终一次运行的范围），每个按 `<merge>^1..<merge>` 回放：
+**近期命中**：main 最近 100 个 first-parent 合并（`b683ba1b5d..49fbcc4d07`，窗口随 main 前进，JSON 里是最终一次运行的范围），每个按 `<merge>^1..<merge>` 回放：
 
 - 规范外圆角 block：1 个合并，命中 #8238（`dash/header-round-buttons`，合并提交 `c4c6d736ac`）里 `GitContextBadge.tsx:449` 的 `rounded-md`：PR 链接行的真实 6px 圆角，属于真违规，不是误报。本 PR 创建以来窗口里先后命中过 #7889（`cfd02a20b4`，侧栏 20px 图标按钮）、#8092（`37c5bb9519`，三处 `rounded-md`）和这一处，都在本 PR 创建之后才合进 main，是 CI 在旧基线上先后拦下它们的原因——main 上持续有人新增 6px 圆角，说明门禁有用。
 - 颜色 block：0（豁免过期没有拦下任何近期改动）。
@@ -55,4 +55,4 @@
 | `ContextSheetGoalView.tsx` | `statusRecording`（`textColor` prop） | 1 | 该 token 定义只供状态指示 |
 | `ContextSheet.tsx`（占位字） | `textTertiary` | 1 | 应为 `textPlaceholder` |
 
-扫描覆盖（最终版）：命名样式块（按是否实际用在 `<Text>` / `textStyle` 上判断，不靠样式名）、内联 `style` / `textStyle` 的对象 / 数组 / 条件分支与 `{ color }` 简写、`const`/`let` 局部别名（按词法作用域和使用位置解析，最多两层）、`textColor` / `labelColor` 等文字颜色 prop、占位字的条件与别名写法；SwiftUI `foregroundStyle` 统计所有非形状 / 图标的所有者（`Text`、`Button`、`TextField` 等，以及没有 JSX 标签的可复用修饰器），参数同样走别名解析；`colors.login.*` 只在登录画布文件放行。存量次数增加会报错，修掉后实际次数低于登记值会提示收紧。扫描器本身有单测，并做过反向验证（把 `nativeGlassButtonStyle.ios.ts` 的 `ctaText` 临时改成 `colors.border`，测试会报出该文件）。
+扫描覆盖（最终版）：命名样式块（按是否实际用在 `<Text>` / `textStyle` 上判断，不靠样式名）、内联 `style` / `textStyle` 的对象 / 数组 / 条件分支与 `{ color }` 简写、`const`/`let` 局部别名（按词法作用域和使用位置解析，最多两层）、`textColor` / `labelColor` 等文字颜色 prop、占位字的条件与别名写法、`elementColors={{ textColor, disabledTextColor }}` 这类对象型文字颜色键；SwiftUI `foregroundStyle` 统计所有非形状 / 图标的所有者（`Text`、`Button`、`TextField` 等，以及没有 JSX 标签的可复用修饰器），参数同样走别名解析；`colors.login.*` 只在登录画布文件放行。存量次数增加会报错，修掉后实际次数低于登记值会提示收紧。扫描器本身有单测，并做过反向验证（把 `nativeGlassButtonStyle.ios.ts` 的 `ctaText` 临时改成 `colors.border`，测试会报出该文件）。
