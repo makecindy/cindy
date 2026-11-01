@@ -1639,7 +1639,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
       }
-      const inputHandoffOwnerNote = allowsEnvironmentNotes ? deps.readInputHandoffOwnerNote?.(sessionId) ?? null : null;
+      // The note belongs to the message that closed the card. A native command (a slash input) keeps its
+      // first characters, so it carries no note and the note is dropped rather than left for the next message.
+      const pendingOwnerNote = deps.readInputHandoffOwnerNote?.(sessionId) ?? null;
+      const inputHandoffOwnerNote = allowsEnvironmentNotes ? pendingOwnerNote : null;
+      if (pendingOwnerNote && !allowsEnvironmentNotes) deps.inputHandoffOwnerNoteDelivered?.(sessionId);
       if (inputHandoffOwnerNote) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }

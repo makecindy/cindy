@@ -3526,6 +3526,22 @@ describe('Cindy Make task note', () => {
     expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
   });
 
+  it('drops the input handoff note for a native command instead of keeping it for the next message', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    let note: string | null = '[Card closed]';
+    const { deps } = createDeps({
+      getSession: () => session,
+      readInputHandoffOwnerNote: () => note,
+      inputHandoffOwnerNoteDelivered: () => { note = null; },
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', '/skill:review');
+    expect(vi.mocked(session.send).mock.calls[0][0]).toBe('/skill:review');
+    expect(note).toBeNull();
+    await transaction.sendToAgentAccepted('session-1', 'Continue');
+    expect(vi.mocked(session.send).mock.calls[1][0]).not.toContain('[Card closed]');
+  });
+
   it('does not decorate native commands or ordinary fork messages with side-chat instructions', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const readTaskSource = vi.fn(async () => 'side-chat');

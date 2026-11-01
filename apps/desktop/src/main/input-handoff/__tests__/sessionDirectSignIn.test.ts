@@ -169,7 +169,8 @@ describe('a sign-in step', () => {
     const { driver, state } = desktop();
     const run = start(driver);
     await run.session.start();
-    expect(run.guarded).toEqual([]);
+    // The account step is covered too: whatever is typed on a sign-in page is the owner's alone.
+    expect(new Set(run.guarded)).toEqual(new Set(['https://login.example.com/']));
     state.screen = 'password';
     await vi.waitFor(() =>
       expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toEqual([

@@ -638,7 +638,8 @@ export class InputHandoffSession {
 
   /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
   private guardSignInPage(step: ExtractedStep): void {
-    if (step.signIn && step.hasSecure && this.target)
+    // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
+    if (step.signIn && this.target)
       this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
   }
 

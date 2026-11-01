@@ -19393,7 +19393,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
       : withSteerNote;
     // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
-    const steerHandoffNote = so[MCP_APP_MESSAGE_GUARD] ? null : inputHandoffSteerNote(sessionId, message);
+    const pendingHandoffNote = so[MCP_APP_MESSAGE_GUARD] ? null : inputHandoffSteerNote(sessionId, message);
+    // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
+    const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
+    if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
     if (steerHandoffNote) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
     }
