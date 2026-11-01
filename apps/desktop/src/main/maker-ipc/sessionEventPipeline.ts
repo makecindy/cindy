@@ -24,6 +24,10 @@ import {
   recordSessionPiTurnUsage,
   type RecordSessionPiTurnUsageDeps,
 } from './sessionPiTurnUsage.js';
+import {
+  recordSessionHermesTurnUsage,
+  type RecordSessionHermesTurnUsageDeps,
+} from './sessionHermesTurnUsage.js';
 
 export type SessionEventDependencies = PrepareSessionEventDeps &
   PersistSessionStreamEventDeps &
@@ -31,7 +35,8 @@ export type SessionEventDependencies = PrepareSessionEventDeps &
   FinishSessionTerminalEventDeps &
   RecordSessionClaudeTurnUsageDeps &
   RecordSessionCodexTurnUsageDeps &
-  RecordSessionPiTurnUsageDeps & {
+  RecordSessionPiTurnUsageDeps &
+  RecordSessionHermesTurnUsageDeps & {
     /** 按供应商记「本机」用量(远程与分享页的按使用方用量)。不提供 = 不记。 */
     readonly recordProviderPartyUsage?: (session: Session, event: AgentEvent) => void;
   };
@@ -68,5 +73,6 @@ export function handleSessionEvent(
   );
   recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
   recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+  recordSessionHermesTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
   deps.recordProviderPartyUsage?.(session, event);
 }

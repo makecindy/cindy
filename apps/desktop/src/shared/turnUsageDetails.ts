@@ -29,6 +29,12 @@ export interface TurnUsageDetails {
   cacheHitRate: number | null;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
+  /**
+   * 本轮实际走的 provider id（如 'deepseek'、'xd'、'openai'）。价格表按 provider
+   * 分组，没有它就无法把 token 换算成金额。Hermes 路径必填：它的 provider 来自
+   * Hermes home 路由，不在 Cindy 的 session provider 里。
+   */
+  provider?: string;
   /** 本轮涉及多个模型时的分桶列表。 */
   models?: string[];
   /**
@@ -45,6 +51,7 @@ export interface BuildTurnUsageDetailsInput {
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
   model?: string | null;
+  provider?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
   perModelCost?: ReadonlyArray<
     | {
@@ -137,10 +144,15 @@ export function aggregateTurnUsageDetails(
   const addModel = (model: string | undefined) => {
     if (model && !modelNames.includes(model)) modelNames.push(model);
   };
+  // The provider is a route fact, not a per-segment one: every segment of one
+  // product turn ran on the same provider. Keep it only when they agree, so a
+  // merged turn never claims a route it did not run on.
+  const providers = new Set<string>();
   const perModel = new Map<string, RegionalMoney>();
   for (const detail of details) {
     addModel(detail.model);
     for (const model of detail.models ?? []) addModel(model);
+    if (detail.provider) providers.add(detail.provider);
     for (const item of detail.perModelCost ?? []) {
       const current = perModel.get(item.model);
       perModel.set(
@@ -178,6 +190,7 @@ export function aggregateTurnUsageDetails(
     durationMs,
     turnDurationMs,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
+    provider: providers.size === 1 ? [...providers][0] : undefined,
     models: modelNames,
     perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),
   });
@@ -225,6 +238,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
   const model = sanitizeModel(input.model);
+  const provider = sanitizeModel(input.provider);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
 
@@ -238,6 +252,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(durationMs ? { durationMs } : {}),
     ...(turnDurationMs ? { turnDurationMs } : {}),
     ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
   };
@@ -255,6 +270,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
       cacheCreateTokens:
         typeof raw.cacheCreateTokens === 'number' ? raw.cacheCreateTokens : undefined,
       model: typeof raw.model === 'string' ? raw.model : undefined,
+      provider: typeof raw.provider === 'string' ? raw.provider : undefined,
       models: Array.isArray(raw.models)
         ? raw.models.filter((m): m is string => typeof m === 'string')
         : undefined,

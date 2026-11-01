@@ -21,6 +21,30 @@ describe('normalizeHermesEvent', () => {
       .toEqual({ kind: 'resume-reset' });
   });
 
+  it('normalizes the CLI init event into the model the run used', () => {
+    expect(
+      normalizeHermesEvent({
+        type: 'system',
+        subtype: 'init',
+        model: 'deepseek-flash',
+        session_id: '',
+      }),
+    ).toEqual({ kind: 'session-init', model: 'deepseek-flash' });
+    // The init's session_id is the daemon's business, not the agent's.
+    expect(
+      normalizeHermesEvent({ type: 'system', subtype: 'init', model: 'deepseek-flash', session_id: 'h-1' }),
+    ).toEqual({ kind: 'session-init', model: 'deepseek-flash' });
+    expect(normalizeHermesEvent({ type: 'system', subtype: 'init' })).toEqual({
+      kind: 'session-init',
+    });
+  });
+
+  it('leaves other system events unknown', () => {
+    expect(normalizeHermesEvent({ type: 'system', subtype: 'something-new' })).toMatchObject({
+      kind: 'unknown',
+    });
+  });
+
   it('normalizes text deltas and drops the empty sentinel', () => {
     expect(normalizeHermesEvent({ type: 'text', text: 'Hello ' })).toEqual({
       kind: 'assistant-delta',

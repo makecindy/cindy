@@ -4,6 +4,7 @@ import {
   aggregateTurnUsageDetails,
   buildTurnUsageDetails,
   mergeTurnUsageDetailsForMessage,
+  normalizeTurnUsageDetails,
 } from '../turnUsageDetails';
 import { DEFAULT_USAGE_CURRENCY, gatewayMoney, usdMoney } from '../regionalMoney';
 
@@ -189,5 +190,64 @@ describe('mergeTurnUsageDetailsForMessage', () => {
       ...generated,
       turnDurationMs: 6_500,
     });
+  });
+});
+
+describe('turn route provider', () => {
+  it('keeps the provider the turn ran on', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 2,
+      model: 'deepseek-flash',
+      provider: 'deepseek',
+    });
+    expect(details).toMatchObject({ model: 'deepseek-flash', provider: 'deepseek' });
+  });
+
+  it('drops an empty provider', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 2,
+      model: 'deepseek-flash',
+      provider: '  ',
+    });
+    expect(details).not.toHaveProperty('provider');
+  });
+
+  it('keeps one provider across merged segments and refuses a mixed route', () => {
+    const first = buildTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 2,
+      model: 'deepseek-flash',
+      provider: 'deepseek',
+    });
+    const second = buildTurnUsageDetails({
+      inputTokens: 5,
+      outputTokens: 1,
+      model: 'deepseek-flash',
+      provider: 'deepseek',
+    });
+    expect(aggregateTurnUsageDetails([first, second])).toMatchObject({
+      provider: 'deepseek',
+    });
+
+    const other = buildTurnUsageDetails({
+      inputTokens: 1,
+      outputTokens: 1,
+      model: 'deepseek-flash',
+      provider: 'openai',
+    });
+    expect(aggregateTurnUsageDetails([first, other])).not.toHaveProperty('provider');
+  });
+
+  it('reads the provider back from persisted data', () => {
+    expect(
+      normalizeTurnUsageDetails({
+        inputTokens: 10,
+        outputTokens: 2,
+        model: 'deepseek-flash',
+        provider: 'deepseek',
+      }),
+    ).toMatchObject({ provider: 'deepseek' });
   });
 });

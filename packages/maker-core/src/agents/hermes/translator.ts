@@ -22,6 +22,15 @@ export type NormalizedHermesTokens = {
 export type NormalizedHermesEvent =
   | { kind: 'session-bound'; hermesSessionId: string }
   | { kind: 'resume-reset'; previousHermesSessionId?: string }
+  /**
+   * `system/init` — the route the CLI actually launched with. It carries the
+   * model id the turn ran on, which is the only per-turn model fact Hermes
+   * reports (the Cindy-side session model is a sentinel or an override, and
+   * the home default can change between turns). The session id on init is
+   * deliberately not carried here: the daemon owns the binding and emits it
+   * as a `session-bound` event.
+   */
+  | { kind: 'session-init'; model?: string }
   | { kind: 'assistant-delta'; text: string }
   | { kind: 'tool-use'; toolCallId?: string; name: string; input?: Record<string, unknown> }
   | {
@@ -96,10 +105,15 @@ export function normalizeHermesEvent(event: unknown): NormalizedHermesEvent {
 
   switch (evt.type) {
     case 'system': {
-      // system/init binds the Hermes session id; the daemon already surfaces
-      // it as a hermes-mgr/session-bound event, so init itself is normalized
-      // for completeness (model metadata may matter later).
-      return { kind: 'unknown', event };
+      // system/init reports the route the CLI launched with. The daemon owns
+      // the session-id binding and emits it as a hermes-mgr/session-bound
+      // event, so init is normalized for the model it carries.
+      if (evt.subtype !== 'init') return { kind: 'unknown', event };
+      const model = asNonEmptyString(evt.model);
+      return {
+        kind: 'session-init',
+        ...(model ? { model } : {}),
+      };
     }
     case 'text': {
       // Empty-string deltas are the turn-end sentinel in Hermes's protocol

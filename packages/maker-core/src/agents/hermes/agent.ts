@@ -333,6 +333,12 @@ export class HermesAgent extends BaseAgent {
     const queue = createAsyncQueue<AgentEvent>();
     const usage = { tokenUsage: 0, contextTokens: 0, costUsd: 0 };
     let hermesSessionId: string | undefined;
+    // The model the current turn actually ran on. Hermes reports it in its
+    // `system/init` event (per spawned CLI process, so it is exact even when
+    // the home default changed between turns or a `/model` switch happened
+    // mid-session). The Cindy-side session model is not a substitute: it is
+    // either the 'hermes-default' sentinel or an override for the *next* turn.
+    let turnModel: string | undefined;
     // Monotonic per-send epoch. `session/closed` has no epoch on the wire, so
     // each result-settled turn leaves exactly one close to be consumed; any
     // other close belongs to the currently active epoch only.
@@ -417,6 +423,12 @@ export class HermesAgent extends BaseAgent {
             data: normalized.hermesSessionId,
             source: 'hermes',
           });
+          return;
+        case 'session-init':
+          // The route this CLI process launched with. Remembered for the turn
+          // so the done event can name the model the tokens were spent on.
+          // The session id is not touched here: the daemon owns that binding.
+          turnModel = normalized.model;
           return;
         case 'resume-reset':
           // The daemon already retried this turn against a fresh session after
@@ -531,6 +543,9 @@ export class HermesAgent extends BaseAgent {
                 ...(normalized.durationMs !== undefined
                   ? { durationMs: normalized.durationMs }
                   : {}),
+                // The model the tokens were spent on, as the CLI reported it.
+                // Without it the tokens cannot be priced at all.
+                ...(turnModel ? { model: turnModel } : {}),
               },
             },
             source: 'hermes',
@@ -658,6 +673,10 @@ export class HermesAgent extends BaseAgent {
         const epoch = ++sendEpoch;
         const previousEpoch = activeEpoch;
         activeEpoch = epoch;
+        // A new turn re-announces its route in its own `system/init`. Clear the
+        // previous turn's model so a turn whose CLI never reached init cannot
+        // inherit the last turn's model and be priced against it.
+        turnModel = undefined;
         // Hermes can stay silent through the whole first model call (and tool
         // runs), unlike token-streaming harnesses; announce the turn now so the
         // composer shows a running state instead of a blank transcript.

@@ -3,6 +3,7 @@ import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { consumeLastAssistantPersistId } from '../../messagePersistBroadcaster.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
 import { setMainLocale } from '../../i18n.js';
@@ -320,6 +321,7 @@ function harness() {
     },
     turnModelPromiseBySession: new Map<string, Promise<string>>(),
     readSessionModelForUsage: vi.fn(async () => 'test-model'),
+    readHermesRoute: vi.fn(async () => ({ model: 'deepseek-flash', provider: 'deepseek' })),
     turnUsageContextBySession: new Map<string, TurnUsageContext>(),
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
@@ -530,6 +532,48 @@ describe('production Session event pipeline', () => {
       expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
       expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
     } finally {
+      await h.dispose();
+    }
+  });
+
+  it('records a Hermes turn usage on the turn assistant message', async () => {
+    const h = harness();
+    const persistId = vi.mocked(consumeLastAssistantPersistId);
+    persistId.mockReturnValue('assistant-1');
+    try {
+      h.emit(
+        event(
+          'done',
+          {
+            result: 'done',
+            usage: {
+              inputTokens: 10149,
+              outputTokens: 43,
+              cacheReadTokens: 6784,
+              cacheCreationTokens: 0,
+              model: 'deepseek-flash',
+            },
+          },
+          { source: 'hermes' },
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: 'task',
+            clientId: 'assistant-1',
+            turnUsageDetails: expect.objectContaining({
+              inputTokens: 10149,
+              outputTokens: 43,
+              cacheReadTokens: 6784,
+              model: 'deepseek-flash',
+              provider: 'deepseek',
+            }),
+          }),
+        ),
+      );
+    } finally {
+      persistId.mockReturnValue(undefined);
       await h.dispose();
     }
   });

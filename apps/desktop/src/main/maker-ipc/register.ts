@@ -724,7 +724,7 @@ import {
   removeHermesMcpServer,
   withHermesManagerDaemon,
 } from '../maker-host/hermes-manager-client.js';
-import { METHODS as HERMES_MGR_METHODS } from '@cindy/maker-hermes-manager';
+import { METHODS as HERMES_MGR_METHODS, readHermesDefaultRoute } from '@cindy/maker-hermes-manager';
 import {
   readMemorySettingsState,
   resetMemorySettings,
@@ -4128,6 +4128,30 @@ async function readSessionModelForUsage(sessionId: string): Promise<string> {
 }
 
 /**
+ * Hermes home route (model + provider) the CLI runs on.
+ *
+ * Hermes picks its own provider in `config.yaml` (`model.provider`), so the
+ * Cindy session provider store knows nothing about it — a Hermes turn on
+ * DeepSeek-direct bills DeepSeek, not the Cindy session's provider. The route
+ * is read per turn: the file is small and the route can change between turns
+ * (a `/model` switch, or the owner editing the home default).
+ *
+ * A missing or unreadable home config costs the price, never the tokens: the
+ * caller falls back to the model the CLI itself reported.
+ */
+async function readHermesRoute(): Promise<{ model?: string; provider?: string }> {
+  try {
+    const route = await readHermesDefaultRoute(resolveHermesHome());
+    return {
+      ...(route.model ? { model: route.model } : {}),
+      ...(route.provider ? { provider: route.provider } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * 本轮实际模型快照。key=sessionId, value=turn start 时启动的 model 读取 promise。
  * 只在第一次 isRunning:true 时写入,避免后续 progress status 在用户切模型后覆盖本轮归因。
  */
@@ -6184,6 +6208,9 @@ const sessionEventDependencies: SessionEventDependencies = {
   },
   get readSessionModelForUsage() {
     return readSessionModelForUsage;
+  },
+  get readHermesRoute() {
+    return readHermesRoute;
   },
   get turnUsageContextBySession() {
     return turnUsageContextBySession;

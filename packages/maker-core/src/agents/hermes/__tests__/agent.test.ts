@@ -32,7 +32,7 @@ const noopLogger: Logger = {
 };
 
 type FakeHelloMode = 'ok' | 'version-error' | 'version-mismatch';
-type FakeTurnMode = 'happy' | 'abort' | 'abort-result' | 'manual';
+type FakeTurnMode = 'happy' | 'abort' | 'abort-result' | 'manual' | 'init-first';
 
 interface FakeDaemonOptions {
   hello?: FakeHelloMode;
@@ -146,6 +146,23 @@ async function startFakeDaemon(
           sendTexts.push(String((message.params as { text?: unknown } | undefined)?.text ?? ''));
           respond(message.id!, { sessionId });
           if (turnMode === 'manual') return;
+          // The real CLI opens every spawned run with system/init, carrying the
+          // model that run used and an empty session_id. 'init-first' only
+          // reports it on the first turn, so a later turn has no model of its
+          // own to report.
+          if (turnMode !== 'init-first' || sendTexts.length === 1) {
+            notify('query/event', {
+              sessionId,
+              seq: ++seq,
+              ts: new Date().toISOString(),
+              event: {
+                type: 'system',
+                subtype: 'init',
+                model: 'hermes-turn-model',
+                session_id: '',
+              },
+            });
+          }
           notify('query/event', {
             sessionId,
             seq: ++seq,
@@ -484,6 +501,17 @@ describe('HermesAgent', () => {
         status: 'completed',
         result: 'hello world',
       });
+      // The done event names the model the turn ran on, so the desktop can
+      // price the tokens instead of showing a bare token count.
+      expect(
+        (events.find((event) => event.type === 'done')?.data as { usage?: unknown }).usage,
+      ).toMatchObject({
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 2,
+        cacheCreationTokens: 1,
+        model: 'hermes-turn-model',
+      });
       expect(handle.getUsageSnapshot()).toEqual({
         tokenUsage: 15,
         contextTokens: 13,
@@ -493,6 +521,32 @@ describe('HermesAgent', () => {
       expect(daemon.methods).toEqual(
         expect.arrayContaining(['protocol/hello', 'query/start', 'query/send']),
       );
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not carry the previous turn\'s model into a turn that reported none', async () => {
+    const daemon = await startDaemon({ turn: 'init-first' });
+    const handle = await start(buildAgent());
+    try {
+      const first = createEventPump(handle);
+      await handle.send({ type: 'user', content: 'first' });
+      const firstEvents = await first.until((event) => event.type === 'done');
+      expect(
+        (firstEvents.find((event) => event.type === 'done')?.data as { usage?: unknown }).usage,
+      ).toMatchObject({ model: 'hermes-turn-model' });
+
+      // The second run never reported a model. It must not inherit the first
+      // turn's model: the tokens would be priced against the wrong tariff.
+      const second = createEventPump(handle);
+      await handle.send({ type: 'user', content: 'second' });
+      const secondEvents = await second.until((event) => event.type === 'done');
+      const usage = (secondEvents.find((event) => event.type === 'done')?.data as {
+        usage?: Record<string, unknown>;
+      }).usage;
+      expect(usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+      expect(usage).not.toHaveProperty('model');
     } finally {
       await handle.close();
     }
