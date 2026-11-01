@@ -217,4 +217,38 @@ describe('outbox to offline history handoff', () => {
     await clearHistoryDisk('d', 's');
     expect(await save()).toBe(false);
   });
+  // Perf regression (mobile streaming jank): the debounced raw-cache write used to fire at every
+  // 600 ms pause of a streaming reply, serializing the whole window on the JS thread mid-turn.
+  // Production entry: useSessionMessages' persist effect. Minimal failing input: one assistant row
+  // with agentMeta.isStreaming=true. The write must wait for the final (settled) snapshot.
+  it('defers the debounced raw write while a reply is still streaming, then writes once settled', async () => {
+    vi.useFakeTimers();
+    try {
+      const render = (rows: RemoteMessage[]) => {
+        state.rows = rows;
+        useSessionMessages('s', 'd');
+        state.effects.splice(0).forEach(effect => effect());
+      };
+      const streaming: RemoteMessage = { ...row('reply', 3), role: 'assistant', agentMeta: { isStreaming: true } };
+      render([row('sent', 2), streaming]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(state.raw.size).toBe(0);
+      render([row('sent', 2), { ...streaming, agentMeta: { turnCompleted: true } }]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect([...state.raw.values()].join('')).toContain('message reply');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // Leaving the task mid-stream has no pending debounce timer any more; the deferred snapshot
+  // must still be flushed by the unmount path, otherwise the rows that arrived during the turn
+  // (including the user's own send) are missing from the offline cache until the next visit.
+  it('flushes the deferred snapshot on unmount while the reply is still streaming', async () => {
+    const streaming: RemoteMessage = { ...row('reply', 3), role: 'assistant', agentMeta: { isStreaming: true } };
+    state.rows = [row('sent', 2), streaming];
+    flushUnmount(state.rows);
+    await vi.waitFor(async () => {
+      expect((await getCachedSessionMessages('d', 's')).map(message => message.id)).toEqual(['sent', 'reply']);
+    });
+  });
 });
