@@ -115,6 +115,8 @@
   "noWindows": "No open windows",
   "windowsFailed": "Could not load or switch windows. Tap to retry.",
   "operations": "Controls",
+  "settings": "Settings",
+  "deviceMenu": "Device menu",
   "inputMode": "Input mode",
   "displayNumber": "Display {{number}}",
   "touchHint": "Tap to click, hold to drag. Two fingers scroll; pinch to zoom.",

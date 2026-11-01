@@ -115,6 +115,8 @@
   "noWindows": "今无打开之窗口",
   "windowsFailed": "读或转窗口未成，轻点再试。",
   "operations": "操控",
+  "settings": "设定",
+  "deviceMenu": "器之选单",
   "inputMode": "操作之式",
   "displayNumber": "显示器 {{number}}",
   "touchHint": "轻点为点击，长按为拖曳；双指卷动，捏合缩放。",

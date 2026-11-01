@@ -115,6 +115,8 @@
   "noWindows": "Nenhuma janela aberta",
   "windowsFailed": "Não foi possível carregar ou alternar janelas. Toque para tentar novamente.",
   "operations": "Controles",
+  "settings": "Ajustes",
+  "deviceMenu": "Menu do dispositivo",
   "inputMode": "Modo de entrada",
   "displayNumber": "Tela {{number}}",
   "touchHint": "Toque para clicar, mantenha pressionado para arrastar. Use dois dedos para rolar e o gesto de pinça para ampliar.",

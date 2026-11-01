@@ -115,6 +115,8 @@
   "noWindows": "Keine offenen Fenster",
   "windowsFailed": "Fenster konnten nicht geladen oder gewechselt werden. Tippe, um es erneut zu versuchen.",
   "operations": "Steuerung",
+  "settings": "Einstellungen",
+  "deviceMenu": "Gerätemenü",
   "inputMode": "Eingabemodus",
   "displayNumber": "Bildschirm {{number}}",
   "touchHint": "Tippe zum Klicken, halte zum Ziehen gedrückt. Scrolle mit zwei Fingern; ziehe sie zum Zoomen auseinander oder zusammen.",

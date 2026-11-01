@@ -115,6 +115,8 @@
   "noWindows": "開いているウィンドウはありません",
   "windowsFailed": "ウィンドウの読み込みまたは切り替えに失敗しました。タップして再試行してください。",
   "operations": "操作",
+  "settings": "設定",
+  "deviceMenu": "デバイスメニュー",
   "inputMode": "操作方法",
   "displayNumber": "ディスプレイ {{number}}",
   "touchHint": "タップでクリック、長押しでドラッグ。2本指でスクロール、ピンチで拡大縮小。",

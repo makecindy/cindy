@@ -115,6 +115,8 @@
   "noWindows": "暂无打开的窗口",
   "windowsFailed": "读取或切换窗口失败，轻点重试。",
   "operations": "操作",
+  "settings": "设置",
+  "deviceMenu": "设备菜单",
   "inputMode": "操作方式",
   "displayNumber": "显示器 {{number}}",
   "touchHint": "轻点点击，长按拖拽；双指滚动，捏合缩放。",

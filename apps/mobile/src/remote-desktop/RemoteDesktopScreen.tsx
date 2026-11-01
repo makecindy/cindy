@@ -37,7 +37,12 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import { Monitor } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Keyboard as KeyboardIcon,
+  Monitor,
+  SlidersHorizontal,
+} from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -156,6 +161,10 @@ import {
   LIVE_SCREEN_TOOLBAR_BUTTONS,
   parseLiveScreenParam,
 } from "./liveScreen";
+import {
+  LiveScreenAssistiveTouch,
+  type LiveScreenMenuItem,
+} from "./LiveScreenAssistiveTouch";
 
 type Mode = "pointer" | "touch" | "pan";
 /** How a data-channel request ended; "relay" means it was never executed. */
@@ -1914,7 +1923,7 @@ export function RemoteDesktopSession({
             ? 0
             : keyboard && landscapeKeyboardOverlay
               ? keyboardPanelHeight + keyboardBottom
-              : !keyboard && !landscape
+              : !keyboard && !landscape && !screenPlugin
                 ? toolbarSize.height
                 : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
@@ -3374,8 +3383,54 @@ export function RemoteDesktopSession({
     0,
     LIVE_SCREEN_TOOLBAR_BUTTONS,
   );
-  const panelDeviceButtons = deviceButtons.slice(LIVE_SCREEN_TOOLBAR_BUTTONS);
   const windowView = Boolean(handoff || liveScreen);
+  const toggleKeyboard = () => {
+    setOperations(false);
+    if (keyboard) {
+      Keyboard.dismiss();
+      send({ type: "events", events: [{ kind: "release" }] });
+    }
+    setKeyboard(!keyboard);
+  };
+  // A device screen fills the phone: everything else is in one movable menu.
+  const liveScreenMenu: LiveScreenMenuItem[] = [
+    {
+      key: "back",
+      icon: ArrowLeft,
+      label: t("remoteDesktop.back"),
+      onPress: () => void back(),
+    },
+    ...deviceButtons.map((button) => ({
+      key: button.key,
+      icon: button.icon,
+      label: button.label,
+      disabled: !canInput,
+      onPress: button.press,
+    })),
+    ...(liveScreen?.keyboard
+      ? [
+          {
+            key: "keyboard",
+            icon: KeyboardIcon,
+            label: t("remoteDesktop.keyboard"),
+            disabled: !canInput,
+            onPress: toggleKeyboard,
+          },
+        ]
+      : []),
+    {
+      key: "settings",
+      icon: SlidersHorizontal,
+      label: t("remoteDesktop.settings"),
+      onPress: () => {
+        Keyboard.dismiss();
+        setKeyboard(false);
+        send({ type: "events", events: [{ kind: "release" }] });
+        setControlPage("controls");
+        setOperations(true);
+      },
+    },
+  ];
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
@@ -3640,15 +3695,19 @@ export function RemoteDesktopSession({
                 {t("remoteDesktop.viewOnly")}
               </Text>
             )}
-          {lease && !showConnectionStatus && !operations && !landscape && (
-            <RemoteDesktopNetworkStatus
-              foreground={viewerColors.textPrimary}
-              send={send}
-              stats={network}
-              video={status === "live"}
-              top={edgePadding.paddingTop + spacing.sm}
-            />
-          )}
+          {lease &&
+            !screenPlugin &&
+            !showConnectionStatus &&
+            !operations &&
+            !landscape && (
+              <RemoteDesktopNetworkStatus
+                foreground={viewerColors.textPrimary}
+                send={send}
+                stats={network}
+                video={status === "live"}
+                top={edgePadding.paddingTop + spacing.sm}
+              />
+            )}
           {windowsOpen &&
             focused &&
             lease &&
@@ -3738,7 +3797,8 @@ export function RemoteDesktopSession({
                   page={controlPage}
                   onPage={setControlPage}
                   device={
-                    liveScreen ? { buttons: panelDeviceButtons } : undefined
+                    // The device's buttons are all in the floating menu.
+                    liveScreen ? { buttons: [] } : undefined
                   }
                   security={
                     liveScreen
@@ -3902,7 +3962,7 @@ export function RemoteDesktopSession({
             ) : null}
           </View>
         ) : null}
-        {!keyboard && (
+        {!keyboard && !screenPlugin && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
             testID="remoteDesktop.toolbarPosition"
@@ -4036,14 +4096,7 @@ export function RemoteDesktopSession({
                         : ["MetaLeft", "KeyD"],
                     )
               }
-              onKeyboard={() => {
-                setOperations(false);
-                if (keyboard) {
-                  Keyboard.dismiss();
-                  send({ type: "events", events: [{ kind: "release" }] });
-                }
-                setKeyboard(!keyboard);
-              }}
+              onKeyboard={toggleKeyboard}
               onOperations={() => {
                 Keyboard.dismiss();
                 setKeyboard(false);
@@ -4054,48 +4107,51 @@ export function RemoteDesktopSession({
           </Animated.View>
         )}
       </View>
-      <View
-        testID="remoteDesktop.backPosition"
-        pointerEvents="auto"
-        onLayout={({ nativeEvent: { layout } }) =>
-          setBackControlHeight(layout.height)
-        }
-        style={[
-          styles.back,
-          {
-            top: landscape
-              ? insets.top + spacing.lg
-              : sharedStatusRow
-                ? sharedBackTop
-                : edgePadding.paddingTop + spacing.xs,
-            // iOS landscape: Island/notch sits mid-edge, so the top-left
-            // corner stays clear even when insets.left is large. Skip that
-            // inset unless the top edge is also unsafe — a physical cutout
-            // occupying the corner, not a centered island. Android left
-            // insets are an unsafe strip (cutout/curve), not an island.
-            left: landscape
-              ? (Platform.OS === "ios" &&
-                !geometry.reservedRegionsSupported &&
-                insets.top === 0
-                  ? 0
-                  : insets.left) +
-                spacing.lg +
-                (Platform.OS === "ios" ? spacing.xs : 0)
-              : portraitBackLeft,
-          },
-          systemSideRail && {
-            top: sideRailTop,
-            left:
-              windowSize.width - (sideRailWidth + navigationChrome.target) / 2,
-            width: navigationChrome.target,
-          },
-        ]}
-      >
-        <RemoteDesktopBackButton
-          label={t("remoteDesktop.back")}
-          onPress={back}
-        />
-      </View>
+      {!screenPlugin && (
+        <View
+          testID="remoteDesktop.backPosition"
+          pointerEvents="auto"
+          onLayout={({ nativeEvent: { layout } }) =>
+            setBackControlHeight(layout.height)
+          }
+          style={[
+            styles.back,
+            {
+              top: landscape
+                ? insets.top + spacing.lg
+                : sharedStatusRow
+                  ? sharedBackTop
+                  : edgePadding.paddingTop + spacing.xs,
+              // iOS landscape: Island/notch sits mid-edge, so the top-left
+              // corner stays clear even when insets.left is large. Skip that
+              // inset unless the top edge is also unsafe — a physical cutout
+              // occupying the corner, not a centered island. Android left
+              // insets are an unsafe strip (cutout/curve), not an island.
+              left: landscape
+                ? (Platform.OS === "ios" &&
+                  !geometry.reservedRegionsSupported &&
+                  insets.top === 0
+                    ? 0
+                    : insets.left) +
+                  spacing.lg +
+                  (Platform.OS === "ios" ? spacing.xs : 0)
+                : portraitBackLeft,
+            },
+            systemSideRail && {
+              top: sideRailTop,
+              left:
+                windowSize.width -
+                (sideRailWidth + navigationChrome.target) / 2,
+              width: navigationChrome.target,
+            },
+          ]}
+        >
+          <RemoteDesktopBackButton
+            label={t("remoteDesktop.back")}
+            onPress={back}
+          />
+        </View>
+      )}
       {keyboard && (
         <View
           testID="remoteDesktop.keyboardPanel"
@@ -4354,6 +4410,20 @@ export function RemoteDesktopSession({
             </View>
           )}
         </View>
+      )}
+      {screenPlugin && (
+        <LiveScreenAssistiveTouch
+          items={liveScreenMenu}
+          caption={`${liveScreen?.name ?? deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
+          label={t("remoteDesktop.deviceMenu")}
+          insets={{
+            top: insets.top,
+            bottom: insets.bottom + (keyboard ? keyboardPanelHeight : 0),
+            left: insets.left,
+            right: insets.right,
+          }}
+          hidden={operations}
+        />
       )}
     </KeyboardAvoidingView>
   );

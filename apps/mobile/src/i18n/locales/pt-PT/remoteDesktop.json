@@ -115,6 +115,8 @@
   "noWindows": "Sem janelas abertas",
   "windowsFailed": "Não foi possível carregar ou mudar de janela. Toque para tentar novamente.",
   "operations": "Controlos",
+  "settings": "Definições",
+  "deviceMenu": "Menu do dispositivo",
   "inputMode": "Modo de entrada",
   "displayNumber": "Ecrã {{number}}",
   "touchHint": "Toque para clicar, mantenha premido para arrastar. Desloque com dois dedos; junte ou afaste os dedos para ampliar ou reduzir.",
