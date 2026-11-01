@@ -103,11 +103,11 @@ export interface ContributionTransferView {
 export interface PluginReviewUpdate {
   pluginId: string;
   key: string;
-  releaseId: string;
-  version: string;
-  sha256: string;
-  revision: string;
-  status: 'approved' | 'rejected';
+  releaseId: string | null;
+  version: string | null;
+  sha256: string | null;
+  revision: string | null;
+  status: 'approved' | 'rejected' | 'disabled' | 'archived' | 'revoked' | 'enabled';
   decidedAt: string;
   unread: boolean;
 }

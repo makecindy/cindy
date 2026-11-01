@@ -33,6 +33,8 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  /** Explicit host project membership; older hosts fall back to workingDir. */
+  projectDir?: string | null;
   tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
@@ -154,6 +156,8 @@ export interface RemoteMessage {
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */
     | 'input-handoff'
+    /** 新任务「让插件选」的结果(由 agentMeta.pluginModelRoute 派生)。 */
+    | 'plugin-model-route'
     | 'mcp-app';
 }
 
@@ -242,6 +246,8 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
+  /** Classical output style chosen next to the language; used only with a classical uiLanguage. */
+  classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;

@@ -333,7 +333,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('<ComposerRichInput');
     expect(composerInputSource).toContain('document={composerDocument}');
     expect(composerInputSource).toContain('inputElement={(');
-    expect(source).toContain("import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
+    expect(source).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(source).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';");
     expect(source).toContain("const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';");
     expect(source).toContain('const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;');
@@ -441,8 +441,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(source).toContain('hasTrailingAction: composerSendSlotIsStop || composerShowSendButton');
     expect(source).toContain('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误。
-    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
+    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误与声纹过滤提示。
+    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);');
     expect(voiceButtonSource).toContain(') : voiceRecordingTimer.label !== null ? (');
     expect(voiceButtonSource).toContain('<VoiceRecordingPillContent');
     // 录音中语音按钮展开成红点+计时胶囊,右缘锚定、只向左生长;旧的红框 Square 形态不再使用。

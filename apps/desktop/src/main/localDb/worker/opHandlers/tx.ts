@@ -1,6 +1,7 @@
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
+import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
@@ -19,7 +20,6 @@ import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/
 import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
 import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
-import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
   wechatActivateBindingEpoch,
   wechatCancelForCommand,
@@ -57,7 +57,6 @@ import type {
   BotsCreateThreadLaneArgs,
 } from '../../client/tx/types.js';
 
-const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1_000, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
 
@@ -78,10 +77,6 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return recordMediaSpend(db, txArgs as import('../../client/tx/types.js').MediaSpendArgs);
     case 'authorization.readProjection':
       return readAutoReviewProjectionTransaction(db, txArgs);
-    case 'codex.importMessages':
-      return codexImportMessages(db, txArgs);
-    case 'claude.importMessages':
-      return claudeImportMessages(db, txArgs);
     case 'rewind.commit':
       return rewindCommit(db, txArgs);
     case 'session.treeRehydrate':
@@ -125,6 +120,7 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
     case 'pluginUsage.execute': return runPluginUsageTransaction(db, txArgs);
+    case 'sessionImport.execute': return runSessionImportTransaction(db, txArgs);
     case 'taskTags.execute':
       return runTaskTagsTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
@@ -838,9 +834,9 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
      sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window,
      fast_mode, plan_mode_enabled, cleared_at, pinned_at, user_send_at, agent_kind,
      orca_role, parent_session_id, forked_at_message_id, worktree_path, extra_dirs,
-     remote_host_id, provider_id, source, created_at, updated_at, agent_device_id)
+     remote_host_id, provider_id, source, created_at, updated_at, agent_device_id, project_dir)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0, 0, 0, 0, ?, 0, NULL, NULL, NULL,
-     ?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`)
+     ?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(expectString(s.id, 'session.id'), expectString(s.title, 'session.title'),
       nullableString(s.workingDir), expectString(s.workspaceKind, 'session.workspaceKind'),
       expectString(s.model, 'session.model'), expectString(s.effort, 'session.effort'),
@@ -849,7 +845,7 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
       nullableString(s.parentSessionId),
       expectString(s.extraDirs, 'session.extraDirs'), nullableString(s.remoteHostId), nullableString(s.providerId),
       expectString(s.source, 'session.source'), expectNumber(s.createdAt, 'session.createdAt'),
-      expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId));
+      expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId), nullableString(s.projectDir));
 }
 
 /** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
@@ -2249,6 +2245,8 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。
 // 两份实现必须同步,typecheck 抓不到 drift。
@@ -2297,7 +2295,9 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
           code: 'PRECONDITION_FAILED',
         });
       }
-      if ((existing as { source?: unknown }).source === 'bot') {
+      // 例行/渠道专线与普通任务一起出现在任务列表，生命周期与普通任务一致（同 setTerminalStatus）；
+      // 伙伴主对话等其余 bot 会话仍必须走 Bot 生命周期。
+      if ((existing as { source?: unknown }).source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
         throw Object.assign(new Error(`Bot 任务必须通过 Bot 生命周期管理: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',
         });
@@ -2334,8 +2334,6 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
-
 /** Atomically persist a terminal task status and its local-close fence. */
 function sessionsSetTerminalStatus(db: Database.Database, args: unknown): SessionsSetTerminalStatusResult {
   const payload = asRecord(args, 'sessions.setTerminalStatus args');
@@ -2371,12 +2369,6 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     return { ...updated, sessionId: updated.id, status, deletedSideChats };
   });
   return transaction();
-}
-
-function invalidateSessionListProjection(db: Database.Database, sessionId: string): void {
-  db.prepare(
-    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
-  ).run(sessionId);
 }
 
 function compactSessionToolResults(
@@ -2534,136 +2526,6 @@ function imRotateSession(
       status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
     return { previousStatus };
   })();
-}
-
-function codexImportMessages(db: Database.Database, args: unknown): { changed: number } {
-  const payload = asRecord(args, 'codex.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const model = expectString(payload.model, 'model');
-  const rows = expectArray(payload.rows, 'rows');
-  const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(
-    db,
-    sessionId,
-    importClientIdPrefix,
-  );
-  const upsert = db.prepare(`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, NULL, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  `);
-  const transaction = db.transaction(() => {
-    let changed = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'codex row');
-      const lineNo = expectNumber(row.lineNo, 'row.lineNo');
-      const role = expectString(row.role, 'row.role') as 'user' | 'assistant';
-      const text = expectString(row.text, 'row.text');
-      const createdAt = expectNumber(row.createdAt, 'row.createdAt');
-      const clientId = `${importClientIdPrefix}${lineNo}`;
-      if (
-        !existingImportedClientIds.has(clientId) &&
-        isLikelyLocalDuplicate(existing, { role, text, createdAt })
-      ) {
-        continue;
-      }
-      changed += upsert.run({
-        id: `codex-import-${sdkSessionId}-${lineNo}`,
-        clientId,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        agentMeta: JSON.stringify({ sdkSessionId, model }),
-        createdAt,
-      }).changes;
-    }
-    if (changed > 0) invalidateSessionListProjection(db, sessionId);
-    return changed;
-  });
-  return { changed: transaction() as number };
-}
-
-function claudeImportMessages(db: Database.Database, args: unknown): { changed: number } {
-  const payload = asRecord(args, 'claude.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const rows = expectArray(payload.rows, 'rows');
-  const upsert = db.prepare(`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, @toolUseId, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      tool_use_id = excluded.tool_use_id,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role != 'tool_result' OR
-        CASE
-          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
-          WHEN json_valid(messages.content) = 0 THEN 1
-          WHEN json_type(messages.content) = 'object'
-           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
-           AND json_extract(messages.content, '$.version') = 1
-           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.originalBytes') >= 0
-           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
-          ELSE 1
-        END = 1
-      ) AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.tool_use_id IS NOT excluded.tool_use_id OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  `);
-  const transaction = db.transaction(() => {
-    let changed = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'claude row');
-      const key = `${expectNumber(row.lineNo, 'row.lineNo')}-${expectNumber(row.partIndex, 'row.partIndex')}`;
-      const role = expectString(row.role, 'row.role');
-      changed += upsert.run({
-        id: `claude-import-${sdkSessionId}-${key}`,
-        clientId: `${importClientIdPrefix}${key}`,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        toolUseId: nullableString(row.toolUseId),
-        agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
-        createdAt: expectNumber(row.createdAt, 'row.createdAt'),
-      }).changes;
-    }
-    if (changed > 0) invalidateSessionListProjection(db, sessionId);
-    return changed;
-  });
-  return { changed: transaction() as number };
 }
 
 function rewindCommit(db: Database.Database, args: unknown): void {
@@ -3211,6 +3073,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       expectNumber(newSession.createdAt, 'newSession.createdAt'),
       expectNumber(newSession.updatedAt, 'newSession.updatedAt'),
     );
+    // A fork keeps its source project's identity even when cwd is a checkout.
+    db.prepare('UPDATE sessions SET project_dir = (SELECT project_dir FROM sessions WHERE id = ?) WHERE id = ?')
+      .run(sourceSessionId, expectString(newSession.id, 'newSession.id'));
     if (newSession.source === 'side-chat') {
       db.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
         .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
@@ -3845,186 +3710,6 @@ function orcaReleaseWorkerCreationReservation(db: Database.Database, args: unkno
   );
 }
 
-function readExistingImportedClientIds(
-  db: Database.Database,
-  sessionId: string,
-  importClientIdPrefix: string,
-): Set<string> {
-  const rows = db.prepare(`
-    SELECT client_id AS clientId
-    FROM messages
-    WHERE session_id = ? AND client_id LIKE ?
-  `).all(sessionId, `${importClientIdPrefix}%`) as Array<{ clientId: string }>;
-  return new Set(rows.map((row) => row.clientId));
-}
-
-interface MessageFingerprint {
-  role: 'user' | 'assistant';
-  /** 原文指纹(仅换行归一 + trim),普通消息只用它精确比较。 */
-  plain: string;
-  /**
-   * citation 规范形指纹(有损:标记→路径、去反引号、折叠空白)。只在 canon 比较
-   * 门放行时参与(见 isLikelyLocalDuplicate),避免「仅 Markdown 格式不同」的两条
-   * 正常回复被误判成重复(review 反馈)。
-   */
-  canonical?: string;
-  /** 原文是否含原始标记字面量——canon 比较的门:至少一侧为真才启用有损比较。 */
-  hasMarker: boolean;
-  createdAt: number;
-}
-
-function readExistingMessageFingerprints(
-  db: Database.Database,
-  sessionId: string,
-  importClientIdPrefix: string,
-): MessageFingerprint[] {
-  const rows = db.prepare(`
-    SELECT role, content, created_at AS createdAt
-    FROM messages
-    WHERE session_id = ?
-      AND role IN ('user', 'assistant')
-      AND client_id NOT LIKE ?
-  `).all(sessionId, `${importClientIdPrefix}%`) as Array<{
-    role: string;
-    content: string;
-    createdAt: number;
-  }>;
-  const out: MessageFingerprint[] = [];
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue;
-    const text = normalizeStoredMessageText(row.content);
-    if (!text) continue;
-    out.push(messageFingerprint(row.role, text, row.createdAt));
-  }
-  return out;
-}
-
-function isLikelyLocalDuplicate(
-  existing: MessageFingerprint[],
-  row: { role: 'user' | 'assistant'; text: string; createdAt: number },
-): boolean {
-  const next = messageFingerprint(row.role, row.text, row.createdAt);
-  return existing.some(
-    (prev) =>
-      prev.role === next.role &&
-      Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS &&
-      // 普通消息:原文精确比较。canon 有损比较只在「至少一侧含原始标记字面量」时
-      // 启用——即升级前的旧标记行 vs 已归一化的导入行;两条都不含标记的正常回复
-      // (如 `Use \`foo\`` vs `Use foo`)绝不走有损比较(review 反馈)。
-      (prev.plain === next.plain ||
-        (prev.canonical !== undefined &&
-          next.canonical !== undefined &&
-          (prev.hasMarker || next.hasMarker) &&
-          prev.canonical === next.canonical)),
-  );
-}
-
-function messageFingerprint(
-  role: 'user' | 'assistant',
-  text: string,
-  createdAt: number,
-): MessageFingerprint {
-  // 升级前落库的旧行仍带原始 `:codex-file-citation{...}` 标记,导入侧新文本已
-  // 归一化(标记换成 code span,截断残尾则被整段剥掉——此时是**不含任何标记/
-  // 反引号的纯文本**)。因此 assistant 一律算出规范形候选指纹,是否参与比较由
-  // isLikelyLocalDuplicate 的标记门决定(review 反馈:残尾行的规范形是纯文本,
-  // 导入侧若不给纯文本算规范形就永远配不上)。只影响比较,不改落库内容。
-  const plain = normalizeFingerprintText(text);
-  const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
-  const canonical =
-    role === 'assistant' ? normalizeFingerprintText(canonicalizeCodexCitations(text)) : undefined;
-  return { role, plain, ...(canonical !== undefined ? { canonical } : {}), hasMarker, createdAt };
-}
-
-// 指纹专用规范形——与展示形(maker-core finalizeCodexCitationText)**刻意不同**:
-// 标记替换为解码路径本体(无 code span 围栏/空格垫),循环到不动点,再去掉全部
-// 反引号并折叠空白。这样「升级前的原始标记行」与「已归一化的展示形文本」两侧
-// 都收敛到同一规范形——路径本身解码出完整标记字面量的极端文件名也一致(review
-// 反馈:展示形二次处理不幂等,不能拿来当指纹)。只用于去重比较,不落库。
-// eval-fallback worker(WorkerThreadTransport WORKER_CODE)无法 import,两份 worker
-// 各内联一份,口径变更需同步(tx.test 用真实标记 fixture 钉行为)。
-const CODEX_CITATION_RE = /:codex-file-citation\{((?:[^"{}]|"(?:[^"\\]|\\.)*")*)\}/g;
-const CODEX_CITATION_OPEN = ':codex-file-citation{';
-
-function codexCitationClose(text: string, attrsStart: number): number {
-  let inQuote = false;
-  for (let i = attrsStart; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inQuote && ch === '\\') i += 1;
-    else if (ch === '"') inQuote = !inQuote;
-    else if (!inQuote && ch === '}') return i;
-    else if (!inQuote && ch === '{') return -2; // 裸 { = 畸形标记,原样透出
-  }
-  return -1; // 扫描到末尾未闭合 = 截断残尾
-}
-
-// path 属性解码(与 translator extractCitationPath 同口径:完整属性名边界、
-// \"/\\ 转义、开头恰好两个反斜杠 = 原生 UNC 整体保留)。
-function decodeCitationPathForFingerprint(attrs: string): string {
-  const raw = /(?:^|\s)path="((?:[^"\\]|\\.)*)"/.exec(attrs)?.[1];
-  if (raw === undefined) return '';
-  const nativeUnc = raw.startsWith('\\\\') && raw[2] !== '\\';
-  const head = nativeUnc ? '\\\\' : '';
-  return head + (nativeUnc ? raw.slice(2) : raw).replace(/\\([\\"])/g, '$1');
-}
-
-function canonicalizeCodexCitations(text: string): string {
-  // 无早退:纯文本也要走末尾的空白折叠,否则「残尾行规范形(折叠过)」与「导入侧
-  // 纯文本规范形(未折叠)」会因内部空白差异配不上。
-  // 截断残尾剥除(与展示口径一致:只剥「扫描到文本末尾仍未闭合」的标记)。
-  let out = text;
-  let from = 0;
-  for (;;) {
-    const open = out.indexOf(CODEX_CITATION_OPEN, from);
-    if (open === -1) break;
-    const close = codexCitationClose(out, open + CODEX_CITATION_OPEN.length);
-    if (close === -1) {
-      out = out.slice(0, open);
-      break;
-    }
-    from = close === -2 ? open + CODEX_CITATION_OPEN.length : close + 1;
-  }
-  // 标记 → 解码路径,循环到不动点(路径解码可能暴露新的完整标记字面量;有界防御)。
-  for (let i = 0; i < 5; i += 1) {
-    const next = out.replace(CODEX_CITATION_RE, (_all, attrs: string) =>
-      decodeCitationPathForFingerprint(attrs),
-    );
-    if (next === out) break;
-    out = next;
-  }
-  // 展示形的围栏/空格垫与换行渲染差异不参与指纹比较。
-  return out.replace(/`+/g, '').replace(/\s+/g, ' ');
-}
-
-function normalizeStoredMessageText(raw: string): string {
-  let value: unknown = raw;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    value = raw;
-  }
-  return extractContentText(value);
-}
-
-function normalizeFingerprintText(text: string): string {
-  return text.replace(/\r\n/g, '\n').trim();
-}
-
-function extractContentText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = typeof block.type === 'string' ? block.type : '';
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join('\n\n');
-}
-
 function remapForkedAgentMeta(
   raw: string | null,
   map: Map<string, string>,
@@ -4156,20 +3841,6 @@ function assertIdentifier(value: string): void {
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}...`;
-}
-
-function stringifyContent(value: unknown): string {
-  const json = JSON.stringify(value);
-  return json === undefined ? 'null' : json;
-}
-
-/**
- * 外部 CLI 历史导入与 live 落库同口径:tool_result 正文截到 8KB。
- * 不截会让 rollout / transcript 重导入"复活"全文。媒体挂账在 main 导入层
- * 对原文执行(本函数跑在 DB worker,碰不到 cindy-media ledger)。
- */
-function stringifyImportedContent(role: string, content: unknown): string {
-  return stringifyContent(capImportedToolResultContent(role, content));
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

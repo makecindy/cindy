@@ -78,10 +78,14 @@ function fail(message) {
 
 const listed = spawnSync('git', ['ls-files', '-z'], {
   encoding: 'buffer',
+  // The tracked path list exceeds spawnSync's default 1 MiB output limit.
+  maxBuffer: 64 * 1024 * 1024,
 });
 
-if (listed.status !== 0) {
-  fail(`git ls-files failed with exit ${listed.status ?? 'null'}\n${listed.stderr?.toString('utf8') ?? ''}`);
+// macOS can report status 0 alongside ENOBUFS; scanning that partial listing
+// would silently omit files at the end of the index.
+if (listed.error || listed.status !== 0) {
+  fail(`git ls-files failed with exit ${listed.status ?? 'null'}\n${listed.error ? `${listed.error.code ?? 'spawn error'}: ${listed.error.message}` : ''}\n${listed.stderr?.toString('utf8') ?? ''}`);
 }
 
 const files = listed.stdout

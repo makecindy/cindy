@@ -162,6 +162,7 @@
     "mediaErrorLine": "錯誤：{{message}}",
     "mediaDeviceLinkHint": "開啟前，手機會先請遠端裝置上傳這個媒體。",
     "controlDelete": "刪除訊息",
+    "controlEdit": "編輯",
     "controlRewind": "回到此處",
     "controlFork": "從這裡開啟新任務",
     "markdownDocAriaLabel": "訊息正文",
@@ -261,6 +262,14 @@
     "waitingMessage": "等待傳送的訊息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為這個任務選了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用 {{model}}",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用 {{model}}",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文並繼續",
       "labelTimeout": "上一輪沒有回應，已整理後繼續",
@@ -420,8 +429,26 @@
     "sent": "已提交",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
+    "downloadVideo": "下載影片",
     "openVideoSource": "開啟原影片",
     "calculationUnavailable": "此項暫時無法計算。",
     "incomplete": "部分內容未能顯示。"
+  },
+  "usageCost": {
+    "title": "費用明細",
+    "conversation": "對話",
+    "additional": "附加費用",
+    "unknownModel": "未記錄模型",
+    "estimate": "估算價值",
+    "charged": "按量費用",
+    "loading": "正在讀取明細…",
+    "unavailable": "這筆記錄暫無明細。",
+    "explanation": "按模型和渠道彙總。訂閱價值是估算，不是額外扣費。僅包含已記錄的費用，歷史記錄的明細可能不完整。",
+    "source": {
+      "subscription": "訂閱帳戶",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 供應商",
+      "unknown": "未記錄渠道"
+    }
   }
 }

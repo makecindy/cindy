@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   live: {} as Record<string, unknown>,
   copy: vi.fn(),
   panel: null as any,
+  focused: true,
 }));
 
 vi.mock('react-native', () => ({
@@ -20,25 +21,31 @@ vi.mock('react-native', () => ({
   Pressable: ({ children, onPress, disabled, testID }: any) => el('button', { onClick: onPress, disabled, 'data-testid': testID }, children),
   StyleSheet: { create: (value: unknown) => value },
 }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, action.label) }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]) }));
 vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, Sparkles: () => null }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, subscribe: h.subscribe, unsubscribe: h.unsubscribe }) }));
 vi.mock('@/session/BotGroupAvatars', () => ({ BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BotGroupAvatar: () => null }));
 vi.mock('@/session/InteractionPanel', () => ({ InteractionPanel: (props: any) => { h.panel = props; return el('div', { 'data-testid': 'panel' }); } }));
-vi.mock('@/session/remoteSessionStore', () => ({
+vi.mock('@/session/remoteSessionStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/session/remoteSessionStore')>();
+  return { ...actual,
   remoteSessionStore: {
+    ...actual.remoteSessionStore,
     subscribe: () => () => {},
     getSessionLiveActivity: (sessionId: string) => h.live[sessionId] ?? null,
     setPendingInteractions: h.setPending,
   },
   useSessionPendingInteractions: (sessionId: string) => h.pending[sessionId] ?? [],
-}));
+}; });
 vi.mock('@/session/useCompanionGenerationCopy', () => ({
   useCompanionGenerationCopy: (input: { phase: string | null; active: boolean }) => { h.copy(input); return input.active ? `copy:${input.phase}` : null; },
 }));
+vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, el('span', { 'data-testid': 'status' }, title), children) }));
+vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: ({ content }: any) => el('p', null, content) }));
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', { 'data-testid': 'status' }, text) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
@@ -46,6 +53,7 @@ vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () =>
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupSpeakerRow } from '@/session/BotGroupSpeakerRow';
 import i18n from '@/i18n';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -57,6 +65,8 @@ async function render(props: Record<string, unknown>) {
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   vi.clearAllMocks(); h.pending = {}; h.live = {}; h.panel = null;
+  h.focused = true;
+  remoteSessionStore.clear();
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
 });
@@ -68,7 +78,7 @@ it('follows the speaking lane while focused and seeds its pending prompts', asyn
   expect(h.invoke).toHaveBeenCalledWith('mac', 'maker:get-pending-interactions', ['s1']);
   expect(h.setPending).toHaveBeenCalledWith('s1', [{ request: { requestId: 'r1' } }], { deviceId: 'mac' });
   // No observed phase must not falsely claim thinking.
-  expect(node.textContent).toContain('copy:processing');
+  expect(node.textContent).toContain('Working');
   await act(async () => root.unmount());
   expect(h.unsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^bot-group-speaker:s1:focus:/), 'mac', ['session:s1']);
   root = createRoot(node);
@@ -77,12 +87,12 @@ it('follows the speaking lane while focused and seeds its pending prompts', asyn
 it('uses the live phase, and plain copy while planning or before a step reports one', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'running', compactDetail: '', workingPhase: 'reading-file' };
   await render({});
-  expect(node.textContent).toContain('copy:reading-file');
+  expect(node.textContent).toContain('Working');
   await render({ activity: 'planning', sessionId: null });
   expect(node.textContent).toContain(i18n.t('groupChat.speaking.planning'));
-  expect(h.copy).toHaveBeenLastCalledWith(expect.objectContaining({ active: false }));
+  expect(h.copy).not.toHaveBeenCalled();
   await render({ activity: 'step', sessionId: 's2' });
-  expect(node.textContent).toContain(i18n.t('groupChat.speaking.step'));
+  expect(node.textContent).toContain('Working');
 });
 
 it('shows the teammate’s pending prompt inline instead of the working line', async () => {
@@ -90,7 +100,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
   await render({});
   expect(h.panel).toMatchObject({ companion: true, embedded: true, deviceId: 'mac', sessionId: 's1', interactions: h.pending.s1 });
   expect(h.panel.companionIdentity.name).toBe('阿布');
-  expect(node.querySelector('[data-testid="status"]')).toBeNull();
+  expect(node.querySelector('[data-testid="panel"]')).not.toBeNull();
 });
 
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
@@ -148,4 +158,32 @@ it('shows real elapsed time and disables the group stop action while pending', a
   expect(button.disabled).toBe(true);
   expect(button.textContent).toBe(i18n.t('groupChat.speaking.stopping'));
   vi.useRealTimers();
+});
+
+// Unit regression: real store refuses new text after task-detail blur unless
+// the focused group owns a message lease. Previous row tests mocked this store.
+it('keeps new stage text visible after returning from the task and releases it on blur', async () => {
+  h.invoke.mockResolvedValue([]);
+  const stop = vi.fn(async () => undefined);
+  const props = { groupId: 'g1', executionId: 'exec', startedAt: 0, onStop: stop };
+  await render(props);
+  h.focused = false;
+  await render(props);
+  const task = remoteSessionStore.enterSessionMessageDetail('s1');
+  remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', task);
+  h.focused = true;
+  await render(props);
+  await act(async () => remoteSessionStore.applyMakerEvent('s1', {
+    type: 'text', data: { text: 'New stage after return', isFullText: true, isFinal: false },
+  }, 'continued'));
+  expect(remoteSessionStore.getMessages('s1').some(message => message.content === 'New stage after return')).toBe(true);
+  expect(node.textContent).toContain('New stage after return');
+  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
+  expect(stop).toHaveBeenCalledTimes(1);
+  h.focused = false;
+  await render(props);
+  await act(async () => remoteSessionStore.applyMakerEvent('s1', {
+    type: 'text', data: { text: 'Late text after leaving', isFullText: true, isFinal: false },
+  }, 'late'));
+  expect(remoteSessionStore.getMessages('s1').some(message => message.content === 'Late text after leaving')).toBe(false);
 });

@@ -1452,6 +1452,7 @@ export function ImageLightbox({
     {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。 */}
     <div
       ref={overlayRef}
+      data-lightbox-layer
       style={{
         position: 'fixed',
         inset: 0,

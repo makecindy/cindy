@@ -1,4 +1,5 @@
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
+import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
@@ -79,7 +80,6 @@ import {
   finalizePlainPreview,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
-import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
@@ -143,7 +143,7 @@ import { cindyMakeManager } from '../../cindy-make/manager.js';
 import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
-import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
+import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { botSessionInputBlockReason, isShadowedCompanionSession } from '../../maker-ipc/botSessionInputGuard.js';
 import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 
@@ -485,6 +485,7 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   try {
@@ -1037,6 +1038,7 @@ export interface SessionRowSnapshot {
   title: string | null;
   userSendAt: number | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   providerId: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
@@ -1067,6 +1069,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       title: sessions.title,
       userSendAt: sessions.userSendAt,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       workspaceKind: sessions.workspaceKind,
       // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
       // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
@@ -1213,6 +1216,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       lastActivityAt: sessions.lastActivityAt,
       updatedAt: sessions.updatedAt,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       workspaceKind: sessions.workspaceKind,
       remoteHostId: sessions.remoteHostId,
       source: sessions.source,
@@ -1246,7 +1250,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     !row.remoteHostId &&
     isRetainableProjectSession(row)
   ) {
-    const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
+    const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
     const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
     if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
@@ -1500,7 +1504,6 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
       sessionId,
@@ -1788,7 +1791,7 @@ export function registerSessionIpc(
         });
       } catch (error) {
         throwIpcError(
-          'PRECONDITION_FAILED',
+          error instanceof WritableDirectoryPickerGrantError ? error.code : 'PRECONDITION_FAILED',
           error instanceof Error ? error.message : 'Writable directory authorization failed',
         );
       }
@@ -1837,7 +1840,7 @@ export function registerSessionIpc(
       !insertRow.remoteHostId &&
       isRetainableProjectSession(insertRow)
     ) {
-      void upsertRecentWorkdir(insertRow.workingDir, now);
+      void upsertRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
     // 资格过滤(用户主会话)与订阅者快路径都在 cindy-brain 内部,这里零判断。
@@ -2496,7 +2499,6 @@ export async function updateSessionInDb(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
-      void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     const row = await selectSessionWithCount(db, sid);
     moveGuard?.assertCurrent();
@@ -2531,12 +2533,12 @@ export async function updateSessionInDb(
       isRetainableProjectSession(row)
     ) {
       const touched = await upsertRecentWorkdir(
-        row.workingDir,
+        row.projectDir ?? row.workingDir,
         Date.now(),
         process.platform,
         dbClient,
       );
-      if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
+      if (touched) broadcastRecentWorkdirsChanged(row.projectDir ?? row.workingDir, ownerScope);
     }
     // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
     // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
@@ -2558,10 +2560,13 @@ export async function updateSessionInDb(
       if (currentRow) broadcastStatus = currentRow.status;
     }
     const broadcastPatch =
-      p.pinnedAt === undefined && p.status === undefined
+      p.pinnedAt === undefined && p.status === undefined && setObj.projectDir === undefined
         ? p
         : {
             ...p,
+            // Include mapper-derived changes so every mounted mirror drops the
+            // old explicit membership after a move, just as SQLite does.
+            ...(setObj.projectDir !== undefined ? { projectDir: updated.projectDir } : {}),
             ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
             ...(p.status !== undefined ? { status: broadcastStatus } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
@@ -2594,6 +2599,7 @@ export async function updateSessionInDb(
       status: updated.status,
       title: updated.title,
       workingDir: updated.workingDir,
+      projectDir: updated.projectDir,
       workspaceKind: updated.workspaceKind,
     });
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });

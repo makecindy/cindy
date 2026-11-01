@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Computador não ligado",
+    "hint": "O conteúdo guardado está disponível. Ligue o computador para carregar mais."
+  },
+  "recovery": {
+    "syncing": "A sincronizar…",
+    "recovered": "Restaurado",
+    "syncingHint": "A atualizar o conteúdo a partir do computador."
+  },
+  "syncFailed": "Falha na sincronização",
+  "resync": "Voltar a sincronizar",
+  "resyncing": "A sincronizar novamente",
+  "syncShort": "Sincronizar",
+  "deviceUnresponsiveTitle": "Ainda sem resposta",
+  "deviceUnresponsiveHint": "Ainda não foi recebida nenhuma resposta. A tentar novamente automaticamente.",
+  "localNetwork": {
+    "title": "Rede do telemóvel indisponível",
+    "hint": "Verifique a rede do telemóvel. A ligação será restabelecida automaticamente quando a rede recuperar."
+  },
+  "serviceConnection": {
+    "title": "Não é possível contactar o serviço",
+    "hint": "O telemóvel não consegue contactar o serviço neste momento. A restabelecer a ligação automaticamente."
+  },
+  "connectStep1": "Instale e abra {{appName}} no computador",
+  "connectStep2": "Inicie sessão com a mesma conta do telemóvel",
+  "connectStep3": "Em Definições → Ligação remota, ative \"Permitir que dispositivos da mesma conta controlem este computador\"",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} na nuvem, em breve",
+  "cloudTeaserCopy": "Após o lançamento, a aplicação móvel funcionará de forma autónoma, sem precisar de computador.",
+  "sectionFirstRun": "Começar",
+  "sectionOffline": "Dispositivos ligados",
+  "sectionRemoteDisabled": "No computador",
+  "sectionAccessRevoked": "Aprovar acesso novamente",
+  "retryAccess": "Tentar aceder novamente",
+  "recheck": "Verificar novamente",
+  "deviceRemovedTitle": "Dispositivo removido",
+  "deviceRemovedHint": "Termine sessão e inicie sessão novamente para voltar à lista de dispositivos.",
+  "authFailedTitle": "Sessão expirada",
+  "authFailedHint": "A sua sessão expirou. Termine sessão e inicie sessão novamente.",
+  "replacedTitle": "Ligação substituída",
+  "replacedHint": "A ligação deste dispositivo foi substituída noutro local. A restabelecer a ligação.",
+  "tooManyConnectionsTitle": "Demasiadas ligações",
+  "tooManyConnectionsHint": "Há demasiados dispositivos online nesta conta. Desligue outro dispositivo e tente novamente.",
+  "versionMismatchTitle": "Versões incompatíveis",
+  "versionMismatchHint": "Esta versão da aplicação é incompatível com o serviço. Atualize para a versão mais recente e tente novamente.",
+  "unstableTitle": "A ligação está sempre a cair",
+  "unstableHint": "A ligação está instável. Verifique a rede e aguarde que a ligação recupere.",
+  "relay": {
+    "label": {
+      "online": "Ligado ao Relay",
+      "connecting": "A ligar ao Relay",
+      "stopped": "Desligado do Relay"
+    },
+    "hint": {
+      "online": "As tarefas remotas podem ser sincronizadas.",
+      "lastSynced": "Última sincronização: {{time}}",
+      "connecting": "A subscrição das tarefas remotas será retomada automaticamente quando a rede recuperar.",
+      "stopped": "A ligação será retomada quando voltar à aplicação ou iniciar sessão novamente."
+    }
+  },
+  "agentAuth": {
+    "noKey": "Não é possível utilizar {{agent}} porque não há nenhuma chave API configurada no computador. Configure uma em {{appName}} no computador, em Definições → Fornecedores de modelos, e tente novamente.",
+    "noOauth": "Não é possível utilizar {{agent}} porque a autorização da conta não está concluída no computador. Volte a ligar a conta em {{appName}} no computador, em Definições → Fornecedores de modelos, e tente novamente.",
+    "noCredentials": "Não é possível utilizar {{agent}} porque não tem sessão iniciada no computador. Inicie sessão através de {{appName}} no computador, em Definições → Fornecedores de modelos, e tente novamente.",
+    "noEncryption": "Não é possível utilizar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Porta-chaves no macOS ou a encriptação da conta no Windows e reinicie {{appName}} no computador.",
+    "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se o problema persistir, reinicie {{appName}} no computador.",
+    "default": "Não é possível utilizar {{agent}} porque o início de sessão no computador está indisponível. Inicie sessão novamente através de {{appName}} no computador, em Definições → Fornecedores de modelos. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "O computador remoto desativou o controlo remoto.",
+    "channelNotAllowed": "A versão de computador atual não suporta esta funcionalidade remota.",
+    "accessRevoked": "Este computador revogou o acesso móvel.",
+    "deviceUnresponsive": "Ainda não foi recebida nenhuma resposta. A tentar novamente automaticamente.",
+    "versionMismatch": "A versão do protocolo do serviço não corresponde. Atualize a aplicação e tente novamente.",
+    "payloadTooLarge": "Esta transferência é demasiado grande. Divida-a em partes mais pequenas e tente novamente.",
+    "mediaFetchFailed": "Não foi possível obter o ficheiro do computador. Tente novamente mais tarde.",
+    "voiceTranscribeFailed": "Falha na transcrição de voz. Tente novamente ou utilize o teclado.",
+    "linkNotOpen": "A ligação de controlo ao computador foi interrompida e está a ser restabelecida.",
+    "accountChanged": "A conta ou o espaço de trabalho do Codex mudou. Atualize a quota e confirme novamente.",
+    "offerExpired": "A oferta de reposição do Codex expirou. Atualize a quota e confirme novamente.",
+    "preconditionFailed": "As condições da operação mudaram. Atualize e confirme novamente.",
+    "transient": "A rede ou o computador remoto está temporariamente indisponível. Volte a sincronizar mais tarde.",
+    "callFailed": "A chamada remota não foi concluída. Tente novamente dentro de momentos.",
+    "unclassified": "Esta ação não foi concluída. Tente novamente dentro de momentos.",
+    "notFound": "Esse item já não existe. Volte à lista e atualize antes de tentar novamente."
+  }
+}

@@ -223,8 +223,7 @@ export function batchAutoReviewProjection<T>(
 ): T {
   if (
     ![
-      'codex.importMessages',
-      'claude.importMessages',
+      'sessionImport.execute',
       'rewind.commit',
       'session.treeRehydrate',
       'fork.session',

@@ -1,8 +1,22 @@
 # 模型配置与下发：架构及维护入口
 
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
+> 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
+> `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+
+## 本地模型说明的客户端译文
+
+`packages/model-providers/src/localModelDescriptions.json` 为现有本地模型的英文说明提供
+法语、西语、德语、葡语（葡萄牙／巴西）译文，不是模型目录正本。展示入口统一用
+`localModelDescription`：活动目录的对应语言优先，其次仅按完全一致的英文原文匹配附带译文，
+否则回退英文。更新目录原文后必须重新校对译文，不能按模型 ID 套用旧说明。
+此补齐不改变目录 revision、型号、推荐排序或参数；不代表独立 Server 已下发十语字段。
 
 ## Cindy AI 身份图标
+
+名称按登录身份加后缀（2026-10-29 裁决，#7744）：个人账号显示「Cindy AI · 个人」，心动显示
+「Cindy AI · 心动」，其他企业显示「Cindy AI · <企业名>」，保持统一品牌并避免登录身份歧义；
+跨账号分享时的来源后缀见[供应商分享](../product-rules/provider-sharing.md)。
 
 供应商 ID 仍为 `xd`；个人、其他企业和未知身份默认使用 Chrome 插件的 Cindy 剪影。
 来源电脑按既有 `isXdOrgUser` 识别心动身份，临时投影 `logoKind: xd`，渲染原来的
@@ -122,10 +136,24 @@ V6 请求使用 `registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1
 Agnes AI 离线副本与 Server 正本同步：四个聊天型号用官方 Messages / Responses / Chat 接口，
 Messages 使用域名根路径（适配器追加 `/v1/messages`），Responses / Chat 保留 `/v1` base，
 模型发现保持 `/v1/models`；不能把三接口机械地写成同一个 base，否则 Messages 会重复 `/v1`。
+Pi 自动默认采用 Chat Completions，Claude Code / Codex 分别保持 Messages / Responses。
+显式接口选择和已运行任务的接口快照保持原值；本次默认调整不代表真实账号的 Chat 思考参数已验证。
 Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,000，输出 65,536。
 原有连接仅补缺失资料，不重置显式窗口、协议或启用开关。三个图片、两个视频型号本次仅收录
 身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
 可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
+
+### 推荐引擎（`recommendedAgents`）
+
+推荐哪个引擎由 Server 正本 `source/registry/recommended-agents.json` 维护：每条规则是
+`providerId` + `modelId`（精确）或 `modelIdPrefix`（前缀）+ `agent`，精确优先，其次最长前缀。
+`providerId` 用路由来源：Cindy AI 为 `xd`，目录预设为预设 ID，内置订阅为其目录身份。
+依据官方与社区推荐填写，不靠协议推断；只写与默认推断不同的家族即可。客户端按目录推荐选中
+引擎，用户手动换过的引擎按来源与模型记住；推荐的引擎在该来源只能走兼容模式时不采用。
+
+字段只在请求带 `registryRecommendedAgents=1` 时下发：已发布的 V6 解析器拒收未知字段，
+服务端对其余请求剥离此字段，旧客户端拿到的目录不变。客户端升级后离线启动可回退到升级前
+URL 缓存的 V6 快照。
 
 ### Gateway 复杂价目展示
 
@@ -295,8 +323,9 @@ Pi 的空来源代表 Cindy AI，先按该身份尝试组 Auto 跟随，再走�
   所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
   `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
 - 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
-  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
-  Registry `perAgent` 可显式打开。
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与需要 Cindy 本地转换的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。上游提供的接口一律视为可直接使用，相应引擎默认开启
+  （2026-10-30 起，Gateway / 聚合渠道的多入口同样如此）。
 - **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
   Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
   调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。

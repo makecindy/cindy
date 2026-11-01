@@ -75,6 +75,86 @@ function RemoteRefs() {
 
 describe('remote task association invalidation', () => {
   afterEach(cleanup);
+  // Unit regression: a manager mutation can finish after the last consumer
+  // leaves. Existing invalidation tests always kept a consumer registered.
+  // One cached (or in-flight) empty result must not suppress a remount within TTL.
+  it.each([false, true])(
+    'invalidates without consumers before remount (in flight: %s)',
+    async (inFlight) => {
+      const now = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+      let finish!: (value: unknown[]) => void;
+      let reads = 0;
+      const ref = {
+        id: 'pr',
+        sessionId: 'remote-child',
+        owner: 'a',
+        repo: 'b',
+        prNumber: 1,
+        url: 'https://github.com/a/b/pull/1',
+        firstSeenAt: 1,
+        lastSeenAt: 1,
+      };
+      mocks.listAllPrRefs.mockResolvedValue([]);
+      const invoke = vi.fn(async (_device: string, channel: string) => {
+        if (channel !== 'git-context:pr-refs:list') return [];
+        reads += 1;
+        if (reads === 1)
+          return inFlight
+            ? await new Promise<unknown[]>((resolve) => {
+                finish = resolve;
+              })
+            : [];
+        return [ref];
+      });
+      window.electronAPI = {
+        gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+        deviceLink: { invoke },
+      } as unknown as typeof window.electronAPI;
+      function Probe({ active }: { active: boolean }) {
+        const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+        const refs = usePrRefsForSession('remote-child');
+        useEffect(() => {
+          if (active) return registerPrConsumer('remote-child', 'home');
+        }, [active, registerPrConsumer]);
+        return (
+          <button onClick={() => invalidateRemotePrRefs('remote-child')}>count:{refs.length}</button>
+        );
+      }
+      const view = (active: boolean) => (
+        <PrRefsProvider>
+          <Probe active={active} />
+        </PrRefsProvider>
+      );
+      const { rerender, unmount } = render(view(true));
+      try {
+        await act(async () => {});
+        expect(reads).toBe(1);
+        rerender(view(false));
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'count:0' }));
+        });
+        if (inFlight)
+          await act(async () => {
+            finish([]);
+          });
+        expect(reads).toBe(1);
+        await act(async () => {
+          rerender(view(true));
+        });
+        expect(screen.getByRole('button', { name: 'count:1' })).toBeTruthy();
+        expect(reads).toBe(2);
+        rerender(view(false));
+        await act(async () => {
+          rerender(view(true));
+        });
+        expect(reads).toBe(2);
+      } finally {
+        unmount();
+        now.mockRestore();
+      }
+    },
+  );
+
   it('suppresses PR reads while the device circuit is open, then permits a fresh read on recovery', async () => {
     mocks.listAllPrRefs.mockResolvedValue([]);
     const invoke = vi.fn(async () => []);

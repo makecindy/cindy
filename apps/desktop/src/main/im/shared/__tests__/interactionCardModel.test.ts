@@ -555,3 +555,12 @@ describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前�
     expect(spec.body).not.toContain(ui.cards.ask.noOptionsHint);
   });
 });
+
+// unit: same page request must offer the same scope in IM and Desktop.
+// Minimum input is one permission with Main-owned once/session metadata.
+it.each(['once', 'session'])('IM page permission scope %s preserves the existing answer contract', scope => {
+  const request: PermissionRequest = { ...PERMISSION_RICH, metadata: { mcpApp: { scope } },
+    suggestions: scope === 'session' ? [{ destination: 'session' }] : undefined };
+  const card = cards.buildPermissionCard(request);
+  expect(card.buttons?.some(button => button.id === 'permission:allow:always')).toBe(scope === 'session');
+});

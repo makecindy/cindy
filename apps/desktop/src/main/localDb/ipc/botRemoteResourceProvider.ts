@@ -25,6 +25,7 @@ import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../devic
 import { routineTools } from '../../routines/service.js';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { getBotRemoteMessageService } from '../../maker-ipc/botRemoteMessageReceiver.js';
+import { isIpcError } from '../../../shared/ipc-errors.js';
 import {
   BOT_REMOTE_RESOURCE_KIND,
   TEAMMATES_REMOTE_COLLECTION_ID,
@@ -33,6 +34,22 @@ import {
   botRemoteResourceFromSource,
   visibleBotRemoteResourceSources,
 } from './botRemoteResourceProjection.js';
+
+/**
+ * A missing or hidden teammate is an ordinary absence. `readBotRemoteResourceSource`
+ * reports that as `[NOT_FOUND]`; leaving it uncaught makes the registry wrap the
+ * read as INTERNAL, so other devices show "the remote call did not complete".
+ * The roster skips the same absence one companion at a time in `listBotRemoteResourceSources`.
+ */
+async function readVisibleBotSource(botId: string): Promise<BotRemoteResourceSource | null> {
+  try {
+    const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
+    return source ?? null;
+  } catch (error) {
+    if (isIpcError(error) && error.code === 'NOT_FOUND') return null;
+    throw error;
+  }
+}
 
 /** The canonical conversation and live delegations share the local roster priority. */
 async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
@@ -106,16 +123,16 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       if (request.ref.id.startsWith('todos:')) {
         const scope = captureDataOwnerBroadcastScope();
         const botId = request.ref.id.slice(6);
-        const candidate = await getBotRemoteResourceSource(botId);
-        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const all = await (await todoAccess(botId)).list();
+        const access = await todoAccess(botId);
+        const all = await access.list();
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         const page = queryTodoItems(all.items, request.query ? JSON.parse(request.query) as TodoListQuery : {});
         page.items = page.items.map(botTodoRemoteProjection);
         // 近况「每天帮我查一次」的当前状态；旧客户端忽略，新客户端缺这个字段（旧宿主）时不显示开关。
-        // 例行任务读不到（引擎未就绪、伙伴暂停）时不带这个字段，待办照常返回。
-        const dailyCheck = await routineTools.todoCheckEnabled(botId).catch(() => undefined);
+        // 例行任务读不到（引擎未就绪、伙伴暂停）或主人关掉了系统技能「待办」时不带这个字段，待办照常返回。
+        const dailyCheck = access.todoOff ? undefined : await routineTools.todoCheckEnabled(botId).catch(() => undefined);
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         return {ref:request.ref,revision:createHash('sha256').update(JSON.stringify(all.items)).digest('hex'),display:{title:source.name},links:[],
           blocks:[{id:'todos',primitive:'teammate-todos',fallbackMarkdown:page.items.map(t=>t.title+' — '+t.progress).join('\n').slice(0,8000),data:{...page,...(dailyCheck === undefined ? {} : {dailyCheck})}}]};
@@ -123,7 +140,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
 
       if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
         const resource = await management.getEditor(context, request.ref.id, request.client.locale, { query: request.query, primitives: request.client.primitives });
-        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' } } }];
+        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' , "es":"Importar un Agent","fr":"Importer un Agent","de":"Agent importieren","pt-PT":"Importar um Agent","pt-BR":"Importar um Agent","zh-Hant-x-lzh":"自他 Agent 納入","zh-Hans-x-lzh":"自他 Agent 纳入"} } }];
         return resource;
       }
       if (request.ref.id.startsWith('working:')) {
@@ -131,7 +148,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         if (extra !== undefined || !botId || !WORKING_PHASES.includes(phase as typeof WORKING_PHASES[number]))
           throw new RemoteResourceRegistryError('NOT_FOUND', 'Unknown working status');
         const scope = captureDataOwnerBroadcastScope();
-        const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
+        const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope))
           throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
         const activity = (await rosterBotActivities([source])).get(source.id);
@@ -142,9 +159,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         return { ref: request.ref, revision: String(source.currentVersion), display: { title: source.name }, links: [],
           blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: result.text ?? '' }] };
       }
-      const [source] = visibleBotRemoteResourceSources([
-        await getBotRemoteResourceSource(request.ref.id),
-      ]);
+      const source = await readVisibleBotSource(request.ref.id);
       if (!source) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
       }
@@ -161,7 +176,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
         } });
       }
-      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일'}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
+      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일', "es":"Tareas pendientes","fr":"Tâches à faire","de":"Aufgaben","pt-PT":"Tarefas","pt-BR":"Tarefas","zh-Hant-x-lzh":"待辦","zh-Hans-x-lzh":"待办"}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
       return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },
     async invoke(context, request) {
@@ -169,8 +184,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const scope = captureDataOwnerBroadcastScope();
         if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
         const botId = request.resourceRef.id.slice(6);
-        const candidate = await getBotRemoteResourceSource(botId);
-        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
         const access = await todoAccess(botId);
         const input = request.input ?? {};
@@ -182,8 +196,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const scope = captureDataOwnerBroadcastScope();
         if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
         const botId = request.resourceRef.id.slice(6);
-        const candidate = await getBotRemoteResourceSource(botId);
-        const [source] = candidate ? visibleBotRemoteResourceSources([candidate]) : [];
+        const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
         if (typeof request.input?.enabled !== 'boolean') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'enabled must be boolean');
         const dailyCheck = await routineTools.setTodoCheck(botId, request.input.enabled);
@@ -212,7 +225,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         || (request.actionId !== 'message-receipt' && (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > (input.requestSource ? 200_000 : 12_000)))) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'Invalid teammate message');
       }
-      const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(request.resourceRef.id)]);
+      const source = await readVisibleBotSource(request.resourceRef.id);
       if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
       if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
       const service = getBotRemoteMessageService();

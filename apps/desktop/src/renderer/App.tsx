@@ -1,3 +1,4 @@
+import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
@@ -110,7 +111,17 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
   );
 }
 
+function syncWorkerPrefs() {
+  const owner = getDataOwnerGeneration();
+  window.electronAPI.syncWorkerCreationPrefs({
+    workerPermissionMode: readWorkerCreationPrefs().workerPermissionMode,
+    selection: readLocalWorkerCreationSelection(owner.dataOwnerId),
+    ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+  });
+}
+
 function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
+  syncWorkerPrefs();
   // 多 renderer 的模块内存彼此独立；跨窗口通知必须从共享持久快照同步，避免旧窗口把
   // 自己的 model / workingDir 等完整旧草稿覆盖进 main 缓存。
   const owner = getDataOwnerGeneration();
@@ -253,17 +264,11 @@ export function App() {
 
   useModelFavoritesHost();
 
-  // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
+  // Worker 创建偏好的真源是 renderer localStorage；main 缓存权限与当前账号本机路线供
   // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。
   useEffect(() => {
-    const sync = () => {
-      const prefs = readWorkerCreationPrefs();
-      window.electronAPI.syncWorkerCreationPrefs({
-        workerPermissionMode: prefs.workerPermissionMode,
-      });
-    };
-    sync();
-    const unsubscribe = subscribeWorkerCreationPrefs(sync);
+    syncWorkerPrefs();
+    const unsubscribe = subscribeWorkerCreationPrefs(syncWorkerPrefs);
     const offApply = window.electronAPI.onWorkerCreationPrefsApply(({ workerPermissionMode }) => {
       setWorkerPermissionModePreference(workerPermissionMode);
     });

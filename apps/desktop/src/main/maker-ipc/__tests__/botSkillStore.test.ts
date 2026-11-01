@@ -18,6 +18,7 @@ import {
   importBotSkillFiles,
   normalizeBotSkillSlug,
   parseBotSkillFile,
+  patchCustomBotSkillSource,
   readBotSkill,
   readBotSkillSource,
   listBotSkillSources,
@@ -25,6 +26,7 @@ import {
   saveBotSkill,
   saveBotSkillSource,
   seedBotSkillIfMissing,
+  setBotSkillEnabled,
 } from '../botSkillStore';
 
 let userDataDir = '';
@@ -394,6 +396,39 @@ describe('verbatim SKILL.md (cloud companions)', () => {
     await saveBotSkillSource(userDataDir, 'bot_c', 'brew', source, { enabled: true });
     expect((await readBotSkill(userDataDir, 'bot_c', 'brew'))?.enabled).toBeUndefined();
     expect(await fs.readFile(path.join(botSkillsDir(userDataDir, 'bot_c'), 'brew', 'helper.sh'), 'utf8')).toBe('echo hi');
+  });
+
+  // The settings switch must not rewrite a skill or bring back one deleted while it was queued.
+  it('turns a skill off and on by moving it, and refuses a skill that no longer exists', async () => {
+    const source = '---\nname: brew\ndescription: Brew\nlicense: MIT\n---\n\nsteps\n';
+    await saveBotSkillSource(userDataDir, 'bot_d', 'brew', source);
+    await setBotSkillEnabled(userDataDir, 'bot_d', 'brew', false);
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([{ slug: 'brew', source, enabled: false }]);
+    await setBotSkillEnabled(userDataDir, 'bot_d', 'brew', true);
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([{ slug: 'brew', source, enabled: true }]);
+    await deleteBotSkill(userDataDir, 'bot_d', 'brew');
+    await expect(setBotSkillEnabled(userDataDir, 'bot_d', 'brew', false)).rejects.toMatchObject({ errorCode: 'NOT_FOUND' });
+    expect(await listBotSkillSources(userDataDir, 'bot_d')).toEqual([]);
+  });
+
+  // Editing an imported skill from settings must keep frontmatter Cindy does not write, and a
+  // rename and the version stamp must stick so a second, stale editor cannot overwrite it.
+  it('patches an imported skill in place and refuses a save based on an older read', async () => {
+    const own = '---\nname: brew\ndescription: Old\nallowed-tools:\n  - Bash\nmetadata:\n  author: me\n---\n\nold steps\n';
+    const edit = { name: 'Brew tea', description: 'New "tea"', body: 'new steps', updatedAt: '2026-11-01T00:00:00.000Z' };
+    const patched = patchCustomBotSkillSource(own, edit)!;
+    expect(patched).toBe('---\nname: brew\ndescription: "New \\"tea\\""\nallowed-tools:\n  - Bash\nmetadata:\n  author: me\n  displayName: "Brew tea"\n  updatedAt: "2026-11-01T00:00:00.000Z"\n---\n\nnew steps\n');
+    expect(parseBotSkillFile(patched)).toMatchObject({ name: 'Brew tea', description: 'New "tea"', updatedAt: edit.updatedAt });
+    expect(patchCustomBotSkillSource(renderBotSkillFile({ slug: 'brew', name: 'Brew', description: 'd', updatedAt: 'now', body: 'b' }),
+      { ...edit, description: 'x', body: 'y' })).toBeNull();
+    const block = '---\nname: brew\ndescription: >\n  Long\nlicense: MIT\n---\n\nsteps\n';
+    expect(() => patchCustomBotSkillSource(block, { ...edit, description: 'Other' })).toThrow(BotSkillStoreError);
+
+    await saveBotSkillSource(userDataDir, 'bot_e', 'brew', own);
+    await saveBotSkillSource(userDataDir, 'bot_e', 'brew', patched, { expectedUpdatedAt: '' });
+    // A second editor opened before the first save still holds the empty stamp.
+    await expect(saveBotSkillSource(userDataDir, 'bot_e', 'brew', own, { expectedUpdatedAt: '' })).rejects.toThrow('Skill changed during review');
+    expect(await readBotSkillSource(userDataDir, 'bot_e', 'brew')).toBe(patched);
   });
 });
 

@@ -3,9 +3,9 @@
  *
  * 同目录文件横滑翻页(iOS Quick Look 心智):进入时列一次父目录,把全部文件
  * (含不可预览的,显示占位页)按浏览页同款排序装进水平 pager。PDF 例外:
- * 预览期间禁用外层横滑,把缩放后的水平拖动完整留给 WKWebView,避免 pager
+ * iOS 预览期间禁用外层横滑,把缩放后的水平拖动完整留给 WKWebView,避免 pager
  * 抢手势后切换文件;PDF cell 离开渲染窗口时可能被回收,进而重置阅读位置
- * 或再次加载 URL。
+ * 或再次加载 URL。安卓 WebView 不渲染 PDF,PDF 页改为「导出 / 分享」占位页,横滑照常。
  * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
@@ -30,6 +30,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   View,
@@ -43,7 +44,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { errorText, resolvedUrlKind, sanitizeDiagnosticText } from '@/debug/fileDiagnostics';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useAuth } from '@/auth/AuthContext';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -53,6 +54,7 @@ import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-l
 import { isAbsolutePathShape, pathDisplayName } from '@/session/chatPathCandidate';
 import { adaptTextFilePreviewResult, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
 import { preparePdfPreviewSource } from '@/session/pdfPreviewSource';
+import { pdfPreviewsInline } from '@/session/pdfSystemOpen';
 import { formatByteSize, isHtmlFilePreviewCandidate } from '@/session/filePreview';
 import { joinRemotePath } from '@/session/htmlLocalResources';
 import { decodeGzipBase64Text, mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
@@ -104,6 +106,8 @@ import { iconSize, iconStroke, radius, spacing, typeScale } from '@/theme/tokens
 
 const MAX_RENDERED_LINES = 5000;
 const NOTICE_DISMISS_MS = 2500;
+/** iOS 用 WKWebView 内嵌预览 PDF;安卓 WebView 不渲染 PDF,改给「导出 / 分享」交系统阅读器。 */
+const PDF_PREVIEWS_INLINE = pdfPreviewsInline(Platform.OS);
 
 type TextPreviewState =
   | { status: 'loading' }
@@ -427,7 +431,7 @@ function RemoteFilePreviewContent() {
 
   const presignGet = useCallback(async (ossKey: string) => {
     return auth.apiFetch<MobileRemoteMediaPresignResult>('/api/device-link/media/presign-get', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
       method: 'POST',
       body: { key: ossKey },
     });
@@ -440,7 +444,7 @@ function RemoteFilePreviewContent() {
   const deleteResourceOssObject = useCallback((ossKey: string) => {
     if (!ossKey) return;
     void auth.apiFetch('/api/device-link/media', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
       method: 'DELETE',
       body: { key: ossKey },
     }).catch(() => undefined);
@@ -766,12 +770,12 @@ function RemoteFilePreviewContent() {
             />
           </View>
         )}
-        // PDF 与「HTML 渲染态」都要把水平拖动完整留给内层 WebView(review P2):
+        // iOS 的 PDF 与「HTML 渲染态」都要把水平拖动完整留给内层 WebView(review P2):
         // 固定宽度布局或用户放大后需要横向平移,外层 pager 会抢走手势并切到相邻文件,
         // 超出视口的内容永远看不到。手势仲裁(区分内层平移与翻页)在 RN 上要自己写一套
         // 竞态裁决,属独立改动;这里沿用本文件对 PDF 已经采用的同一口径 —— 想翻页就切到
         // 「源码」态(源码是竖向列表,不冲突),或 Done 返回列表。
-        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}
+        scrollEnabled={!(current.previewKind === 'pdf' && PDF_PREVIEWS_INLINE) && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
@@ -856,8 +860,11 @@ function FilePreviewPage({
         workdir={workdir}
       />
     );
-  } else if (item.previewKind === 'pdf') {
+  } else if (item.previewKind === 'pdf' && PDF_PREVIEWS_INLINE) {
     content = <PdfPreviewPage active={active} exportToUrl={exportToUrl} item={item} onDownload={onDownload} recoveryEpoch={recoveryEpoch} workdir={workdir} />;
+  } else if (item.previewKind === 'pdf') {
+    // 安卓 WebView 不渲染 PDF:不取件、不挂 WebView,直接给「导出 / 分享」交系统阅读器。
+    content = <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.androidPdfHint')} />;
   } else if (avKind) {
     content = <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} visible={visible} workdir={workdir} />;
   } else if (item.thumb === 'doc') {
@@ -887,7 +894,7 @@ function FilePreviewPage({
   }
   return (
     <View style={styles.textPage}>
-      <View style={[styles.textPage, item.previewKind !== 'pdf' && contentPadding]}>{content}</View>
+      <View style={[styles.textPage, !(item.previewKind === 'pdf' && PDF_PREVIEWS_INLINE) && contentPadding]}>{content}</View>
       {visible ? <HtmlBrowserChrome
         document
         {...htmlBrowserActions}
@@ -1579,7 +1586,7 @@ function UnsupportedPage({
       </View>
       <Text style={styles.bigName}>{item.name}</Text>
       <Text style={styles.bigMeta}>{item.metaLabel}</Text>
-      <Text style={styles.hintText}>{reason}</Text>
+      <Text style={styles.reasonText}>{reason}</Text>
       {onRetry ? <MainWindowActionButton action={{ label: t('files.preview.retry'), onPress: onRetry }} /> : <Pressable
         accessibilityLabel={t('files.preview.a11yExportShareFile')}
         onPress={onDownload}
@@ -1739,6 +1746,13 @@ const makeStyles = (colors: ThemeColors) => {
     bigMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     hintText: {
       color: colors.textTertiary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      textAlign: 'center',
+    },
+    // 占位页的原因与操作指引是成句的说明(设计指南 §3「说明、提示、报错」):textSecondary。
+    reasonText: {
+      color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       textAlign: 'center',

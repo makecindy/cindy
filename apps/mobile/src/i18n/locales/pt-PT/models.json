@@ -1,0 +1,119 @@
+{
+  "picker": {
+    "title": "Modelo",
+    "permissionTitle": "Permissões",
+    "searchAccessibility": "Pesquisar modelos",
+    "searchPlaceholder": "Pesquisar modelos…",
+    "noResults": "Nenhum modelo correspondente",
+    "emptyDefault": "Nenhum modelo disponível",
+    "loadingDefault": "A carregar modelos…",
+    "subscriptionBadge": "Subscrição",
+    "subscriptionBadgeCompact": "Sub",
+    "backToModels": "Voltar à lista de modelos",
+    "agentSwitchHint": "Depois de escolher um modelo, a próxima mensagem muda para {{agent}}",
+    "crossAgentEmptyHint": "Ligue primeiro uma origem de modelos de {{agent}} no dispositivo remoto",
+    "permissionModeAccessibility": "Modo de permissões: {{mode}}",
+    "selectProviderModelAccessibility": "Selecionar {{model}} de {{provider}}",
+    "selectModelAccessibility": "Selecionar {{model}}",
+    "configureAccessibility": "Configurar {{model}}",
+    "budgetDisabledHint": "Este modelo requer primeiro a configuração de uma chave de API no dispositivo remoto",
+    "priceLine": "Entrada {{input}} · Saída {{output}} / milhão de tokens",
+    "priceTitle": "Por 1 M de tokens",
+    "priceAmounts": "Entrada {{input}} · Saída {{output}}",
+    "discountedVsStandard": "Com desconto · {{percent}}% abaixo do preço normal",
+    "contextSuffix": "Contexto de {{size}}",
+    "fastTag": "Rápido"
+  },
+  "options": {
+    "speed": {
+      "label": "Velocidade",
+      "standard": "Padrão",
+      "fast": "Rápido",
+      "ultrafast": "Ultrarrápido"
+    },
+    "fastMode": "Modo rápido",
+    "fastModeAccessibility": "Modo rápido {{model}}",
+    "reasoningEffort": "Esforço de raciocínio",
+    "reasoningEffortAccessibility": "Esforço de raciocínio {{label}}",
+    "effortLevels": {
+      "minimal": "Mínimo",
+      "low": "Baixo",
+      "medium": "Médio",
+      "high": "Alto",
+      "xhigh": "Muito alto",
+      "max": "Máximo",
+      "ultra": "Ultra"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "Este modelo não comporta a conversa atual",
+    "remoteTitle": "Esta mudança de modelo remoto não é suportada",
+    "description": "Esta conversa já utiliza {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se mudar, Cindy fará um breve resumo e continuará. O histórico da conversa mantém-se; apenas não será transmitido integralmente palavra por palavra.",
+    "remoteDescription": "Esta tarefa remota já utiliza {{used}} / {{total}} do contexto do modelo mais pequeno (cerca de {{pct}}%), pelo que Cindy não pode mudar em segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
+    "cancel": "Manter este modelo",
+    "confirm": "Mudar e continuar"
+  },
+  "switchOutcome": {
+    "applied": "A mudança de fornecedor de modelos já está em vigor.",
+    "failed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo."
+  },
+  "agentSwitch": {
+    "browseAccessibility": "Explorar modelos de {{agent}}",
+    "confirmTitle": "Mudar para {{agent}}?",
+    "confirmMessage": "Quando enviar a próxima mensagem, {{appName}} transfere a sessão atual para {{agent}}. Os dois Agents podem interpretar o contexto e as ferramentas de forma diferente, por isso confirme antes de escolher o modelo de destino.",
+    "cancel": "Cancelar",
+    "confirm": "Continuar"
+  },
+  "agentRelocation": {
+    "titleOther": "Executar o Agent em «{{device}}»?",
+    "titleHost": "Executar novamente o Agent em «{{host}}»?",
+    "titleHostUnnamed": "Executar novamente o Agent no computador da sessão?",
+    "message": "O registo da conversa no outro computador não pode ser transferido, pelo que a conversa continua a partir de um resumo de transição. O raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
+    "messageNativeHistory": "O registo completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, a conversa continua a partir de um resumo de transição, e o raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
+    "confirm": "Mudar de computador",
+    "cancel": "Manter como está"
+  },
+  "unified": {
+    "favoriteConfiguration": "Adicionar esta configuração aos favoritos",
+    "savedConfiguration": "Nos favoritos · Toque para remover",
+    "currentConfiguration": "Configuração atual",
+    "usingRecommended": "A utilizar as definições recomendadas",
+    "customized": "Personalizada",
+    "resetScopeHint": "Restaurar recomendações repõe o Harness, o esforço de raciocínio e o modo rápido. Os favoritos existentes mantêm-se inalterados.",
+    "saveFavoriteHint": "Guarde estas definições para acesso rápido nos Favoritos.",
+    "removeFavoriteHint": "Remover o atalho não altera as definições atuais.",
+    "editFavorite": "Editar favorito original",
+    "editFavoriteHint": "As alterações só se aplicam a este favorito depois de guardar. A configuração em utilização mantém-se inalterada.",
+    "saveFavorite": "Guardar favorito",
+    "cancelEdit": "Cancelar edição",
+    "originalFavoriteKept": "Definições atualizadas. O favorito original mantém-se inalterado.",
+    "parametersSaved": "Definições guardadas.",
+    "restoredHint": "Definições recomendadas restauradas. Os favoritos existentes mantêm-se inalterados.",
+    "favoriteRemoved": "Favorito removido. As definições atuais mantêm-se inalteradas.",
+    "favoriteSaved": "Configuração adicionada aos Favoritos.",
+    "favoriteUpdated": "Favorito atualizado. A configuração em utilização mantém-se inalterada.",
+    "favoriteChanged": "Este favorito foi alterado ou removido. Cancele a edição e volte a abri-lo para tentar novamente.",
+    "favoriteExists": "Esta configuração já está nos Favoritos. Cancele a edição para a utilizar.",
+    "favorites": "Favoritos",
+    "all": "Todos os modelos",
+    "recommended": "Recomendado",
+    "source": "Origem",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Grupo de fornecedores · {{count}} computador",
+    "groupBadge_other": "Grupo de fornecedores · {{count}} computadores",
+    "harness": "Harness",
+    "restoreRecommended": "Restaurar recomendações",
+    "saveFailed": "Não foi possível guardar. Tente novamente.",
+    "configure": "Configurar",
+    "syncFailed": "Não foi possível sincronizar os favoritos. Volte a abrir o seletor para tentar novamente; o computador remoto poderá precisar de uma atualização.",
+    "timeUnit": {
+      "day": "d",
+      "hour": "h",
+      "minute": "m",
+      "second": "s"
+    },
+    "groupBadge_many": "Grupo de fornecedores · {{count}} computadores"
+  }
+}

@@ -248,6 +248,8 @@ export interface AgentInputSendOpts {
    */
   fromMobileClient?: boolean;
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage; direct wire values are stripped. */
+  classicalStyle?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -1194,11 +1196,22 @@ function isScheduledQuotaRecovery(
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  return isAutomaticInputOriginKind(item?.origin?.kind);
+  return !isManualSchedulerContinuation(item) && isAutomaticInputOriginKind(item?.origin?.kind);
+}
+
+// A same-process receipt: wire input and restored automation cannot impersonate
+// a fresh Continue click. Object spreads preserve it; JSON persistence does not.
+const manualSchedulerContinuation = Symbol('manual-scheduler-continuation');
+export function markManualSchedulerContinuation(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  return Object.assign(item, { [manualSchedulerContinuation]: true as const });
+}
+function isManualSchedulerContinuation(item: AgentInputQueuedMessage | null | undefined): boolean {
+  return (item as (AgentInputQueuedMessage & { [manualSchedulerContinuation]?: true }) | undefined)?.[manualSchedulerContinuation] === true;
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
+  return (!isSchedulerOriginItem(item) || isManualSchedulerContinuation(item))
+    && item.originalSyntheticTrigger === 'continue';
 }
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
@@ -1352,10 +1365,10 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
-  /** Account-scoped tools may not borrow the Host identity from plugin or shared guest input. */
+  /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return !!item && !item.sourcePlugin && !item.sharedTaskAuthor;
+    return !!item && !item.sharedTaskAuthor;
   }
 
   /**
@@ -1926,7 +1939,7 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
+    const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
@@ -2683,6 +2696,7 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
+        ...(item.classicalStyle ? { classicalStyle: item.classicalStyle } : {}),
         // 消息来源同样随 steer 透传(只用于说明与归属,steer 不经 send 事务)。主机生成的
         // 隐藏指令([UI_ACTION_TRIGGER])与自动续跑不是来源方的话,同 send 事务不加 `[消息来源]`。
         ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
@@ -5195,6 +5209,7 @@ export class AgentInputCoordinator {
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
+        ...(head.classicalStyle ? { classicalStyle: head.classicalStyle } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {

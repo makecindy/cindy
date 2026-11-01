@@ -1289,7 +1289,7 @@ export function parseModelRegistry(
           "nativeApiRules",
           "localModels",
           "baseModels",
-          ...(value.schemaVersion === 6 ? ["interfaceProfiles"] : []),
+          ...(value.schemaVersion === 6 ? ["interfaceProfiles", "recommendedAgents"] : []),
         ]
       : value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [...MODEL_REGISTRY_FIELDS, "nativeApiRules"]

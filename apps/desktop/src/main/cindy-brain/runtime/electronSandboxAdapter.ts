@@ -20,7 +20,7 @@ import {
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, mediaTypeForLibraryPath, resolveGhostFilePath } from './ghostFiles.js';
 import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -209,7 +209,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
-    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -311,6 +312,12 @@ type GhostSecretsProtocolHandler = (args: {
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -674,6 +681,23 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === '/models') {
+        if (!ghostModelsHandler) return new Response(null, { status: 503 });
+        const out = await ghostModelsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, {
+          status: out.status,
+          headers: {
+            ...(out.body !== undefined ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
       // /secrets:input:'ghost' 凭证的只写入库通道(FORGE_GUIDE §4.7)。
       // 明文单向进保险库,无任何读回动作;分区专属通道天然只碰自己的账。
       if (url.pathname === '/secrets' || url.pathname.startsWith('/secrets/')) {
@@ -897,30 +921,6 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
     if (code === 'ENOENT' || code === 'EISDIR') return new Response(null, { status: 404 });
     log.error('ghost library serve error', { ghostId, error: err instanceof Error ? err.message : String(err) });
     return new Response(null, { status: 500 });
-  }
-}
-
-/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
-function mediaTypeForLibraryPath(relPath: string): string {
-  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.svg': return 'image/svg+xml';
-    case '.mp4': return 'video/mp4';
-    case '.webm': return 'video/webm';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.wav': return 'audio/wav';
-    case '.ogg': return 'audio/ogg';
-    case '.m4a': return 'audio/mp4';
-    case '.pdf': return 'application/pdf';
-    case '.json': return 'application/json; charset=utf-8';
-    case '.txt': return 'text/plain; charset=utf-8';
-    default: return 'application/octet-stream';
   }
 }
 

@@ -25,22 +25,31 @@
 import path from 'node:path';
 
 import {
+  GHOST_PIPE_CALL_MAX_TOTAL_MS,
   GHOST_PICK_MIN_INTERVAL_MS,
   GHOST_PICK_TITLE_MAX_CHARS,
   type DirDepositReceiptShape,
   type GhostPipePickResult,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { pickedFileNameBudget } from './pickedFiles.js';
 import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 export interface PickSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   getMutationTarget(id: string): string | null;
+  getPendingCallSignal?(ghostId: string, callId: string): AbortSignal | null;
+  holdCall?(ghostId: string, callId: string, budgetMs: number): void;
+  releaseCall?(ghostId: string, callId: string): void;
   /**
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
   showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string }): Promise<string | null>;
+  showFileDialog?(params: { ghostName: string; purpose: string | null; accept: string[]; multiple: boolean }): Promise<string[] | null>;
+  importFiles?(ghostId: string, paths: string[], input: {
+    into: 'media' | 'library'; path?: string; callId?: string; assertCurrent(): void;
+  }): Promise<GhostPipePickResult>;
   /** 签发目录过户票据(dirDeposit.deposit,userGranted 语义 = 用户已亲手选中)。 */
   depositDir(
     ghostId: string,
@@ -84,8 +93,27 @@ export class GhostPickSlot {
     }
     const request = payload as Record<string, unknown>;
     if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
-    if (request.mode !== 'directory') {
-      return fail('INVALID_REQUEST', 'mode 目前只支持 "directory"');
+    if (request.callId !== undefined && (typeof request.callId !== 'string' || !request.callId || request.callId.length > 128)) {
+      return fail('INVALID_REQUEST', 'callId 必须是非空字符串');
+    }
+    const fileMode = request.mode === 'file';
+    if (request.mode !== 'directory' && !fileMode) {
+      return fail('INVALID_REQUEST', 'mode 只支持 directory / file');
+    }
+    if (fileMode) {
+      if ((request.into !== 'media' && request.into !== 'library') ||
+          (request.multiple !== undefined && typeof request.multiple !== 'boolean') ||
+          (request.path !== undefined && typeof request.path !== 'string') ||
+          (request.accept !== undefined && (!Array.isArray(request.accept) || request.accept.length > 32 || request.accept.some(v => typeof v !== 'string' || !/^(?:\.[a-zA-Z0-9]{1,16}|(?:image|video|audio)\/\*|[a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+)$/.test(v))))) {
+        return fail('INVALID_REQUEST', '文件选择参数不合法');
+      }
+      if (request.mobilePageId !== undefined || !this.deps.showFileDialog || !this.deps.importFiles) {
+        return fail('UNSUPPORTED', '当前宿主不支持本机文件选择');
+      }
+      if (request.into === 'library' && ghost.manifest.library !== true) return fail('PERMISSION_DENIED', '插件未声明 Library');
+      if (request.into === 'library' && !pickedFileNameBudget((request.path as string | undefined) ?? 'imports')) {
+        return fail('INVALID_REQUEST', 'Library 目标目录不合法或无法容纳导入文件名');
+      }
     }
     if (request.title !== undefined && typeof request.title !== 'string') {
       return fail('INVALID_REQUEST', 'title 必须是字符串');
@@ -95,7 +123,7 @@ export class GhostPickSlot {
     }
     const wantDeposit = request.deposit === true;
     const hasNode = ghost.manifest.node !== undefined;
-    if (!hasNode && !wantDeposit) {
+    if (!fileMode && !hasNode && !wantDeposit) {
       return fail(
         'INVALID_REQUEST',
         '未声明 node 槽的插件必须带 deposit:true(选完只有过户票据可发,不给绝对路径)',
@@ -119,57 +147,111 @@ export class GhostPickSlot {
     const target = this.deps.getMutationTarget(ghostId);
     if (target === null) return fail('PERMISSION_DENIED', '插件安装或账户状态已变化');
 
-    this.dialogInFlight = true;
-    let picked: string | null;
-    try {
-      picked = await this.deps.showDirectoryDialog({
-        ghostName: ghost.manifest.name,
-        purpose,
-        ghostId,
-        ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
-      });
-    } catch (error) {
-      this.deps.log?.warn('ghost pick dialog failed', {
-        ghostId,
-        err: error instanceof Error ? error.message : String(error),
-      });
-      return fail('INTERNAL', '选择窗口无法打开');
-    } finally {
-      this.dialogInFlight = false;
-    }
-    if (!shouldContinue()) return fail('CANCELLED', 'The originating page has closed.');
-    if (picked === null) {
-      return fail('CANCELLED', '用户取消了选择');
-    }
-    const current = this.deps.getGhost(ghostId);
-    if (!current?.enabled || current.manifest.pick !== true ||
-        this.deps.getMutationTarget(ghostId) !== target) {
-      return fail('PERMISSION_DENIED', '插件安装或账户状态已变化,请重新选择');
-    }
-    // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
-    // 授权事实——用户确实选了)。
-    this.deps.recordPickedDir?.(ghostId, picked);
-
-    const result: Extract<GhostPipePickResult, { ok: true }> = {
-      ok: true,
-      name: path.basename(picked),
-    };
-    if (wantDeposit) {
-      const deposited = this.deps.depositDir(ghostId, picked);
-      if (!deposited.ok) {
-        // 用户已亲选但票据签不出(如超过收集上限):如实报错,不发半成品。
-        return fail('INTERNAL', `目录过户票据签发失败:${deposited.message}`);
+    const callId = typeof request.callId === 'string' ? request.callId : undefined;
+    const signal = callId ? this.deps.getPendingCallSignal?.(ghostId, callId) : undefined;
+    if (callId && (!signal || signal.aborted)) return fail('CANCELLED', '原工具调用已结束');
+    const remainsActive = () => shouldContinue() && !signal?.aborted &&
+      (!callId || this.deps.getPendingCallSignal?.(ghostId, callId) === signal);
+    if (!remainsActive()) return fail('CANCELLED', '原页面或调用已结束');
+    if (callId) this.deps.holdCall?.(ghostId, callId, GHOST_PIPE_CALL_MAX_TOTAL_MS);
+    // A cancelled logical request does not close Electron's native panel. Keep
+    // BUSY owned by the dialog promise, not by the cancellation race below.
+    const selectAndDeliver = async (): Promise<GhostPipePickResult> => {
+      this.dialogInFlight = true;
+      let picked: string | null;
+      let files: string[] | null = null;
+      try {
+        if (fileMode) {
+          files = await this.deps.showFileDialog!({ ghostName: ghost.manifest.name, purpose,
+            accept: (request.accept as string[] | undefined) ?? [], multiple: request.multiple === true });
+          picked = files?.[0] ?? null;
+        } else picked = await this.deps.showDirectoryDialog({
+          ghostName: ghost.manifest.name,
+          purpose,
+          ghostId,
+          ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
+        });
+      } catch (error) {
+        this.deps.log?.warn('ghost pick dialog failed', {
+          ghostId,
+          err: error instanceof Error ? error.message : String(error),
+        });
+        return fail('INTERNAL', '选择窗口无法打开');
+      } finally {
+        this.dialogInFlight = false;
       }
-      result.dir_deposit = deposited.receipt;
+      if (!remainsActive()) return fail('CANCELLED', 'The originating page has closed.');
+      if (picked === null) {
+        return fail('CANCELLED', '用户取消了选择');
+      }
+      const current = this.deps.getGhost(ghostId);
+      if (!current?.enabled || current.manifest.pick !== true ||
+          this.deps.getMutationTarget(ghostId) !== target) {
+        return fail('PERMISSION_DENIED', '插件安装或账户状态已变化,请重新选择');
+      }
+      if (fileMode && files) {
+        const assertCurrent = () => {
+          if (!remainsActive() || !this.deps.getGhost(ghostId)?.enabled || this.deps.getMutationTarget(ghostId) !== target) throw new Error('FILE_SELECTION_CANCELLED');
+        };
+        try {
+          const result = await this.deps.importFiles!(ghostId, files, {
+            into: request.into as 'media' | 'library',
+            ...(typeof request.path === 'string' ? { path: request.path } : {}),
+            ...(typeof request.callId === 'string' ? { callId: request.callId } : {}), assertCurrent,
+          });
+          assertCurrent();
+          if (result.ok && result.files) {
+            for (let i = 0; i < result.files.length; i++) {
+              if (wantDeposit) {
+                const deposited = this.deps.depositDir(ghostId, files[i]!);
+                if (!deposited.ok) return { ...fail('INTERNAL', '文件过户票据签发失败'), files: result.files };
+                result.files[i]!.deposit = deposited.receipt;
+              }
+              if (hasNode) result.files[i]!.path = files[i];
+            }
+          }
+          return result;
+        } catch { return fail('CANCELLED', '文件导入已取消或插件状态已变化'); }
+      }
+      // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
+      // 授权事实——用户确实选了)。
+      this.deps.recordPickedDir?.(ghostId, picked);
+
+      const result: Extract<GhostPipePickResult, { ok: true }> = {
+        ok: true,
+        name: path.basename(picked),
+      };
+      if (wantDeposit) {
+        const deposited = this.deps.depositDir(ghostId, picked);
+        if (!deposited.ok) {
+          // 用户已亲选但票据签不出(如超过收集上限):如实报错,不发半成品。
+          return fail('INTERNAL', `目录过户票据签发失败:${deposited.message}`);
+        }
+        result.dir_deposit = deposited.receipt;
+      }
+      if (hasNode) {
+        result.path = picked;
+      }
+      this.deps.log?.info('ghost pick granted', {
+        ghostId,
+        withDeposit: wantDeposit,
+        withPath: hasNode,
+      });
+      return result;
+    };
+    let onAbort: (() => void) | undefined;
+    try {
+      const operation = selectAndDeliver();
+      if (!signal) return await operation;
+      const cancelled = new Promise<GhostPipePickResult>(resolve => {
+        onAbort = () => resolve(fail('CANCELLED', '原页面或调用已结束'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      });
+      return await Promise.race([operation, cancelled]);
+    } finally {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      if (callId) this.deps.releaseCall?.(ghostId, callId);
     }
-    if (hasNode) {
-      result.path = picked;
-    }
-    this.deps.log?.info('ghost pick granted', {
-      ghostId,
-      withDeposit: wantDeposit,
-      withPath: hasNode,
-    });
-    return result;
   }
 }

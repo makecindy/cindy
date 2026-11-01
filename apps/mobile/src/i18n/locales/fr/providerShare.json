@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Partagé par {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Partage indisponible"
+  },
+  "link": {
+    "title": "Partage de fournisseurs",
+    "heading": "Ouvrez ce lien sur un ordinateur",
+    "body": "Le partage de fournisseurs ne peut être demandé et utilisé que dans {{appName}} sur un ordinateur. Envoyez le lien à votre ordinateur et ouvrez-le là-bas, ou collez-le dans Paramètres → Fournisseurs → Fournisseurs partagés avec moi.",
+    "note": "Les liens de partage expirent 5 minutes après leur création et ne fonctionnent qu'une seule fois.",
+    "copy": "Copier le lien",
+    "copied": "Lien de partage copié",
+    "copyFailed": "Impossible de copier le lien de partage. Réessayez dans un instant."
+  }
+}

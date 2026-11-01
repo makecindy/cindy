@@ -114,6 +114,8 @@ export interface RemoteAgentWireStartOptions {
   makerMemoryEnabled?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
+  /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
+  ghostRosterSnapshot?: string;
   permissionMode?: string;
   planMode?: boolean;
   displayReasoning?: string;
@@ -253,7 +255,8 @@ const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/comman
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
-  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'permissionMode', 'displayReasoning', 'resumeSessionId',
+  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
+  'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
   'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'planMode', 'codexHistoryHasProductPrompt',

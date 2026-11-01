@@ -68,7 +68,6 @@ function realBuiltinProviderNames(): KnownProviderName[] {
     scheduler: {} as never,
     ssh: {} as never,
     memory: {} as never,
-    contacts: {} as never,
     docs: {} as never,
     xdtHelper: {} as never,
     orca: {} as never,
@@ -361,7 +360,7 @@ describe('PluginRegistry — scoped priority', () => {
     const list = await registry.listPlugins(workingDir, true);
     expect(list.find((item) => item.id === 'browser')).toMatchObject({ effectiveEnabled: false });
     expect(list.find((item) => item.id === 'scheduler')).toMatchObject({ essential: true, effectiveEnabled: true });
-    expect(list.some((item) => item.id === 'contacts')).toBe(true);
+    expect(list.some((item) => item.id === 'android')).toBe(true);
     expect((await registry.listPlugins(workingDir)).some((item) => item.id === 'scheduler')).toBe(false);
   });
 
@@ -409,7 +408,6 @@ describe('PluginRegistry — scoped priority', () => {
     });
     expect(list.find((item) => item.id === 'android')).toBeUndefined();
     expect(list.find((item) => item.id === 'computer')).toBeUndefined();
-    expect(list.find((item) => item.id === 'contacts')).toBeUndefined();
     expect(list.find((item) => item.id === 'ios-simulator')).toBeUndefined();
   });
 

@@ -78,7 +78,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
       return <BotGroupSpeakerRow key={speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}
         deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
         identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={speaker.sessionId ?? target?.sessionId ?? null}
-        startedAt={speaker.startedAt} onStop={index === speakers.length - 1 && online ? onStop : undefined} stopPending={stopPending}
+        executionId={speaker.executionId} startedAt={speaker.startedAt} onStop={index === speakers.length - 1 && online ? onStop : undefined} stopPending={stopPending} groupId={group.id}
         activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
     })}
   </ScrollView>;

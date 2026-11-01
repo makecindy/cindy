@@ -26,7 +26,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
-import { isCindyOfficialTrustInfo } from './GhostManager.js';
+import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
+import { canUseGithubHostCredentials } from './GhostManager.js';
+import {
+  applyMcpAppsManualHeaders,
+  pluginDeclaresMcpAppsUi,
+  toolOpensMcpAppsPage,
+  type McpAppsManualRef,
+} from './mcpAppsManualHeaders.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -57,6 +64,9 @@ import {
   type GhostConnectionDecl,
   type GhostFetchMethod,
   type GhostSecretOauthDecl,
+  isSafeGhostRelativePath,
+  GHOST_HANDOFF_REF_RE,
+  GHOST_HANDOFF_UNAVAILABLE,
   type GhostPipeFetchResult,
   type GhostSecretDecl,
   type InstalledGhost,
@@ -64,6 +74,18 @@ import {
 
 export interface NetworkSlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  createTransferProgress?(instanceKey: string, callId?: string): (bytes: number | undefined, total: number | undefined, message: string) => void;
+  readLibraryFile?(instanceKey: string, path: string, signal: AbortSignal): Promise<Response>;
+  /** Live handoff copy of this instance; null when expired, deleted or never handed over, `changed` when altered on disk. */
+  readHandoffFile?(instanceKey: string, ref: string, signal: AbortSignal): Promise<{ bytes: Uint8Array; name: string; mimeType: string } | 'changed' | null>;
+  /** A successful upload counts as use of these handoff copies; renewal never fails the request. */
+  touchHandoffFiles?(instanceKey: string, refs: readonly string[]): Promise<void>;
+  uploadFileSize?(instanceKey: string, value: string, library: boolean): Promise<number | undefined>;
+  saveLibraryStream?(instanceKey: string, input: {
+    path: string; source: AsyncIterable<Uint8Array>; totalBytes?: number;
+    assertCurrent(): void; onProgress?(bytes: number, total?: number): void;
+  }): Promise<{ ok: true; path: string; bytes: number; sha256: string; ref: string } |
+    { ok: false; errorCode: string; message: string }>;
   captureRequestGuard?(instanceKey: string): () => void;
   /**
    * callId → 严格在途的 Agent 调用上下文。只有 channel:'session'、
@@ -77,7 +99,14 @@ export interface NetworkSlotDeps {
     /** null = 已证明是本地会话；string = SSH remote；undefined = 未知。 */
     remoteHostId: string | null | undefined;
     channel: 'session' | 'script';
+    /** 该次调用的插件工具名；旧登记缺省时不按工具自动带手册头。 */
+    tool?: string;
   } | null;
+  /**
+   * 本客户端内置《Cindy MCP Apps 页面生成手册》的 CDN 地址与 sha256；版本无关或
+   * 找不到手册时 null。未注入时不带手册头。
+   */
+  mcpAppsManual?(): McpAppsManualRef | null;
   /**
    * 读某意识某条凭证的明文(safeStorage 现读,不缓存——用户改了 key 下一单
    * 即生效);未配置 / 读失败返回 null。
@@ -797,9 +826,11 @@ export class GhostNetworkSlot {
       uploadDir?: unknown;
       timeoutMs?: unknown;
       as?: unknown;
+      path?: unknown;
       label?: unknown;
       authAccount?: unknown;
       callId?: unknown;
+      mcpAppsManual?: unknown;
     };
 
     // ── 载荷形状校验(不占在途名额)──────────────────────────────────
@@ -818,6 +849,9 @@ export class GhostNetworkSlot {
     }
     const requestCallId = p.callId as string | undefined;
     const callId = requestCallId ?? 'unattributed';
+    if (p.mcpAppsManual !== undefined && typeof p.mcpAppsManual !== 'boolean') {
+      return { ok: false, message: 'mcpAppsManual 必须是布尔值(或不传)' };
+    }
     let body: string | Uint8Array | undefined;
     if (p.body !== undefined) {
       if (typeof p.body !== 'string') return { ok: false, message: 'body 必须是字符串' };
@@ -833,12 +867,18 @@ export class GhostNetworkSlot {
     }
     // ── 响应模式:text(缺省)/ media(字节落总仓)/ file(字节落 save
     // 票据目录)——后两种字节都不进沙箱。
-    let asMode: 'text' | 'media' | 'file' = 'text';
+    let asMode: 'text' | 'media' | 'file' | 'library' = 'text';
     if (p.as !== undefined) {
-      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file') {
-        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file'" };
+      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file' && p.as !== 'library') {
+        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file' / 'library'" };
       }
       asMode = p.as;
+    }
+    if (asMode === 'library' && (typeof p.path !== 'string' || !isSafeGhostRelativePath(p.path))) {
+      return { ok: false, errorCode: 'PATH_INVALID', message: 'Library 下载需要安全的相对 path' };
+    }
+    if (asMode === 'library' && !this.deps.saveLibraryStream) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明或宿主不支持 Library 下载' };
     }
     // 下行落盘票据(仅 as:'file' 必填):形状校验在此,验票在写盘时。
     let saveTo: { token: string; filename?: string } | undefined;
@@ -866,24 +906,43 @@ export class GhostNetworkSlot {
     }
     // ── 上传通道(媒体模式的镜像):意识只报指纹,主机验归属读字节代组
     // multipart。字节不进沙箱。
-    let upload: { hashes: string[]; field: string; fields: Record<string, string> } | undefined;
+    let upload: { hashes: string[]; library: string[]; handoff: string[]; field: string; fields: Record<string, string> } | undefined;
     if (p.upload !== undefined) {
       if (typeof p.upload !== 'object' || p.upload === null || Array.isArray(p.upload)) {
         return { ok: false, message: 'upload 必须是对象({ hashes, field?, fields? })' };
       }
-      const u = p.upload as { hashes?: unknown; field?: unknown; fields?: unknown };
-      if (!Array.isArray(u.hashes) || u.hashes.length === 0 || u.hashes.length > GHOST_FETCH_UPLOAD_MAX_FILES) {
+      const u = p.upload as { hashes?: unknown; library?: unknown; handoff?: unknown; field?: unknown; fields?: unknown };
+      const sources = [u.hashes, u.library, u.handoff].filter((value) => value !== undefined).length;
+      if (sources !== 1) {
+        return { ok: false, message: u.handoff === undefined
+          ? 'upload 必须提供 hashes 或 library 其中一项'
+          : 'upload 必须提供 hashes、library 或 handoff 其中一项' };
+      }
+      const values = u.hashes ?? u.library ?? u.handoff;
+      if (!Array.isArray(values) || values.length === 0 || values.length > GHOST_FETCH_UPLOAD_MAX_FILES) {
         return { ok: false, message: `upload.hashes 必须是 1–${GHOST_FETCH_UPLOAD_MAX_FILES} 条的数组` };
       }
       const hashes: string[] = [];
-      for (const h of u.hashes) {
-        if (typeof h !== 'string' || !GHOST_MEDIA_HASH_RE.test(h)) {
+      const library: string[] = [];
+      const handoff: string[] = [];
+      const target = u.handoff !== undefined ? handoff : u.library === undefined ? hashes : library;
+      for (const h of values) {
+        if (u.handoff !== undefined && (typeof h !== 'string' || !GHOST_HANDOFF_REF_RE.test(h))) {
+          return { ok: false, message: 'upload.handoff 只接受 handoff:<uuid> 交接引用' };
+        }
+        if (typeof h !== 'string' || (u.handoff === undefined && (u.library === undefined ? !GHOST_MEDIA_HASH_RE.test(h) : !isSafeGhostRelativePath(h)))) {
           return { ok: false, message: 'upload.hashes 含非法指纹(需 64 位十六进制)' };
         }
-        if (hashes.includes(h)) {
+        if (target.includes(h)) {
           return { ok: false, message: 'upload.hashes 含重复指纹' };
         }
-        hashes.push(h);
+        target.push(h);
+      }
+      if (library.length && !this.deps.readLibraryFile) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明或宿主不支持 Library 上传' };
+      }
+      if (handoff.length && !this.deps.readHandoffFile) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '宿主不支持交接文件上传' };
       }
       let field = 'file';
       if (u.field !== undefined) {
@@ -919,11 +978,11 @@ export class GhostNetworkSlot {
       }
       if (method !== 'POST') return { ok: false, message: 'upload 仅在 POST 时允许' };
       if (body !== undefined) return { ok: false, message: 'upload 与 body 互斥(multipart 体由主机代组)' };
-      if (asMode === 'media') {
+      if (asMode === 'media' || asMode === 'library') {
         // 上传响应(入库回执 JSON)按文本回;禁掉组合免与取件闸互相占坑。
-        return { ok: false, message: "upload 与 as:'media' 不可同时使用(上传响应按文本形态返回)" };
+        return { ok: false, message: asMode === 'media' ? "upload 与 as:'media' 不可同时使用(上传响应按文本形态返回)" : 'upload 与 Library 下载不能同时使用' };
       }
-      upload = { hashes, field, fields: uploadFields };
+      upload = { hashes, library, handoff, field, fields: uploadFields };
     }
     // ── 目录上传通道(uploadDir):意识只报过户票据,主机凭票读盘代组
     // multipart(文件字段 file-N,filename=相对路径)。路径与字节都不进沙箱。
@@ -1012,7 +1071,7 @@ export class GhostNetworkSlot {
     }
 
     // 超时分档:媒体/文件下载与上传天然更久,缺省/上限用 MEDIA_* 档;下限共用。
-    const isHeavy = asMode === 'media' || asMode === 'file' || upload !== undefined || uploadDir !== undefined;
+    const isHeavy = asMode === 'media' || asMode === 'file' || asMode === 'library' || upload !== undefined || uploadDir !== undefined;
     const timeoutDefault = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_DEFAULT_MS : GHOST_FETCH_TIMEOUT_DEFAULT_MS;
     const timeoutMax = isHeavy ? GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS : GHOST_FETCH_TIMEOUT_MAX_MS;
     let timeoutMs = timeoutDefault;
@@ -1057,6 +1116,9 @@ export class GhostNetworkSlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
+    if ((asMode === 'library' || upload?.library.length) && ghost.manifest.library !== true) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: '插件未声明 Library' };
+    }
     const net = ghost.manifest.network;
     const hasLiveAgentAuthorization = (): boolean => {
       const callInfo = requestCallId
@@ -1077,13 +1139,7 @@ export class GhostNetworkSlot {
     const declaredHosts = net?.hosts ?? [];
     const declaredSecrets = net?.secrets ?? [];
     const ghCliSecrets = declaredSecrets.filter((secret) => secret.source === 'gh-cli');
-    if (
-      ghCliSecrets.length > 0 &&
-      (ghost.manifest.id !== 'cindy-github' || ghost.namespace != null ||
-        ghost.namespaceState === 'pending' ||
-        ghost.namespaceState === 'unconfirmed' ||
-        !isCindyOfficialTrustInfo(ghost.trust))
-    ) {
+    if (ghCliSecrets.length > 0 && !canUseGithubHostCredentials(ghost)) {
       return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
     }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
@@ -1109,6 +1165,8 @@ export class GhostNetworkSlot {
           (connectionDecls.length > 0 ? ';如是自建服务地址,请先在意识设置页添加该连接' : ''),
       };
     }
+    // 手册头只在沙箱 cindy.fetch 上生效；Node 工作进程的请求只剥除插件自带的同名头。
+    const mcpAppsManual = nodeAuth ? null : this.selectMcpAppsManual(instanceKey, ghost, requestCallId, p.mcpAppsManual);
 
     // ── 凭证注入:命中本次目标域名的每条声明凭证,保险库现读明文拼头
     // (交换型凭证在此换取/取缓存令牌)。未配置的凭证快速失败(带清晰
@@ -1130,6 +1188,8 @@ export class GhostNetworkSlot {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     let holdingMediaGate = false;
+    const progress = this.deps.createTransferProgress?.(instanceKey, requestCallId);
+    const hasTransfer = !!upload || asMode === 'library';
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
       const hostGuard = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
@@ -1145,7 +1205,7 @@ export class GhostNetworkSlot {
       const connectionInjected = new Map(inject0.connectionInjected);
       let initialConnectionInjected = new Map(inject0.connectionInjected);
       this.deps.log?.info('ghost fetch-request start', { ghostId: instanceKey, callId, method, host: url.hostname, path: url.pathname,
-        ...(upload ? { uploadFiles: upload.hashes.length } : {}),
+        ...(upload ? { uploadFiles: upload.hashes.length + upload.library.length } : {}),
         ...(uploadDir ? { dirUpload: true } : {}),
       });
 
@@ -1157,8 +1217,10 @@ export class GhostNetworkSlot {
         }
         this.mediaReadsInflight += 1;
         holdingMediaGate = true;
-        const built = await this.buildUploadBody(instanceKey, upload);
-        if ('error' in built) return { ok: false, message: built.error };
+        const built = await this.buildUploadBody(instanceKey, upload, controller.signal, assertStillValid, progress);
+        if ('error' in built) return { ok: false, message: built.error,
+          ...(built.limitBytes !== undefined ? { errorCode: 'TOO_LARGE', limitBytes: built.limitBytes } : {}),
+          ...(built.errorCode ? { errorCode: built.errorCode } : {}) };
         body = built.body;
         // multipart 的 Content-Type(含 boundary)由主机独占,意识自带的删干净。
         deleteHeaderVariants(requestHeaders, 'Content-Type');
@@ -1179,6 +1241,7 @@ export class GhostNetworkSlot {
         requestHeaders['Content-Type'] = `multipart/form-data; boundary=${built.boundary}`;
       }
 
+      if (upload) progress?.(undefined, undefined, '正在上传');
       // ── 执行(重定向逐跳手动跟,每跳重验白名单 + 重算凭证注入)────────
       // 外层 attempt 循环只为交换型 / oauth / Connection 凭证的 401 兜底:令牌可能被
       // 服务端提前作废,作废本地缓存重换/重刷一次再整链重试;第二次仍
@@ -1274,6 +1337,8 @@ export class GhostNetworkSlot {
               };
             }
           }
+          // 与凭证头一样逐跳重判：只带给 network 已声明的主机，换到其它主机即删掉。
+          applyMcpAppsManualHeaders(hopHeaders, mcpAppsManual && hostDeclared(currentUrl.hostname) ? mcpAppsManual : null);
           if (nodeAuth) {
             assertStillValid();
             deleteHeaderVariants(hopHeaders, 'Authorization');
@@ -1375,6 +1440,9 @@ export class GhostNetworkSlot {
       }
       if (!response) return { ok: false, message: '请求未获得响应' };
       assertStillValid();
+      if (upload?.handoff?.length && response.status >= 200 && response.status < 300) {
+        await this.deps.touchHandoffFiles?.(instanceKey, upload.handoff).catch(() => {});
+      }
 
       // ── 响应收敛:媒体落仓 / 文本透传;体积护栏;响应头白名单 ──────────
       const contentType = response.headers.get('content-type') ?? '';
@@ -1390,6 +1458,32 @@ export class GhostNetworkSlot {
       // 文件模式:2xx 的任意类型字节凭票写进 save 目录(不进沙箱不进总仓);
       // 非 2xx 回落文本形态(错误 JSON 意识看得到)。与媒体取件共用全局
       // 串行闸(体整体驻内存直到写盘,峰值封顶)。
+      if (asMode === 'library' && response.status >= 200 && response.status < 300) {
+        const declared = Number(response.headers.get('content-length') ?? NaN);
+        const totalBytes = Number.isSafeInteger(declared) && declared >= 0 && !response.headers.has('content-encoding') ? declared : undefined;
+        const reader = response.body?.getReader();
+        async function* source() {
+          if (!reader) return;
+          while (true) {
+            controller.signal.throwIfAborted();
+            assertStillValid();
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            yield chunk.value;
+          }
+        }
+        try {
+          const saved = await this.deps.saveLibraryStream!(instanceKey, {
+            path: p.path as string, source: source(), totalBytes,
+            assertCurrent: () => { controller.signal.throwIfAborted(); assertStillValid(); },
+            onProgress: (bytes, total) => progress?.(bytes, total, '正在保存文件'),
+          });
+          assertStillValid();
+          if (!saved.ok) return saved;
+          return { ok: true, status: response.status, headers: responseHeaders, library: saved };
+        } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+      }
+
       if (asMode === 'file' && saveTo && response.status >= 200 && response.status < 300) {
         const declaredLength = Number(response.headers.get('content-length') ?? Number.NaN);
         if (Number.isFinite(declaredLength) && declaredLength > GHOST_FETCH_FILE_MAX_BYTES) {
@@ -1564,15 +1658,19 @@ export class GhostNetworkSlot {
       };
     } catch (err) {
       const aborted = controller.signal.aborted;
-      const message = nodeAuth ? (aborted ? 'NODE_AUTH_REQUEST_ABORTED' : 'NODE_AUTH_REQUEST_FAILED') : aborted
-        ? `请求超时(${timeoutMs}ms)`
+      // 网络层失败带稳定 errorCode,原因码进 message;识别不出的(守门抛错等)保持原文、不打码。
+      const network = nodeAuth ? null : aborted ? fetchTimeoutFailure(timeoutMs) : classifyFetchNetworkFailure(err);
+      const message = nodeAuth ? (aborted ? 'NODE_AUTH_REQUEST_ABORTED' : 'NODE_AUTH_REQUEST_FAILED')
+        : network ? network.reason
         : err instanceof Error ? err.message : String(err);
       // 错误消息可能带 URL(含 query),日志只记 host,消息本身回给沙箱前不动
       // (意识本来就知道自己请求了什么,不构成泄露)。
       this.deps.log?.warn('ghost fetch-request failed', { ghostId: instanceKey, callId, method, host: url.hostname, aborted, error: message,
+        ...(network ? { errorCode: network.errorCode, ...(network.causeCode ? { causeCode: network.causeCode } : {}) } : {}),
       });
-      return { ok: false, message: `请求失败:${message}` };
+      return { ok: false, message: `请求失败:${message}`, ...(network ? { errorCode: network.errorCode } : {}) };
     } finally {
+      if (hasTransfer) progress?.(undefined, undefined, '文件处理结束');
       nodeAuth?.signal.removeEventListener('abort', abortNode);
       clearTimeout(timer);
       await Promise.allSettled(guardedFetchReleases.map((release) => release()));
@@ -1580,6 +1678,30 @@ export class GhostNetworkSlot {
       const left = (this.inflight.get(instanceKey) ?? 1) - 1;
       if (left <= 0) this.inflight.delete(instanceKey);
       else this.inflight.set(instanceKey, left);
+    }
+  }
+
+  /**
+   * 本次请求是否带手册头：插件显式传 mcpAppsManual 时以它为准；否则仅当 callId
+   * 对应的在途工具在 mcpApps.ui 中对模型可见（会打开页面卡片）时带上。
+   */
+  private selectMcpAppsManual(
+    instanceKey: string,
+    ghost: InstalledGhost,
+    callId: string | undefined,
+    option: boolean | undefined,
+  ): McpAppsManualRef | null {
+    if (option === false) return null;
+    if (option !== true) {
+      // 没声明 MCP Apps 页面的插件不查在途调用，保持原有请求路径不变。
+      if (!callId || !pluginDeclaresMcpAppsUi(ghost.manifest)) return null;
+      const call = this.deps.inFlightCallInfo?.(callId) ?? null;
+      if (call?.ghostId !== instanceKey || !toolOpensMcpAppsPage(ghost.manifest, call.tool)) return null;
+    }
+    try {
+      return this.deps.mcpAppsManual?.() ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -1924,29 +2046,94 @@ export class GhostNetworkSlot {
    * filename 用指纹前 16 位 + 总仓后缀,不含任何用户可控文本。
    */
   private async buildUploadBody(instanceKey: string,
-    upload: { hashes: string[]; field: string; fields?: Record<string, string> },
-  ): Promise<{ body: Uint8Array; boundary: string } | { error: string }> {
+    upload: { hashes: string[]; library: string[]; handoff?: string[]; field: string; fields?: Record<string, string> },
+    signal: AbortSignal, assertCurrent: () => void,
+    progress?: (bytes: number | undefined, total: number | undefined, message: string) => void,
+  ): Promise<{ body: Uint8Array; boundary: string } | { error: string; limitBytes?: number; errorCode?: string }> {
     const boundary = `----cindy-ghost-${randomUUID()}`;
     const encoder = new TextEncoder();
     const chunks: Uint8Array[] = [];
     let total = 0;
     const fileParts: Uint8Array[] = [];
-    for (const hash of upload.hashes) {
-      const media = await this.deps.readGhostMedia(instanceKey, hash);
+    const entries = [...upload.hashes.map(value => ({ value, library: false })), ...upload.library.map(value => ({ value, library: true }))];
+    // Handoff copies are capped at import time; read them first and reuse the media path below.
+    const handoffs = new Map<string, { buffer: Buffer; name: string; mimeType: string }>();
+    let handoffBytes = 0;
+    for (const ref of upload.handoff ?? []) {
+      const copy = await this.deps.readHandoffFile!(instanceKey, ref, signal);
+      assertCurrent(); signal.throwIfAborted();
+      if (!copy) return { error: '交接文件已过期或已被删除,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      if (copy === 'changed') return { error: '交接文件在交出后被改动,已拒绝上传,请让用户重新发送', errorCode: GHOST_HANDOFF_UNAVAILABLE };
+      // Stop as soon as the batch cannot fit instead of holding every copy first.
+      handoffBytes += copy.bytes.byteLength;
+      if (handoffBytes > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+      const buffer = Buffer.from(copy.bytes.buffer, copy.bytes.byteOffset, copy.bytes.byteLength);
+      handoffs.set(ref, { buffer, name: copy.name, mimeType: copy.mimeType });
+      entries.push({ value: ref, library: false });
+    }
+    let expectedTotal: number | undefined = 0;
+    for (const entry of entries) {
+      const handoffCopy = handoffs.get(entry.value);
+      if (handoffCopy) { expectedTotal = (expectedTotal ?? 0) + handoffCopy.buffer.byteLength; continue; }
+      const size = await this.deps.uploadFileSize?.(instanceKey, entry.value, entry.library);
+      assertCurrent(); signal.throwIfAborted();
+      if (size === undefined) { expectedTotal = undefined; break; }
+      if (size > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+      expectedTotal += size;
+      if (expectedTotal > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+    }
+    const reportRead = (bytes: number) => progress?.(bytes, expectedTotal !== undefined && bytes <= expectedTotal ? expectedTotal : undefined, '正在读取文件');
+    for (const entry of entries) {
+      assertCurrent(); signal.throwIfAborted();
+      const hash = entry.value;
+      let media;
+      if (entry.library) {
+        const response = await this.deps.readLibraryFile!(instanceKey, hash, signal);
+        if (!response.ok) return { error: 'Library 文件不可用' };
+        const reader = response.body?.getReader();
+        const parts: Uint8Array[] = [];
+        let size = 0;
+        try {
+          const declared = Number(response.headers.get('content-length'));
+          if (declared > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+          if (total + declared > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+          while (reader) {
+            const chunk = await reader.read();
+            assertCurrent(); signal.throwIfAborted();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) return { error: '上传文件超出单件上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
+            if (total + size > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) return { error: '上传文件超出总量上限', limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
+            parts.push(chunk.value);
+            reportRead(total + size);
+          }
+        } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+        media = { buffer: Buffer.concat(parts), ext: '', mimeType: normalizeMime(response.headers.get('content-type') ?? '') || 'application/octet-stream' };
+      } else media = handoffs.get(hash) ? { ...handoffs.get(hash)!, ext: '' } : await this.deps.readGhostMedia(instanceKey, hash);
+      assertCurrent(); signal.throwIfAborted();
       if (!media) {
         return { error: `媒体不存在或不属于本意识(${hash.slice(0, 8)}…)——只能上传自己名下/用户过户的总仓媒体` };
       }
       if (media.buffer.byteLength > GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE) {
-        return { error: `上传文件过大(${media.buffer.byteLength} 字节,单文件上限 ${GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE})` };
+        return { error: `上传文件过大(${media.buffer.byteLength} 字节,单文件上限 ${GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE})`, limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE };
       }
       total += media.buffer.byteLength;
       if (total > GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES) {
-        return { error: `上传总量超上限(${GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES} 字节)` };
+        return { error: `上传总量超上限(${GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES} 字节)`, limitBytes: GHOST_FETCH_UPLOAD_MAX_TOTAL_BYTES };
       }
+      reportRead(total);
+      const handoffName = handoffs.get(hash)?.name;
+      const filename = handoffName !== undefined
+        ? handoffName.replace(/[^a-zA-Z0-9_.-]/g, '_')
+        : entry.library ? (hash.split('/').pop() ?? 'file').replace(/[^a-zA-Z0-9_.-]/g, '_') : `${hash.slice(0, 16)}${media.ext}`;
+      // The user's original name (often non-ASCII) travels as RFC 5987 filename*.
+      // RFC 5987 ext-value: encodeURIComponent leaves ' ( ) * literal, which attr-char forbids.
+      const utf8Name = handoffName !== undefined && filename !== handoffName
+        ? `; filename*=UTF-8''${encodeURIComponent(handoffName).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}` : '';
       fileParts.push(
         encoder.encode(
           `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name="${upload.field}"; filename="${hash.slice(0, 16)}${media.ext}"\r\n` +
+          `Content-Disposition: form-data; name="${upload.field}"; filename="${filename}"${utf8Name}\r\n` +
           `Content-Type: ${media.mimeType}\r\n\r\n`,
         ),
         media.buffer,

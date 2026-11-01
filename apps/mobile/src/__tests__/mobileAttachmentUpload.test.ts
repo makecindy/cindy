@@ -3,10 +3,11 @@ import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
+  deleteMobileAttachmentUpload,
   discardMobileUploadedAttachment,
   presignMobileAttachmentUpload,
   putMobileAttachmentUpload,
@@ -719,5 +720,24 @@ describe('mobileAttachmentUpload', () => {
       },
     );
     await vi.waitFor(() => expect(failingFetch).toHaveBeenCalled());
+  });
+});
+
+// 共享任务附件只在官方存储(docs/self-hosted-relay-plan.md §15.6):走自建中转时删除也不能发往中转。
+describe('deleteMobileAttachmentUpload', () => {
+  it('deletes shared-task objects on the official service and others on the current relay', async () => {
+    const apiFetch = vi.fn(async (_path: string, _options: { baseUrl?: string }) => ({ deleted: true }));
+    const deps = { apiFetch: apiFetch as unknown as typeof apiFetchRaw };
+    setDeviceLinkApiBaseOverride('https://relay.home.example');
+    try {
+      await deleteMobileAttachmentUpload('cindy/device-link/shared-task/task/member/a.png', { token: 'token', deps });
+      await deleteMobileAttachmentUpload('cindy/device-link/account/a.png', { token: 'token', deps });
+    } finally {
+      setDeviceLinkApiBaseOverride(null);
+    }
+    expect(apiFetch.mock.calls.map(([, options]) => options.baseUrl)).toEqual([
+      getOfficialDeviceLinkApiBaseUrl(),
+      'https://relay.home.example',
+    ]);
   });
 });

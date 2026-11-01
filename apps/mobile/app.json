@@ -7,6 +7,18 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "locales": {
+      "en": "./locales/en.json",
+      "zh-Hans": "./locales/zh-Hans.json",
+      "zh-Hant": "./locales/zh-Hant.json",
+      "ja": "./locales/ja.json",
+      "ko": "./locales/ko.json",
+      "es": "./locales/es.json",
+      "fr": "./locales/fr.json",
+      "de": "./locales/de.json",
+      "pt-PT": "./locales/pt-PT.json",
+      "pt-BR": "./locales/pt-BR.json"
+    },
     "runtimeVersion": {
       "policy": "fingerprint"
     },
@@ -98,6 +110,7 @@
       "expo-apple-authentication",
       "expo-notifications",
       "./plugins/with-communication-notifications",
+      "./plugins/with-usage-widgets",
       "expo-secure-store",
       "expo-web-browser",
       "./plugins/with-incoming-share-files",

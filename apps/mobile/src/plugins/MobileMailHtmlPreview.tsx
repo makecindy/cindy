@@ -1,21 +1,74 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { Text } from '@/components/AppText';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Keyboard, View } from 'react-native';
 import { applyMailInlineEdits, mailInlineDocument, mailReadingDocument, mailReadingThemeScript, mailInlineBindingScript, mailInlineRefreshScript, type MailInlineImage } from '@cindy/maker-shared/mail-text-edit';
 import { WebView } from 'react-native-webview';
 import { interceptHtmlNavigation } from '@/session/htmlNavigationPolicy';
 import { useBotGroupRemoteMedia } from '@/session/useBotGroupRemoteMedia';
-import { useTheme, useThemedStyles, spacing, typeScale, lineHeight, fontWeight, type ThemeColors } from '@/theme';
+import { MessageListRevealContext } from '@/session/messageListReveal';
+import { useTheme } from '@/theme';
 
-/** CID substitution is preview-only. Never pass fetched URLs back into the draft. */
+/** Native injection only (the document CSP blocks page scripts). Lays the message out at
+ * its natural height, shrinking fixed-width newsletters to the screen like a mail app,
+ * so the page or chat scrolls the body together with its header. Typing re-measures. */
+const MAIL_FIT_SCRIPT = `(function(){
+  var root=document.documentElement,body=document.body;if(!body)return;
+  if(!window.__cindyMailFit){
+    // iOS zooms into focused text under 16px; the frame would then clip the enlarged
+    // content. The page owns scrolling and sizing, so the document never zooms.
+    var viewport=document.querySelector('meta[name=viewport]');
+    if(viewport)viewport.setAttribute('content','width=device-width,initial-scale=1,maximum-scale=1');
+    var queued=false;
+    var measure=function(){
+      queued=false;
+      body.style.zoom='';
+      var width=root.clientWidth||window.innerWidth,wide=Math.max(root.scrollWidth,body.scrollWidth);
+      // Before native layout the frame can be 0 wide; text would wrap per character.
+      if(!width)return;
+      var zoom=width>0&&wide>width+1?width/wide:1;
+      if(zoom<1)body.style.zoom=String(zoom);
+      var range=document.createRange();range.selectNodeContents(body);
+      var css=getComputedStyle(body),end=(parseFloat(css.marginBottom)||0)+(parseFloat(css.paddingBottom)||0);
+      var height=Math.ceil(range.getBoundingClientRect().bottom+window.scrollY+end*zoom);
+      window.ReactNativeWebView.postMessage(JSON.stringify({type:'mail-size',height:height}));
+    };
+    window.__cindyMailFit=function(){if(!queued){queued=true;requestAnimationFrame(measure)}};
+    document.addEventListener('load',window.__cindyMailFit,true);
+    document.addEventListener('error',window.__cindyMailFit,true);
+    document.addEventListener('input',window.__cindyMailFit);
+    window.addEventListener('resize',window.__cindyMailFit);
+    // The page or chat owns scrolling; WebKit's caret reveal must not shift the document.
+    window.addEventListener('scroll',function(){if(window.scrollX||window.scrollY)window.scrollTo(0,0)});
+    if(document.fonts)document.fonts.ready.then(window.__cindyMailFit);
+    setTimeout(window.__cindyMailFit,500);
+  }
+  window.__cindyMailFit();
+})();true;`;
+
+/** Editing inside a chat card: report the caret (viewport px) so the list can keep
+ * it above the keyboard. Only sent while a mail text run has focus. */
+const MAIL_CARET_SCRIPT = `(function(){
+  if(window.__cindyMailCaret)return;window.__cindyMailCaret=true;var queued=false;
+  var send=function(){
+    queued=false;var sel=document.getSelection();
+    var node=sel&&sel.rangeCount?sel.getRangeAt(0):null;
+    var run=document.activeElement&&document.activeElement.closest&&document.activeElement.closest('[data-cindy-mail-run]');
+    if(!node||!run)return;
+    var rect=node.getClientRects()[0]||node.getBoundingClientRect();
+    if(!rect||(!rect.height&&!rect.top))rect=run.getBoundingClientRect();
+    window.ReactNativeWebView.postMessage(JSON.stringify({type:'mail-caret',top:rect.top,bottom:rect.bottom}));
+  };
+  var queue=function(){if(!queued){queued=true;requestAnimationFrame(send)}};
+  document.addEventListener('selectionchange',queue);document.addEventListener('input',queue);
+  document.addEventListener('focusin',queue);
+})();true;`;
+
+/** CID substitution is preview-only. Never pass fetched URLs back into the draft.
+ * The whole message is shown inline at full height; there is no separate enlarged view. */
 export function MobileMailHtmlPreview({ html, images = [], deviceId, disabled, onChange }: {
   html: string; images?: { cid: string; url: string }[]; deviceId: string;
   disabled?: boolean; onChange?: (html: string, text: string) => void;
 }) {
-  const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
   const resolve = useBotGroupRemoteMedia(deviceId);
-  const [open, setOpen] = useState(false);
   const [resolved, setResolved] = useState<{ binding: string; urls: Record<string, string> }>();
   const binding = JSON.stringify([deviceId, images]);
   useEffect(() => {
@@ -50,28 +103,30 @@ export function MobileMailHtmlPreview({ html, images = [], deviceId, disabled, o
   }, [binding, resolve]);
   const urls = resolved?.binding === binding ? resolved.urls : {};
   const previewImages = Object.entries(urls).map(([cid, url]) => ({ cid, url }));
-  return <View style={styles.root}>
-    <View style={styles.controls}>
-    <Pressable accessibilityRole="button" accessibilityLabel={t('plugins.mailEnlarge')} style={styles.enlarge} onPress={() => setOpen(true)}>
-      <Text style={styles.note}>{t('plugins.mailEnlarge')}</Text>
-    </Pressable>
-    </View>
-    <View style={styles.preview}><MobileMailFrame html={html} images={previewImages} disabled={disabled || open} onChange={onChange} /></View>
-    <Modal visible={open} presentationStyle="pageSheet" onRequestClose={() => setOpen(false)}>
-      <View style={styles.sheet}>
-        <View style={styles.header}><Text style={styles.title}>{t('plugins.mailPreview')}</Text>
-          <Pressable accessibilityRole="button" style={styles.enlarge} onPress={() => setOpen(false)}><Text style={styles.note}>{t('common.close')}</Text></Pressable></View>
-        <MobileMailFrame html={html} images={previewImages} disabled={disabled} onChange={onChange} />
-      </View>
-    </Modal>
-  </View>;
+  return <MobileMailFrame html={html} images={previewImages} disabled={disabled} onChange={onChange} />;
 }
 /** This is an email-only bridge; arbitrary HTML file previews keep their existing
  * reader with no message handler. Author scripts are blocked before parsing. */
 function MobileMailFrame({ html, images, disabled, onChange }: {
   html: string; images: MailInlineImage[]; disabled?: boolean; onChange?: (html: string, text: string) => void;
 }) {
-  const web = useRef<WebView>(null);
+  const web = useRef<WebView>(null), frame = useRef<View>(null);
+  const [height, setHeight] = useState<number>();
+  const reveal = useContext(MessageListRevealContext);
+  const caret = useRef<{ top: number; bottom: number } | undefined>(undefined);
+  const revealCaret = () => {
+    const rect = caret.current;
+    if (!rect || !reveal) return;
+    frame.current?.measureInWindow((_x, y) => { if (Number.isFinite(y)) reveal({ top: y + rect.top, bottom: y + rect.bottom }); });
+  };
+  const revealRef = useRef(revealCaret); revealRef.current = revealCaret;
+  // The list shrinks above the keyboard only after it appears; re-check then.
+  useEffect(() => {
+    if (!onChange) return;
+    const sub = Keyboard.addListener('keyboardDidShow', () => setTimeout(() => revealRef.current(), 50));
+    const hide = Keyboard.addListener('keyboardDidHide', () => { caret.current = undefined; });
+    return () => { sub.remove(); hide.remove(); };
+  }, [Boolean(onChange)]);
   const { mode, colors } = useTheme();
   const model = useRef({ source: html, emitted: html, received: html, edits: {} as Record<string, string>, revision: 0 });
   if (model.current.received !== html) {
@@ -84,17 +139,35 @@ function MobileMailFrame({ html, images, disabled, onChange }: {
   const settled = useRef(false), lastSource = useRef(source);
   if (lastSource.current !== source) { lastSource.current = source; settled.current = false; }
   const appearance = editable ? '' : mailReadingThemeScript(mode === 'dark', { surface: colors.surface, text: colors.textPrimary });
-  const refresh = mailInlineRefreshScript(Boolean(onChange) && !disabled, images) + appearance;
+  const refresh = mailInlineRefreshScript(Boolean(onChange) && !disabled, images) + appearance + MAIL_FIT_SCRIPT + (editable ? MAIL_CARET_SCRIPT : '');
   useEffect(() => { web.current?.injectJavaScript(refresh); }, [refresh]);
-  return <WebView key={revision} ref={web} source={source} javaScriptEnabled
+  return <View ref={frame} collapsable={false} style={{ width: '100%' }}><WebView key={revision} ref={web} source={source} javaScriptEnabled
     originWhitelist={['*']} onShouldStartLoadWithRequest={request => interceptHtmlNavigation(request, settled.current)}
     setSupportMultipleWindows={false} allowFileAccess={false} mediaCapturePermissionGrantType="deny"
-    keyboardDisplayRequiresUserAction scrollEnabled
+    keyboardDisplayRequiresUserAction scrollEnabled={false} bounces={false}
+    automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never"
+    showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false}
     onLoadEnd={() => { settled.current = true; web.current?.injectJavaScript(mailInlineBindingScript(revision) + refresh); }}
     onMessage={event => {
-      if (disabled || !onChange || event.nativeEvent.data.length > 100000) return;
+      if (event.nativeEvent.data.length > 100000) return;
       try {
         const data = JSON.parse(event.nativeEvent.data);
+        if (data.type === 'mail-caret') {
+          if (editable && typeof data.top === 'number' && typeof data.bottom === 'number' && Number.isFinite(data.top) && Number.isFinite(data.bottom)) {
+            caret.current = { top: data.top, bottom: data.bottom };
+            revealCaret();
+          }
+          return;
+        }
+        if (data.type === 'mail-size') {
+          // The page owns scrolling; a stray size only resizes this frame.
+          if (typeof data.height === 'number' && data.height > 0 && data.height <= 1_000_000) {
+            const next = Math.ceil(data.height);
+            setHeight(old => old !== undefined && Math.abs(old - next) <= 1 ? old : next);
+          }
+          return;
+        }
+        if (disabled || !onChange) return;
         if (data.type !== 'mail-text' || data.documentId !== model.current.revision || typeof data.id !== 'string' || typeof data.text !== 'string') return;
         const edits = { ...model.current.edits, [data.id]: data.text };
         const next = applyMailInlineEdits(model.current.source, edits);
@@ -102,14 +175,7 @@ function MobileMailFrame({ html, images, disabled, onChange }: {
         model.current.edits = edits; model.current.emitted = next.html;
         onChange(next.html, next.text);
       } catch { /* Invalid/stale messages never modify or send a draft. */ }
-    }} style={{ flex: 1 }} />;
+    }} containerStyle={{ flex: 0, width: '100%', height: height ?? MAIL_FIT_INITIAL_HEIGHT }} style={{ flex: 1 }} /></View>;
 }
-const makeStyles = (c: ThemeColors) => StyleSheet.create({
-  root: { width: '100%' }, preview: { height: 280 },
-  controls: { flexDirection: 'row', justifyContent: 'flex-end' },
-  sheet: { flex: 1, padding: spacing.lg, backgroundColor: c.surface },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  enlarge: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-end', paddingHorizontal: spacing.sm },
-  title: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold, color: c.textPrimary },
-  note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, color: c.textSecondary },
-});
+// Placeholder until the first measurement; most messages report within a frame.
+const MAIL_FIT_INITIAL_HEIGHT = 160;

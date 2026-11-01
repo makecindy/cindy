@@ -25,6 +25,7 @@ vi.mock('expo-router/react-navigation', () => ({
 vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Plus: () => null, RefreshCw: () => null, UsersRound: () => null }));
+vi.mock('@/chat/chatInviteIntent', () => ({ openManualChatInvite: vi.fn() }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children) }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: ({ name, avatar }: any) => {
@@ -233,6 +234,22 @@ it('retries a cloud roster failure without restarting healthy computer or group 
   await act(async () => byId('home.teammatesRetry')!.click());
   expect(h.cloudRefresh).toHaveBeenCalledTimes(1);
   expect(roster.refresh).not.toHaveBeenCalled(); expect(groups.refresh).not.toHaveBeenCalled();
+});
+
+// Unit merge regression: a zero-computer invite must survive header-only and avatar-strip settings.
+it.each([[false, false, false], [true, false, false], [false, true, false], [false, true, true]])(
+  'retains only a compact invite trigger with no computers (loading=%s, collapsed=%s, avatars=%s)', async (loading, collapsed, showAvatars) => {
+  const original = roster.items;
+  try {
+    roster.items = []; roster.loading = loading; roster.error = null;
+    h.collapsed = collapsed; h.showAvatars = showAvatars;
+    await render(0);
+    expect(byId('home.teammatesCreate')).not.toBeNull();
+    expect(byId('home.teammatesAdd')).toBeNull();
+    expect(h.createOptions.onInvite).toBeTypeOf('function');
+    await render(0, { query: 'missing' });
+    expect(byId('home.teammates')).toBeNull();
+  } finally { roster.items = original; roster.loading = false; }
 });
 
 // Unit: explicitly hiding avatars must remove the entire body, including an empty create row.

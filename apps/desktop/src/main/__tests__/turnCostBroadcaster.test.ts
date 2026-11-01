@@ -141,6 +141,20 @@ beforeEach(() => {
 });
 
 describe('recordTurnCostOnMessage', () => {
+  // Unit: subscription valuation accompanying an API charge must affect only
+  // the displayed round, never the raw billing amount or scheduler input.
+  it('includes per-model subscription value in the display while preserving actual billing', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps();
+    await recordTurnCostOnMessage({ ...ARGS, money: usdMoney(1), turnUsageDetails: {
+      ...DETAILS, perModelCost: [
+        { model: 'subscription-model', billingSource: 'subscription',
+          money: { ...usdMoney(2), approximate: true, kind: 'value-estimate' } },
+        { model: 'api-model', billingSource: 'cindy-ai', money: usdMoney(1) },
+      ],
+    } }, deps);
+    expect(patchCalls[0].patch.turnCost).toEqual(usdMoney(1));
+    expect(broadcasts[0]).toMatchObject({ userTurnMoney: { amount: 3 }, userTurnCostIsEstimate: true });
+  });
   it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
     const { deps, broadcasts } = makeDeps(true);
     deps.enqueue = vi.fn(async (_label, fn) => {

@@ -52,7 +52,8 @@ beforeEach(async () => {
 });
 describe('message detail lifecycle', () => {
   it('keeps folded work lazy and retains projected lines until expanded details arrive', () => {
-    const setVisible = vi.fn();
+    const release = vi.fn();
+    const setVisible = vi.fn(() => release);
     const item: any = { type: 'work_group', key: 'work', children: [{ type: 'message', key: 'detail' }],
       isStreaming: true, durationMs: 0, deferred: { owner: 'host', key: 'work', setVisible,
         awaitingDetails: true, lines: [{ key: 'line', kind: 'thinking', text: 'Reading' }] } };
@@ -60,12 +61,12 @@ describe('message detail lifecycle', () => {
     try {
       expect(child).not.toHaveBeenCalled(); expect(h.host.textContent).toContain('Reading');
       act(() => h.host.querySelector('button')!.click());
-      expect(setVisible).toHaveBeenCalledWith(true, false);
+      expect(setVisible).toHaveBeenLastCalledWith(true, true);
       expect(h.host.textContent).toContain('Reading'); expect(child).not.toHaveBeenCalled();
       h.update({ item: { ...item, deferred: { ...item.deferred, awaitingDetails: false } }, actions: {} });
       expect(h.host.textContent).toContain('detail'); expect(h.host.textContent).not.toContain('Reading');
     } finally { h.unmount(); }
-    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it('reveals generic tool input when structured detail is absent and remembers row folding', () => {

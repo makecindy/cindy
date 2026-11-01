@@ -1391,7 +1391,18 @@ async function cleanupPublishedLock(
   const releasePath = `${lockPath}.release-${process.pid}-${crypto.randomUUID()}`;
   try {
     const current = await readLockRecord(lockPath);
-    if (typeof current === 'string' || !sameLockOwner(current, lock.record)) {
+    if (typeof current === 'string') {
+      if (current !== 'missing') {
+        // The path may still contain our held record. Do not mutate an
+        // unverified path, but retain our nonce so a later acquisition can
+        // recover it under the reclaim gate once reads become available.
+        pendingOwnRecordRecovery.set(lockPath, lock.nonce);
+      }
+      await lock.handle.close().catch(() => undefined);
+      log.warn(`${label} lock record ${current} before release; preserving current lock`);
+      return;
+    }
+    if (!sameLockOwner(current, lock.record)) {
       await lock.handle.close().catch(() => undefined);
       log.warn(`${label} lock identity changed before release; preserving current lock`);
       return;

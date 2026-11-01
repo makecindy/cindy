@@ -531,6 +531,29 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  // Unit regression: the reported disabled-host UX had only a generic Connect
+  // action. Exercise the real screen with enabled=false, then enable the host
+  // and use the explicit check action; existing cases did not cover this path.
+  it("guides a disabled host and checks again before connecting", async () => {
+    let enabled = false;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities" ? { ...result, enabled } : result;
+    });
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    expect(host.textContent).toContain("remoteDesktop.disabled");
+    expect(button("connect")).toBeNull();
+    expect(button("reconnectAfterPermissions")).not.toBeNull();
+    expect(requests().some((request) => request.op === "start")).toBe(false);
+    enabled = true;
+    await act(async () => button("reconnectAfterPermissions").click());
+    expect(host.textContent).not.toContain("remoteDesktop.disabled");
+    expect(requests().some((request) => request.op === "start")).toBe(true);
+  });
+
   it.each([false, true])(
     "allows the Wayland consent window while keeping the overall wait bounded (native=%s)",
     async (native) => {
@@ -3411,17 +3434,19 @@ describe("remote desktop controls", () => {
       });
     },
   );
-  it.each([false, true])(
-    "waits for the saved lock policy before starting, enabled=%s",
-    async (enabled) => {
+  it.each([null, "false", "true", "unreadable"])(
+    "waits for the saved lock policy before starting, stored=%s",
+    async (stored) => {
       act(() => root.unmount());
       fixture.lockPreferenceFromStorage = true;
       let finish!: (value: string | null) => void;
+      let fail!: (error: Error) => void;
       const original = storage.getItem;
       const read = vi.spyOn(storage, "getItem").mockImplementation((key) =>
         key.includes(".lock-on-exit.")
-          ? new Promise<string | null>((resolve) => {
+          ? new Promise<string | null>((resolve, reject) => {
               finish = resolve;
+              fail = reject;
             })
           : original(key),
       );
@@ -3433,9 +3458,14 @@ describe("remote desktop controls", () => {
         );
         expect(finish).toBeTypeOf("function");
         expect(requests().filter((r) => r.op === "start")).toHaveLength(0);
-        await act(async () => finish(String(enabled)));
+        await act(async () =>
+          stored === "unreadable"
+            ? fail(new Error("STORAGE_UNAVAILABLE"))
+            : finish(stored),
+        );
+        // A failed read is not an opt-out, so it follows the default (on).
         expect(requests().filter((r) => r.op === "start")).toEqual([
-          { op: "start", displayId: "display", lockOnExit: enabled },
+          { op: "start", displayId: "display", lockOnExit: stored !== "false" },
         ]);
       } finally {
         read.mockRestore();

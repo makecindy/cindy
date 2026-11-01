@@ -99,6 +99,7 @@
     "incomplete": "음성 입력이 완료되지 않았습니다. 다시 시도하세요.",
     "missingRefinerTargetProvider": "음성 다듬기를 사용할 수 없습니다. {{appName}}에 다시 로그인한 후 다시 시도하세요.",
     "emptyTranscript": "음성 인식 결과가 비어 있습니다. 다시 녹음해 주세요.",
+    "speakerFiltered": "다른 사람의 목소리를 제외했습니다",
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",

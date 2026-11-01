@@ -1,3 +1,4 @@
+import { pluginHasToolUi } from '../toolUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   PLUGIN_API_SCHEMA_VERSION,
@@ -835,3 +836,20 @@ describe('plugin delivery contract', () => {
     expect(parsePluginDownloadResponse(legacy)).not.toHaveProperty('namespace');
   });
 });
+
+// Unit: an immutable historical Release may carry formerly unknown mcpApps.
+// Real delivery parsing must preserve its tools/data; unrelated errors still fail.
+it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://help', file: '../page.html' }], tools: { help: {} } } }])(
+  'reads historical release mcpApps without granting UI: %j', mcpApps => {
+    const plugin = { id: pluginId, ghostId: validManifest.id, name: validManifest.name, description: null, author: null,
+      scope: 'public', organizationId: null, defaultInstall: false,
+      currentRelease: { id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64), sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest: { ...validManifest, mcpApps } } };
+    const parsed = parseGetPluginResponse({ schemaVersion: 2, plugin }).plugin.currentRelease.manifest;
+    expect(parsed.mcpApps).toEqual(mcpApps);
+    expect(parsed.tools).toEqual(validManifest.tools);
+    expect(pluginHasToolUi(parsed)).toBe(false);
+    expect(() => parseGetPluginResponse({ schemaVersion: 2, plugin: { ...plugin,
+      currentRelease: { ...plugin.currentRelease, manifest: { ...plugin.currentRelease.manifest, entry: '../main.js' } } } })).toThrow();
+  },
+);

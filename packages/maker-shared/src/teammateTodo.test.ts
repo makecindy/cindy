@@ -506,3 +506,51 @@ it('refreshes once at a long deferral boundary and cancels without polling or ex
     vi.useRealTimers();
   }
 });
+describe('teammate affairs input errors name the field to fix', () => {
+  it('lists every missing or blank creation field in one error', () => {
+    const s = emptyTodoState();
+    for (const input of [{ title: '测试待办' }, { key: ' ', title: '测试待办' }])
+      expect(() => applyTodoPatch(s, input, 'one', now)).toThrow(
+        /^INVALID_INPUT: a new Todo needs key, title and outcome .*missing or empty: key, outcome\./,
+      );
+    expect(s.items).toHaveLength(0);
+    expect(applyTodoPatch(s, { key: 'k', title: '测试待办', outcome: '完成' }, 'one', now).id).toBe(
+      'one',
+    );
+  });
+  it('names the invalid field and limit', () => {
+    const s = emptyTodoState();
+    expect(() => applyTodoPatch(s, { ...patch, title: 'x'.repeat(301) }, 'one', now)).toThrow(
+      'INVALID_INPUT: title must be at most 300 characters',
+    );
+    expect(() =>
+      applyTodoPatch(s, { ...patch, origin: 'found' as TodoPatch['origin'] }, 'one', now),
+    ).toThrow("INVALID_INPUT: origin must be 'assigned' or 'discovered'");
+    expect(() =>
+      applyTodoPatch(
+        s,
+        { ...patch, next: { label: 'Next', instruction: 'Continue', kind: 'invalid' as 'advance' } },
+        'one',
+        now,
+      ),
+    ).toThrow("INVALID_INPUT: next.kind must be 'advance', 'view' or 'decide'");
+    expect(() =>
+      applyTodoPatch(
+        s,
+        {
+          ...patch,
+          deadlineCandidate: {
+            value: { kind: 'date', date: '2026-11-01', timeZone: 'UTC' },
+            reason: '',
+          },
+        },
+        'one',
+        now,
+      ),
+    ).toThrow('INVALID_INPUT: deadlineCandidate.reason is required');
+    const t = applyTodoPatch(s, patch, 'one', now);
+    expect(() =>
+      applyTodoPatch(s, { id: t.id, expectedRevision: 1, outcome: ' ' }, 'unused', now),
+    ).toThrow('INVALID_INPUT: outcome is required');
+  });
+});

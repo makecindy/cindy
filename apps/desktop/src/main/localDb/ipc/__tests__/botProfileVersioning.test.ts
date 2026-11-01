@@ -10,13 +10,13 @@ import {
 describe('Bot Profile versioning', () => {
   it('removes retired built-in references while preserving other choices and stale-form edits', () => {
     const previous = { toolCapabilityVersion: 1, toolsetMode: 'allowlist',
-      toolsets: ['ios-simulator', 'docs'], tools: ['ios-simulator', 'browser'],
+      toolsets: ['ios-simulator', 'docs'], tools: ['ios-simulator', 'contacts', 'browser'],
       mcpMode: 'allowlist', mcpServers: ['private-mcp'], permissions: 'ask' };
     const next = mergeBotProfileCapabilities({ previous, hasSkills: false,
-      capabilities: { toolsets: ['ios-simulator', 'contacts'] },
+      capabilities: { toolsets: ['ios-simulator', 'contacts', 'lsp'] },
       capabilityBaseline: { toolsets: ['ios-simulator', 'docs'] },
     });
-    expect(next).toEqual({ ...previous, toolsets: ['contacts'], tools: ['browser'] });
+    expect(next).toEqual({ ...previous, toolsets: ['lsp'], tools: ['browser'] });
     expect(previous.toolsets).toEqual(['ios-simulator', 'docs']);
     expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
   });

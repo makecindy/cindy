@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  sheet: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
+  sheet: null as any, model: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
   close: vi.fn(), closed: vi.fn(), search: vi.fn(), created: vi.fn(),
 }));
 vi.mock('react-native', () => ({
@@ -22,27 +22,28 @@ vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'Fil
   .map(name => [name, Object.assign(() => null, { displayName: name })])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
-vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
+vi.mock('@/device-link/remoteResources', async original => ({ ...await original<object>(), invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => <span>{children}</span>,
   TextInput: (p: any) => <input aria-label={p.accessibilityLabel} value={p.value} maxLength={p.maxLength} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />,
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => <button disabled={!!action.disabled || !!action.busy} data-tone={action.tone} onClick={action.onPress}>{action.label}</button> }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: (p: any) => <span data-testid="avatar" data-size={p.size} /> }));
-vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, icon, onPress, disabled, busy, destructive, testID }: any) =>
-  <button data-testid={testID} data-icon={icon?.type?.displayName ?? ''} data-destructive={destructive ? 'true' : 'false'} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, icon, onPress, disabled, busy, destructive, testID, detail }: any) =>
+  <button data-testid={testID} data-icon={icon?.type?.displayName ?? ''} data-destructive={destructive ? 'true' : 'false'} data-detail={detail} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
 vi.mock('@/session/CompanionChoice', () => ({ CompanionChoice: (p: any) => { h.choices.push(p); return <span data-choice={p.label} />; } }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => { h.sheet = p; return p.visible ? <div data-testid="sheet">{p.children}</div> : null; } }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => { h.sheet = p; return p.visible ? <div data-testid="sheet">{p.trailingAction ? <header><button data-testid={p.trailingAction.testID} disabled={p.trailingAction.disabled || p.trailingAction.busy} onClick={p.trailingAction.onPress}>{p.trailingAction.label}</button></header> : null}<div data-testid="sheet-body">{p.children}</div></div> : null; } }));
 vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifacts: () => null }));
 vi.mock('@/session/CompanionPortraitPicker', async original => ({ ...await original<object>(), CompanionPortraitPicker: (p: any) => { h.portrait = p; return <span data-testid="portraits" />; } }));
 vi.mock('@/session/CompanionMemoryPage', () => ({ CompanionMemoryPage: () => <div data-testid="memoryPage" /> }));
 vi.mock('@/session/useCompanionMemory', () => ({ useCompanionMemory: () => ({ busy: false, dirty: false, flush: async () => true, back: async () => false }) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: () => { throw new Error('iOS view on Android'); } }));
 vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: () => { throw new Error('iOS view on Android'); } }));
-vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: () => null, CompanionModelPicker: () => null }));
+vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: () => null }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 import { CompanionCreateSheet, CompanionProfileSheet } from '@/session/CompanionProfileSheet';
+import { parseCompanionProfileData } from '@/session/companionProfileData';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const ref = { collectionId: 'teammates', kind: 'bot', id: 'bot' };
@@ -67,8 +68,8 @@ async function type(label: string, value: string) {
   const field = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); if (!field) throw new Error(`Missing ${label}`);
   await act(async () => { field.value = value; field.dispatchEvent(new Event('input', { bubbles: true })); });
 }
-async function render() {
-  await act(async () => root.render(createElement(CompanionProfileSheet, { visible: true, resource: resource as any, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true,
+async function render(online = true) {
+  await act(async () => root.render(createElement(CompanionProfileSheet, { visible: true, resource: resource as any, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online,
     onClose: h.close, onClosed: h.closed, onOpenSearch: h.search })));
   await settle();
 }
@@ -150,6 +151,28 @@ it('edits a skill with the host body limit and removes it through a destructive 
   await press(row); expect(h.sheet.title).toBe('Remove?');
 });
 
+// Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): the host titles the system and learned lists and marks a
+// turned-off Skill with a subtitle. Before, every entry fell into one untitled group without state.
+// Minimal input: the host's skills page (an untitled core list, two titled lists); unit, parsed by the real reader.
+it('groups a host editor list under its block titles and shows entry subtitles, as iOS does', async () => {
+  const id = 'settings:bot/skills';
+  const raw = { ref: { ...ref, id }, revision: 'r1', display: { title: 'Skills' }, links: [], blocks: [
+    { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'core', title: 'Core Skill', subtitle: 'Shared by every teammate', resourceId: `${id}/_core` }] } },
+    { id: 'system', title: 'System Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [
+      { id: 'todo', title: 'Todos', resourceId: `${id}/_todo` }, { id: 'routine', title: 'Routines', subtitle: 'Off', resourceId: `${id}/_routine` }] } },
+    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', resourceId: `${id}/learned` }] } },
+  ] };
+  const root = () => ({ ...home(), panels: home().panels.map(item => item.id === 'skills' ? { id: 'skills', values: {}, entries: [{ id: 'skills', title: 'Skills', resourceId: id }] } : item) });
+  h.read.mockImplementation(async (_invoke: unknown, _device: string, target: { id: string }) => target.id === id ? parseCompanionProfileData(raw, { ...ref, id }) : root());
+  await render(); await press(byTest('companionProfile.skills')); await press(byTest('companionProfile.personalSkills'));
+  const headers = [...container.querySelectorAll('span')].map(node => node.textContent).filter(text => text?.endsWith('Skills'));
+  expect(headers).toEqual(['System Skills', 'Personal Skills']);
+  expect(buttons().filter(node => node.dataset.detail !== undefined).map(node => [node.textContent, node.dataset.detail]))
+    .toEqual([['Core Skill', 'Shared by every teammate'], ['Routines', 'Off']]);
+  await press(byText('Routines'));
+  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { ...ref, id: `${id}/_routine` }, 'en');
+});
+
 it('shows a spinner, not loading text, while an editor loads', async () => {
   let finish!: (value: unknown) => void;
   h.read.mockImplementation((_invoke: unknown, _device: string, target: { id: string }) => target.id === 'settings:bot/avatar' ? new Promise(done => { finish = done; }) : Promise.resolve(home()));
@@ -227,4 +250,67 @@ it('keeps Create disabled for a disabled host action and cancels a clean form di
   await type('Name', '');
   await press(byText('devices.common.cancel'));
   expect(h.alert).not.toHaveBeenCalled(); expect(h.close).toHaveBeenCalledOnce();
+});
+
+async function renderModels() {
+  const data = home();
+  data.panels.push(form('models', [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }], { modelChain: '[]', followsDefault: false }));
+  h.read.mockResolvedValue(data);
+  await render();
+  expect(h.sheet.trailingAction).toBeUndefined();
+  await press(byTest('companionProfile.models'));
+}
+// Model-page Save placement and controller guards were not covered together on Android.
+it('keeps Android model Save in the header and submits the same draft action', async () => {
+  await renderModels();
+  expect(h.sheet.onBack).toBeTypeOf('function');
+  expect(h.sheet.trailingAction).toMatchObject({ label: 'devices.common.save', disabled: true });
+  expect(container.querySelectorAll('[data-testid="companionProfile.models.save"]')).toHaveLength(1);
+  expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'devices.companionProfile.save')).toHaveLength(0);
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  expect(h.sheet.trailingAction.disabled).toBe(false);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
+  expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: { followsDefault: true } });
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await act(async () => h.sheet.onBack());
+  expect(h.sheet.trailingAction).toBeUndefined();
+  await press(byTest('companionProfile.profile'));
+  expect(h.sheet.trailingAction).toBeUndefined();
+  expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'devices.companionProfile.save')).toHaveLength(1);
+});
+
+it('keeps Android header Save disabled offline and while a save is in flight', async () => {
+  await renderModels();
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  await render(false);
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await render();
+  let finish!: (value: any) => void;
+  h.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.sheet.trailingAction.busy).toBe(true);
+  expect(byTest('companionProfile.models.save')!.disabled).toBe(true);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
+  await act(async () => finish({ effects: [] }));
+  expect(h.sheet.trailingAction.busy).toBe(false);
+});
+
+it('keeps the Android model draft on save failure and blocks a conflicting header save', async () => {
+  await renderModels();
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.model.values.followsDefault).toBe(true);
+  expect(h.sheet.trailingAction.disabled).toBe(false);
+  const latest = await h.read();
+  h.read.mockResolvedValue({ ...latest, resource: { ...resource, revision: 'v2' } });
+  // The real Retry action re-reads the host and preserves the local conflicting draft.
+  const retry = byText('devices.resources.retry')!;
+  await act(async () => retry.click());
+  expect(h.model.values.followsDefault).toBe(true);
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
 });

@@ -1219,16 +1219,17 @@ describe("cindy · media MCP 边界", () => {
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
   });
 
-  it("把受管媒体地址交给 Host 按需解析本地路径", async () => {
-    const url = `cindy-media://blobs/${"a".repeat(64)}.png`;
-    const callMedia = vi.fn(async () => ({ ok: true, local_path: "/media/a.png" }));
+  it.each(['png', 'mp4', 'webm'])("把受管 %s 地址交给 Host 按需解析本地路径", async (ext) => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.${ext}`;
+    const localPath = `/media/a.${ext}`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: localPath }));
     const result = await handleMedia(fakeDeps({ callMedia }), {
       action: "resolve_local_path",
       url,
     });
 
     expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
-    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: "/media/a.png" });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: localPath });
   });
 
   it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
@@ -2109,7 +2110,7 @@ describe('connect_account transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('exposes a Host connection without requiring an installed plugin', async () => {
+  it('exposes Host connections (Grok, teammate messaging platforms) without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
     const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
@@ -2122,9 +2123,13 @@ describe('connect_account transport', () => {
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
-      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
-      expect(rejected.isError).toBe(true);
-      expect(connectAccount).toHaveBeenCalledTimes(1);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      for (const id of ['invented', 'im-unknown']) {
+        const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
+        expect(rejected.isError).toBe(true);
+      }
+      expect(connectAccount).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
 

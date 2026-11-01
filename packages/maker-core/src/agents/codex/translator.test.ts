@@ -872,7 +872,7 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
-  it('Codex 远端 compact 密文 400 走 context-overflow，交给 host 换窗而不是原样重试', async () => {
+  it('Codex 远端 compact 密文 400 保留独立原因并交给 host 换窗', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     translateErrorNotification(
@@ -886,7 +886,7 @@ describe('translateErrorNotification', () => {
     );
     const events = await collect(q);
     expect(events[0]!.data).toMatchObject({
-      reason: 'context-overflow',
+      reason: 'remote-compact-encrypted-content',
       isTerminal: true,
     });
   });
@@ -947,13 +947,13 @@ describe('translateErrorNotification', () => {
         message:
           'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
       }).reason,
-    ).toBe('context-overflow');
+    ).toBe('remote-compact-encrypted-content');
     expect(
       classifyCodexError({
         message: 'Error running remote compact task',
         additionalDetails: 'code=invalid_encrypted_content',
       }).reason,
-    ).toBe('context-overflow');
+    ).toBe('remote-compact-encrypted-content');
     expect(
       classifyCodexError({
         message: 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
@@ -1057,6 +1057,50 @@ describe('translateErrorNotification', () => {
     expect((events[0].data as { message: string }).message).toBe(
       'The upstream declined this request. (auto-retry 1/4)',
     );
+  });
+
+  it('上游文案带 rate limit exceeded 时仍按容量接管重投,且不再标记 usageLimit', async () => {
+    // Kimi 编码端点回的原文: 半句 rate limit exceeded 会让既有信号抽取置 usageLimit,
+    // 只归 overloaded 时这轮既不会被接管重投, 还会被续跑判定当成账号用量上限拒掉。
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events[0].data).toMatchObject({
+      isTerminal: false,
+      willRetry: true,
+      reason: 'upstream-overload',
+    });
+    // 容量问题不是账号用量上限: 这个字段会让续跑与限额自动继续走错分支。
+    expect(events[0].data).not.toHaveProperty('usageLimit');
+    expect((events[0].data as { message: string }).message).toBe(
+      'rate limit exceeded: The engine is currently overloaded, please try again later (auto-retry 1/4)',
+    );
+  });
+
+  it('classifyCodexError 把 currently overloaded 归容量,不保留 rate limit 信号', () => {
+    const classified = classifyCodexError({
+      message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+    });
+    expect(classified.isCapacityError).toBe(true);
+    expect(classified.reason).toBe('upstream-overload');
+    expect(classified.usageLimit).toBe(false);
+    expect(classified.data).not.toHaveProperty('usageLimit');
   });
 
   it('结构化 tag 透出到 error data，且不干扰既有 errorStatus 推断', async () => {
@@ -1373,6 +1417,21 @@ describe('translateItemNotification contextCompaction', () => {
 });
 
 describe('translateItemNotification commandExecution output normalization', () => {
+  it.each(['declined', 'failed', 'completed'] as const)('keeps empty %s command results truthful and readable', async (status) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    translateItemNotification('completed', { threadId: 't', turnId: 'turn',
+      item: { type: 'commandExecution', id: 'empty', command: 'pwd', status, aggregatedOutput: '' },
+    }, queue, makeCtx(newCodexRuntimeState()));
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const result = events.find(event => event.type === 'tool_result_full')!;
+    expect(result.data).toMatchObject({ isError: status !== 'completed',
+      fullText: status === 'completed' ? '' : expect.stringMatching(/declined|failed/),
+    });
+    expect(JSON.stringify(result)).not.toContain('rejected by user');
+  });
+
   it('keeps the raw PowerShell wrapper command and emits a display command for tool_use display', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();

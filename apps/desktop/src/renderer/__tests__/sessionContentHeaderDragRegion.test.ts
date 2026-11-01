@@ -21,10 +21,10 @@ describe('SessionContentHeader window drag region', () => {
     expect(sessionHeaderSource).toMatch(
       /aria-label=\{t\('ccAgent\.sessionHeader\.moreActions'\)\}[\s\S]{0,120}style=\{WINDOW_NO_DRAG_STYLE\}/,
     );
-    // PR chip 的 onClick 按 gh 可用性二选一(打开 PR / 引导 Agent),但按钮本身
+    // PR 按钮按 gh 可用性打开 PR 或安装/登录引导;整组悬停显示汇总,但按钮本身
     // 必须始终在 no-drag 区,否则两种点击都会被窗口拖拽区吞掉。
     expect(gitContextBadgeSource).toMatch(
-      /onClick=\{handleClick\}[\s\S]{0,180}style=\{WINDOW_NO_DRAG_STYLE\}/,
+      /data-pr-guidance=\{guidance \?\? undefined\}[\s\S]{0,80}style=\{WINDOW_NO_DRAG_STYLE\}/,
     );
   });
 
@@ -42,8 +42,6 @@ describe('SessionContentHeader window drag region', () => {
     expect(sessionHeaderSource).toMatch(
       /\{\.\.\.titleManualDrag\}[\s\S]{0,80}onDoubleClick=\{sharedGuest \? undefined : startEdit\}/,
     );
-    expect(sessionHeaderSource).toContain(
-      'const titleManualDrag = useManualWindowDrag();',
-    );
+    expect(sessionHeaderSource).toContain('const titleManualDrag = useManualWindowDrag();');
   });
 });

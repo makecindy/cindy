@@ -125,7 +125,15 @@ function buildPredictionPrompt(
     en: "Match the user's language. The user types in English.",
     ja: "Match the user's language. The user types in Japanese.",
     ko: "Match the user's language. The user types in Korean.",
-  };
+
+  "es": "Match the user's language. The user types in Spanish.",
+  "fr": "Match the user's language. The user types in French.",
+  "de": "Match the user's language. The user types in German.",
+  "pt-PT": "Match the user's language. The user types in European Portuguese.",
+  "pt-BR": "Match the user's language. The user types in Brazilian Portuguese.",
+  "zh-Hant-x-lzh": "Match the user's language. The user types in Traditional Chinese.",
+  "zh-Hans-x-lzh": "Match the user's language. The user types in Simplified Chinese.",
+};
   const wdLine = workingDir
     ? `Current working directory: ${escapeReferenceData(workingDir)}`
     : null;

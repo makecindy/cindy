@@ -291,6 +291,7 @@ export interface SlackHookMcpDeps {
 
 /** Native routine service; only caller-bound companion tools expose it to agents. */
 export interface RoutineToolService {
+  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
   list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
   sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
   save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
@@ -392,9 +393,6 @@ export interface SchedulerHookScriptService {
  *  - searchSessions: 历史对话 FTS5 检索. 数据在 desktop SQLite (messages 表 + messages_fts
  *    虚拟表), maker-core 不可达 — 必须 host 注入。可选: host 没接 messages_fts 时
  *    缺省, session_search tool 注册时跳过。
- *
- * 依赖 @cindy/maker-core 的类型与少量 runtime 实现(ContactsError / import 管道 /
- * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
@@ -517,49 +515,6 @@ export interface SshMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-/**
- * cindy_contacts(智能通讯录)MCP server 工厂参数。
- *
- * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir)，调用上下文仅供 Host
- * 核验账号数据访问边界。开关由 host 设置层注入 isEnabled — provider 注册门控 +
- * withContacts 工具级双重拦截(Codex host 长生命周期下 server 可能已 spawn,
- * 运行期关闭靠工具级拦截兜底, 跟 memory 的 MAKER_MEMORY_NOT_READY 同模式)。
- *
- * 依赖 @cindy/maker-core 的类型与少量 runtime 实现(ContactsError / import 管道 /
- * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
- */
-export interface ContactsMcpDeps {
-  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
-  getSessionContext?: () => LiziMcpSessionContext;
-  getManager(): import('@cindy/maker-core').MakerContactsManager;
-  /** host 设置层的功能开关. 缺省视为常开(测试/独立复用场景) */
-  isEnabled?: () => boolean;
-  /**
-   * 系统通讯录只读拉取(macOS 由 host 注入 JXA 读取器; 其它平台缺省)。
-   * 缺省时 contacts_import_system 工具不注册(跟 memory 的 session_search 同模式)。
-   */
-  readSystemContacts?: () => Promise<import('@cindy/maker-core').ImportContactRecord[]>;
-  /**
-   * 系统通讯录回写(macOS host 注入)。缺省时 contacts_export_system 不注册。
-   * 语义: 只增/改结构化字段, 系统侧永不删除。
-   */
-  writeSystemContacts?: (
-    items: import('@cindy/maker-core').SystemContactWriteItem[],
-  ) => Promise<import('@cindy/maker-core').SystemContactWriteResult[]>;
-  /**
-   * 系统通讯录回写的单批上限(host 侧 writeSystemContacts 一次能接收的最大条数)。
-   * 只接受 1..200 的整数, 缺省 200(host 硬限制);非法值/超限回退 200。
-   * 测试注入小值可省去大量建卡开销, 仍能验证分批边界。
-   */
-  systemWriteBatchSize?: number;
-  /**
-   * write/manage 类工具成功后的变更通知(host 注入, 用于广播 renderer 刷新)。
-   * MCP 直写同进程 store 不经 IPC 层, 没有这个回调 UI 就收不到 agent 侧变更。
-   */
-  onMutated?: () => void;
-  logger?: LiziMcpLogger;
-}
-
 export interface SessionSearchOptions {
   /** 限定 sessionId */
   sessionId?: string;
@@ -618,7 +573,6 @@ export type LiziMcpId =
   | 'cindy_scheduler'
   | 'cindy_ssh'
   | 'cindy_memory'
-  | 'cindy_contacts'
   | 'cindy_helper'
   | 'cindy_orca'
   | 'cindy_docs'
@@ -834,6 +788,11 @@ export interface ComputerMcpDeps {
    * screen point of this app, or its focused element. Roles only, never values.
    */
   isSecureTarget?(target: { pid: number; point?: { x: number; y: number } }): Promise<boolean>;
+  /**
+   * Host-side desktop facts the driver cannot report: whether the screen is
+   * locked. Used to name the reason when an observation produces nothing.
+   */
+  describeDesktop?(): Promise<{ screen_locked?: boolean }>;
   logger?: LiziMcpLogger;
 }
 

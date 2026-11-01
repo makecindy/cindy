@@ -1,7 +1,7 @@
-import { hasRichAnswer } from './richAnswer';
+import { hasRichAnswer, richAnswerMediaSources } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isContinuationMessage } from './syntheticTrigger.js';
-export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
+export { groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
@@ -213,6 +213,8 @@ export interface MessageRenderWorkGroupItem<
   TMessage extends MessageRenderNormalizedMessage = MessageRenderNormalizedMessage,
 > {
   type: 'work_group';
+  /** Teammate-only continuous public progress, with ordered activity segments. */
+  teammateJournal?: boolean;
   key: string;
   children: MessageRenderWorkChildItem<TMessage>[];
   deferred?: import('./historyView.js').DeferredHistoryWork;
@@ -301,6 +303,19 @@ function buildLinearItems<
   includeOrphanTaskUpdates = false,
 ): MessageRenderItem<TMessage>[] {
   const sourceMessages = messages.map((message) => message.source);
+  // Each turn shares one set, filled before projecting tool artifacts. Keep the
+  // original tool rows intact so expanding the work history still shows results.
+  const inlineMediaByMessage = new Map<TMessage, Set<string>>();
+  let inlineMedia = new Set<string>();
+  for (const message of messages) {
+    if (message.kind === 'user' && isPlanUserBoundary({ ...message.source, role: 'user' })) {
+      inlineMedia = new Set<string>();
+    }
+    inlineMediaByMessage.set(message, inlineMedia);
+    if (message.kind === 'assistant' && !message.isStreaming && !message.failedSamplingAttempt) {
+      for (const url of richAnswerMediaSources(message.body)) inlineMedia.add(url);
+    }
+  }
   const todoInsertAt = findMessageTodoInsertions(sourceMessages);
   const agentPlanToolUseIds = collectAgentPlanToolUseIds(sourceMessages);
   const items: MessageRenderItem<TMessage>[] = [];
@@ -329,7 +344,11 @@ function buildLinearItems<
     // tool 产出媒体(agent 出图等)提为独立 tool_media 项,紧跟所属 tool_group,
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
-    const mediaTools = pendingTools.filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
+    const mediaTools = pendingTools.map((tool) => {
+      const urls = inlineMediaByMessage.get(tool);
+      if (!urls?.size || !tool.media?.some(media => urls.has(media.url))) return tool;
+      return { ...tool, media: tool.media.filter(media => !urls.has(media.url)) };
+    }).filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
     if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0
       || mediaTools.some((tool) => (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0)) {
       items.push({

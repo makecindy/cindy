@@ -56,6 +56,7 @@ export interface ConversationSearchSessionSummary {
   id: string;
   title: string;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;

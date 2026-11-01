@@ -1,3 +1,4 @@
+import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -7,7 +8,6 @@ import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
-import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
@@ -21,7 +21,6 @@ import { UpstreamMergeController, type UpstreamMergeDependencies } from '../../c
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES } from '../usageLimitAutoResume.js';
 import { MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import {
   createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
@@ -430,61 +429,145 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
-  const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
-  const handlerEnd = source.indexOf('\n  );', handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
-  const compiled = transpileModule(`return (${handler});`, {
-    compilerOptions: { target: ScriptTarget.ES2022 },
-  }).outputText;
-
-  function hostInput(h: ReturnType<typeof createHarness>, remote = true, mobile = false) {
-    const noop = () => undefined;
-    const sameItem = (item: AgentInputQueuedMessage) => item;
-    const owner = {};
-    const bindings = {
-      inputCoordinator: h.coordinator,
-      requireSessionId: (id: string) => id,
-      requireQueuedMessage: sameItem,
-      prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
-      getCurrentDbClientSnapshot: () => owner,
-      isDeviceLinkInvoke: () => remote,
-      isMobileControllerInvoke: () => mobile,
-      readDeviceLinkInvokeSourceDevice: () => mobile
-        ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
-        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
-      readClaimedUiLanguage: noop,
-      getResolvedMainLocale: () => 'zh-CN',
-      getInputSessionRow: async () => ({ clearedAt: null }),
-      getMakerIfReady: () => null,
-      beginRemoteSendTrace: noop,
-      remoteInputClientIdWasPersisted: () => false,
-      hasInputDeliveryCancellation: () => false,
-      materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
-      hydrateQueuedAgentReferences: sameItem,
-      stampTurnUiLanguage: sameItem,
-      stampTrustedDesktopQueuedOrigin,
-      stampTrustedDeviceLinkQueuedOrigin,
-      stampMobileClientOrigin,
-      isAutomaticInputOriginKind,
-      prepareDeviceLinkAutoTitle: async () => noop,
-      queuedAttachmentOwnership: { activateCurrentOwner: noop },
-      throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
-      ...Object.fromEntries([
-        'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
-        'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
-        'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
-        'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
-        'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
-      ].map(name => [name, noop])),
-    };
-    expect(start).toBeGreaterThan(0);
-    expect(handlerStart).toBeGreaterThan(start);
-    expect(handlerEnd).toBeGreaterThan(handlerStart);
-    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
-      (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  function hostInput(
+    h: ReturnType<typeof createHarness>, remote = true, mobile = false,
+    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async () => null,
+  ) {
+    return createInputEnqueueHarness(h.coordinator, { remote, mobile, resumeInterruptedScheduleRun }).enqueue;
   }
+
+  // Execute the actual shared Desktop/device-link handler with the real queue.
+  // The scheduler runner is stubbed so no provider or GitHub code executes.
+  it.each([['phone', true, true], ['remote desktop', true, false], ['local desktop', false, false]] as const)(
+    'reconnects an explicit %s Continue to its run without waiting for completion', async (_name, remote, mobile) => {
+      const h = createHarness();
+      const sid = 'interrupted-scheduled-task';
+      h.setLoadQueueSnapshot(async () => [makeItem('later', 'queued later task')]);
+      const done = deferred<void>();
+      const resume = vi.fn<typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
+        completion: Promise.resolve().then(async () => {
+          await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+            persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
+            origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original-run' },
+            onAccepted: vi.fn(),
+          });
+          await done.promise;
+          return { runId: 'original-run' };
+        }),
+      }));
+      const enqueue = hostInput(h, remote, mobile, resume);
+      const input = makeItem('manual-click', CONTINUE_AFTER_APP_EXIT_PROMPT);
+      await enqueue({}, sid, input);
+      await flush();
+      expect(resume).toHaveBeenCalledOnce();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage).toMatchObject({
+        clientId: 'manual-click', content: CONTINUE_AFTER_APP_EXIT_PROMPT,
+        origin: { kind: 'scheduler', runId: 'original-run' },
+      });
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        queuePaused: false, continuationInFlightClientId: 'manual-click',
+      });
+      expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['later']);
+      // A weak-link resend acknowledges the same input without claiming again.
+      await enqueue({}, sid, input);
+      expect(resume).toHaveBeenCalledOnce();
+      done.resolve();
+    },
+  );
+
+  it('does not send an untracked continuation when the scheduler cannot prepare it', async () => {
+    const h = createHarness();
+    const resume = vi.fn(async () => ({ completion: Promise.resolve({ runId: 'original', deferred: true }) }));
+    await expect(hostInput(h, false, false, resume)(
+      {}, 'task', makeItem('click', CONTINUE_AFTER_APP_EXIT_PROMPT),
+    )).rejects.toThrow('could not be queued');
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  // discussion_r4420666505 / unit: enqueue can consume UI Continue by retrying
+  // a failed head instead. The real handler must reject that scheduler claim
+  // immediately, including a recovery created during its plan-mode read.
+  it.each(['before Continue', 'during preparation'] as const)(
+    'rejects the scheduled claim when queue-head recovery consumes Continue (%s)', async (timing) => {
+      const h = createHarness();
+      const sid = 'scheduled-continue-queue-head';
+      const onAccepted = vi.fn();
+      const createRecovery = async () => {
+        h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'not dispatched'));
+        h.coordinator.enqueue(sid, makeItem('original-head', 'never dispatched'));
+        await flush();
+        expect(h.coordinator.getProjection(sid).recovery?.kind).toBe('queue-head');
+      };
+      if (timing === 'before Continue') await createRecovery();
+      const input = createInputEnqueueHarness(h.coordinator, {
+        remote: false,
+        getSessionFsSnapshot: async () => {
+          if (timing === 'during preparation') await createRecovery();
+          return { planModeEnabled: false };
+        },
+        resumeInterruptedScheduleRun: async (sessionId, enqueue) => ({
+          completion: Promise.resolve().then(async () => {
+            await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+              persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT, inheritTargetPlanMode: true,
+              origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original-run' },
+              onPreparing: async () => {}, onDiscarded: vi.fn(), onAccepted,
+            });
+            return { runId: 'original-run' };
+          }),
+        }),
+      });
+      await expect(input.enqueue({}, sid, makeItem('manual-click', CONTINUE_AFTER_APP_EXIT_PROMPT)))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[1])).toEqual([
+        { type: 'user', content: 'never dispatched' },
+        { type: 'user', content: 'never dispatched' },
+      ]);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(input.acceptedCallbacks.size).toBe(0);
+      expect(input.preparations.size).toBe(0);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    },
+  );
+
+  it('rejects a continuation if the task is cleared while its scheduled run is being prepared', async () => {
+    const h = createHarness();
+    const entered = deferred<void>();
+    const prepare = deferred<void>();
+    const resume: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
+      completion: Promise.resolve().then(async () => {
+        entered.resolve();
+        await prepare.promise;
+        await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+          persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
+          origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original' },
+          onAccepted: vi.fn(),
+        });
+        return { runId: 'original' };
+      }),
+    });
+    const pending = hostInput(h, false, false, resume)({}, 'task', makeItem('click', CONTINUE_AFTER_APP_EXIT_PROMPT));
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await entered.promise;
+    h.coordinator.clearSession('task');
+    prepare.resolve();
+    await rejected;
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an automatic remote delivery as a manual scheduled continuation', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'existing work')]);
+    const resume = vi.fn(async () => null);
+    const input = { ...makeItem('automatic', CONTINUE_AFTER_APP_EXIT_PROMPT),
+      origin: { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'Review' },
+    };
+    await hostInput(h, true, false, resume)({}, 'task', input);
+    expect(resume).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('task').queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
 
   function leadInput(clientId = 'lead-input') {
     return buildRemoteWorkerQueuedMessage({
@@ -2288,25 +2371,22 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate', { sourcePlugin: { pluginId: 'p' } }));
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
-    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(true);
     acknowledge(); await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
-    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(true);
   });
 
   it.each([
     { source: {kind: 'delegated-continuation'} as const, authoredText: undefined },
     { source: {kind: 'agent-request', request: {userText: '只检查', sessionId: 'owner', clientId: 'original'}} as const, authoredText: undefined },
     { source: 'My next task', authoredText: 'My next task' },
-  ])('exposes only human text as input takeover evidence: $source', async ({source, authoredText}) => {
+  ])('keeps accepted input provenance distinct: $source', async ({source, authoredText}) => {
     const h = createHarness(), sid = 'typed-input-provenance';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
     h.coordinator.enqueue(sid, {...makeItem('input', 'Continue'), autoReviewUserText: source});
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({clientId: 'input', authoredText});
-    const db = { get drizzle(): never { throw new Error('Current Host source must not borrow older transcript'); } };
-    await expect(hasAcceptedUserTaskInput(db, sid, h.coordinator.getAcceptedInputProvenance(sid)))
-      .resolves.toBe(typeof source === 'string');
     expect(h.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(typeof source === 'object' && source.kind === 'delegated-continuation' ? true : undefined);
     if (typeof source === 'object' && source.kind === 'agent-request') {
       expect(h.coordinator.getAcceptedInputProvenance(sid)?.delegatedRequest).toEqual(source.request);
@@ -2365,14 +2445,12 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
   });
 
-  // Unit regression for #6669: plugin-target input must not borrow the publishing
-  // account, including before native ACK or while human steering is unaccepted.
-  // The existing account matrix covered guests but omitted sourcePlugin.
+  // Message provenance does not change the current account task's tool permissions.
   it.each([
     ['the owner', {}, true],
     ['an ordinary scheduled task', { origin: { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'n' } }, true],
     ['an ordinary Worker', { origin: { kind: 'orca' as const, senderLabel: 'Lead' } }, true],
-    ['a plugin message in an ordinary task', { sourcePlugin: { pluginId: 'p' } }, false],
+    ['a plugin message in an ordinary task', { sourcePlugin: { pluginId: 'p' } }, true],
     ['a shared-task guest', { sharedTaskAuthor: { sharedTaskId: 't', sessionId: 'account-input', memberId: 'm', accountId: 'guest', displayName: 'G' } }, false],
   ])('keeps account tools scoped to %s throughout the active turn', async (_label, patch, expected) => {
     const h = createHarness(), sid = 'account-input';
@@ -2456,10 +2534,10 @@ describe('AgentInputCoordinator send transaction', () => {
     const steering = h.coordinator.steer(sid, makeItem('human-pending', 'New direction'));
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
-    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(true);
     reject(new Error('not accepted')); await steering;
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
-    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(true);
     await h.coordinator.steer(sid, makeItem('human-accepted', 'New direction'));
     expect(h.coordinator.getActiveInputClientIds(sid)).toContain('plugin-task:run');
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human-accepted');
@@ -12726,16 +12804,6 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     expect(restarted.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
     await restarted.sendToAgent.mock.results[0]!.value;
     expect(history[1]?.agentMeta?.autoReviewUserText).toEqual({kind:'delegated-continuation'});
-    const route={agentKind:'codex' as const,providerId:'p',model:'m',effort:'high',fastMode:false};
-    const authority: PluginReviewSnapshot={pluginId:'test',authorized:true,revision:1,registeredRoute:route,
-      session:{workingDir:'/answer',permissionMode:'auto',status:'active',route},lead:{permissionMode:'auto',status:'active'},
-      plan:{task:'Inspect project',items:[],concurrency:null},history,sessionHistory:history,historyComplete:true};
-    const resolve=createPluginTaskReviewResolver(async()=>authority);
-    const live=vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]!;
-    for(const userIntent of [live,restoreAutoReviewUserIntent(history)]){
-      const reviewed=await resolve({sessionId:sid,agentKind:'codex',model:'m',userIntent,workspaceRoots:['/answer'],platform:'linux',action:{kind:'exec',command:'ls',cwd:'/answer'}});
-      expect(reviewed.authorizationError).toBeUndefined();expect(reviewed.userIntent).toBe('Do not modify files');expect(reviewed.delegatedTask).toBeDefined();
-    }
     // Genuine human resource input, without the Main-only symbol, still resets old consent.
     await transaction.sendToAgentAccepted(sid,'New attachment',undefined,{
       [AUTO_REVIEW_SOURCE_CONTENT]:'',

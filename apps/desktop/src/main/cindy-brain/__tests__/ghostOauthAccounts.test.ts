@@ -2170,6 +2170,31 @@ describe('tokenBroker 模式', () => {
     expect(mgr.clientConfigured(GHOST, KEY, BROKER_DECL)).toBe(true);
     // brokered 但清单没内置 clientId → false(没有可用的授权身份)。
     expect(mgr.clientConfigured(GHOST, KEY, { ...BROKER_DECL, clientId: undefined })).toBe(false);
+    // 飞书企业由服务端签发应用身份,清单不需要 clientId。
+    expect(mgr.clientConfigured(GHOST, KEY, { ...BROKER_DECL, clientId: undefined, tokenBroker: 'feishu' })).toBe(true);
+  });
+
+  it('feishu:授权页用服务端签发的 App ID 而非清单内置值,交换带上授权事务', async () => {
+    const bootstrap = vi.fn(async () => ({ ok: true as const, clientId: 'cli-issued', transactionId: 'tx-1' }));
+    const exchange = vi.fn(async () => ({
+      ok: true as const,
+      bundle: { accessToken: 'at-fs', refreshToken: 'rt-fs', expiresAt: Date.now() + 60_000, grantedScope: null },
+    }));
+    const mgr = new GhostOauthAccountManager({
+      vault: memoryVault(),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: (url) => {
+        expect(new URL(url).searchParams.get('client_id')).toBe('cli-issued');
+        autoBrowser('c-fs')(url);
+      },
+      broker: { bootstrap, exchange, refresh: vi.fn() },
+      ...FIRST_PARTY_HOST,
+    });
+
+    const result = await mgr.connectAccount(GHOST, KEY, { ...BROKER_DECL, tokenBroker: 'feishu', clientIdAlternatives: undefined });
+    expect(result.ok).toBe(true);
+    expect(bootstrap).toHaveBeenCalledWith('feishu', { redirectUri: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/callback$/) });
+    expect(exchange).toHaveBeenCalledWith('feishu', expect.objectContaining({ code: 'c-fs', transactionId: 'tx-1' }));
   });
 
   it('connect 可选清单内备用 clientId;未声明值防御性拒绝', async () => {

@@ -60,6 +60,14 @@ export function recordMediaSpend(db: Database.Database, args: MediaSpendArgs) {
         if (existing) existing.amount += amount;
         else costs.push({ amount, currency, approximate: false, kind: 'actual-cost' });
         meta.mediaCosts = costs;
+        const details = Array.isArray(meta.mediaCostDetails) ? meta.mediaCostDetails : [];
+        const matching = details.find(value => value?.model === model && value?.providerName === args.providerName
+          && value?.money?.currency === currency && Number.isFinite(value?.money?.amount));
+        if (matching) matching.money.amount += amount;
+        else details.push({ model, category: 'additional', billingSource: 'cindy-ai',
+          ...(args.providerName ? { providerName: args.providerName } : {}),
+          providerId: 'xd', money: { amount, currency, approximate: false, kind: 'actual-cost' } });
+        meta.mediaCostDetails = details;
         db.prepare(`UPDATE messages SET agent_meta = ? WHERE session_id = ? AND client_id = ?`).run(
           JSON.stringify(meta),
           sessionId,

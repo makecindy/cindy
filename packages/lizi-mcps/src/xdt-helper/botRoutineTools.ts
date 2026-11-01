@@ -3,6 +3,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import { registerRoutineTools } from '../scheduler/routines.js';
 import { registerScheduleNotifyCurrentRunTool } from '../scheduler/notifyCurrentRun.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
+import { registerScheduleListModelsTool } from '../scheduler/listModels.js';
 import type { SchedulerMcpDeps, RoutineToolService, LiziMcpSessionContext } from '../types.js';
 
 export interface BotRoutineCallbacks {
@@ -21,6 +22,7 @@ export function registerBotRoutineTools(
   const routines = new SchedulerToolRegistry();
   registerRoutineTools(routines, { routines: callbacks.service });
   if (callbacks.scheduler) {
+    registerScheduleListModelsTool(routines, callbacks.scheduler);
     registerScheduleNotifyCurrentRunTool(routines, callbacks.scheduler, getSessionContext ?? (() => ({ sessionId: getSessionId(), agentKind: '', workingDir: '' })));
     registerScheduleSetPreRunHookTool(routines, callbacks.scheduler);
   }

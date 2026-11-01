@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  invokeMetricLabel,
+  recordGunzip,
   recordInvokeSent,
   recordInvokeTransfer,
+  recordLoopLag,
   recordPushHandled,
+  recordUiThreadLag,
   setJankMetricsEnabled,
   setRemoteSessionStoreSizeSource,
   takeJankMetrics,
+  takeSyncWorkMetrics,
 } from "./jankMetrics";
 import { serializeMobileDebugRecord } from "./mobileDebugRecord";
 
@@ -83,6 +88,61 @@ describe("jank metrics", () => {
       relayTransfersOmitted: 0,
     });
     expect(takeJankMetrics()).toMatchObject({ pushCount: 0, invokeCount: 0 });
+  });
+
+  it("reports sync work on its own line, within the writer budget, then resets", () => {
+    setJankMetricsEnabled(true);
+    for (let i = 0; i < 10; i++) {
+      recordInvokeTransfer({ channel: `channel:${i}`, phase: 'decoded', inflateMs: i, parseMs: 1 });
+    }
+    const channel = invokeMetricLabel('maker:remote-resources:invoke', [{ collectionId: 'plugins', actionId: 'settings:open' }]);
+    recordInvokeTransfer({ channel, phase: 'result', payloadBytes: 950_000, gzip: true });
+    recordInvokeTransfer({ channel, phase: 'decoded', inflateMs: 812.4, parseMs: 96.6 });
+    recordGunzip({ offThread: true });
+    recordGunzip({ offThread: false, onThreadMs: 40.4, fallback: true });
+    recordLoopLag(100);
+    recordLoopLag(1500);
+    recordUiThreadLag(20);
+    recordUiThreadLag(700);
+
+    const line = serializeMobileDebugRecord('debug', 'performance', ['sync work metrics', takeSyncWorkMetrics()]);
+    expect(line).not.toContain('[truncated]');
+    expect(line).not.toContain('[redacted]');
+    const snapshot = JSON.parse(line).args[1];
+    expect(snapshot.decodes).toHaveLength(6);
+    expect(snapshot.decodes[0]).toEqual({
+      channel: 'maker:remote-resources:invoke#plugins/settings:open', count: 1, inflateMs: 812, parseMs: 97,
+    });
+    expect(snapshot).toMatchObject({
+      gunzip: { offThread: 1, onThread: 1, onThreadMs: 40, fallbacks: 1 },
+      loopLag: { maxMs: 1500, over250: 1, over1000: 1 },
+      uiThread: { pings: 2, maxLagMs: 700, over250: 1 },
+    });
+    expect(takeSyncWorkMetrics()).toEqual({
+      decodes: [],
+      gunzip: { offThread: 0, onThread: 0, onThreadMs: 0, fallbacks: 0 },
+      loopLag: { maxMs: 0, over250: 0, over1000: 0 },
+      uiThread: { pings: 0, maxLagMs: 0, over250: 0 },
+    });
+  });
+
+  it("names a resource action only from the known allowlist", () => {
+    const label = (request: unknown) => invokeMetricLabel('maker:remote-resources:invoke', [request]);
+    expect(invokeMetricLabel('git-context:pr-status', [{ actionId: 'ignored' }])).toBe('git-context:pr-status');
+    expect(label({ collectionId: 'teammates', actionId: 'management:settings', input: { op: 'channels.im.listLanes' } }))
+      .toBe('maker:remote-resources:invoke#teammates/management:settings/channels.im.listLanes');
+    expect(label({ collectionId: 'plugins', actionId: 'settings:open' }))
+      .toBe('maker:remote-resources:invoke#plugins/settings:open');
+    // Harmless-looking but unknown values, including ones a host or plugin chooses, are not logged.
+    expect(label({
+      collectionId: 'acme-private',
+      actionId: 'opaque-token',
+      resourceRef: { id: 'instance-id' },
+      input: { query: 'private text', op: 'opaque-op' },
+    })).toBe('maker:remote-resources:invoke#?/?/?');
+    expect(label({ collectionId: 'plugins', actionId: 'manage_connection:connection:acct-secret-id' }))
+      .toBe('maker:remote-resources:invoke#plugins/?');
+    expect(label(undefined)).toBe('maker:remote-resources:invoke#?/?');
   });
 
   it("keeps every number through the debug log redaction", () => {

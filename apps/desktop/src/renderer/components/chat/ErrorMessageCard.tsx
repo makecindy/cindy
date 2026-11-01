@@ -27,7 +27,7 @@ import {
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { errorReasonI18nKey } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
@@ -60,7 +60,7 @@ export function ErrorMessageCard({
   const isAttachmentAccessDenied = kind === 'reply-error'
     && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
-  const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+  const i18nKey = errorReasonI18nKey(reason, decoded);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
   const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
     reason,
@@ -89,6 +89,7 @@ export function ErrorMessageCard({
   return (
     <ErrorNotice
       key={`${reason ?? ''}:${kind}`}
+      className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}

@@ -48,6 +48,8 @@
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读
   `docs/dev-rules/media-storage-and-protocols.md`。
+- 新增或修改邮件卡（阅读、编辑、草稿同步、发送、头像）或邮箱插件与 Cindy 之间的分工前，
+  必须先读 `docs/product-rules/mail-card.md`。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
@@ -59,7 +61,7 @@
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
-- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、终端 askpass、
+- 新增或修改代输入（`ask_owner` 的 fill／scan、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
 - 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
@@ -140,6 +142,9 @@
   改动」豁免。
 - 修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、插件运行期
   可见性门禁或 FORGE_GUIDE 作者契约前，必须先读 `docs/ghost-progressive-discovery.md`。
+- 新增或修改 Browser Use（专用浏览器、侧边栏、「我的浏览器」）的工具层、配方目录、外链处理
+  或任一浏览器后端前，必须先读 `docs/dev-rules/browser-use.md`：优化做在共享层让三端都受益，
+  能力不设限、风险交给审批。
 - 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
   回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
   `docs/dev-rules/plugin-library-storage.md`。
@@ -193,6 +198,10 @@
 5. 修改时保持范围最小，保护用户已有改动，不使用破坏性 Git 命令。
 6. 完成后运行与风险匹配的检查，并 review 整体 diff。
 7. 如实报告已验证、未验证、风险和需要用户决定的事项。
+8. 可复用的项目知识归仓库：排错结论、设计与产品裁决的理由、操作流程和回归要求，
+   写进对应的代码、测试或 `docs/` 规则文档，不只留在聊天、个人记忆、全局 Skill 或
+   本机报告里；个人路径、设备标识、账号偏好、凭据和私聊原文留在本地。归属细则见
+   `docs/dev-rules/development-workflow.md`「项目知识放在哪里」。
 
 ## Git 与交付
 

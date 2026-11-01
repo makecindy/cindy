@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryViewController } from '../historyViewController.js';
 import type { HistoryDetailPage, HistoryMessageSource, HistoryViewPage, HistoryWorkPatch, HistoryWorkSummary } from '../historyView.js';
 import { renderHistoryView } from '../historyViewRender.js';
-import { HISTORY_WORK_LINE_MAX_BYTES, HISTORY_WORK_LINES_MAX_BYTES, projectHistoryWorkLines } from '../historyWorkLines.js';
+import { HISTORY_WORK_LINE_LIMIT, HISTORY_WORK_LINE_MAX_BYTES, HISTORY_WORK_LINES_MAX_BYTES, projectHistoryWorkLines } from '../historyWorkLines.js';
 
 let n = 0;
 function row(role: string, content: unknown, extra: Partial<HistoryMessageSource> = {}): HistoryMessageSource {
@@ -81,6 +81,35 @@ describe('projectHistoryWorkLines', () => {
     if (newest.kind !== 'tool') throw new Error('expected a tool line');
     // The count a multi-file row shows survives the reduction.
     expect(newest.descriptor.kind === 'fileChange' ? newest.descriptor.changes.length : newest.descriptor.kind).toBe(15);
+  });
+
+  it('lets a line spend its whole byte share without dropping the oldest of five', () => {
+    // The id length is the 1-byte knob: a path character costs 4 bytes, so sweeping only
+    // the path cannot land on the budget and the fixture would miss the failing byte.
+    const id = (length: number) => `cw${'0'.repeat(length)}`;
+    const wideRow = (pathLength: number, idLength: number, index = 1) => tool('file_change', {
+      changes: [{ path: 'a'.repeat(pathLength), kind: { type: 'update', move_path: 'b'.repeat(pathLength) }, diff: '+x\n'.repeat(400) }],
+    }, { clientId: id(idLength) + String(index) });
+    const lineBytes = (pathLength: number, idLength: number) =>
+      Buffer.byteLength(JSON.stringify(projectHistoryWorkLines([wideRow(pathLength, idLength)], true)[0]), 'utf8');
+    // Sweep for a line that spends its whole share: only the cut form of a long path fills
+    // it, so a shorter input cannot stand in for a maximal line.
+    let widest = { pathLength: 1, idLength: 1, bytes: 0 };
+    for (let pathLength = 1; pathLength <= 400; pathLength += 1) {
+      for (let idLength = 1; idLength <= 8; idLength += 1) {
+        const bytes = lineBytes(pathLength, idLength);
+        if (bytes <= HISTORY_WORK_LINE_MAX_BYTES && bytes > widest.bytes) widest = { pathLength, idLength, bytes };
+      }
+    }
+    // The fixture spends the share exactly, so the old share (one byte more) overflows the
+    // window and the guard drops the oldest line.
+    expect(widest.bytes).toBe(HISTORY_WORK_LINE_MAX_BYTES);
+    const rows = Array.from({ length: HISTORY_WORK_LINE_LIMIT }, (_entry, index) => wideRow(widest.pathLength, widest.idLength, index + 1));
+    const lines = projectHistoryWorkLines(rows, true);
+    // Five lines that each spend the whole share still fit the window, so none is dropped.
+    expect(lines).toHaveLength(HISTORY_WORK_LINE_LIMIT);
+    expect(Buffer.byteLength(JSON.stringify(lines), 'utf8')).toBeLessThanOrEqual(HISTORY_WORK_LINES_MAX_BYTES);
+    expect(lines.at(-1)?.key).toBe(rows.at(-1)?.clientId);
   });
 });
 
@@ -199,3 +228,4 @@ describe('HistoryViewController.applyWorkPatch', () => {
     await vi.waitFor(() => expect(awaiting()).toBe(false));
   });
 });
+

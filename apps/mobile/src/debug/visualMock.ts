@@ -1,4 +1,7 @@
+import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
+import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
+import { sessionImportVisualFixture } from './sessionImportVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
@@ -23,7 +26,8 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
-import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID } from '@/debug/teammateVisualFixture';
+import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
+import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -219,8 +223,14 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  const github = githubPrVisualFixture(channel, args[0]);
+  if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);
   if (mask !== undefined) return mask as T;
+  const groupSettings = groupSettingsVisualFixture(channel, args[0]);
+  if (groupSettings !== undefined) return groupSettings as T;
+  const sessionImport = sessionImportVisualFixture(channel, args[0]);
+  if (sessionImport !== undefined) return sessionImport as T;
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
@@ -251,6 +261,8 @@ async function visualMockInvoke<T = unknown>(
     } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const mailResult = realData ? undefined : mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args);
+  if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
   if (pluginResult !== undefined) return pluginResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
@@ -307,6 +319,20 @@ async function visualMockInvoke<T = unknown>(
       return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
+    case 'local-db:messages:work-details': {
+      const rows = visualMockMessages(String(args[0]));
+      const ref = args[1] as { firstMessageId: string; lastMessageId: string };
+      const first = rows.findIndex(row => row.id === ref.firstMessageId);
+      const last = rows.findIndex(row => row.id === ref.lastMessageId);
+      return { version: 1, messages: first >= 0 && last >= first ? rows.slice(first, last + 1) : [], hasMore: false, nextCursor: null } as T;
+    }
+    case 'local-db:messages:view-intent': return undefined as T;
+    case 'local-db:messages:around-client-id': {
+      const rows = visualMockMessages(String(args[0]));
+      const index = rows.findIndex(row => row.clientId === args[1]);
+      const radius = Math.max(0, Number((args[2] as { radius?: number } | undefined)?.radius ?? 0));
+      return (index < 0 ? [] : rows.slice(Math.max(0, index - radius), index + radius + 1)) as T;
+    }
     case 'local-db:messages:list':
       return visualMockMessages(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:view': {
@@ -546,7 +572,12 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
-  if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) return {
+  if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
+    companion: { id: 'visual-bot-b2b', role: 'canonical' } };
+  if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
+  if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
+  if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
+    || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
   };
   return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
@@ -570,12 +601,55 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === 'visual-teammate-b2b') {
+    const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
+      v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
+      peerBotName: 'LiZi', direction, sequence, preview: sequence === 1 ? '请核对版式。' : '已核对，入口左对齐。',
+    } });
+    return [
+      message(sessionId, 'b2b-received', 'assistant', '', -90000, { agentMeta: trace('received', 1) }),
+      message(sessionId, 'bot-dm:visual-b2b-thread:delivery', 'user', '[UI_ACTION_TRIGGER]请核对版式。', -89000),
+      message(sessionId, 'b2b-thinking', 'thinking', { text: '核对版式', durationMs: 1000 }, -80000, { agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-send', 'tool_use', { toolName: 'mcp:cindy_helper:send_to_agent', toolUseId: 'b2b-send', input: { target_id: 'visual-bot-lizi', message: '已核对，入口左对齐。' } }, -75000, { agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-sent', 'assistant', '', -70000, { agentMeta: trace('sent', 2) }),
+      message(sessionId, 'b2b-send-result', 'tool_result', { ok: true, accepted: true }, -69000, { toolUseId: 'b2b-send', agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-internal', 'assistant', 'B2B-INTERNAL-HIDDEN', -65000, { agentMeta: { botPrivateReply: true, assistantPhase: 'final_answer', turnCompleted: true } }),
+      message(sessionId, 'b2b-owner', 'user', '把核对结果告诉我。', -30000),
+      message(sessionId, 'b2b-owner-answer', 'assistant', '入口已经左对齐，完整往来可以点开查看。', -20000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+    ];
+  }
+  if (sessionId === VISUAL_MAIL_DRAFT_SESSION_ID) return [
+    message(sessionId, 'mail-draft-user', 'user', '帮我回复 Avery，说两个问题都记下了，约下周二或周三下午通话。', -60000),
+    message(sessionId, 'mail-draft-call', 'tool_use', { toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'google-gmail', tool: 'gmail_run' }, toolUseId: 'mail-draft-call' }, -50000),
+    message(sessionId, 'mail-draft-result', 'tool_result', JSON.stringify({ ok: true, result: { draft: 'saved', xdt_card_id: VISUAL_MAIL_DRAFT_CALL_ID } }), -49000, { toolUseId: 'mail-draft-call' }),
+    message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+  ];
+  if (sessionId === 'visual-teammate-process') return [
+    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
+    message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
+    message(sessionId, 'fixture-note1', 'assistant', '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', -70000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
+    message(sessionId, 'fixture-read-result', 'tool_result', 'Error: file not found', -64000, { toolUseId: 'fixture-read' }),
+    message(sessionId, 'fixture-note2', 'assistant', '刚才的读取没有完成。我会保留已有记录，换一种方式继续核对。', -60000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-second-work', 'thinking', { text: '继续核对当前状态', durationMs: 1000 }, -50000),
+    message(sessionId, 'fixture-search', 'tool_use', { toolName: 'Grep', input: { pattern: 'task', path: '/repo' }, toolUseId: 'fixture-search' }, -45000),
+    message(sessionId, 'fixture-search-result', 'tool_result', 'Found task records', -44000, { toolUseId: 'fixture-search' }),
+    message(sessionId, 'fixture-note3', 'assistant', '任务与 PR 的信息已核对，正在整理摘要。', -40000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-result', 'assistant', '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', -30000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+  ];
+  const topic = [...visualTeammateThreads.values()].find(thread => thread.sessionId === sessionId);
+  if (topic) return topic.replyCount ? [
+    message(sessionId, 'visual-topic-user', 'user', '把移动端和群聊的话题入口统一起来。', -180_000),
+    message(sessionId, 'visual-topic-reply', 'assistant', '两处都会使用堆叠头像，回复数和时间保持同一字号。', -120_000),
+  ] : [];
   if (sessionId === VISUAL_TEAMMATE_SESSION_ID || sessionId.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) {
     const rows = visualMockMessages('ui-mock-rich-answer');
-    return rows.map((row, index) => ({
+    const messages = rows.map((row, index) => ({
       ...row, id: `${sessionId}-${row.id}`, clientId: `${sessionId}-${row.clientId}`, sessionId,
       createdAt: new Date(teammateVisualReplyAt(sessionId) - (rows.length - 1 - index) * 1_000).toISOString(),
     }));
+    return sessionId === VISUAL_TEAMMATE_SESSION_ID ? [...messages,
+      message(sessionId, VISUAL_TEAMMATE_THREAD_ROOT_ID, 'assistant', '我们在话题里确认移动端样式，主聊天继续处理其他事情。', -300_000)] : messages;
   }
   if (sessionId === VISUAL_MOCK_SESSION_ID) {
     return SHARED_REMOTE_CONTROL_FIXTURE.rawMessages.map((message) => ({
@@ -597,7 +671,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : null,
+        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });
@@ -897,6 +971,7 @@ function visualMockFileBrowserEntries() {
     { type: 'file', name: 'README.md', relPath: 'README.md', size: 4820, mtimeMs: NOW - 900_000 },
     { type: 'file', name: 'visual-report.md', relPath: 'visual-report.md', size: 78, mtimeMs: NOW - 300_000 },
     { type: 'file', name: 'chart.png', relPath: 'chart.png', size: 48_112, mtimeMs: NOW - 240_000 },
+    { type: 'file', name: 'quarterly-report.pdf', relPath: 'quarterly-report.pdf', size: 248_000, mtimeMs: NOW - 180_000 },
     { type: 'file', name: 'demo.mp4', relPath: 'demo.mp4', size: 4_820_000, mtimeMs: NOW - 120_000 },
   ];
 }

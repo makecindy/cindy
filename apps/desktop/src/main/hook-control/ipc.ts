@@ -113,7 +113,6 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
-import { resetTelegramSpeakerRegistrationCache } from '../im/telegram/contactsAutoRegister.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
@@ -1270,7 +1269,6 @@ export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boole
   unregisterSlackToolBridge();
   registerGroupImageReader(null);
   resetGroupContextCursorsSafely(options);
-  resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
   manager = null;
   store = null;

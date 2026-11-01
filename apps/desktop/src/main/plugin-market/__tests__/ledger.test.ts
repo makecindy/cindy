@@ -406,6 +406,41 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
+  // An explicit market reinstall re-subscribes only the installing user to that one
+  // Plugin; other users' and other Plugins' uninstall opt-outs must survive the write.
+  it('clears only the installing user opt-out for that Plugin on an explicit reinstall', () => {
+    const { ledger } = harness();
+    const other = record({ pluginId: `c${'c'.repeat(24)}`, ghostId: 'cindy-other' });
+    ledger.upsertInstallation(record());
+    ledger.upsertInstallation(other);
+    ledger.markRemovedRecord(ledger.installationForGhost('cindy-test')!, 'user-a');
+    ledger.markRemovedRecord(ledger.installationForGhost('cindy-test')!, 'user-b');
+    ledger.markRemovedRecord(ledger.installationForGhost('cindy-other')!, 'user-a');
+
+    expect(ledger.upsertInstallationAndClearOptOut(record({ releaseId: 'release-2' }), 'user-a')).toBe(true);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: true, releaseId: 'release-2' });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(false);
+    expect(ledger.isDefaultInstallSuppressed('user-b', `c${'a'.repeat(24)}`)).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-a', other.pluginId)).toBe(true);
+  });
+
+  // Historical installed + opt-out repair is a compare-and-write: an uninstall that
+  // lands after the reconciliation captured the record re-writes the opt-out and wins.
+  it.each([
+    ['still installed', false, true],
+    ['uninstalled after capture', true, false],
+  ] as const)('repairs a stale opt-out only when the record is %s', (_label, uninstall, cleared) => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record());
+    ledger.markRemovedRecord(ledger.installationForGhost('cindy-test')!, 'user-a');
+    ledger.upsertInstallation(record());
+    const captured = ledger.installationForGhost('cindy-test')!;
+    if (uninstall) ledger.markRemovedRecord(captured, 'user-a');
+
+    expect(ledger.clearOptOutIfStillInstalled(captured, 'user-a')).toBe(cleared);
+    expect(ledger.isDefaultInstallSuppressed('user-a', captured.pluginId)).toBe(!cleared);
+  });
+
   it('keeps a recovered organization route out of market-only authorization', () => {
     const { ledger } = harness();
     ledger.upsertInstallation(record({

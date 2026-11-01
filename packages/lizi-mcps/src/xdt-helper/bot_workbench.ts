@@ -342,7 +342,7 @@ function registerTodoTools(
     name: 'update_teammate_todo',
     category: 'bots',
     description:
-      '新建或部分更新同一事务。key跨来源标识同一问题；已存在时用id+expectedRevision，冲突先读再合并，省略字段保留旧值。发现可入单但不自动授权执行/发送。完成必须携带可核验summary/ref；停止/合并未必满足outcome。删除/静音保留抑制记录，只有用户恢复可解除。来源可指向任务（kind=task，id 为本机任务 id 或 deviceId::sessionId），不需要项目。跟进处理完一件事后更新或完成对应事务。到期保留来源/时区，模糊日期用candidate，用户覆盖不被新来源改掉；稍后不修改期限。',
+      '新建或部分更新同一事务。新建必须带key、title、outcome（预期结果或完成标准）；key跨来源标识同一问题；已存在时用id+expectedRevision，冲突先读再合并，省略字段保留旧值。发现可入单但不自动授权执行/发送。完成必须携带可核验summary/ref；停止/合并未必满足outcome。删除/静音保留抑制记录，只有用户恢复可解除。来源可指向任务（kind=task，id 为本机任务 id 或 deviceId::sessionId），不需要项目。跟进处理完一件事后更新或完成对应事务。到期保留来源/时区，模糊日期用candidate，用户覆盖不被新来源改掉；稍后不修改期限。',
     inputShape: { patch: todoPatch },
     handler: ({ patch }) => run('update', patch satisfies TodoPatch),
   });

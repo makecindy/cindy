@@ -24,7 +24,7 @@ import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmationProjection.js';
 
 /**
- * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
+ * 过户通道:attachments = 媒体文件进总仓;handoff = 非媒体文件存一份副本给插件(7 天未使用即删除);dir = 上行读票据;save_dir = 下行
  * 写票据;reveal_path = 把 Host 已安全解析的单个媒体仓路径返回给当前 Agent;
  * fs_write = fs 槽写 workdir 文件(会话 permission 为逐条确认档时,
  * 意识每次写入前弹卡;同目录本会话批一次,记忆在 fsSlot);workspace =
@@ -36,6 +36,7 @@ import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmatio
  */
 export type GhostGrantLane =
   | 'attachments'
+  | 'handoff'
   | 'dir'
   | 'save_dir'
   | 'reveal_path'

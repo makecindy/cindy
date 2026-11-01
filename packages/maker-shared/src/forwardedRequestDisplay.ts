@@ -8,6 +8,11 @@ const DIALECTS = [
   ['[來源] ', '使用者原話：', 'Agent補充：', '[任務來源] ', '任務 ID：'],
   ['[出典] ', 'ユーザーの原文：', 'Agent の補足：', '[タスクの出典] ', 'タスク ID：'],
   ['[출처] ', '사용자 원문:', 'Agent 보충:', '[작업 출처] ', '작업 ID:'],
+  ['[Fuente] ', 'Palabras originales del usuario:', 'Suplemento del Agent:', '[Origen de la tarea] ', 'ID de la tarea:'],
+  ['[Source] ', "Mots d'origine de l'utilisateur :", "Complément de l'Agent :", '[Source de la tâche] ', 'ID de la tâche :'],
+  ['[Quelle] ', 'Ursprünglicher Wortlaut des Nutzers:', 'Agent-Ergänzung:', '[Aufgabenquelle] ', 'Aufgaben-ID:'],
+  ['[Origem] ', 'Palavras originais do utilizador:', 'Suplemento do Agent:', '[Origem da tarefa] ', 'ID da tarefa:'],
+  ['[Origem] ', 'Palavras originais do usuário:', 'Complemento do Agent:', '[Origem da tarefa] ', 'ID da tarefa:'],
 ] as const;
 
 /** Display only, for attributed machine messages. Decode one complete envelope,

@@ -17,7 +17,7 @@ import {
   type EndpointManifestDialogLocale,
 } from '../endpointManifestDialogCopy';
 
-const LOCALES: EndpointManifestDialogLocale[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
+const LOCALES: EndpointManifestDialogLocale[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"];
 
 /** CJK 与拉丁字母混排检测用:排除产品名、已裁决术语与占位符后仍有英文单词即视为混排。 */
 function stripAllowedLatin(text: string): string {
