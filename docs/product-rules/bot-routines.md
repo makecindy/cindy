@@ -255,6 +255,10 @@ Pi 将 routine_list、routine_save、routine_sources、routine_history、routine
 
 明确判定为检查型的新建 agent 自动化由创建入口显式启用“检查没事不说话”；
 未分类的通用创建入口和仅执行脚本的任务保持原通知行为，避免吞掉提醒或定时发送。
+Agent 经 `schedule_create` 新建的检查（`silentWhenIdle=true`）若既未绑定会话、也未表态
+`persistentSession`，工具层补成持续会话，后续检查复用同一任务，不再每次在侧栏新建一条
+没有变化的对话（2026-11-01）；显式 `persistentSession=false`、绑定已有任务、提醒类与仅脚本任务不变，
+引擎与 UI 的默认值不变。
 插件前置检查（2026-10-31）：自动化与例行任务的「前置检查」可选「脚本」或「插件」。选了插件的
 任务（`preRunPlugin`：插件实例 id + 出错处理）被触发后、建任务和调用模型之前，宿主只询问这个插件
 （自动化走 `will-schedule-run`，例行任务走 `will-routine-run`；恢复中断的续跑不问，例行任务的承载

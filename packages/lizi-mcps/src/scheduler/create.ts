@@ -42,7 +42,7 @@ export function registerScheduleCreateTool(
       '(4) heartbeat 模式（注入到已存 session）：**要跟进当前这条对话就传 bindToCurrentSession=true**（代码自动绑定本会话,无需也不要自己去查 / 传 session id）；只有要绑到另一条已知 session 时才显式传 targetSessionId。heartbeat 模式不传 workingDir；model / providerId / effort 留空沿用绑定会话，传入则改用；' +
       '(5) 默认 useWorktree=false / notify={desktop:true, feishu:false}；' +
       '(6) 删除已有调度前先用 schedule_get / schedule_list 核对目标和授权；本次自动跟进达到既定停止条件时，可自行停止和清理自身调度，不影响其他调度；' +
-      '(7) 确定是检查时显式设 silentWhenIdle=true（无变化不播报）；提醒/定时发送设 false，保留用户选择。省略此字段会按 false 处理，避免旧调用方的提醒被吞。如果用户定义了提醒条件，把条件保留在 prompt 里（如 CI 失败/新评论时提醒），有结果时用 schedule_notify_current_run 主动上报；' +
+      '(7) 确定是检查时显式设 silentWhenIdle=true（无变化不播报），未绑定会话且未设 persistentSession 时自动复用同一会话，不为每次检查新建任务；提醒/定时发送设 false，每次仍新建，保留用户选择。省略此字段会按 false 处理，避免旧调用方的提醒被吞。如果用户定义了提醒条件，把条件保留在 prompt 里（如 CI 失败/新评论时提醒），有结果时用 schedule_notify_current_run 主动上报；' +
       '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载；' +
       '(9) 既有工作流程中的自动跟进，沿用该流程明确的频率、执行引擎、静默与通知默认值；用户在线也不需要为这些默认值另行确认。用户主动新建独立任务时，若关键实体或会实质改变目标的参数缺失，先询问，不盲猜；用户已明确说明或已有流程定义的参数不重复问。' +
       '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。' +
@@ -144,7 +144,7 @@ export function registerScheduleCreateTool(
       persistentSession: z
         .boolean()
         .optional()
-        .describe('true → 第一次 fire 后自动把新建 session 的 id 回写到 targetSessionId,后续 fire 持续在同一 session 中运行（拥有完整上下文）。默认 false。'),
+        .describe('true → 第一次 fire 后自动把新建 session 的 id 回写到 targetSessionId,后续 fire 持续在同一 session 中运行（拥有完整上下文）。默认 false；silentWhenIdle=true 的检查任务未显式设置且未绑定会话时按 true 处理，显式传 false 则保持每次新建。'),
       silentWhenIdle: z
         .boolean()
         .optional()
@@ -273,6 +273,19 @@ export function registerScheduleCreateTool(
             );
           }
           input = { ...input, targetSessionId: sessionId };
+        }
+        // 检查类(silentWhenIdle=true)没有显式绑定时默认复用同一个会话:每次触发都新建任务会让
+        // 没变化的检查在侧栏刷出一串空对话。只在调用方没有表态时补默认,显式 false/绑定一律保留;
+        // 提醒类(silentWhenIdle 缺省/false)不受影响。script 模式不支持 persistentSession,同样跳过。
+        // 持续会话下「本机位置」须带完整 Harness+model(引擎校验);只给了本机位置时不补,保持原来可创建。
+        if (
+          input.silentWhenIdle === true &&
+          input.persistentSession === undefined &&
+          !input.targetSessionId?.trim() &&
+          (input.executionMode ?? 'agent') === 'agent' &&
+          !(input.modelAgentDeviceId === '' && (!input.modelAgentKind || !input.model?.trim()))
+        ) {
+          input = { ...input, persistentSession: true };
         }
         if (input.preRunHook?.command?.trim()) {
           if (!deps.hookScript?.stabilizeCommand) {

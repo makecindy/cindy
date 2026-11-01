@@ -374,6 +374,27 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('call_tool(schedule_create) reuses one conversation for unbound checks but keeps reminders and explicit choices', async () => {
+    const create = async (extra: Record<string, unknown>) => {
+      const result = await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'schedule_create', args: { ...baseCreate, ...extra } as Record<string, unknown> },
+      });
+      const { envelope } = parseToolResult(result as { content: unknown[]; isError?: boolean });
+      if (!envelope.ok) throw new Error(`create failed: ${JSON.stringify(envelope)}`);
+      return envelope.data as Schedule;
+    };
+
+    expect((await create({ silentWhenIdle: true })).persistentSession).toBe(true);
+    expect((await create({ silentWhenIdle: true, persistentSession: false })).persistentSession).toBe(false);
+    expect((await create({ silentWhenIdle: true, targetSessionId: 'sess-bound' })).persistentSession).toBe(false);
+    expect((await create({ silentWhenIdle: true, modelAgentDeviceId: '', model: 'gpt-5.5' })).persistentSession).toBe(false);
+    expect((await create({})).persistentSession).toBe(false);
+    expect((await create({ silentWhenIdle: false })).persistentSession).toBe(false);
+
+    await h.cleanup();
+  });
+
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',
