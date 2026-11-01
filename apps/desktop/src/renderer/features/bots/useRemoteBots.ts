@@ -8,7 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
-import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
+import { getRetiredCompanionBotIds, useCompanionCloud, companionCloudApi } from './companionCloudStore';
 import { parseRemoteBots, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
@@ -17,6 +17,8 @@ let snapshot: RemoteBot[] = [];
 let cindyIds = new Set<string>();
 const listeners = new Set<() => void>();
 const publish = (next: RemoteBot[]) => {
+  const retired = getRetiredCompanionBotIds();
+  if (retired.size) next = next.filter((bot) => !retired.has(bot.id));
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
   snapshot = next;
   if (owner) {
@@ -36,13 +38,17 @@ const empty: RemoteBot[] = [];
 
 /** Non-hook read for entry routing (island / notification clicks); empty while signed out. */
 export function readRemoteBots(): readonly RemoteBot[] {
-  return owner ? snapshot : empty;
+  if (!owner) return empty;
+  const retired = getRetiredCompanionBotIds();
+  return retired.size ? snapshot.filter((bot) => !retired.has(bot.id)) : snapshot;
 }
 
 export function useRemoteBots(): readonly RemoteBot[] {
   const { dataOwnerId, isAuthenticated } = useAuth();
   const rows = useSyncExternalStore(subscribe, () => snapshot);
-  return isAuthenticated && owner === dataOwnerId ? rows : empty;
+  if (!isAuthenticated || owner !== dataOwnerId) return empty;
+  const retired = getRetiredCompanionBotIds();
+  return retired.size ? rows.filter((bot) => !retired.has(bot.id)) : rows;
 }
 
 /** Identity discovery is independent of a home computer's roster being online. */
@@ -59,6 +65,7 @@ export function useRemoteBotSync(): void {
   const devices = useDeviceLinkDeviceList();
   const cloud = useCompanionCloud();
   const actorsKey = cloud.actors.map(actor => `${actor.externalId}:${actor.homeDeviceId ?? ''}`).join(',');
+  const retiredKey = [...getRetiredCompanionBotIds()].sort().join(',');
   const revoked = useSyncExternalStore(
     revokedDevicesStore.subscribe,
     revokedDevicesStore.getSnapshot,
@@ -229,6 +236,13 @@ export function useRemoteBotSync(): void {
     }).catch(() => { /* Cached template identity remains usable offline. */ });
     return () => { live = false; };
   }, [dataOwnerId, isAuthenticated, cloud.enabled, actorsKey]);
+
+  useEffect(() => {
+    if (!isAuthenticated || owner !== dataOwnerId || !retiredKey) return;
+    const retired = getRetiredCompanionBotIds();
+    const next = snapshot.filter((bot) => !retired.has(bot.id));
+    if (next.length !== snapshot.length) publish(next);
+  }, [dataOwnerId, isAuthenticated, retiredKey]);
 
 }
 

@@ -23,6 +23,8 @@ let owner = getDataOwnerGeneration();
 // Counts pushes: a refresh answered after a push may carry the older snapshot.
 let pushes = 0;
 let hydratedOwner = '';
+let hydration: Promise<void> | null = null;
+let retiredBotIds = new Set<string>();
 let users = 0;
 let unsubscribePush: (() => void) | null = null;
 const listeners = new Set<() => void>();
@@ -45,33 +47,41 @@ function accept(next: CompanionCloudSnapshot): void {
   if (next.enabled) {
     const ids = new Set(next.actors.map(actor => actor.externalId));
     for (const actor of snapshot.actors) if (!ids.has(actor.externalId)) {
+      retiredBotIds.add(actor.externalId);
       void companionCloudApi()?.chatDisplayCache?.({ action: 'remove', key: `companion:${actor.externalId}`, owner }).catch(() => undefined);
     }
+    for (const id of ids) retiredBotIds.delete(id);
   }
   apply(next);
   if (next.enabled || next.humanActorId) {
-    void companionCloudApi()?.chatDisplayCache?.({ action: 'write', key: 'cloud-homes', owner, value: next }).catch(() => undefined);
+    void companionCloudApi()?.chatDisplayCache?.({ action: 'write', key: 'cloud-homes', owner,
+      value: { ...next, retiredBotIds: [...retiredBotIds] } }).catch(() => undefined);
   }
 }
 
-function hydrate(): void {
+function hydrate(): Promise<void> {
   const stamp = JSON.stringify(owner);
-  if (!owner.dataOwnerId || hydratedOwner === stamp) return;
+  if (!owner.dataOwnerId || hydratedOwner === stamp) return hydration ?? Promise.resolve();
   hydratedOwner = stamp;
   const requestOwner = owner;
-  void companionCloudApi()?.chatDisplayCache?.({ action: 'read', key: 'cloud-homes', owner }).then(value => {
+  hydration = Promise.resolve(companionCloudApi()?.chatDisplayCache?.({ action: 'read', key: 'cloud-homes', owner })).then(value => {
     const cached = value as CompanionCloudSnapshot | null;
     if (!isDataOwnerGenerationCurrent(requestOwner) || snapshot.enabled || snapshot.humanActorId
       || !cached || !Array.isArray(cached.actors) || !Array.isArray(cached.demotedBotIds)
       || !cached.actors.every(actor => actor && typeof actor.id === 'string' && typeof actor.externalId === 'string' && typeof actor.name === 'string')) return;
+    const cachedRetired = (cached as CompanionCloudSnapshot & { retiredBotIds?: unknown }).retiredBotIds;
+    retiredBotIds = new Set(Array.isArray(cachedRetired) ? cachedRetired.filter((id): id is string => typeof id === 'string') : []);
     apply(cached);
   }).catch(() => undefined);
+  return hydration;
 }
 
 function ensureOwner(): void {
   if (isDataOwnerGenerationCurrent(owner)) return;
   owner = getDataOwnerGeneration();
   snapshot = EMPTY_COMPANION_CLOUD_SNAPSHOT;
+  retiredBotIds = new Set();
+  hydration = null;
 }
 
 /** Re-reads the snapshot; resolves once the answer is applied (or dropped as superseded), never rejects. */
@@ -79,10 +89,10 @@ export function refreshCompanionCloudSettled(): Promise<void> {
   ensureOwner();
   const api = companionCloudApi();
   if (!api) return Promise.resolve();
-  hydrate();
+  const hydrated = hydrate();
   const requestOwner = owner;
   const requestPushes = pushes;
-  return Promise.resolve().then(() => api.getCompanionCloudState()).then((next) => {
+  return hydrated.then(() => api.getCompanionCloudState()).then((next) => {
     if (isDataOwnerGenerationCurrent(requestOwner) && pushes === requestPushes && next) accept(next);
   }).catch(() => undefined);
 }
@@ -135,9 +145,17 @@ export function getCompanionCloudSnapshot(): CompanionCloudSnapshot {
   return read();
 }
 
+/** Actor ids removed from the authoritative cloud roster, retained to suppress stale device caches. */
+export function getRetiredCompanionBotIds(): ReadonlySet<string> {
+  ensureOwner();
+  return retiredBotIds;
+}
+
 /** Test-only reset of the module mirror. */
 export function resetCompanionCloudStoreForTests(next: CompanionCloudSnapshot = EMPTY_COMPANION_CLOUD_SNAPSHOT): void {
   owner = getDataOwnerGeneration();
   hydratedOwner = '';
+  hydration = null;
+  retiredBotIds = new Set();
   apply(next);
 }

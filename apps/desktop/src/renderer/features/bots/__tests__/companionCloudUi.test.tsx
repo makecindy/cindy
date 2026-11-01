@@ -33,7 +33,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
 import { BotHomeComputerSetting, companionArrivedHere } from '../BotHomeComputerSetting';
-import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
+import { getRetiredCompanionBotIds, resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
 import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 
@@ -353,6 +353,42 @@ describe('companionCloudStore', () => {
     await act(async () => { answer(snapshot('desk')); await Promise.resolve(); });
     expect(result.current.actors[0]!.homeDeviceId).toBe('laptop');
     unmount();
+  });
+
+  it('uses cached cloud identities to retire deleted companions before accepting the fresh roster', async () => {
+    const { renderHook } = await import('@testing-library/react');
+    resetCompanionCloudStoreForTests();
+    const cached = { ...snapshot('laptop'), retiredBotIds: [] };
+    let finishCacheRead!: (value: unknown) => void;
+    const writes: Array<{ key?: string; value?: unknown }> = [];
+    maker.chatDisplayCache.mockImplementation(((request: { action: string; key: string; value?: unknown }) => {
+      if (request.action === 'read' && request.key === 'cloud-homes') return new Promise(resolve => { finishCacheRead = resolve; });
+      if (request.action === 'write') writes.push(request);
+      return Promise.resolve(null);
+    }) as never);
+    const current = { ...snapshot('laptop'), actors: [] };
+    maker.getCompanionCloudState.mockResolvedValue(current);
+    const { result, unmount } = renderHook(() => useCompanionCloud());
+    await act(async () => { await Promise.resolve(); });
+    expect(maker.getCompanionCloudState).not.toHaveBeenCalled();
+
+    await act(async () => { finishCacheRead(cached); });
+    await waitFor(() => expect(result.current.actors).toEqual([]));
+    expect(getRetiredCompanionBotIds().has('mia')).toBe(true);
+    expect(cloudRemoteBots(current, [{ id: 'mia', deviceId: 'laptop', deviceName: 'Laptop', name: 'Mia', avatar: '',
+      avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true }])).toEqual([]);
+    const savedCloud = writes.find(write => write.key === 'cloud-homes')?.value;
+    expect(savedCloud).toMatchObject({ retiredBotIds: ['mia'] });
+    unmount();
+
+    resetCompanionCloudStoreForTests();
+    maker.chatDisplayCache.mockImplementation(((request: { action: string; key: string }) =>
+      Promise.resolve(request.action === 'read' && request.key === 'cloud-homes' ? savedCloud : null)) as never);
+    const restarted = renderHook(() => useCompanionCloud());
+    await waitFor(() => expect(getRetiredCompanionBotIds().has('mia')).toBe(true));
+    expect(cloudRemoteBots(current, [{ id: 'mia', deviceId: 'laptop', deviceName: 'Laptop', name: 'Mia', avatar: '',
+      avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true }])).toEqual([]);
+    restarted.unmount();
   });
 });
 
