@@ -147,6 +147,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     if (element.matches('[data-chat-image-preview] img, img[data-gallery-src]')) {
       const media = element.closest<HTMLElement>('.rich-answer-media');
       const geometry = [['width', '--rich-width'], ['height', '--rich-height'],
+        ['max-width', '--rich-maxWidth'],
         ['min-height', '--rich-minHeight'], ['max-height', '--rich-maxHeight']] as const;
       if (media && geometry.some(([, token]) => media.style.getPropertyValue(token))) {
         // RichAnswer's important media rule overrides the preview's inline
@@ -156,7 +157,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
         target.style.height = 'auto';
         for (const [property, token] of geometry) {
           const value = media.style.getPropertyValue(token);
-          if (value) target.style.setProperty(property, value);
+          if (value) target.style.setProperty(property, property === 'max-width' ? `min(100%, ${value})` : value);
         }
       }
     }
@@ -461,6 +462,10 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     const selected = cloneSelected(node);
     if (selected) fragment.appendChild(selected);
   }
+  // The common container's children bypass cloneSelected(container), including
+  // its flex-gap boundary handling. Apply that once before reconstructing it.
+  const commonBoundariesApplied = common.nodeType === Node.ELEMENT_NODE && !commonIsAtomic;
+  if (commonBoundariesApplied) preserveTextBoundaries(common as Element, fragment as DocumentFragment);
   // Retain semantic ancestors so
   // selecting a word inside a link or bold text does not lose its meaning.
   let ancestor = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
@@ -472,7 +477,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
       const wrapper = shell(ancestor);
       wrapper.appendChild(fragment);
       preserveOrderedStart(ancestor, wrapper);
-      preserveTextBoundaries(ancestor, wrapper);
+      if (!commonBoundariesApplied || ancestor !== common) preserveTextBoundaries(ancestor, wrapper);
       fragment = wrapper;
     }
     ancestor = ancestor.parentElement;

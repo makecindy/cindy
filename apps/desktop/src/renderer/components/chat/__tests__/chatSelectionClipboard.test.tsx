@@ -345,7 +345,7 @@ describe('chat selection clipboard', () => {
   // Review #4359639062: media-only button unwrapping misses selectable card
   // summaries. Render the actual context card and copy across its header;
   // unit/jsdom verifies plain summary content without a dead pasted button.
-  it('copies a production context header as ordinary text while excluding marked controls', async () => {
+  it.each([false, true])('copies a production context header with boundaries (header only=%s)', async headerOnly => {
     productionSelectionCss();
     const { root, select, copy } = setup(<>
       <p>before context</p>
@@ -362,7 +362,15 @@ describe('chat selection clipboard', () => {
     const labels = [...header.querySelectorAll(':scope > span')].map(e => e.textContent!);
     expect(labels).toHaveLength(2);
     const summary = labels.join(' ');
-    select();
+    if (headerOnly) {
+      // Review4434554285: drag between text leaves so common ancestor is button.
+      const range = document.createRange();
+      range.setStart(header.querySelector(':scope > span')!.firstChild!, 0);
+      const last = header.querySelectorAll(':scope > span')[1].firstChild!;
+      range.setEnd(last, last.textContent!.length);
+      window.getSelection()!.addRange(range);
+      expect(range.commonAncestorContainer).toBe(header);
+    } else select();
     const { clipboardData } = copy();
     const html = clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
     const plain = clipboardData.setData.mock.calls.find(([type]) => type === 'text/plain')![1];
@@ -373,8 +381,12 @@ describe('chat selection clipboard', () => {
     expect(plain).toContain(summary);
     expect(pasted.textContent).not.toContain('Control action');
     expect(plain).not.toContain('Control action');
-    expect(pasted.textContent).toContain('before context');
-    expect(pasted.textContent).toContain('after context');
+    if (headerOnly) {
+      expect(pasted.textContent).not.toMatch(/before context|after context/);
+    } else {
+      expect(pasted.textContent).toContain('before context');
+      expect(pasted.textContent).toContain('after context');
+    }
     expect(header.isConnected).toBe(true);
     expect(header.getAttribute('aria-expanded')).toBe('false');
   });
@@ -596,9 +608,11 @@ describe('chat selection clipboard', () => {
   // Review4434467983: real Markdown/RichAnswer media override, not a
   // hand-sized img. Authored wrapper variables must survive detached export.
   it.each([
-    { style: { width: 120 }, width: '120px', height: 'auto' },
-    { style: { width: 120, height: 60 }, width: '120px', height: '60px' },
-  ])('keeps effective authored image dimensions $height', async ({ style, width, height }) => {
+    { style: { width: 120 }, width: '120px', height: 'auto', maxWidth: '100%' },
+    { style: { width: 120, height: 60 }, width: '120px', height: '60px', maxWidth: '100%' },
+    // Review4434554280: max-width-only wrapper has no explicit image width.
+    { style: { maxWidth: 120 }, width: '', height: 'auto', maxWidth: 'min(100%, 120px)' },
+  ])('keeps effective authored image dimensions $maxWidth/$height', async ({ style, width, height, maxWidth }) => {
     const source = JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'photo', kind: 'image', props: {
       src: 'https://example.com/rich-sized.png', alt: 'Sized rich photo', style,
     } });
@@ -611,7 +625,7 @@ describe('chat selection clipboard', () => {
     pasted.innerHTML = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
     const target = pasted.querySelector('img')!;
     expect(target.style.width).toBe(width); expect(target.style.height).toBe(height);
-    expect(target.style.maxWidth).toBe('100%');
+    expect(target.style.maxWidth).toBe(maxWidth);
     expect(pasted.textContent).toContain('before photo'); expect(pasted.textContent).toContain('after photo');
   });
 
