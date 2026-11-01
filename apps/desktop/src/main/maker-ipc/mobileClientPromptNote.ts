@@ -99,9 +99,22 @@ function singleTextContent(message: unknown): string | null {
 }
 
 /**
- * 原生命令必须位于消息开头；环境说明不能抢占这个位置。
- * Claude 旁路 /compact；Pi 的 slash 输入交由运行时自己的命令发现处理。
+ * 必须留在消息开头的命令：Claude 内置的 `/compact`，以及 Cindy 内置的 `/learn`。
+ *
+ * 只列确定会被派发出去的名字：`/compactness` 这类同前缀文本、行首带空格的输入、
+ * 以 `/` 开头的路径(`/Users/…`、`/tmp/…`)都不是命令，说明照常前置。
+ * `skill:<name>` / `cindy:<name>` 带命名空间，前缀本身已经能证明它是命令。
  */
+const NATIVE_COMMANDS = new Set(['compact', 'learn']);
+const LEADING_COMMAND = /^\/([a-z0-9][\w-]*)(?:\s|$)/i;
+const LEADING_NAMESPACED_COMMAND = /^\/(?:skill|cindy):[a-z0-9][\w-]*(?:\s|$)/i;
+
+function startsWithNativeCommand(text: string): boolean {
+  if (LEADING_NAMESPACED_COMMAND.test(text)) return true;
+  const command = LEADING_COMMAND.exec(text)?.[1];
+  return command !== undefined && NATIVE_COMMANDS.has(command.toLowerCase());
+}
+
 export function shouldPrependMobileClientPromptNote(
   message: unknown,
   agentKind: string,
@@ -117,7 +130,9 @@ export function shouldPrependMobileClientPromptNote(
     return !(text ?? firstText ?? '').trimStart().startsWith('/');
   }
   if (agentKind !== 'claude-code') return true;
-  return text === null || !/^\/compact(?:\s|$)/.test(text);
+  // 说明一旦把命令挤离开头，固定 Skill 的复核(`pinned-skill-invocation.ts` 用
+  // `^/(?:skill:)?<name>` 匹配整条消息)会直接拒掉整条消息，用户看到的是回复失败。
+  return text === null || !startsWithNativeCommand(text);
 }
 
 /**
