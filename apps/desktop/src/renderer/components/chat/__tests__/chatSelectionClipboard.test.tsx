@@ -811,7 +811,7 @@ describe('chat selection clipboard', () => {
     expect(pasted.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
-  it.each(['\\frac{a}{b}', '\\sqrt{x^2}'])('exports MathML when dragging only the visible formula %s', (source) => {
+  it.each(['\\frac{a}{b}', '\\sqrt{x^2}'])('exports MathML when selecting the full visible formula %s', (source) => {
     const { root, copy } = setup(`<p>before ${katex.renderToString(source)} after</p>`);
     const visual = root.querySelector('.katex-html')!;
     const walker = document.createTreeWalker(visual, NodeFilter.SHOW_TEXT);
@@ -822,6 +822,9 @@ describe('chat selection clipboard', () => {
     const range = document.createRange();
     range.setStart(nodes[0], 0);
     range.setEnd(nodes.at(-1)!, nodes.at(-1)!.length);
+    // The radical is an SVG sibling outside its radicand's text leaves.
+    // A whole-formula positive case must include that visible glyph too.
+    if (visual.querySelector('svg')) range.selectNodeContents(visual);
     window.getSelection()!.addRange(range);
     const html = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')?.[1];
     const pasted = document.createElement('div');
@@ -882,8 +885,9 @@ describe('chat selection clipboard', () => {
     expect(pasted.innerHTML).not.toMatch(/background|(?:^|[;" ])color:/);
   });
 
-  it('does not expand an internal partial formula selection', () => {
-    const { root, copy } = setup(katex.renderToString('x + y'));
+  // Review4434882815: an SVG radical adds no text leaf, but remains unselected.
+  it.each(['x + y', '\\sqrt{x}', '\\sqrt{x^2}'])('does not expand an internal text selection in %s', source => {
+    const { root, copy } = setup(katex.renderToString(source));
     const letter = root.querySelector('.katex-html .mord.mathnormal')!.firstChild!;
     const range = document.createRange();range.selectNodeContents(letter);
     window.getSelection()!.addRange(range);
@@ -891,8 +895,25 @@ describe('chat selection clipboard', () => {
     const html = clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')?.[1];
     const pasted = document.createElement('div');pasted.innerHTML = html;
     expect(pasted.textContent).toBe('x');
-    expect(pasted.querySelector('math, [aria-hidden="true"]')).toBeNull();
+    expect(pasted.querySelector('math, svg, [aria-hidden="true"]')).toBeNull();
     expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', 'x');
+  });
+
+  it('does not add a radical when dragging across all radicand text leaves', () => {
+    const { root, copy } = setup(katex.renderToString('\\sqrt{x^2}'));
+    const visual = root.querySelector('.katex-html')!;
+    const walker = document.createTreeWalker(visual, NodeFilter.SHOW_TEXT);
+    const leaves: Text[] = [];
+    while (walker.nextNode()) if (walker.currentNode.textContent?.replace(/[\s\u200b]/g, '')) leaves.push(walker.currentNode as Text);
+    const range = document.createRange();
+    range.setStart(leaves[0], 0); range.setEnd(leaves.at(-1)!, leaves.at(-1)!.length);
+    window.getSelection()!.addRange(range);
+    const calls = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = calls.find(([type]) => type === 'text/html')![1];
+    expect(pasted.textContent).toBe('x2');
+    expect(pasted.querySelector('math, svg')).toBeNull();
+    expect(calls.find(([type]) => type === 'text/plain')![1]).not.toContain('sqrt');
   });
 
   it('preserves checked and unchecked GFM task markers in both clipboard formats', () => {

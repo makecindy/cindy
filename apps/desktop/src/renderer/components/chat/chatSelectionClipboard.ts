@@ -380,8 +380,13 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
         while (walker.nextNode()) {
           if (walker.currentNode.textContent?.replace(/[\s\u200b]/g, '')) leaves.push(walker.currentNode);
         }
+        // Text alone cannot establish whole-formula coverage: radicals and
+        // other SVG glyphs may sit outside an internal text-only selection.
+        const drawings = [...visual.querySelectorAll('svg')];
         fullVisual = leaves.length > 0 && leaves.every(leaf =>
-          range.comparePoint(leaf, 0) === 0 && range.comparePoint(leaf, leaf.textContent!.length) === 0);
+          range.comparePoint(leaf, 0) === 0 && range.comparePoint(leaf, leaf.textContent!.length) === 0) &&
+          drawings.every(drawing => range.comparePoint(drawing, 0) === 0 &&
+            range.comparePoint(drawing, drawing.childNodes.length) === 0);
       }
       if (math && fullVisual) {
         // KaTeX's clipped accessibility MathML and its visual layout describe
