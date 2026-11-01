@@ -14,6 +14,7 @@ import {
 } from '@cindy/device-link';
 import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
+import { isBrowserBundle } from './originPolicy.js';
 import { qrContent } from './qrCode.js';
 import { extractStep, type ExtractedStep } from './stepExtractor.js';
 import type {
@@ -430,6 +431,7 @@ export class InputHandoffSession {
       }
       await this.useTarget(target);
       this.initial = target;
+      if (target.minimized) await this.coverBeforeRestoring(target);
       const restored = await this.restoreTarget(target);
       const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
@@ -1134,6 +1136,22 @@ export class InputHandoffSession {
       this.agentControlled = AUTOMATION_FLAGS.test(await this.options.driver.commandLine(target.pid));
     }
     this.target = target;
+  }
+
+  /**
+   * The window is about to come back where the owner can type in it. Read it first while it is still
+   * minimized (accessibility sees it), and cover a sign-in page before it shows; a browser page that
+   * cannot be read is covered by its window title, since it may well be one.
+   */
+  private async coverBeforeRestoring(target: HandoffTarget): Promise<void> {
+    const before = await this.read().catch(() => null);
+    if (before && !before.pageMissing) {
+      this.guardSignInPage(before);
+      return;
+    }
+    if (isBrowserBundle(target.bundleId)) {
+      this.options.onSecretEntered?.({ pid: target.pid, windowTitle: target.window.title });
+    }
   }
 
   /** A minimized window draws nothing and the owner cannot see it: bring it back before asking anything. */

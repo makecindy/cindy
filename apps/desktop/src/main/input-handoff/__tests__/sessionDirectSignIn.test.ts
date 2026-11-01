@@ -224,6 +224,48 @@ describe('a sign-in step', () => {
   });
 });
 
+describe('a minimized window brought back for a sign-in', () => {
+  it('is covered before it comes back, whether or not its page could be read', async () => {
+    for (const readable of [true, false]) {
+      const { driver, state } = desktop('password');
+      state.minimized = true;
+      const events: string[] = [];
+      const read = driver.snapshot.bind(driver);
+      driver.snapshot = async (pid, window) => {
+        const shot = await read(pid, window);
+        return readable || !('nodes' in shot) || !state.minimized
+          ? shot
+          : { ...shot, nodes: [screens.email[0]] };
+      };
+      const raise = driver.raise!.bind(driver);
+      driver.raise = async (target) => {
+        events.push('raise');
+        state.minimized = false;
+        return raise(target);
+      };
+      const session = new InputHandoffSession({
+        requestId: 'req1',
+        purpose: 'Sign in',
+        target: { app: 'Google Chrome', windowTitle: 'Sign in' },
+        timeoutMs: 600_000,
+        hostPid: 1,
+        remoteInput: true,
+        driver,
+        publish: () => undefined,
+        finish: () => undefined,
+        onSecretEntered: ({ url, windowTitle }) => events.push(`cover:${url ?? windowTitle}`),
+        sleep: async () => undefined,
+        windowWatchMs: 5000,
+        settleTimeoutMs: 50,
+      });
+      await session.start();
+      expect(events[0]).toMatch(/^cover:/);
+      expect(events.indexOf('raise')).toBeGreaterThan(0);
+      session.cancel();
+    }
+  });
+});
+
 describe('a browser page that cannot be read', () => {
   const unreadable = () => {
     const { driver, state } = desktop();
