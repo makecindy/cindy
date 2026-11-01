@@ -42,6 +42,7 @@ const links: Record<string, ProviderSetupLink> = {
   'volcengine-api': account('https://console.volcengine.com/ark/'),
   'siliconflow-cn': key('https://cloud.siliconflow.cn/account/ak'),
   'siliconflow-global': key('https://cloud.siliconflow.com/account/ak'),
+  runcrate: key('https://runcrate.ai/dashboard/api-keys'),
   'volcengine-coding-plan': account('https://console.volcengine.com/ark/'),
   'tencentcloud-coding-plan': account('https://console.cloud.tencent.com/'),
   opencode: account('https://opencode.ai/auth'),
