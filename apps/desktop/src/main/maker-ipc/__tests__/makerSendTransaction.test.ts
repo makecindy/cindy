@@ -582,6 +582,9 @@ describe('maker SEND transaction', () => {
       ...item,
       fromDeviceLinkClient: true,
     }, false)).not.toHaveProperty('fromDeviceLinkClient');
+    // A remote controller must not skip the executing computer's plugin message hooks.
+    expect(stampTrustedDeviceLinkQueuedOrigin({ ...item, bypassGhostHooks: true }, true))
+      .not.toHaveProperty('bypassGhostHooks');
   });
 
   it('rejects invalid sessionId before touching transaction dependencies', async () => {

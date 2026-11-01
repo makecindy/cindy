@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erreur : {{message}}",
     "mediaDeviceLinkHint": "Avant l'ouverture, votre téléphone demande à l'appareil distant d'envoyer ce média.",
     "controlDelete": "Supprimer le message",
+    "controlEdit": "Modifier",
     "controlRewind": "Revenir ici",
     "controlFork": "Démarrer une nouvelle session à partir d'ici",
     "markdownDocAriaLabel": "Corps du message",
@@ -262,6 +263,14 @@
     "imagesNotUploaded_many": "{{count}} images n'ont pas été envoyées"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} a choisi {{model}} pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise {{model}}",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise {{model}}",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Contexte réorganisé, poursuite en cours",
       "labelTimeout": "Le dernier tour n'a pas répondu ; contexte réorganisé pour continuer",

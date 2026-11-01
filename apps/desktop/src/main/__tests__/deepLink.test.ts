@@ -459,6 +459,16 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('cindy://plugins/..%2Fetc')).toBeNull();
   });
 
+  // Agent guidance target when Computer Use is off (CU-013 follow-up): the page
+  // holds the switch and the macOS permission guide, so only the bare path opens.
+  it('parses settings/builtin-tools as a bare tab and rejects parameters or sub-paths', () => {
+    expect(parseDeepLink('cindy://settings/builtin-tools')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools/')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools?connect=x')).toEqual({ type: 'settings', tab: 'builtin-tools' });
+    expect(parseDeepLink('cindy://settings/builtin-tools/computer')).toBeNull();
+    expect(parseDeepLink('cindy://settings/general')).toBeNull();
+  });
+
   it('parses settings/providers payload with and without a connect target', () => {
     expect(parseDeepLink('cindy://settings/providers')).toEqual({
       type: 'settings',

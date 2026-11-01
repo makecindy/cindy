@@ -1102,6 +1102,7 @@
     "allow": "Remotedesktop erlauben",
     "allowHint": "Erlaube deinen angemeldeten Geräten, alle Apps auf diesem Computer anzuzeigen und zu bedienen. Aktiviere oben auch die Gerätesteuerung.",
     "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her.",
+    "inputUnsupported": "Die aktuelle Desktopumgebung dieses Computers unterstützt die Fernsteuerung von Tastatur und Maus in Cindy nicht.",
     "controlUnavailable": "Der entfernte Computer kann keine Eingaben annehmen. Prüfe seine Steuerungsberechtigungen und die Verbindung und verbinde dich dann erneut.",
     "beingControlled": "Dein Desktop wird gesteuert",
     "beingViewed": "Dein Desktop wird angesehen",
@@ -1227,7 +1228,6 @@
     "clipboardSyncSkipped": "Dieses Format wird bei der Synchronisierung der Zwischenablage nicht unterstützt und wurde übersprungen.",
     "clipboardSyncTooLarge": "Der Inhalt überschreitet die Größenbegrenzung für die Synchronisierung der Zwischenablage und wurde übersprungen.",
     "clipboardSyncPermission": "Die Zwischenablagesynchronisierung benötigt Zugriff zum Einfügen. Erlaube ihn und kehre dann zu diesem Fenster zurück, um fortzufahren.",
-    "clipboardSyncWaiting": "Die Zwischenablage des Remote-Computers ist derzeit nicht verfügbar (möglicherweise ist sie gesperrt). Die Synchronisierung wird automatisch fortgesetzt.",
     "lockingOnExit": "Computer wird gesperrt…",
     "idleLock": "Bei Inaktivität trennen und sperren",
     "idleNever": "Nie",
@@ -5417,7 +5417,6 @@
         "title": "Meine Browser-Anmeldedaten verwenden",
         "description": "Der Agent öffnet Websites mit deinen angemeldeten Chrome-, Edge- oder Brave-Konten.",
         "toggleAria": "Meine Browser-Anmeldedaten verwenden",
-        "unavailableEmbedded": "Gilt nur für den Standalone-Browser. Durch das Ausschalten werden die kopierten Anmeldedateien gelöscht.",
         "confirmTitle": "Dem Agent Zugriff auf deine Browser-Anmeldedaten erlauben?",
         "confirmDescription": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
         "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Zum Lesen der Chrome-Anmeldedateien ist außerdem Festplattenvollzugriff erforderlich. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
@@ -7526,6 +7525,20 @@
         "unknownPublisher": "Unbekannter Herausgeber",
         "unknownReviewerDetail": "Das Paket beansprucht eine Rezension, aber diese Cindy-Version erkennt den Prüfschlüssel nicht und wird daher nicht als geprüft angezeigt."
       },
+      "controlPoints": {
+        "title": "Prüfungen vor der Ausführung",
+        "description": "Dieses Plugin kann Automatisierungen oder Routinen vor dem Start prüfen. Es kann einen Lauf überspringen oder stoppen, aber nie für dich genehmigen.",
+        "titleWithStartTask": "Wann dieses Plugin eingreift",
+        "descriptionWithStartTask": "Es greift nur bei Aufgaben ein, für die du es gewählt hast: Vor einem Lauf kann es ihn nur überspringen oder stoppen, bei einer neuen Aufgabe wählt es einmal ein Modell für die erste Nachricht. Es genehmigt nie etwas für dich.",
+        "usage": "Wähle es beim Bearbeiten einer Automatisierung oder Routine unter Vorabprüfung aus.",
+        "usageStartTask": "So nutzt du es: Wähle in der Modellauswahl einer neuen Aufgabe ein Modell, das dieses Plugin bereitstellt.",
+        "points": {
+          "will-schedule-run": "Vor der Ausführung einer Automatisierung",
+          "will-routine-run": "Vor der Ausführung einer Routine eines Teammitglieds",
+          "will-start-task": "Wenn eine neue Aufgabe startet"
+        },
+        "inactive": "Noch nicht verfügbar. Erlaube es beim Aktualisieren oder Neuinstallieren dieses Plugins."
+      },
       "perm": {
         "mail": "E-Mail-Entwürfe und Versandkarten verwenden",
         "mailDetail": "Entwürfe in einer Karte bearbeiten und synchronisieren, mit Bestätigung und einem Countdown zum Rückgängigmachen vor dem Senden.",
@@ -7560,6 +7573,9 @@
         "agentDelegationDetail": "Teammitglieder dürfen die delegierte Aufgabe mit automatischer Prüfung ausführen. Dabei wird weder die Identität des Eigentümers angenommen noch werden die Berechtigungen der Teammitglieder geändert.",
         "agentTargets": "Kann Nachrichten an Projekte, bestehende Aufgaben und Companions senden",
         "agentTargetsDetail": "Kann lokale Projektverzeichnisse sowie Namen und IDs von Aufgaben und Teammitgliedern anzeigen, Aufgaben in Projekten erstellen und Text und Bilder an bestehende Aufgaben und Teammitglieder senden. Dabei können KI-Ausführungen und Modellkosten entstehen. Diese Zustell-API selbst kann weder den Verlauf anderer Aufgaben lesen noch deren Einstellungen ändern oder sie stoppen.",
+        "agentObserve": "Kann Liste und Status der Sitzungen lokaler Projekte sehen",
+        "agentObserveDetail": "Kann Titel, Agent-Typ, Archivstatus und Status (läuft, Handlung nötig, letzte Aktivität) der Sitzungen registrierter lokaler Projekte sehen und eine Sitzung im Hauptfenster öffnen. Kann keine Nachrichten, Pläne oder Dateien lesen und weder Nachrichten senden noch Sitzungen ändern.",
+        "agentObserveRequest": "Berechtigung zum Anzeigen von Sitzungen prüfen",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
@@ -7592,6 +7608,12 @@
         "subscribeHooksDetail": "Prüft jede Nachricht vor dem Senden: Kann sie blockieren oder den Text vor dem Versand umschreiben. Blockierte Nachrichten kannst du bearbeiten und erneut senden.",
         "subscribeAssistantReply": "Kann die Antworten der KI lesen und umschreiben",
         "subscribeAssistantReplyDetail": "Verarbeitet jede fertige KI-Antwort: Kann den Text überarbeiten oder umschreiben (ersetzt ihn direkt, ohne das Original zu behalten) oder die Antwortblase durch eine eigene gerenderte Karte ersetzen (in diesem Fall bleibt der Originaltext erhalten und lässt sich durch einmaliges Tippen anzeigen).",
+        "subscribeScheduleRun": "Kann ausgewählte Automatisierungen vor dem Start prüfen",
+        "subscribeScheduleRunDetail": "Automatisierungen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht Name und Anweisungen und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
+        "subscribeRoutineRun": "Kann ausgewählte Teammate-Routinen vor dem Start prüfen",
+        "subscribeRoutineRunDetail": "Routinen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht die Anweisungen und auslösenden Ereignisse und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
+        "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
+        "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Es wählt einmal; das Modell ändert sich während der Aufgabe nicht.",
         "card": "Stellt Nachrichtenkarten dar",
         "cardExternalLink": "Karten können externe Links enthalten, die nach Bestätigung deinen Browser öffnen",
         "cardExternalLinkDetail": "Beim Anklicken eines Kartenlinks erscheint ein Bestätigungsdialog. Die URL öffnet sich erst nach deiner Zustimmung im Systembrowser. Nur http/https-Adressen sind erlaubt.",
@@ -7782,6 +7804,22 @@
         "reveal": "In Aufgabenliste anzeigen",
         "revealed": "Aufgabe wird in der Aufgabenliste angezeigt",
         "revealFailed": "Aufgabe konnte nicht in der Aufgabenliste angezeigt werden"
+      },
+      "handoff": {
+        "title": "In Chats an dieses Plugin übergebene Dateien",
+        "description": "Kopien von Dateien, die du in Chats an dieses Plugin übergeben hast. Jede Kopie wird automatisch gelöscht, wenn sie 7 Tage lang nicht verwendet wurde.",
+        "empty": "In Chats wurden diesem Plugin noch keine Dateien übergeben.",
+        "loadFailed": "Die Dateiliste konnte nicht geladen werden. Versuche es später erneut.",
+        "refresh": "Aktualisieren",
+        "openInFinder": "Im Finder öffnen",
+        "openInExplorer": "Im Datei-Explorer öffnen",
+        "meta": "{{size}} · Übergeben am {{handedAt}} · Automatisch gelöscht am {{expiresAt}}",
+        "delete": "Löschen",
+        "deleteNamed": "{{name}} löschen",
+        "deleteTitle": "Diese Datei löschen?",
+        "deleteDescription": "Nach dem Löschen können das Plugin und geöffnete Seiten „{{name}}“ nicht mehr verwenden. Dies kann nicht rückgängig gemacht werden.",
+        "deleteFailed": "Die Datei konnte nicht gelöscht werden. Versuche es später erneut.",
+        "cancel": "Abbrechen"
       },
       "library": {
         "title": "Dauerhafte Bibliothek",
@@ -10755,6 +10793,9 @@
         "chatUnavailable": "Der Chatdienst ist nicht verfügbar. Prüfe deine Verbindung und versuch es erneut.",
         "importPending": "Der Gruppenverlauf wird noch synchronisiert. Versuch es später erneut.",
         "requestTimeout": "Das Ergebnis ist noch nicht bestätigt. Aktualisiere die Ansicht zur Prüfung, bevor du es erneut versuchst.",
+        "revisionConflict": "Die Arbeit wurde geändert, bevor diese Aktion abgeschlossen werden konnte.",
+        "stopOwnershipUnknown": "Ein Teil der Arbeit konnte nicht gestoppt werden, da nicht überprüft werden konnte, wer sie angefordert hat.",
+        "nothingToStop": "Es gibt keine laufende Arbeit zum Stoppen.",
         "permissionDenied": "Du hast keine Berechtigung, diese Gruppe zu verwalten.",
         "serviceError": "Der Chatdienst konnte die Anfrage nicht abschließen. Versuch es später erneut.",
         "groupArchived": "Diese Gruppe ist archiviert. Diese Aktion ist nicht verfügbar.",
@@ -12709,6 +12750,7 @@
     "cindyServiceUnavailable": "Der Cindy-Sprachdienst ist nicht verfügbar. Prüfe dein Netzwerk oder wechsle die Dienstquelle.",
     "asrServiceUnavailable": "Verbindung zum Spracherkennungsdienst fehlgeschlagen. Prüfe dein Netzwerk und versuche es erneut.",
     "emptyTranscript": "Sprache wurde erkannt, aber kein Text. Versuche es erneut.",
+    "speakerFiltered": "Stimme einer anderen Person ignoriert",
     "connectionInterrupted": "Die Sprachverbindung wurde unterbrochen. Prüfe dein Netzwerk und versuche es erneut.",
     "recognitionStalled": "Die Spracherkennung liefert keine Ergebnisse mehr. Versuche es erneut.",
     "transcriptKept": "{{message}} Der bisher erkannte Text wurde beibehalten — du kannst ihn direkt bearbeiten.",
@@ -12734,6 +12776,14 @@
     "verificationFailed": "Cindy konnte nicht bestätigen, ob die ChatGPT-Anmeldung wiederhergestellt ist. Prüfe es erneut."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "hat für diese Aufgabe gewählt:",
+      "kept": {
+        "no-opinion": "{{plugin}} hat das Modell diesmal nicht geändert, diese Aufgabe nutzt",
+        "failed": "{{plugin}} hat nicht rechtzeitig geantwortet, diese Aufgabe nutzt",
+        "unavailable-route": "{{plugin}} hat ein nicht nutzbares Modell gewählt, diese Aufgabe nutzt"
+      }
+    },
     "imageDelivery": {
       "stored": "Bild übertragen",
       "failed": "Bildübertragung fehlgeschlagen. Versuche erneut, das vorhandene Bild zu übertragen.",
@@ -15299,6 +15349,25 @@
         },
         "browse": "Wähle eine Skriptdatei aus (oder ziehe sie auf das Eingabefeld)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Prüfen mit",
+        "source": {
+          "script": "Skript",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Vor jedem Lauf fragt Cindy das gewählte Plugin. Es kann den Lauf zulassen, diesen Lauf überspringen oder ihn stoppen. Es kann nie etwas genehmigen, das deine Bestätigung braucht.",
+        "choose": "Plugin wählen",
+        "unavailable": "Plugin nicht verfügbar",
+        "unavailableHint": "Dieses Plugin ist nicht mehr verfügbar. Bis du ein anderes wählst, gilt „Wenn das Plugin fehlschlägt“.",
+        "hint": "Das Plugin kann den Lauf zulassen, diesen Lauf überspringen oder ihn stoppen. Es kann nie etwas für dich genehmigen.",
+        "empty": "Noch kein Plugin kann Läufe prüfen. Installiere ein Plugin mit Vorabprüfung und erlaube sie beim Installieren oder Aktualisieren.",
+        "onFailureLabel": "Wenn das Plugin fehlschlägt",
+        "onFailure": {
+          "allow": "Normal ausführen",
+          "skip": "Diesen Lauf überspringen",
+          "block": "Stoppen und als fehlgeschlagen markieren"
+        }
+      },
       "validation": {
         "nameRequired": "Name ist erforderlich",
         "promptRequired": "Prompt ist erforderlich",
@@ -15311,6 +15380,7 @@
         "modelUnavailable": "Modell {{model}} ist nicht mehr verfügbar. Wähle ein anderes Modell.",
         "reasoningInvalid": "Denkintensität muss einer der Werte {{values}} sein",
         "preRunHookCommandRequired": "Gib den Befehl für die Vorabprüfung ein",
+        "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
       }
@@ -15797,6 +15867,7 @@
       "titleRevealPath": "Darf der Agent den lokalen Pfad dieser Mediendatei erhalten?",
       "count": "{{count}} Dateien",
       "descriptionAttachments": "Die folgenden Dateien liegen außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, werden sie diesem Plugin übergeben (es erhält nur Inhaltsfingerabdrücke, niemals Pfade).",
+      "descriptionHandoff": "Die folgenden Dateien liegen außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, erhält das Plugin Kopien davon (niemals die Pfade); die Kopien werden automatisch gelöscht, wenn sie 7 Tage lang nicht verwendet wurden.",
       "descriptionDir": "Das folgende Verzeichnis bzw. die folgende Datei liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, werden die Dateien diesem Plugin zum Hochladen übergeben (es erhält nur ein einmaliges Ticket, niemals Pfade).",
       "descriptionSaveDir": "Das folgende Verzeichnis liegt außerhalb des Arbeitsverzeichnisses dieser Sitzung. Wenn du zustimmst, kann dieses Plugin heruntergeladene Dateien darin speichern (vorhandene Dateien werden niemals überschrieben).",
       "descriptionRevealPath": "Der Pfad wird erst nach deiner Zustimmung an den aktuellen Agent übergeben und in den Gesprächsverlauf aufgenommen. Gekoppelte Geräte können diesen Verlauf synchronisieren. Dadurch erhält kein Plugin Zugriff auf die Datei.",
@@ -17619,6 +17690,7 @@
     "sessionModeFresh": "Neue Sitzung bei jedem Auslöser (Kontext isolieren)",
     "sessionModeHint": "Dauerhaft behält eine Unterhaltung für die Routine bei. Eine neue Sitzung erstellt und schließt bei jedem Auslöser eine isolierte Unterhaltung.",
     "quietHint": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
+    "checkSource": "Prüfen mit",
     "checkCommand": "Prüfbefehl vor der Ausführung",
     "checkHint": "Optional. Prüft vor jeder Ausführung auf dem Computer: Exit-Code 2 überspringt die Ausführung, Exit-Code 0 setzt sie fort, Fehler bleiben sichtbar. Zum Entfernen leeren.",
     "timeoutMs": "Zeitlimit für die Prüfung (ms, leer für unbegrenzt)",
@@ -17684,6 +17756,14 @@
         "skillDisabled": "Skill „{{title}}“ deaktiviert",
         "skillMerged": "Skill „{{title}}“ mit „{{into}}“ zusammengeführt und deaktiviert"
       }
+    },
+    "remote": {
+      "pause": "Routine pausieren",
+      "resume": "Routine fortsetzen",
+      "addSchedule": "Zeitplan hinzufügen",
+      "addInterval": "Intervall hinzufügen",
+      "addEvent": "Ereignisauslöser hinzufügen",
+      "filterField": "Filterfeld"
     }
   },
   "cindyMakeDoctor": {

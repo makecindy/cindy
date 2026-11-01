@@ -120,7 +120,12 @@ export type VoiceConversationEvent = {
   callId: string;
   /** Identifies the ASR capture generation; ended events have no input generation. */
   inputGeneration?: number;
-  event: ConversationInputEvent | { type: 'ended' } | { type: 'call-record'; record: VoiceCallRecord };
+  event:
+    | ConversationInputEvent
+    | { type: 'ended' }
+    | { type: 'call-record'; record: VoiceCallRecord }
+    /** "Recognize my voice" muted speech judged to be someone else. */
+    | { type: 'speaker-filtered' };
 };
 export type VoiceConversationStart = VoiceConversationSelection & {
   callId: string;

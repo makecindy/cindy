@@ -96,6 +96,7 @@ const D_GHOST_CALL = [
   "要把一个本地目录或单个文件交给插件上传(如部署构建产物)时,把其**绝对路径**放进",
   "顶层 dir(不是塞进 args):主机会收集文件并以",
   "一次性票据注入 args.dir_deposit,供需要把选定目录或单文件整体交给插件的工具上传。",
+  "目标工具参数声明了 cindy_handoff_files 时,用户在对话里交的文件(含表格等非媒体)放进 attachments,不用 dir。",
   D_FILE_HANDOFF_PERMISSION,
   "原生接管且真实目标未变时不再调用 Cindy 复审；symlink/junction 解析暴露新目标时由 Cindy 审核真实路径。",
   "被拒绝/超时后不要重试,转告用户即可。Auto / Full Access 自动交接不写人工永久授权，切回 Ask 后恢复确认；用户已明确允许的同一文件(按内容指纹)",
@@ -1357,13 +1358,13 @@ export function createCindyGhostsMcpServer(
         .max(32)
         .optional()
         .describe(
-          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径。" + D_FILE_HANDOFF_PERMISSION + "不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;非媒体类型文件改用顶层 dir。",
+          "可选,普通调用 ≤4 项(grant_only 批量交接 ≤32 项):要交给插件处理或收录的图片/媒体文件;目标工具参数声明了 cindy_handoff_files 时,用户在对话里交的文件(含表格等非媒体)也放进 attachments,不用 dir。地址原样透传即可,四种写法都认:xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>、消息里给出的本机绝对路径(主机会归一化并验归属),或本机媒体文件(图/视频/音频)的绝对路径。" + D_FILE_HANDOFF_PERMISSION + "不要自己拼地址。主机过户给该插件后以指纹注入 args.attachments。用户明确交出的媒体与当前 Agent / Core 工具刚生成、目标插件工具明确要求接收的结果都可使用;其它情况下非媒体文件改用顶层 dir。",
         ),
       dir: z
         .string()
         .optional()
         .describe(
-          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。" + D_FILE_HANDOFF_PERMISSION + "主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
+          "可选:要交给插件上传的本地目录或单个文件的绝对路径(如站点部署的构建产物目录、要传的附件文件)。目标工具参数声明了 cindy_handoff_files 时,用户在对话里交的文件(含表格等非媒体)放进 attachments,不用 dir。" + D_FILE_HANDOFF_PERMISSION + "主机收集文件(自动排除 node_modules/.git/.env 等)并以一次性票据注入 args.dir_deposit,插件凭票上传,摸不到路径与字节。仅当目标工具的说明要求交付目录/文件时使用。",
         ),
       save_dir: z
         .string()

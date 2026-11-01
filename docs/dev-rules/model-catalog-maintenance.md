@@ -1,8 +1,22 @@
 # 模型配置与下发：架构及维护入口
 
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
+> 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
+> `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+
+## 本地模型说明的客户端译文
+
+`packages/model-providers/src/localModelDescriptions.json` 为现有本地模型的英文说明提供
+法语、西语、德语、葡语（葡萄牙／巴西）译文，不是模型目录正本。展示入口统一用
+`localModelDescription`：活动目录的对应语言优先，其次仅按完全一致的英文原文匹配附带译文，
+否则回退英文。更新目录原文后必须重新校对译文，不能按模型 ID 套用旧说明。
+此补齐不改变目录 revision、型号、推荐排序或参数；不代表独立 Server 已下发十语字段。
 
 ## Cindy AI 身份图标
+
+名称按登录身份加后缀（2026-10-29 裁决，#7744）：个人账号显示「Cindy AI · 个人」，心动显示
+「Cindy AI · 心动」，其他企业显示「Cindy AI · <企业名>」，保持统一品牌并避免登录身份歧义；
+跨账号分享时的来源后缀见[供应商分享](../product-rules/provider-sharing.md)。
 
 供应商 ID 仍为 `xd`；个人、其他企业和未知身份默认使用 Chrome 插件的 Cindy 剪影。
 来源电脑按既有 `isXdOrgUser` 识别心动身份，临时投影 `logoKind: xd`，渲染原来的

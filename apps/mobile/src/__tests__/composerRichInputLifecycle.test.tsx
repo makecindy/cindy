@@ -212,7 +212,7 @@ it('cancels queue edit before a late change can overwrite the restored personal 
     composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
     voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft,
   });
-  onChangeDocument.mockImplementation(pageCallback('applyRichComposerChange', { applyComposerDocument, queueEditingRef }));
+  onChangeDocument.mockImplementation(pageCallback('applyRichComposerChange', { applyComposerDocument, queueEditingRef, messageEditingRef: { current: null } }));
   const cancel = pageCallback('cancelQueueEdit', {
     queueEditingRef, composerInputRef: ref, composerDocumentProjectedText,
     setQueueEditing: vi.fn(), queueEditLockOwnerRef: { current: null },

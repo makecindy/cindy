@@ -69,7 +69,7 @@ import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
-import { podInstallBounded, inspectIOSBuildTools, COCOAPODS_SETUP_HINT } from './sim-pod-install.mjs';
+import { podInstallBounded, inspectIOSBuildTools, withUserGemPodOnPath, COCOAPODS_SETUP_HINT } from './sim-pod-install.mjs';
 import { computeSimulatorNativeFingerprint, inspectSimulatorNativeIdentity } from './lib/sim-native-identity.mjs';
 import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
@@ -303,6 +303,11 @@ console.log(`SIM_CACHE=${JSON.stringify({ ...cache, directory: cacheDir, root: a
 
 if (!app) {
   console.log(`› 缓存不可复用（${cache.code}），检查 iOS 构建工具链…`);
+  const podEnv = withUserGemPodOnPath({ env: devProcessEnv });
+  if (podEnv !== devProcessEnv) {
+    devProcessEnv.PATH = podEnv.PATH;
+    console.log('  pod 不在 PATH，使用用户 gem 目录中的 CocoaPods（仅本次构建）。');
+  }
   const preflight = inspectIOSBuildTools({ env: devProcessEnv });
   console.log(`SIM_BUILD_PREFLIGHT=${JSON.stringify(preflight)}`);
   if (!preflight.healthy) {

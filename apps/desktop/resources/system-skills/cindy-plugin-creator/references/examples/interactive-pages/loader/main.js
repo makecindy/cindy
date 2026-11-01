@@ -53,6 +53,12 @@ function viewFragment(intent, fields = {}) {
     + '<form id="record-form"><label>标题<input name="title" required maxlength="160" value="' + escapeHtml(fields.title || '') + '"></label><button type="submit">保存记录</button></form>'
     + '<p id="result" role="status"></p>';
 }
+// 对话交接的文件只列名称和大小，不读取内容；按钮带引用，用户点击后才上传。
+function filesFragment(files = []) {
+  const rows = files.map(file => '<li>' + escapeHtml(file.name) + '（' + escapeHtml(file.size) + ' 字节）'
+    + '<button data-file-ref="' + escapeHtml(file.ref) + '">上传并预览</button></li>').join('');
+  return '<p role="note">离线示例：只显示名称和大小，不读取文件内容。</p><h1>Files</h1><ul id="files">' + rows + '</ul><p id="result" role="status"></p>';
+}
 function fullPage(content) {
   // pageClient 是后端维护的页面脚本；所有动态数据先转义，不拼进 JavaScript。
   return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Records</title>'
@@ -88,6 +94,16 @@ function pageClient() {
         content.innerHTML = result._meta.view.html;
         // 保留未确认写入的编号：切回表单提交相同内容时沿用，内容变了才换新编号。
         bind();
+      } catch (error) { connection.textContent = error.message; }
+      finally { busy = false; button.disabled = false; }
+    };
+    for (const button of content.querySelectorAll('[data-file-ref]')) button.onclick = async () => {
+      if (busy) return;
+      busy = true; button.disabled = true;
+      try {
+        // 只把引用交给插件，由 main.js 上传；页面不读取文件内容。
+        const result = await call('upload_files', { files: [button.dataset.fileRef], path: '/api/imports/stage' });
+        showBatch(result.structuredContent);
       } catch (error) { connection.textContent = error.message; }
       finally { busy = false; button.disabled = false; }
     };
@@ -133,6 +149,25 @@ function pageClient() {
       };
     }
   }
+  // 暂存后的预览显示在文件列表下方，不换文档，其余文件仍可上传；数据一律用 textContent。
+  function showBatch(batch) {
+    const item = (tag, value) => Object.assign(document.createElement(tag), { textContent: value });
+    const rows = item('ul'); rows.append(...(batch.rows || []).map(row => item('li', JSON.stringify(row))));
+    const errors = item('ul'); errors.append(...(batch.errors || []).map(error => item('li', '第 ' + error.line + ' 行：' + error.message)));
+    const confirm = item('button', '确认导入'); confirm.id = 'confirm-import'; confirm.dataset.batch = batch.batchId;
+    let preview = content.querySelector('#import-preview');
+    if (!preview) {
+      preview = item('section'); preview.id = 'import-preview';
+      const result = content.querySelector('#result');
+      if (result) result.before(preview); else content.append(preview, Object.assign(item('p'), { id: 'result' }));
+    }
+    // 取消只收起这份预览，不提交，也不离开文件列表。
+    const cancel = item('button', '取消'); cancel.onclick = () => preview.remove();
+    preview.replaceChildren(...(batch.offline ? [item('p', '离线示例：未读取真实文件，接入后端后解析真实内容。')] : []),
+      item('h2', '文件预览'), item('p', '共 ' + (batch.total ?? (batch.rows || []).length) + ' 行，出错 ' + (batch.errors || []).length + ' 行。'),
+      rows, errors, confirm, cancel);
+    bind();
+  }
   // 对话交来的媒体附件由宿主放进 hostContext，每项是 resource_link，地址只读、仅本卡有效。
   function showAttachments() {
     const links = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachments'] ?? [];
@@ -152,7 +187,7 @@ function pageClient() {
 }
 async function mockBackend(path, method, data, query) {
   if (path === '/view') {
-    const html = viewFragment(data.intent, data.fields);
+    const html = data.intent === 'files' ? filesFragment(data.fields?.files) : viewFragment(data.intent, data.fields);
     return { html: data.fragment ? html : fullPage(html) };
   }
   if (method === 'GET' && path === '/api/records') return { items: records.filter(record => record.title.includes(String(query.keyword || ''))) };
@@ -213,10 +248,19 @@ cindy.onHostMessage(async msg => {
       result = { ...dataResult({ files }), ...(!picked.ok ? { isError: true, content: [text('文件选择未完成；已成功导入的文件仍保留。')] } : {}) };
     } else if (msg.tool === 'upload_files') {
       const url = endpoint(a.path, ['/api/imports/stage']);
-      if (!Array.isArray(a.files) || !a.files.length || a.files.length > 4 || a.files.some(ref => !selectedFiles.has(ref) || !ref.startsWith('library:'))) throw new InputError('请先选择要上传的文件。');
+      const files = Array.isArray(a.files) && a.files.length <= 4 ? a.files : [];
+      // 按前缀分流：handoff: 是对话交接的副本，宿主只接受本插件收到过的引用；
+      // library: 必须来自本次运行里 pick_files 的选择。两种来源不混用。
+      const handoff = files.length > 0 && files.every(ref => typeof ref === 'string' && /^handoff:[0-9a-f-]{36}$/.test(ref));
+      if (!handoff && (!files.length || files.some(ref => !selectedFiles.has(ref) || !ref.startsWith('library:')))) throw new InputError('请先选择要上传的文件。');
       // 离线不上传；返回与 import_file 相同、标明离线的示例批次，页面照常预览和确认。
       if (USE_MOCK) result = dataResult(offlineBatch());
-      else result = dataResult(JSON.parse(checked(await cindy.fetch({ url, method: 'POST', upload: { library: a.files.map(ref => ref.slice(8)), field: 'file', fields: a.fields }, callId: msg.callId })).body));
+      else {
+        const upload = handoff ? { handoff: files, field: 'file', fields: a.fields } : { library: files.map(ref => ref.slice(8)), field: 'file', fields: a.fields };
+        const reply = await cindy.fetch({ url, method: 'POST', upload, callId: msg.callId });
+        if (reply?.errorCode === 'HANDOFF_UNAVAILABLE') throw new InputError('文件已失效，请在对话里重新发送。');
+        result = dataResult(JSON.parse(checked(reply).body));
+      }
     } else if (msg.tool === 'fetch_file') {
       const url = endpoint(a.path, ['/api/files']);
       // 与 Library 路径规则一致：每段最多 64 字符，不以点结尾，不用 Windows 保留名。
@@ -234,7 +278,16 @@ cindy.onHostMessage(async msg => {
         if (!response.library) throw new InputError('后端未返回文件。');
         result = { content: [text('文件已下载。'), { type: 'resource_link', uri: response.library.ref, name: a.name }] };
       }
+    } else if (msg.tool === 'import_file' && Array.isArray(a.cindy_handoff_files) && a.cindy_handoff_files.length) {
+      // 对话交接（0.1.123-beta 起）：只把引用和基本信息交给后端生成页面，不读取文件内容；
+      // 首屏只显示名称和大小，用户点按钮后才经 upload_files 上传。
+      const files = a.cindy_handoff_files.map(file => ({ ref: file?.ref, name: String(file?.name || ''), mimeType: String(file?.mimeType || ''), size: Number(file?.size) || 0 }));
+      if (files.some(file => typeof file.ref !== 'string' || !file.ref.startsWith('handoff:'))) throw new InputError('交接的文件引用无效。');
+      const page = await request(msg, '/view', 'POST', { intent: 'files', fields: { files }, fragment: false });
+      if (typeof page.html !== 'string' || !page.html.trim()) throw new InputError('后端没有返回有效页面。');
+      result = pageResult(page.html);
     } else if (msg.tool === 'import_file') {
+      // 没有交接能力（旧宿主或用户用 dir 交接）时的旧做法：立即暂存，把批次和预览写进首屏。
       let batch;
       if (USE_MOCK) {
         // 离线模式读不到交接的文件（dir 票据只能交给 uploadDir），页面会明确标出这是示例数据。

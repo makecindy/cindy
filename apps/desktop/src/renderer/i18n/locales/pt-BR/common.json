@@ -1119,6 +1119,7 @@
     "allow": "Permitir área de trabalho remota",
     "allowHint": "Permita que seus dispositivos conectados à conta visualizem e operem todos os apps neste computador. Ative também o controle de dispositivos acima.",
     "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte.",
+    "inputUnsupported": "O ambiente de área de trabalho atual deste computador não oferece suporte ao controle remoto do teclado e do mouse no Cindy.",
     "controlUnavailable": "O computador remoto não aceita comandos. Verifique as permissões de controle e a conexão e reconecte.",
     "beingControlled": "Sua área de trabalho está sendo controlada",
     "beingViewed": "Sua área de trabalho está sendo visualizada",
@@ -1244,7 +1245,6 @@
     "clipboardSyncSkipped": "Este formato não é compatível com a sincronização da área de transferência e foi ignorado.",
     "clipboardSyncTooLarge": "O conteúdo excede o limite de tamanho da sincronização da área de transferência e foi ignorado.",
     "clipboardSyncPermission": "A sincronização da área de transferência precisa de permissão para colar. Autorize e volte a esta janela para retomar.",
-    "clipboardSyncWaiting": "A área de transferência do computador remoto está indisponível no momento (ele pode estar bloqueado). A sincronização será retomada automaticamente.",
     "lockingOnExit": "Bloqueando computador…",
     "idleLock": "Desconectar e bloquear por inatividade",
     "idleNever": "Nunca",
@@ -5472,7 +5472,6 @@
         "title": "Usar meus logins do navegador",
         "description": "O Agent abrirá sites com suas contas conectadas no Chrome, Edge ou Brave.",
         "toggleAria": "Usar meus logins do navegador",
-        "unavailableEmbedded": "Aplica-se apenas ao navegador independente. Desativar esta opção exclui os arquivos de login copiados.",
         "confirmTitle": "Permitir que o Agent use seus logins do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. Você pode desativar a opção a qualquer momento; a cópia será excluída.",
         "confirmDescriptionMac": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. A leitura dos arquivos de login do Chrome também exige Acesso Total ao Disco. Você pode desativar esta opção a qualquer momento; a cópia será excluída.",
@@ -7593,6 +7592,20 @@
         "unknownPublisher": "Publicador desconhecido",
         "unknownReviewerDetail": "O pacote declara ter uma revisão, mas esta versão do Cindy não reconhece a chave do revisor, por isso ele não é exibido como revisado."
       },
+      "controlPoints": {
+        "title": "Verificações antes da execução",
+        "description": "Este plugin pode verificar automações ou rotinas antes de executarem. Pode pular ou parar uma execução, nunca aprová-la por você.",
+        "titleWithStartTask": "Quando este plugin entra em ação",
+        "descriptionWithStartTask": "Só entra em ação nas tarefas em que você o escolheu: antes de uma execução, só pode pulá-la ou pará-la; numa tarefa nova, escolhe um modelo uma vez, para a primeira mensagem. Nunca aprova nada por você.",
+        "usage": "Para usar, escolha-o em Verificação prévia ao editar uma automação ou rotina.",
+        "usageStartTask": "Para usar, escolha um modelo oferecido por ele no seletor de modelos de uma nova tarefa.",
+        "points": {
+          "will-schedule-run": "Antes de executar uma automação",
+          "will-routine-run": "Antes de executar uma rotina de um colega",
+          "will-start-task": "Ao iniciar uma nova tarefa"
+        },
+        "inactive": "Ainda indisponível. Permita ao atualizar ou reinstalar este plugin."
+      },
       "perm": {
         "mail": "Usar rascunhos de e-mail e cartões de envio",
         "mailDetail": "Edite e sincronize rascunhos em um cartão, com confirmação e contagem regressiva para desfazer antes do envio.",
@@ -7627,6 +7640,9 @@
         "agentDelegationDetail": "Os companheiros podem executar a tarefa delegada sob revisão automática. Não se passa pelo proprietário nem altera as permissões dos companheiros.",
         "agentTargets": "Pode enviar mensagens a projetos, tarefas existentes e companheiros",
         "agentTargetsDetail": "Pode visualizar diretórios de projetos locais e nomes e IDs de tarefas e companheiros, criar tarefas em projetos e enviar texto e imagens a tarefas existentes e companheiros. Pode iniciar execuções de IA e gerar cobranças de modelo. Esta API de envio, por si só, não pode ler o histórico de outras tarefas, alterar suas configurações nem interrompê-las.",
+        "agentObserve": "Pode ver a lista e o status das sessões de projetos locais",
+        "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o status (em execução, precisa de atenção, última atividade) das sessões dos projetos locais registrados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou arquivos, nem enviar mensagens ou alterar sessões.",
+        "agentObserveRequest": "Revisar permissão para ver sessões",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
@@ -7659,6 +7675,12 @@
         "subscribeHooksDetail": "Revisa cada mensagem antes do envio: pode bloqueá-la ou reescrever o texto antes que seja enviado; mensagens bloqueadas podem ser editadas e reenviadas.",
         "subscribeAssistantReply": "Pode ler e reescrever as respostas da IA",
         "subscribeAssistantReplyDetail": "Processa cada resposta da IA após sua conclusão: pode aprimorar ou reescrever o texto (substituindo-o diretamente, sem manter o original) ou substituir o balão de resposta por seu próprio cartão renderizado (nesse caso, o texto original é mantido e pode ser visto com um toque).",
+        "subscribeScheduleRun": "Pode verificar automações escolhidas antes de executarem",
+        "subscribeScheduleRunDetail": "As automações em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê o nome e as instruções e pode pular ou parar essa execução, mas não aprovar nada por você.",
+        "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de executarem",
+        "subscribeRoutineRunDetail": "As rotinas em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê as instruções e os eventos que as acionaram e pode pular ou parar essa execução, mas não aprovar nada por você.",
+        "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Escolhe uma vez; o modelo não muda durante a tarefa.",
         "card": "Renderiza cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar links externos que abrem seu navegador após confirmação",
         "cardExternalLinkDetail": "Clicar em um link de cartão exibe uma caixa de diálogo de confirmação; a URL só abre no navegador do sistema após sua aprovação. Apenas endereços http/https são permitidos.",
@@ -7849,6 +7871,22 @@
         "reveal": "Mostrar na lista de tarefas",
         "revealed": "Tarefa exibida na lista de tarefas",
         "revealFailed": "Não foi possível mostrar a tarefa na lista de tarefas"
+      },
+      "handoff": {
+        "title": "Arquivos entregues a este plugin em conversas",
+        "description": "Cópias dos arquivos que você entregou a este plugin em conversas. Cada cópia é excluída automaticamente após 7 dias sem uso.",
+        "empty": "Nenhum arquivo foi entregue a este plugin em uma conversa ainda.",
+        "loadFailed": "Não foi possível carregar a lista de arquivos. Tente novamente mais tarde.",
+        "refresh": "Atualizar",
+        "openInFinder": "Abrir no Finder",
+        "openInExplorer": "Abrir no Explorador de Arquivos",
+        "meta": "{{size}} · Entregue em {{handedAt}} · Excluído automaticamente em {{expiresAt}}",
+        "delete": "Excluir",
+        "deleteNamed": "Excluir {{name}}",
+        "deleteTitle": "Excluir este arquivo?",
+        "deleteDescription": "Após a exclusão, o plugin e as páginas abertas não poderão mais usar “{{name}}”. Não é possível desfazer.",
+        "deleteFailed": "Não foi possível excluir o arquivo. Tente novamente mais tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -10840,6 +10878,9 @@
         "chatUnavailable": "O serviço de conversa está indisponível. Verifique sua conexão e tente novamente.",
         "importPending": "O histórico do grupo ainda está sendo sincronizado. Tente novamente mais tarde.",
         "requestTimeout": "O resultado ainda não foi confirmado. Atualize para verificar antes de tentar novamente.",
+        "revisionConflict": "O trabalho foi alterado antes que esta ação pudesse ser concluída.",
+        "stopOwnershipUnknown": "Não foi possível parar parte do trabalho porque não foi possível verificar quem o solicitou.",
+        "nothingToStop": "Não há trabalho em andamento para parar.",
         "permissionDenied": "Você não tem permissão para gerenciar este grupo.",
         "serviceError": "O serviço de conversa não conseguiu concluir a solicitação. Tente novamente mais tarde.",
         "groupArchived": "Este grupo está arquivado. Esta ação está indisponível.",
@@ -12811,6 +12852,7 @@
     "cindyServiceUnavailable": "O serviço de voz do Cindy está indisponível. Verifique sua rede ou altere a fonte do serviço.",
     "asrServiceUnavailable": "O serviço de reconhecimento de voz não conseguiu conectar. Verifique sua rede e tente novamente.",
     "emptyTranscript": "Foi detectada fala, mas nenhum texto foi reconhecido. Tente novamente.",
+    "speakerFiltered": "Voz de outra pessoa ignorada",
     "connectionInterrupted": "A conexão de voz foi interrompida. Verifique sua rede e tente novamente.",
     "recognitionStalled": "O reconhecimento de voz parou de retornar resultados. Tente novamente.",
     "transcriptKept": "{{message}} O texto reconhecido até agora foi mantido — você pode editá-lo diretamente.",
@@ -12836,6 +12878,14 @@
     "verificationFailed": "O Cindy não conseguiu confirmar se o login do ChatGPT foi restaurado. Verifique novamente."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "escolheu para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa"
+      }
+    },
     "imageDelivery": {
       "stored": "Imagem entregue",
       "failed": "Não foi possível entregar a imagem. Tente transferir novamente a imagem existente.",
@@ -15442,6 +15492,25 @@
         },
         "browse": "Escolha um arquivo de script (ou arraste um para o campo)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Verificar com",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Antes de cada execução, a Cindy consulta o plugin escolhido. Ele pode deixar a execução seguir, pular esta execução ou interrompê-la. Nunca pode aprovar algo que precise da sua confirmação.",
+        "choose": "Escolher plugin",
+        "unavailable": "Plugin indisponível",
+        "unavailableHint": "Este plugin não está mais disponível. Até você escolher outro, vale a opção “Se o plugin falhar”.",
+        "hint": "O plugin pode deixar a execução seguir, pular esta execução ou interrompê-la. Nunca pode aprovar nada por você.",
+        "empty": "Ainda não há plugins que possam verificar execuções. Instale um plugin compatível com verificação prévia e permita-a ao instalar ou atualizar.",
+        "onFailureLabel": "Se o plugin falhar",
+        "onFailure": {
+          "allow": "Executar normalmente",
+          "skip": "Pular esta execução",
+          "block": "Parar e marcar como falha"
+        }
+      },
       "validation": {
         "nameRequired": "O nome é obrigatório",
         "promptRequired": "O prompt é obrigatório",
@@ -15454,6 +15523,7 @@
         "modelUnavailable": "O modelo {{model}} não está mais disponível. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio deve ser um de {{values}}",
         "preRunHookCommandRequired": "Insira o comando de verificação prévia",
+        "preRunPluginRequired": "Escolha um plugin para a verificação prévia",
         "templateParamRequired": "Insira {{label}}",
         "templateApplyFailed": "Não foi possível aplicar o modelo. Verifique os parâmetros e tente novamente."
       }
@@ -15941,6 +16011,7 @@
       "titleRevealPath": "Permitir que o Agent receba o caminho local deste arquivo de mídia?",
       "count": "{{count}} arquivos",
       "descriptionAttachments": "Os arquivos abaixo estão fora do diretório de trabalho desta sessão. Se você permitir, eles serão repassados a este plugin (ele recebe apenas impressões digitais do conteúdo, nunca caminhos).",
+      "descriptionHandoff": "Os arquivos abaixo estão fora do diretório de trabalho desta sessão. Se você permitir, o plugin recebe cópias deles (nunca os caminhos); as cópias são excluídas automaticamente após 7 dias sem uso.",
       "descriptionDir": "O diretório/arquivo abaixo está fora do diretório de trabalho desta sessão. Se você permitir, seus arquivos serão repassados a este plugin para envio (ele recebe apenas um tíquete de uso único, nunca caminhos).",
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se você permitir, este plugin poderá salvar nele os arquivos baixados (arquivos existentes nunca são sobrescritos).",
       "descriptionRevealPath": "O caminho só é retornado ao Agent atual após sua permissão e passará a fazer parte do registro da conversa; dispositivos pareados podem sincronizar esse registro. Isso não concede a nenhum plugin acesso ao arquivo.",
@@ -17780,6 +17851,7 @@
     "sessionModeFresh": "Nova sessão a cada gatilho (isolar contexto)",
     "sessionModeHint": "A opção persistente mantém uma única conversa da rotina. Uma nova sessão cria e fecha uma conversa isolada para cada gatilho.",
     "quietHint": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
+    "checkSource": "Verificar com",
     "checkCommand": "Comando de verificação prévia",
     "checkHint": "Opcional. Verifica o computador antes de cada execução: exit 2 pula a execução, exit 0 continua, erros permanecem visíveis. Limpe para remover.",
     "timeoutMs": "Tempo limite da verificação (ms, em branco para sem limite)",
@@ -17848,6 +17920,14 @@
       "pendingTurns_many": "{{count}} trocas",
       "lastLearned_many": "{{count}} alterações",
       "readTurns_many": "{{count}} trocas lidas"
+    },
+    "remote": {
+      "pause": "Pausar rotina",
+      "resume": "Retomar rotina",
+      "addSchedule": "Adicionar horário",
+      "addInterval": "Adicionar intervalo",
+      "addEvent": "Adicionar gatilho de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

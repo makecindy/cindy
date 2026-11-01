@@ -459,6 +459,11 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** Device ownership resolved by the session view: a device id = remote task,
+   *  null = confirmed local task, undefined = not resolved yet (or unknown to
+   *  the caller). Local-only capabilities that read this machine's file system
+   *  with the session working dir wait for null. */
+  ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
@@ -3011,6 +3016,7 @@ export function MessageStream({
   sessionTitle,
   agentKind,
   remoteHostId,
+  ownerDeviceId,
   sessionSource,
   onDiagnoseError,
   workingDir,
@@ -3097,7 +3103,7 @@ export function MessageStream({
   // 会话文件来源上下文(local / device-link / SSH):顶层构造一次,经
   // ChatSessionFileProvider 下发给整棵消息树;galleryDeviceId 也从这里同源取
   // (见 sessionImageSrcs 处注释)。
-  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
+  const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId, ownerDeviceId);
 
   /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
   const shareSelectionActive = useShareSelectionActive(sessionId);
@@ -3205,6 +3211,13 @@ export function MessageStream({
     return resolveRestoredRenderWindow(restoreSnapshotRef.current).forwardItems;
   });
   const [highlightMessageClientId, setHighlightMessageClientId] = useState<string | null>(null);
+  // A navigation highlight is a temporary locator. Keep its expiry independent
+  // of streaming/layout updates so new content cannot leave it stuck on screen.
+  useEffect(() => {
+    if (!highlightMessageClientId) return;
+    const timer = window.setTimeout(() => setHighlightMessageClientId(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [highlightMessageClientId, focusMessageRequestId]);
   const lastAppliedFocusRef = useRef<string | null>(null);
   const lastMissingFocusRef = useRef<{
     clientId: string;
@@ -3963,6 +3976,7 @@ export function MessageStream({
       ? `${focusMessageRequestId ?? 0}:${focusMessageClientId}`
       : null;
     if (!focusMessageClientId || !focusRequestKey) {
+      setHighlightMessageClientId(null);
       lastAppliedFocusRef.current = null;
       lastMissingFocusRef.current = null;
       cancelFocusJump({ refreshAnchor: true });
@@ -3974,6 +3988,7 @@ export function MessageStream({
       cancelFocusJump({ refreshAnchor: true });
     }
     if (lastAppliedFocusRef.current === focusRequestKey) return;
+    setHighlightMessageClientId(null);
     const lastItemKey = allRenderItems.at(-1)?.key ?? null;
     const missingFocus = lastMissingFocusRef.current;
     if (
@@ -4042,8 +4057,8 @@ export function MessageStream({
       settleFocusJump,
       2500,
     );
-    // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
-    // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
+    // 高亮等落定后再点亮；点亮后由独立的到期 effect 清除并淡出。
+    // scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
     focusHighlightTimerRef.current = window.setTimeout(() => {
       setHighlightMessageClientId(focusMessageClientId);
       focusHighlightTimerRef.current = null;
@@ -6780,7 +6795,7 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 transition-colors', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
                           {startsUnread ? (
                             <div
@@ -6823,7 +6838,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 transition-colors',
+                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
                           shareable && 'relative',
                           highlightClass,
                         )}

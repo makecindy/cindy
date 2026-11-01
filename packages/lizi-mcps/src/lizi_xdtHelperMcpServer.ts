@@ -158,7 +158,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
+  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
   control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',

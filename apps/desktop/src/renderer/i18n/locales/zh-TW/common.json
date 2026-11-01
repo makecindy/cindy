@@ -1216,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暫不支援剪貼簿同步，已略過",
     "clipboardSyncTooLarge": "內容超出剪貼簿同步大小限制，已略過",
     "clipboardSyncPermission": "剪貼簿同步需要貼上權限，授權後回到視窗即可恢復",
-    "clipboardSyncWaiting": "遠端電腦的剪貼簿暫時無法存取（可能已鎖定螢幕），解鎖後會自動繼續同步。",
     "lockingOnExit": "正在鎖定電腦…",
     "idleLock": "閒置後中斷並鎖定螢幕",
     "idleNever": "永不",
@@ -5375,7 +5374,6 @@
         "title": "使用我的瀏覽器登入態",
         "description": "Agent 會用你在 Chrome、Edge 或 Brave 裡已登入的身分造訪網站。",
         "toggleAria": "使用我的瀏覽器登入態",
-        "unavailableEmbedded": "只對獨立瀏覽器生效。關閉後會刪除已複製的登入檔。",
         "confirmTitle": "允許 Agent 使用你的瀏覽器登入態？",
         "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
         "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完全磁碟存取權」。可以隨時關掉，拷貝會被刪除。",
@@ -7484,6 +7482,20 @@
         "unknownPublisher": "未知釋出者",
         "unknownReviewerDetail": "包裡帶有稽核宣告，但當前 Cindy 不認識這把稽核公鑰，因此不會顯示為已稽核。"
       },
+      "controlPoints": {
+        "title": "執行前檢查",
+        "description": "這個插件可以在自動化或例行任務執行前做檢查：只能跳過或停止這次執行，不能替你核准。",
+        "titleWithStartTask": "插件介入的時機",
+        "descriptionWithStartTask": "只在你選了它的任務裡介入：執行前只能跳過或停止這次執行，開新任務時只為第一則訊息選一次模型。都不能替你核准。",
+        "usage": "使用方式：編輯自動化或例行任務時，在「前置檢查」裡選它。",
+        "usageStartTask": "使用方式：在新任務的模型選擇器裡選它提供的模型。",
+        "points": {
+          "will-schedule-run": "自動化執行前",
+          "will-routine-run": "夥伴的例行任務執行前",
+          "will-start-task": "開新任務時"
+        },
+        "inactive": "還不能使用。更新或重新安裝這個插件時允許即可。"
+      },
       "perm": {
         "mail": "使用郵件草稿與傳送卡片",
         "mailDetail": "可在卡片中編輯和同步草稿，並在傳送前提供確認與撤銷倒數。",
@@ -7518,6 +7530,9 @@
         "agentDelegationDetail": "夥伴按委派範圍執行並接受自動審核；不冒用主人身分，不修改夥伴權限。",
         "agentTargets": "可向專案、現有任務和夥伴投遞訊息",
         "agentTargetsDetail": "可查看本機專案目錄、任務和夥伴的名稱與識別碼，在專案中新建任務或向現有任務、夥伴傳送文字和圖片。可能觸發 AI 執行並產生模型費用。此投遞介面本身無法讀取其他任務的歷史、修改設定或停止任務。",
+        "agentObserve": "可查看本機專案的任務列表和狀態",
+        "agentObserveDetail": "可查看已登記本機專案中任務的標題、Agent 類型、封存情況和狀態（執行中、待處理、最近活動時間），並在主視窗開啟某個任務。無法讀取訊息、計畫或檔案，也無法傳送訊息或修改任務。",
+        "agentObserveRequest": "確認任務檢視權限",
         "agentHiddenTasks": "可建立不顯示在任務列表裡的後臺任務",
         "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「後臺任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
@@ -7550,6 +7565,12 @@
         "subscribeHooksDetail": "傳送前先經它審閱：可攔下訊息，也可能改寫正文後再發出；被攔的訊息可編輯後重發。",
         "subscribeAssistantReply": "可讀取並重寫 AI 的回覆",
         "subscribeAssistantReplyDetail": "AI 每輪迴復完成後先經它處理：可潤色改寫正文(直接替換，不留原文)，或用自繪卡片替換回復氣泡(卡片替換時原文保留，可一鍵檢視)。",
+        "subscribeScheduleRun": "可在你選定的自動化執行前做檢查",
+        "subscribeScheduleRunDetail": "在「前置檢查」裡選了它的自動化，執行前會先詢問它。它看得到這項自動化的名稱和指令，可以讓這次跳過或停止，但不能替你核准。",
+        "subscribeRoutineRun": "可在你選定的夥伴例行任務執行前做檢查",
+        "subscribeRoutineRunDetail": "在「前置檢查」裡選了它的例行任務，每次觸發後會先詢問它。它看得到例行任務的指令和觸發它的事件內容，可以讓這次跳過或停止，但不能替你核准。",
+        "subscribeStartTask": "可為新任務選模型",
+        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。只選一次，任務中途不會換模型。",
         "card": "渲染訊息卡片",
         "cardExternalLink": "卡片內可宣告外鏈，經你確認後開啟瀏覽器",
         "cardExternalLinkDetail": "卡片中的連結點選後會彈出確認框，你同意後才會在系統瀏覽器中開啟；僅限 http/https 地址。",
@@ -7740,6 +7761,22 @@
         "reveal": "顯示到任務列表",
         "revealed": "任務已顯示到任務列表",
         "revealFailed": "未能將任務顯示到任務列表"
+      },
+      "handoff": {
+        "title": "對話中交給插件的檔案",
+        "description": "這些是你在對話中交給該插件的檔案副本，7 天未使用後自動刪除。",
+        "empty": "還沒有在對話中交給該插件的檔案。",
+        "loadFailed": "無法讀取檔案列表，請稍後再試。",
+        "refresh": "重新整理",
+        "openInFinder": "在 Finder 中開啟",
+        "openInExplorer": "在檔案總管中開啟",
+        "meta": "{{size}} · 交出於 {{handedAt}} · {{expiresAt}} 自動刪除",
+        "delete": "刪除",
+        "deleteNamed": "刪除 {{name}}",
+        "deleteTitle": "刪除這個檔案？",
+        "deleteDescription": "刪除後，插件和已開啟的頁面都無法再使用「{{name}}」，且無法復原。",
+        "deleteFailed": "刪除失敗，請稍後再試。",
+        "cancel": "取消"
       },
       "library": {
         "title": "持久作品庫",
@@ -10702,6 +10739,9 @@
         "hostNotReady": "Cindy 還在準備中，請稍後重試",
         "planOpen": "正在分工，做完或停止後才能安排新的",
         "planClosed": "這個安排已經結束或更新了",
+        "revisionConflict": "工作狀態已變更，未能完成操作",
+        "stopOwnershipUnknown": "部分工作未能停止：無法確認由誰發起",
+        "nothingToStop": "目前沒有可停止的工作",
         "invalidAttachment": "附件無法讀取，請重新選擇後傳送。",
         "attachmentUnavailable": "未能從手機取回附件，請檢查裝置連線後重試。",
         "attachmentTooLarge": "附件超過 100 MB，請選擇較小的檔案。",
@@ -12657,6 +12697,7 @@
     "cindyServiceUnavailable": "Cindy 官方語音服務暫不可用，請檢查網路或切換服務來源。",
     "asrServiceUnavailable": "語音識別服務連線失敗，請檢查網路或稍後重試。",
     "emptyTranscript": "檢測到了語音，但沒有識別出文字，請重試。",
+    "speakerFiltered": "已忽略其他人的聲音",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音識別沒有繼續返回結果，請重試。",
     "transcriptKept": "{{message}}（識別出的文字已經保留，可以直接編輯）",
@@ -12682,6 +12723,14 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "為這個任務選了",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用"
+      }
+    },
     "teammateProcess": {"record":"處理紀錄","operations":"操作記錄","elapsed":"已處理 {{duration}}","took":"用時 {{duration}}","processing":"正在處理","worked":"處理紀錄","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次呼叫失敗","separator":"、","actions":{"running":{"read":"正在檢視檔案","edit":"正在編輯檔案","search":"正在尋找內容","web":"正在查閱網頁","command":"正在執行指令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理計畫"},"done":{"read":"檢視了檔案","edit":"編輯了檔案","search":"尋找了內容","web":"查閱了網頁","command":"執行了指令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了計畫"}}},
     "imageDelivery": {
       "stored": "圖片已交付",
@@ -15200,6 +15249,25 @@
         },
         "browse": "選擇指令碼檔案（也可直接拖拽到輸入框）"
       },
+      "preRunPlugin": {
+        "sourceLabel": "檢查方式",
+        "source": {
+          "script": "腳本",
+          "plugin": "插件"
+        },
+        "tooltip": "每次執行前先詢問你選的插件：它可以放行、跳過這次或停止這次執行，不能替你核准任何需要你確認的事。",
+        "choose": "選擇插件",
+        "unavailable": "插件無法使用",
+        "unavailableHint": "這個插件已經無法使用。改選其他插件前，執行時依「插件出錯時」的設定處理。",
+        "hint": "插件可以放行、跳過這次或停止這次執行，不能替你核准任何事。",
+        "empty": "還沒有能做執行前檢查的插件。安裝支援執行前檢查的插件，並在安裝或更新時允許。",
+        "onFailureLabel": "插件出錯時",
+        "onFailure": {
+          "allow": "照常執行",
+          "skip": "跳過這次",
+          "block": "停止並記為失敗"
+        }
+      },
       "validation": {
         "nameRequired": "請填寫名稱",
         "promptRequired": "請填寫 Prompt",
@@ -15212,6 +15280,7 @@
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
         "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
+        "preRunPluginRequired": "請為前置檢查選擇插件",
         "templateParamRequired": "請填寫{{label}}",
         "templateApplyFailed": "無法套用模板，請檢查參數後重試"
       }
@@ -15697,6 +15766,7 @@
       "titleRevealPath": "允許 Agent 取得這個媒體檔案的本機路徑？",
       "count": "{{count}} 個檔案",
       "descriptionAttachments": "以下檔案在當前任務的工作目錄之外。允許後，這些檔案會交給該插件處理(它只拿到內容指紋，拿不到路徑)。",
+      "descriptionHandoff": "以下檔案在目前任務的工作目錄之外。允許後，插件會收到這些檔案的副本（拿不到路徑），副本 7 天未使用後自動刪除。",
       "descriptionDir": "以下目錄/檔案在當前任務的工作目錄之外。允許後，其中的檔案會交給該插件上傳(它只拿到一次性票據，拿不到路徑)。",
       "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該插件可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
       "descriptionRevealPath": "該路徑只會在你允許後回傳給目前 Agent，並進入對話記錄；配對裝置可能同步該記錄。此操作不授予插件讀取檔案的權限。",
@@ -17518,6 +17588,7 @@
     "sessionModeFresh": "每次新建任務（隔離上下文）",
     "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
     "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
+    "checkSource": "檢查方式",
     "checkCommand": "前置檢查命令",
     "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
     "timeoutMs": "檢查逾時（毫秒，留空不限時）",
@@ -17583,6 +17654,14 @@
         "skillDisabled": "停用了技能「{{title}}」",
         "skillMerged": "把技能「{{title}}」併入「{{into}}」並停用"
       }
+    },
+    "remote": {
+      "pause": "暫停例行任務",
+      "resume": "恢復例行任務",
+      "addSchedule": "新增定時條件",
+      "addInterval": "新增間隔條件",
+      "addEvent": "新增事件觸發器",
+      "filterField": "篩選欄位"
     }
   },
   "cindyMakeDoctor": {

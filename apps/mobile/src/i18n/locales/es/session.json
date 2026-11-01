@@ -780,5 +780,17 @@
     "confirm": "Cambiar",
     "remember": "Cambia y hazlo automáticamente a partir de ahora (solo esta tarea)",
     "cancel": "Cancelar"
+  },
+  "messageEdit": {
+    "editing": "Editando mensaje",
+    "discard": "Descartar edición del mensaje",
+    "stopTimeout": "Se agotó el tiempo de espera para detener la tarea. Vuelve a intentarlo",
+    "queueNotEmpty": "Esta sesión tiene mensajes en cola. Envíalos o elimínalos antes de editar",
+    "notLast": "Hay un mensaje más reciente en esta sesión. Este ya no es el último y no se puede editar",
+    "failed": "No se pudo editar y reenviar. Vuelve a intentarlo",
+    "noPriorAssistant": "No hay ninguna respuesta de la IA antes de este mensaje y la versión de Cindy del ordenador aún no puede editarlo. Actualiza Cindy en el ordenador y vuelve a intentarlo.",
+    "uploadsPending": "Todavía se están subiendo archivos adjuntos. Espera a que terminen antes de editar el mensaje.",
+    "rollbackHint": "Al enviar, se desharán los cambios en {{count}} archivo(s) del último turno",
+    "conversationOnlyHint": "Al enviar, no se restaurarán los archivos del proyecto; los cambios anteriores se conservarán"
   }
 }

@@ -558,3 +558,71 @@ it.each([false, true])('shows the executing teammate rather than a queued teamma
   expect(row.textContent).not.toContain('咪咪');
   expect(row.textContent).not.toContain('bots.groupChat.header.queued');
 });
+
+describe('collapsed avatar strip mentions', () => {
+  const mentionLabel = 'bots.groupChat.server.thread.hintMentioned';
+  const collapse = () => fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+  afterEach(() => window.localStorage.clear());
+
+  it('turns the group avatar status point into @ for an unread mention, keeping the running color', async () => {
+    mocks.groups = [
+      group({ speakingBotIds: ['mimi'], serverUnread: { count: 2, mentioned: true } }),
+      group({ id: 'g2', name: '读书会', serverUnread: { count: 1, mentioned: false } }),
+    ];
+    mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'running' }]]);
+    const view = await renderSidebar();
+    collapse();
+    // The running point itself carries the @: one indicator, status color kept.
+    const marked = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.running · ${mentionLabel}` });
+    expect(marked.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
+    const point = marked.querySelector<HTMLElement>('[data-teammate-mention]');
+    expect(point?.getAttribute('data-teammate-status')).toBe('running');
+    expect(point?.style.backgroundColor).toBe('var(--status-bar-accent)');
+    // An unread group without an @ keeps only its status dot.
+    const plain = screen.getByRole('button', { name: /^读书会 · / });
+    expect(plain.getAttribute('aria-label')).not.toContain(mentionLabel);
+    expect(plain.querySelector('[data-teammate-mention]')).toBeNull();
+    expect(view.container.querySelectorAll('[data-teammate-mention]')).toHaveLength(1);
+  });
+
+  it('paints the @ unread blue when the group is not running, even after a completed reply', async () => {
+    mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
+    await renderSidebar();
+    collapse();
+    const point = screen.getByRole('button', { name: `周末出游 · bots.avatarStatus.done · ${mentionLabel}` })
+      .querySelector<HTMLElement>('[data-teammate-mention]');
+    expect(point?.style.backgroundColor).toBe('var(--bot-unread-bg)');
+  });
+
+  it('drops the mark once the mention is no longer unread', async () => {
+    mocks.groups = [group({ serverUnread: { count: 0, mentioned: true } })];
+    const view = await renderSidebar();
+    collapse();
+    expect(screen.getByRole('button', { name: '周末出游' })).toBeTruthy();
+    expect(view.container.querySelector('[data-teammate-mention]')).toBeNull();
+  });
+
+  it('carries a hidden group mention onto the +N overflow entry', async () => {
+    const original = globalThis.ResizeObserver;
+    // One slot: every chat folds into +N.
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 48 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.groups = [group({ serverUnread: { count: 1, mentioned: true } })];
+      await renderSidebar();
+      collapse();
+      const more = screen.getByRole('button', { name: `bots.list.sectionExpand · +3 · ${mentionLabel}` });
+      expect(more.querySelector('[data-teammate-mention]')).not.toBeNull();
+      // Mouse users read the same words as the accessible name.
+      fireEvent.pointerEnter(more);
+      fireEvent.pointerMove(more, { pointerType: 'mouse' });
+      expect((await screen.findByRole('tooltip')).textContent).toBe(`bots.list.sectionExpand · +3 · ${mentionLabel}`);
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+});

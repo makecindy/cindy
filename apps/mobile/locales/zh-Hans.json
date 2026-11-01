@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy 需要使用麦克风，以便在远程任务中进行语音输入。",
+    "NSCameraUsageDescription": "Cindy 需要使用相机，以便拍摄照片并添加到远程任务中。",
+    "NSPhotoLibraryUsageDescription": "Cindy 需要访问照片图库，以便显示最近的照片和截屏，供你快速添加附件。"
+  }
+}

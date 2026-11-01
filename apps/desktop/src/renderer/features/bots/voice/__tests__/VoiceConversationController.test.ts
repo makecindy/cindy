@@ -875,6 +875,27 @@ describe('automatic voice exit', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // Rule: companion-voice-mode「本机声纹过滤」. Someone else's muted speech is
+  // explained on the call bar but is not activity: it must not postpone idle
+  // exit, and ending the call drops the notice with its timer.
+  it('shows the voiceprint notice briefly without postponing idle exit', async () => {
+    const f = fixture();
+    await f.controller.start(selection);
+    await vi.advanceTimersByTimeAsync(50_000);
+    f.emit({ type: 'speaker-filtered' });
+    expect(f.controller.getSnapshot().speakerFiltered).toBe(true);
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(f.controller.getSnapshot().speakerFiltered).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.controller.getSnapshot().speakerFiltered).toBe(false);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(f.controller.getSnapshot().exitCountdown?.reason).toBe('idle');
+    f.emit({ type: 'speaker-filtered' });
+    f.controller.end();
+    expect(f.controller.getSnapshot().speakerFiltered).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('ends on a final explicit voice command while preserving accepted task work', async () => {
     const f = fixture();
     await f.controller.start(selection);

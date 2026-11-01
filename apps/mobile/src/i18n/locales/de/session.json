@@ -775,5 +775,17 @@
     "confirm": "Wechseln",
     "remember": "Wechseln und künftig automatisch wechseln (nur für diese Aufgabe)",
     "cancel": "Abbrechen"
+  },
+  "messageEdit": {
+    "editing": "Nachricht bearbeiten",
+    "discard": "Bearbeitung der Nachricht verwerfen",
+    "stopTimeout": "Zeitüberschreitung beim Warten auf das Beenden der Aufgabe – versuch es erneut",
+    "queueNotEmpty": "Diese Sitzung hat Nachrichten in der Warteschlange – sende oder entferne sie vor dem Bearbeiten",
+    "notLast": "In dieser Sitzung gibt es eine neuere Nachricht – diese ist nicht mehr die neueste und kann nicht bearbeitet werden",
+    "failed": "Bearbeiten und erneutes Senden fehlgeschlagen. Versuch es erneut",
+    "noPriorAssistant": "Vor dieser Nachricht gibt es keine KI-Antwort, und die Cindy-Version auf dem Computer kann sie noch nicht bearbeiten. Aktualisiere Cindy auf dem Computer und versuch es erneut.",
+    "uploadsPending": "Es werden noch Anhänge hochgeladen. Warte, bis der Upload abgeschlossen ist, und bearbeite die Nachricht dann.",
+    "rollbackHint": "Beim Senden werden Änderungen an {{count}} Datei(en) aus dem letzten Durchgang rückgängig gemacht",
+    "conversationOnlyHint": "Beim Senden werden Projektdateien nicht wiederhergestellt; bisherige Dateiänderungen bleiben erhalten"
   }
 }

@@ -212,6 +212,35 @@ await cindy.library({
 - Host 复用 owner-scoped safeStorage 的设备密钥和首次公钥固定机制，采用 X25519 / AES-GCM。
   Device Link relay 只搬运密文；离线没有云端存储，不承诺两台从不同时在线的电脑能够交换。
 
+### 4.10.3 对话里交给插件的文件（cindy_handoff_files）
+
+用户在对话里发 CSV、XLSX 等非媒体文件，页面要等用户点按钮才处理时使用。在工具参数表里
+声明保留参数 `cindy_handoff_files`（`{"type":"array"}`），模型就会把这类文件放进 ghost_call
+的 attachments；宿主保存一份副本，插件收到
+`args.cindy_handoff_files=[{ref:'handoff:<uuid>',name,mimeType,size,sha256,createdAt,expiresAt}]`。
+未声明时非媒体文件照旧要求改用 dir。不需要声明 library。在这个工具自己的说明里写明「用户在对话里发的
+文件，用 ghost_call 的 attachments 交给本工具」：工具说明离模型的调用决定最近，模型才不会误用 dir。
+
+- 这个参数只由宿主填写：模型或页面自带的同名值会被删掉。页面回传引用请用你自己的参数名。
+- 一次最多 4 个文件，单个 64 MiB、一批 128 MiB；每个插件最多保存 512 MiB / 200 个，满了新交接
+  会被拒绝。工作目录外的文件按当前权限档确认。
+- 处理文件只有两条路：发给后端用 `cindy.fetch({method:'POST',upload:{handoff:[ref]},...})`
+  （与 hashes / library 三选一，文件名是净化后的原名，另附 `filename*`）；本机处理则由页面从
+  `hostContext.toolInfo.tool._meta['cindy/attachments']` 找到同一 `uri` 的项，用
+  `_meta['cindy/file'].url` 读取，在页面里解析后再调用你的 app-only 工具保存结果。
+- 插件拿不到字节和路径，也不能删除副本；副本连续 7 天未使用后宿主自动删除（卡片签发地址、
+  页面读取、`upload.handoff` 上传成功都算使用，会顺延），用户也可以在插件详情页逐个删除。
+  之后上传返回 `errorCode:'HANDOFF_UNAVAILABLE'`，页面上该项没有 `url`；请提示用户重新发送。
+  `expiresAt` 是收到时的当前到期时间，使用时会顺延，不要把它当成固定截止时间。
+- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程不能使用这个能力。
+- 需要 `minCindyVersion: 0.1.123-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
+
+```js
+// main.js 里 app-only 的 confirm_import：页面把 ref 作为 file 传回
+const reply = await cindy.fetch({ url: 'https://api.example.com/import', method: 'POST',
+  upload: { handoff: [msg.args.file] }, callId: msg.callId });
+```
+
 ### 在交互页面里使用文件
 
 工具返回 resource_link，uri 使用 Library 相对引用或本插件媒体引用；页面从该内容块的

@@ -295,6 +295,7 @@ export type { VisionCapability } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,
+  localModelDescription,
   isLocalModelLibraryName,
 } from "./localModelCatalog.js";
 export type {
