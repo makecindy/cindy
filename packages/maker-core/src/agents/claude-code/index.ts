@@ -4482,6 +4482,20 @@ export class ClaudeCodeAgent extends BaseAgent {
                       ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
                       : undefined,
                     onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
+                    onExit: ({ pid, exitCode, signal, abortRequested }) => {
+                      const details = {
+                        pid,
+                        exitCode,
+                        signal,
+                        abortRequested,
+                        sessionId: opts.sessionId ?? null,
+                      };
+                      if (signal !== null && !abortRequested) {
+                        log.warn('Claude Code SDK process exited after an unrequested signal', details);
+                      } else {
+                        log.info('Claude Code SDK process exited', details);
+                      }
+                    },
                   }),
               }
             : {}),
