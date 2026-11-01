@@ -1,3 +1,10 @@
+import {
+  createPiIdleReleaseWatcher,
+  piIdleReleaseCandidateWhere,
+  piIdleReleaseIdleSince,
+  DEFAULT_PI_IDLE_RELEASE_MINUTES,
+  type PiIdleReleaseWatcher,
+} from './piIdleReleaseWatcher.js';
 import { createOrcaPluginAuthority } from '@cindy/app-runtime/orcaPluginAuthority';
 import {createSessionRewindInputBoundary} from '@cindy/app-runtime/sessionRewindInputBoundary';
 import {createBotTodoDelivery} from '@cindy/app-runtime/botTodoDelivery';
@@ -2689,6 +2696,7 @@ export async function dispatchInterAgentMessage(
 
 /** 模块级 idle watcher；停止后不再持有可能已经失效的 maker 引用。 */
 let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
+let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -2731,6 +2739,11 @@ function createBridgeWorkerLabel(task: string): string {
 export function stopOrcaIdleWatcher(): void {
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
+}
+
+export function stopPiIdleReleaseWatcher(): void {
+  piIdleReleaseWatcher?.stop();
+  piIdleReleaseWatcher = null;
 }
 
 function requireAgentKind(value: unknown): AgentKind {
@@ -13911,6 +13924,49 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   idleReleaseWatcher.start();
+
+  // ─── pi 普通与插件会话 idle watcher ──────────────────────────────────────
+  // 插件隐藏任务也由宿主回收；Orca 角色/远程/bot 与 IM 沿用各自生命周期。
+  // 归档会话也纳入(归档不关运行时)，其余安全闸门见
+  // piIdleReleaseWatcher；释放后下一次发送走 lazy create-session 透明重建。
+  piIdleReleaseWatcher?.stop();
+  piIdleReleaseWatcher = createPiIdleReleaseWatcher({
+    readIdleReleaseMinutes: () => DEFAULT_PI_IDLE_RELEASE_MINUTES,
+    listCandidates: async (idleBeforeMs) => {
+      const idleSince = piIdleReleaseIdleSince();
+      const rows = await getDbClient()
+        .drizzle
+        .select({ id: sessions.id, idleSinceMs: idleSince })
+        .from(sessions)
+        .where(and(piIdleReleaseCandidateWhere(), sql`${idleSince} < ${idleBeforeMs}`));
+      return rows.map((row) => ({ id: row.id, idleSinceMs: Number(row.idleSinceMs) }));
+    },
+    readIdleSinceMs: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle
+        .select({ idleSinceMs: piIdleReleaseIdleSince() })
+        .from(sessions)
+        .where(and(eq(sessions.id, sessionId), piIdleReleaseCandidateWhere()))
+        .limit(1);
+      return row ? Number(row.idleSinceMs) : null;
+    },
+    getSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    withSessionLock: withSendToSessionLock,
+    hasPendingInput: hasPendingIdleReleaseInput,
+    hasScheduledAutoResume: (sessionId) => {
+      const coordinator = agentInputCoordinatorHolder;
+      if (!coordinator) return false;
+      return (
+        coordinator.isAutoResumePending(sessionId) ||
+        coordinator.getAutoResumeAttemptToken(sessionId) !== null ||
+        coordinator.hasQueuedAutoResume(sessionId)
+      );
+    },
+    now: Date.now,
+    timer: { setInterval, clearInterval },
+    log,
+  });
+  piIdleReleaseWatcher.start();
 
   let applySessionRuntimeSelection: (
     sessionId: string,

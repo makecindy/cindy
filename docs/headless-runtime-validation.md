@@ -170,3 +170,11 @@ worktree-core、Terminal 类型检查通过；Desktop 全量检查 224 条诊断
 共享工厂引入额外的同进程多宿主边界：heldLeaseFiles 必须为进程共有，否则另一个宿主会将相同 PID 下较旧的心跳误判为旧进程遗留。沿用 Terminal worktrees/host.test.ts 的真实占用测试，在租约仍被持有时将时间调到二十五小时前，再经另一生产工厂读取；原先实例局部集合先失败，改为进程共有后通过。没有新增测试文件、真实等待或模块重载。该 integration tier 使用真实 Git、SQLite 与 Node archive worker，全文件 3 项通过（28.09 秒，收集 12.55 秒、执行 15.09 秒）；保留原有恢复与释放断言。
 
 Desktop 租约、进程身份、回收与维护四文件 172 项全部通过（8.29 秒），先前六项租约失败消除。Desktop 全量类型检查仍 224 条诊断，本批文件无诊断；共享 worktree-core 与 Terminal 类型检查另行复核。未验证真实账号多端长期负载；主干冲突、完整 CI 和余下类型迁移仍未完成，在线 VPS 未修改。
+
+### Desktop Pi 空闲回收接线（2026-11-01）
+
+registerMakerIpc 补回主干 Pi watcher 的启动与重新注册清理，并导出 bootstrap 退出路径已调用的 stopPiIdleReleaseWatcher。每五分钟扫描空闲三十分钟的本机普通桌面及插件 Pi 任务；归档纳入，其他隐藏任务、伙伴、IM、Orca、SSH 与其他设备任务排除。扫描与发送锁内复查使用同一 SQL 条件及最新活动时间，保留回合、后台任务、待续跑、自动续跑和排队输入保护，最终调用已有 closeIfIdle。下一次发送沿原生 session ID 懒恢复，不改 Terminal Codex 回收策略、插件批准或持久数据。
+
+Pi watcher 16 项通过（单文件 1.92 秒），Session.close 47 项通过（2.36 秒）。在既有 watcher 文件加入一项内存 SQLite 集成用例，实际执行生产候选谓词和活动时间表达式，覆盖插件隐藏任务与受保护来源，以及三种时间字段更新后的排除；原有测试只注入假候选，无法发现 SQL 筛选错误。无新增文件、真实等待或逐例模块加载。此次不声称已完成真实 Pi 进程三十分钟闲置后的端到端恢复验证。
+
+Desktop 完整类型检查为 223 条诊断（此前 224），本批接线无新增诊断；test-hygiene 通过（349 files within baseline）。完整 CI、主干冲突和其他类型迁移仍未完成，在线 VPS 未修改。

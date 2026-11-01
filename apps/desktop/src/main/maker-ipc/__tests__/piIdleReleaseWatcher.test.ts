@@ -1,10 +1,51 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { and, sql } from 'drizzle-orm';
+import { sessions } from '../../localDb/schema';
 
 import {
   createPiIdleReleaseWatcher,
+  piIdleReleaseCandidateWhere,
+  piIdleReleaseIdleSince,
   type PiIdleReleaseCandidate,
   type PiIdleReleaseWatcherDeps,
 } from '../piIdleReleaseWatcher';
+
+// SQLite integration: the existing fake-candidate tests cannot verify the production
+// source/visibility filter or the latest-activity clock used by scan and locked recheck.
+it('selects only local ordinary and plugin Pi tasks using their latest activity', () => {
+  const raw = new Database(':memory:');
+  try {
+    raw.exec(`CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, agent_kind TEXT DEFAULT 'pi', status TEXT DEFAULT 'active',
+      source TEXT DEFAULT 'desktop', hidden_at INTEGER, orca_role TEXT,
+      remote_host_id TEXT, agent_device_id TEXT, updated_at INTEGER DEFAULT 10,
+      last_turn_ended_at INTEGER, user_send_at INTEGER
+    );
+    INSERT INTO sessions(id) VALUES ('ordinary');
+    INSERT INTO sessions(id, source, hidden_at, status) VALUES ('plugin', 'plugin', 1, 'archived');
+    INSERT INTO sessions(id, hidden_at) VALUES ('hidden', 1);
+    INSERT INTO sessions(id, source) VALUES ('bot', 'bot'), ('im', 'telegram');
+    INSERT INTO sessions(id, agent_kind) VALUES ('codex', 'codex');
+    INSERT INTO sessions(id, status) VALUES ('deleted', 'deleted');
+    INSERT INTO sessions(id, orca_role) VALUES ('worker', 'worker');
+    INSERT INTO sessions(id, remote_host_id) VALUES ('ssh', 'remote');
+    INSERT INTO sessions(id, agent_device_id) VALUES ('device', 'remote');
+    INSERT INTO sessions(id, updated_at, last_turn_ended_at, user_send_at)
+      VALUES ('recent-update', 100, 10, 10), ('recent-turn', 10, 100, 10), ('recent-send', 10, 10, 100);
+    `);
+    const db = drizzle(raw);
+    const read = () => db.select({ id: sessions.id }).from(sessions)
+      .where(and(piIdleReleaseCandidateWhere(), sql`${piIdleReleaseIdleSince()} < 50`)).all()
+      .map(row => row.id).sort();
+    expect(read()).toEqual(['ordinary', 'plugin']);
+    raw.exec("UPDATE sessions SET user_send_at = 100 WHERE id = 'plugin'");
+    expect(read()).toEqual(['ordinary']);
+  } finally {
+    raw.close();
+  }
+});
 
 function createCandidate(overrides: Partial<PiIdleReleaseCandidate> = {}): PiIdleReleaseCandidate {
   return {
