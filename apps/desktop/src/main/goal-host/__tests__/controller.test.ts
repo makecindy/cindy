@@ -22,6 +22,8 @@ import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { createSessionGoalCallbacks } from '../../mcp-integrations/sessionGoal.js';
+import { createTaskActionAuthorizer, TaskActionAuthorizationError } from '../../maker-ipc/taskActionAuthorization.js';
+import { withToolCallAuthority } from '../../../../../../packages/lizi-mcps/src/tool-call-authority.js';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -528,6 +530,98 @@ describe('GoalController', () => {
   });
 
   // ── setGoal / updateGoal ──
+  // PR #8362 review r4436193423 / teammate-authority.md: admission must remain
+  // valid at delayed goal commits and resumes. Earlier callback tests never revoke
+  // a real task-action grant inside controller waits. Unit, in-memory boundaries.
+  it.each(['goal-read', 'objective-write', 'resume-restore', 'deferred-resume', 'dispatch'] as const)(
+    'checks delayed Goal effects against the invocation grant at %s', async (boundary) => {
+      let generation = 1;
+      let revoke = false;
+      const local = makeController({
+        ensureSession: async () => {
+          if (boundary === 'resume-restore' && revoke) generation++;
+          return local.session;
+        },
+        beforeDispatchUserTurn: async () => {
+          if (boundary === 'dispatch' && revoke) generation++;
+        },
+      });
+      const callbacks = createSessionGoalCallbacks({
+        getController: () => local.controller, isCurrentSession: () => true,
+        withAccess: async (_id, operation) => operation(async () => {}),
+      });
+      const authorize = createTaskActionAuthorizer({
+        capture: async () => {
+          const admittedGeneration = generation;
+          const assertCurrentSync = () => {
+            if (generation !== admittedGeneration) throw new TaskActionAuthorizationError();
+          };
+          return { key: 'goal-edit', ownerInput: true, delegated: false,
+            assertCurrent: async () => assertCurrentSync(), assertCurrentSync };
+        },
+        confirm: async () => true,
+      });
+      try {
+        await local.storage.upsert(seededGoal({ status: 'paused' }));
+        if (boundary === 'goal-read') {
+          const get = local.storage.get.bind(local.storage);
+          vi.spyOn(local.storage, 'get').mockImplementationOnce(async (id) => {
+            const state = await get(id);
+            generation++;
+            return state;
+          });
+        }
+        if (boundary === 'objective-write') {
+          const update = local.storage.update.bind(local.storage);
+          vi.spyOn(local.storage, 'update').mockImplementationOnce(async (id, patch) => {
+            // The write crossed the submission boundary while admission was valid.
+            generation++;
+            return update(id, patch);
+          });
+        }
+        local.session.running = boundary === 'deferred-resume';
+        revoke = true;
+        const result = await withToolCallAuthority(authorize, {
+          sessionId: 's1', server: 'cindy_helper', tool: 'update_goal', args: { objective: 'new objective' },
+        }, () => callbacks.update({ sessionId: 's1', agentKind: 'codex', workingDir: '/fixture' }, 'new objective'));
+        if (boundary === 'deferred-resume') {
+          generation++;
+          local.session.running = false;
+          await local.controller.maybeContinueActiveGoal('s1');
+          await tick();
+        } else {
+          expect(result).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+        }
+        const state = await local.storage.get('s1');
+        expect(local.session.sends).toHaveLength(0);
+        if (boundary !== 'dispatch') expect(state?.status).toBe('paused');
+        if (boundary === 'goal-read') {
+          expect(state?.objective).toBe('old objective');
+          expect(local.userMessages).toHaveLength(0);
+        }
+        if (boundary === 'objective-write') {
+          expect(state?.objective).toBe('new objective');
+          expect(local.userMessages).toEqual([{ sessionId: 's1', content: 'new objective', updated: true }]);
+        }
+      } finally { await local.controller.dispose(); }
+    },
+  );
+
+  it('releases the Goal edit grant after its resumed turn reaches vendor dispatch', async () => {
+    let revoked = false;
+    const assertCurrent = () => { if (revoked) throw new TaskActionAuthorizationError(); };
+    try {
+      await h.storage.upsert(seededGoal({ status: 'paused' }));
+      await h.controller.updateGoal('s1', { objective: 'new objective' }, assertCurrent);
+      expect(h.session.sends).toHaveLength(1);
+      revoked = true;
+      h.session.emitGoalTurn({ toolUse: true });
+      await tick();
+      expect(h.session.sends).toHaveLength(2);
+      expect(await h.storage.get('s1')).toMatchObject({ objective: 'new objective', status: 'active' });
+    } finally { await h.controller.dispose(); }
+  });
+
   // Goal MCP API: real controller persistence, UI broadcasts and next-turn objective.
   // Existing controller-only tests do not pass through the host callback. Unit, in-memory.
   it('edits a running Goal through the MCP callback without restarting its turn or resetting limits', async () => {

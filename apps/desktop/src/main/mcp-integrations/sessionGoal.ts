@@ -6,7 +6,7 @@ import {
   GoalUpdateSupersededError,
   type GoalController,
 } from '../goal-host/controller.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard, isTaskActionRevoked } from '../maker-ipc/taskActionAuthorization.js';
 
 /** Reuse GoalController edits and its persistence/broadcast lifecycle without dispatching user input. */
 export function createSessionGoalCallbacks(deps: {
@@ -17,6 +17,7 @@ export function createSessionGoalCallbacks(deps: {
   const run = async (context: LiziMcpSessionContext, objective?: string) => {
     if (!context.sessionId) return { ok: false as const, errorCode: 'NO_SESSION_CONTEXT', message: '当前调用没有绑定 Cindy 任务。' };
     const sessionId = context.sessionId;
+    const actionGuard = objective === undefined ? undefined : captureTaskActionSyncGuard();
     const assertSessionCurrent = () => {
       if (!deps.isCurrentSession(context)) throw new GoalControllerDisposedError();
     };
@@ -29,10 +30,16 @@ export function createSessionGoalCallbacks(deps: {
         if (objective !== undefined) await assertTaskActionCurrent();
         assertSessionCurrent();
         if (deps.getController() !== controller) throw new GoalControllerDisposedError();
+        const assertMutationCurrent = () => {
+          actionGuard?.();
+          assertSessionCurrent();
+          if (deps.getController() !== controller) throw new GoalControllerDisposedError();
+        };
         const goal = objective === undefined
           ? await controller.getStatus(sessionId)
-          : await controller.updateGoal(sessionId, { objective });
+          : await controller.updateGoal(sessionId, { objective }, assertMutationCurrent);
         await assertCurrent();
+        actionGuard?.();
         assertSessionCurrent();
         if (deps.getController() !== controller) throw new GoalControllerDisposedError();
         return { ok: true as const, goal };
@@ -40,7 +47,7 @@ export function createSessionGoalCallbacks(deps: {
     } catch (error) {
       if (error instanceof GoalControllerInputError)
         return { ok: false as const, errorCode: 'INVALID_ARGS', message: error.message };
-      if (error instanceof GoalSessionRestoreError || error instanceof GoalUpdateSupersededError || error instanceof GoalControllerDisposedError)
+      if (isTaskActionRevoked(error) || error instanceof GoalSessionRestoreError || error instanceof GoalUpdateSupersededError || error instanceof GoalControllerDisposedError)
         return { ok: false as const, errorCode: 'PRECONDITION_FAILED', message: '目标状态已变化，请先用 get_goal 重新读取再决定是否重试。' };
       return { ok: false as const, errorCode: 'INTERNAL', message: '无法确认目标操作结果，请先用 get_goal 查询再决定是否重试。' };
     }
