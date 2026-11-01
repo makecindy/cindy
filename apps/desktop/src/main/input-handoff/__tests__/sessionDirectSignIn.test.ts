@@ -96,6 +96,7 @@ function start(
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
   const guarded: Array<string | undefined> = [];
+  let clock = 0;
   const session = new InputHandoffSession({
     requestId: 'req1',
     purpose: 'Sign in',
@@ -107,7 +108,11 @@ function start(
     publish: (snapshot) => published.push(snapshot),
     finish: (result) => finished.push(result),
     onSecretEntered: ({ url }) => guarded.push(url),
-    sleep: async () => undefined,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+
     finishingDelayMs: 1,
     settleTimeoutMs: 50,
     windowWatchMs: 2,
