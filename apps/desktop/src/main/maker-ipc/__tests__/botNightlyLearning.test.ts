@@ -176,6 +176,23 @@ it('keeps the count when the model fails and leaves conversations that arrive mi
   expect(state.runs[0]!.outcome).toBe('nothing');
 });
 
+// Issue #8194：理由超长时 validateResponse 判定回复无效，整条模型链失败，这一夜什么都学不到。
+it('keeps a plan whose reason runs past the limit and records the clipped reason', async () => {
+  const filename = memory('progress', 'Report results', 'Old.');
+  const text = JSON.stringify({ memories: [
+    { op: 'update', filename, title: 'Report results', description: 'd', body: 'New.', reason: 'x'.repeat(200) },
+  ] });
+  // 替身按真实模型链的判定走：validateResponse 不通过就算这个候选失败。
+  h.model.mockImplementationOnce(async (_maker: unknown, _input: string, request: { validateResponse: (t: string) => boolean }) => (
+    request.validateResponse(text) ? { ok: true, text } : { ok: false }
+  ));
+  await runNightlyLearning('bot', { manual: true });
+  expect(h.memories.get(filename).body).toBe('New.');
+  const [run] = (await readNightlyLearningState(h.root, 'bot'))!.runs;
+  expect(run!.outcome).toBe('learned');
+  expect(run!.items[0]!.reason).toBe(`${'x'.repeat(119)}…`);
+});
+
 it('moves past a batch of filtered replies and waits for a reply that is still being written', async () => {
   const t0 = Date.now() - 60_000;
   await recordNightlyLearningTurn(h.root, 'bot', 'main', t0);
