@@ -192,6 +192,10 @@ import {
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
+import { PROJECT_DROP_CLASS, useSessionProjectDrop } from './sidebar/useSessionProjectDrop';
+import { canOfferSessionProjectMove } from './sidebar/sessionProjectDrop';
+import { moveRemoteTaskProject } from './sidebar/TaskMoveSubmenu';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
@@ -3036,7 +3040,8 @@ function ExpandedView({
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
-      if (!session) return;
+      if (!session || !canOfferSessionProjectMove(session)) return;
+      const owner = getDataOwnerGeneration();
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
         return;
@@ -3068,22 +3073,14 @@ function ExpandedView({
         }
       }
 
+      if (!isDataOwnerGenerationCurrent(owner)) return;
       // worktree 会话的工作区就是它绑定的 worktree：只改 workingDir 会造成半移动
       // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定不在这里做：归属只有
       // 共享写路径一处权威，renderer 的缓存/复核都是异步镜像，任何「先查询再决定」都
       // 会有一条「查询通过后、写入前恰好回收」的窗口，把主进程本会放行的移动挡在请求
       // 之前。这里照常发请求，被守卫拒绝时在下面映射成同一条 toast；「移到对话」不改
       // 目录，不受影响。
-      const oldPatch = {
-        workingDir: session.workingDir,
-        workspaceKind: session.workspaceKind,
-      };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(sessionId, nextPatch);
       let expandedProjectKey: string | null = null;
       let wasExpandedProjectCollapsed = false;
       if (targetWorkingDir) {
@@ -3095,7 +3092,19 @@ function ExpandedView({
         }
       }
       try {
-        await sessionService.update(sessionId, nextPatch);
+        // Use the same host authority as remote moves: Bot-linked tasks may
+        // still have source='desktop', so renderer-only checks are insufficient.
+        const result = await window.electronAPI.deviceLink.taskMigration(null, {
+          action: 'move-project',
+          sessionId,
+          workingDir: target.kind === 'dialogue' ? null : targetWorkingDir!,
+        });
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (result.projectMove?.sessionId !== sessionId) throw new Error('MIGRATION_FAILED');
+        patchLocal(sessionId, {
+          workingDir: result.projectMove.workingDir,
+          workspaceKind: result.projectMove.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
+        });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -3107,8 +3116,8 @@ function ExpandedView({
           ),
         );
       } catch (err) {
+        if (!isDataOwnerGenerationCurrent(owner)) return;
         log.error('[session move]', err);
-        patchLocal(sessionId, oldPatch);
         if (expandedProjectKey && wasExpandedProjectCollapsed) {
           collapse.setCollapsed(expandedProjectKey, true);
         }
@@ -3122,6 +3131,28 @@ function ExpandedView({
     },
     [collapse.expand, collapse.setCollapsed, effectiveRunningSessionIds, patchLocal, t],
   );
+
+  const projectDrop = useSessionProjectDrop({
+    getSession: (id) => sessionsByIdRef.current.get(id),
+    getProject: (key) => visibleProjectUniverse.find((project) => project.projectKey === key),
+    expandProject: collapse.expand,
+    onMoveSession: (id, target) => {
+      const session = sessionsByIdRef.current.get(id);
+      if (!session?.deviceLinkDeviceId) {
+        void handleMoveSession(id, target);
+        return;
+      }
+      if (target.kind === 'browseProject') return;
+      // A remote row must be moved by its owner, never by the controller's local DB.
+      const owner = getDataOwnerGeneration();
+      void moveRemoteTaskProject(session, target.kind === 'dialogue' ? null : target.workingDir)
+        .catch((error) => {
+          if (!isDataOwnerGenerationCurrent(owner)) return;
+          const code = /MIGRATION_[A-Z_]+/.exec(String(error))?.[0];
+          toast.error(t(`taskMigration.errors.${code}`, { defaultValue: t('taskMove.failed') }));
+        });
+    },
+  });
 
   /* ---- Delete / Archive / Unarchive action handlers ----
    * delete 走 ConfirmDialog —— 不可逆，必须确认；
@@ -3710,6 +3741,9 @@ function ExpandedView({
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           ref={sidebarScrollRef}
+          onDragOverCapture={projectDrop.onDragOverCapture}
+          onDropCapture={projectDrop.onDropCapture}
+          onDragLeaveCapture={projectDrop.onDragLeaveCapture}
           className="flex flex-col gap-2 pt-0 pb-4 overflow-y-auto flex-1"
           // 空白处右键 = 打开整理菜单(2026-08-12 用户裁决)。任务行 / 项目行 /
           // 对话组头各自处理菜单，由各自的 stopPropagation 阻止这里接管。
@@ -3943,6 +3977,14 @@ function ExpandedView({
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
                 />
+                {projectDrop.showDialogueDrop && (
+                  <div
+                    data-session-dialogue-drop="source"
+                    className={cn('mx-3 flex min-h-8 select-none items-center rounded-full border border-dashed border-[var(--border-default)] px-3 text-sm text-[var(--sidebar-list-muted)]', PROJECT_DROP_CLASS)}
+                  >
+                    {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
+                  </div>
+                )}
               </>
             )}
           </div>

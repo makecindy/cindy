@@ -4177,7 +4177,10 @@ interface ElectronAPI {
   deviceLink: {
     confirmSkillMutation: (deviceId: string, operationId: string) => Promise<import('../shared/remoteSkills').RemoteSkillReceipt>;
     pickPluginPackage: (deviceId: string) => Promise<{ attachment: string } | null>;
-    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
+    taskMigration: <Request extends import('@cindy/device-link').TaskMigrationRequest>(
+      deviceId: string | null,
+      request: Request,
+    ) => Promise<import('../shared/taskMigrationIpc').TaskMigrationIpcResult<Request>>;
     getState: () => Promise<{
       remoteControlEnabled: boolean;
       keepAwake: boolean;
