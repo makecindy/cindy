@@ -43,6 +43,15 @@ export interface ExternalChromeBackendOptions {
    * cleanup. May be lazy so it follows Cindy vs Cindy-real.
    */
   managedUserDataDir?: MaybeLazy<string | undefined>;
+  /**
+   * Name of the profile this backend launched. Lazy so it follows the
+   * Cindy ↔ Cindy-real consent switch. The forced teardown behind a failed
+   * stop only runs when the failed request targeted this profile (or named
+   * none at all): a stale or foreign profile name fails the stop before any
+   * dispatch, and the error says nothing about the browser this backend runs —
+   * tearing down for it would destroy the active browser and its tabs.
+   */
+  managedProfileName?: MaybeLazy<string | undefined>;
   createProxyAuth?: (
     route: BrowserProxyRoute,
     logger: BackendLogger,
@@ -200,6 +209,12 @@ export class ExternalChromeBackend implements BrowserBackend {
 
   private resolveManagedUserDataDir(): string | undefined {
     const value = this.options.managedUserDataDir;
+    if (typeof value === 'function') return value();
+    return value;
+  }
+
+  private resolveManagedProfileName(): string | undefined {
+    const value = this.options.managedProfileName;
     if (typeof value === 'function') return value();
     return value;
   }
@@ -678,7 +693,18 @@ export class ExternalChromeBackend implements BrowserBackend {
       // the same Windows survivor then hard-blocked every later request.
       // Attempt the identity-checked termination before hard-blocking; only a
       // verified exit may report the stop as done.
-      if (await this.terminateManagedPortOwner()) {
+      //
+      // Gate on the failed request actually targeting this backend's browser:
+      // a profile-scoped stop can 404 on a stale/unknown profile name BEFORE
+      // any dispatch, and that error says nothing about the managed browser —
+      // killing its port owner then would destroy the active browser and its
+      // tabs for a misdirected stop. Fail closed when the name cannot be
+      // compared: no proof the request meant this browser, no forced teardown.
+      const requestedProfile = request.profile;
+      const targetsThisBrowser = requestedProfile === undefined
+        || (this.resolveManagedProfileName() !== undefined
+          && requestedProfile === this.resolveManagedProfileName());
+      if (targetsThisBrowser && await this.terminateManagedPortOwner()) {
         await this.disposeAuth();
         this.resetStoppedRuntime();
         return actionWithProxy({
