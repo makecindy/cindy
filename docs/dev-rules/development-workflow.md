@@ -127,6 +127,27 @@ worktree 建成空目录或自动切到项目根继续修改代码。
   `docs/` 下规则找实际问题；发现 P0／P1 必须先修复并重新 review，直到没有 P0／P1。commit
   可以先创建，但 push 的必须是 review 通过的最终 commit。
 
+### CodeQL 扫描范围与启用
+
+`.github/codeql/codeql-config.yml` 保留默认安全查询，仅排除 Desktop、Mobile 和共享包的
+独立 `*.test.ts` / `*.test.tsx` 模块及不发布的 `docs/design-previews`。不排除整个
+`__tests__` / fixture / mock 目录：辅助模块可能被运行时代码引用。构建／安装脚本、vendor、
+生成的运行时资源（包括 Mobile 富内容资源）仍在扫描范围内。测试执行范围不受此配置影响。
+
+修改排除项前检查文件身份、生产导入及打包入口；不能按目录名字或体积直接排除。
+在相同源码、CodeQL 版本、查询集与 runner 上对比基线和候选：确认未减少生产提取文件，
+解释告警差异，并记录分析耗时、数据库大小。源码字节数的下降不能充当数据库缩小的证据。
+
+本仓使用 CodeQL default setup。配置文件合并本身不会启用它；完成上述验证后，仅为本仓设置
+`github-codeql-config-file` 属性为 `.github/codeql/codeql-config.yml`，不要设置组织级默认值，
+也不必切换 advanced setup。属性需先在组织中声明为 Text 类型且不设置默认值。
+首次默认分支扫描后确认配置实际载入、数据库是否低于当时 action 的 overlay 上传上限，
+再由后续 PR 扫描确认缓存命中。回滚时清除本仓属性值并重新扫描，恢复原提取范围；
+不要关闭 CodeQL、删查询或减少扫描语言。
+
+参考：[GitHub default setup 配置文件](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/manage-your-configuration/edit-default-setup#customizing-default-setup-with-a-configuration-file)、
+[仓库属性](https://docs.github.com/en/code-security/concepts/code-scanning/repository-properties)。
+
 ## 3. Review 严重度口径
 
 对照 `docs/` 下各规则与 `.github/PULL_REQUEST_TEMPLATE.md`（以现行内容为准，不凭记忆）：
