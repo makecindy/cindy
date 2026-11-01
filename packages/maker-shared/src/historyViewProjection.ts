@@ -3,6 +3,7 @@ import { isContinuationMessage } from './syntheticTrigger.js';
 import { describeToolUse } from './toolUseDescriptor.js';
 import { isAgentPlanToolName, isDeliveryProseText, isSteerUserRow } from './messageRender.js';
 import { isAgentTaskToolName } from './agentTask.js';
+import { isGhostCallToolName } from './ghostCommand.js';
 import { extractPayloadToolResultMedia, extractPayloadToolResultFiles, extractPayloadToolCardIds } from './payloadSummary.js';
 import { isOrcaCommunicationTool, messageContentToPreview, parseMessageToolUse } from './messageNormalize.js';
 import type { HistoryMessageSource, HistoryViewItem, HistoryWorkSummary } from './historyView.js';
@@ -235,7 +236,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       const meta = row.agentMeta as { parentUuid?: string; replyToClientId?: string } | null;
       const tool = parseMessageToolUse(row);
       const input = tool.input as Record<string, unknown> | null;
-      if (meta?.parentUuid || !/(?:^|:|__)ghost_call$/.test(tool.toolName ?? '') || typeof input?.ghost_id !== 'string') return [];
+      if (meta?.parentUuid || !isGhostCallToolName(tool.toolName) || typeof input?.ghost_id !== 'string') return [];
       if (Object.hasOwn(input, 'namespace') && input.namespace !== null && typeof input.namespace !== 'string') return [];
       return [{ clientId: row.clientId, createdAt: row.createdAt, rowid: row.rowid,
         replyToClientId: meta?.replyToClientId, ghostId: input.ghost_id,

@@ -35,6 +35,21 @@ function legacyStamp(content: string | null): string | null {
 }
 
 describe('SQLite history outline', () => {
+  it.each(['mcp__other__ghost_call', 'mcp:other:ghost_call', 'ghost_call'])(
+    'omits plugin attribution for another server tool %s', (toolName) => {
+      // #8296 review, unit: real SQLite outline must not retain foreign plugin facts.
+      const content = outline('tool_use', { toolName, toolUseId: 't',
+        input: { ghost_id: 'art', namespace: 'acme' } });
+      const call = withHistoryArtifacts({ id: 'call', clientId: 'call', role: 'tool_use', content,
+        createdAt: '2026-01-01T00:00:01Z', agentMeta: { replyToClientId: 'user' } });
+      expect(content.input).not.toHaveProperty('ghost_id');
+      expect(content.input).not.toHaveProperty('namespace');
+      expect(call.agentMeta).not.toHaveProperty('replyToClientId');
+      const items = projectHistoryView([call, { id: 'result', clientId: 'result', role: 'tool_result',
+        content: 'ok', toolUseId: 't', createdAt: '2026-01-01T00:00:02Z' }], false, true);
+      expect(historyWorkSummaries(items).flatMap(summary => summary.ghostCalls ?? [])).toEqual([]);
+    },
+  );
   it.each([undefined, null, 'acme'])('keeps folded plugin ownership with namespace=%s through SQLite outlining', (namespace) => {
     // #8296 review, unit: lazy history never hydrates the hidden call. Exercise
     // the SQL outline and grouping, including absent versus explicit root scope.

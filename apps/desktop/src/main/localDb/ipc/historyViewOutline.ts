@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { describeToolUse, createdPathsFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
+import { GHOST_CALL_TOOL_NAMES, isGhostCallToolName } from '@cindy/maker-shared/ghost-command';
 import type { HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import { extractCommandOutputPathCandidates } from '../../../shared/commandOutputPaths';
 import { messages } from '../schema';
@@ -33,7 +34,7 @@ export function historyOutlineContent(): SQL<string> {
         json_extract(${body}, '$.input.args.outPath'), json_extract(${body}, '$.input.args.out_path'),
         json_extract(${body}, '$.input.args.outputPath'), json_extract(${body}, '$.input.args.output_path')) IS NOT NULL
       ) THEN ${body}
-    WHEN ${messages.role} = 'tool_use' AND substr(json_extract(${body}, '$.toolName'), -10) = 'ghost_call'
+    WHEN ${messages.role} = 'tool_use' AND json_extract(${body}, '$.toolName') IN (${sql.join(GHOST_CALL_TOOL_NAMES.map(name => sql`${name}`), sql`, `)})
       THEN json_object('toolName', json_extract(${body}, '$.toolName'),
         'toolUseId', json_extract(${body}, '$.toolUseId'),
         'input', json(CASE WHEN json_type(${body}, '$.input.namespace') IS NULL
@@ -146,7 +147,7 @@ export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T 
     row = { ...row, agentMeta };
     // Folded plugin rows are not hydrated until expanded. Preserve only the
     // ownership link needed by their summary, alongside the small outline input.
-    if (row.role === 'tool_use' && /(?:^|:|__)ghost_call$/.test(parseMessageToolUse(row).toolName ?? '') && _replyToClientId) {
+    if (row.role === 'tool_use' && isGhostCallToolName(parseMessageToolUse(row).toolName) && _replyToClientId) {
       row = { ...row, agentMeta: { ...agentMeta, replyToClientId: _replyToClientId } };
     }
   }
