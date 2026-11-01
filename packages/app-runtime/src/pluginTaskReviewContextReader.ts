@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { sessions, orcaWorkers, orcaTeams } from '@cindy/runtime-db/schema';
 import type { CurrentDbClientSnapshot } from '@cindy/runtime-db/client/current';
@@ -56,7 +57,7 @@ export function createPluginTaskReviewContextReader(host: {
     let directoryMatches = item?.workingDir === session.workingDir;
     if (item && !directoryMatches) {
       try {
-        directoryMatches = await fsp.realpath(item.workingDir) === session.workingDir;
+        directoryMatches = path.normalize(await fsp.realpath(item.workingDir)) === path.normalize(session.workingDir);
       } catch {
         directoryMatches = false;
       }

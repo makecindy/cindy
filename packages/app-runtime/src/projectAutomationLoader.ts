@@ -447,7 +447,11 @@ export function createProjectAutomationLoader(host: {
       const found = new Map<string, string>();
       const add = (workingDir: string | null | undefined) => {
         if (!workingDir) return;
-        found.set(path.resolve(workingDir), workingDir);
+        const resolved = path.resolve(workingDir);
+        const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+        // Keep the registered schedule's spelling when a session names the same
+        // directory differently; reconciliation hashes use that persisted key.
+        if (!found.has(key)) found.set(key, workingDir);
       };
 
       const projectSchedules = await this.deps

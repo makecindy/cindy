@@ -391,7 +391,7 @@ describe('terminal task host', () => {
   it('serves the original GUI session lifecycle and preserves remote field authority', async () => {
     const { host, root, pushes } = await setup();
     const remote = { source: 'remote' as const, ownerId: 'owner', deviceId: 'controller', assertCurrent() {} };
-    const task = await host.invoke('local-db:sessions:create', [{ id: 'original-session', title: 'Original', workingDir: root, agentKind: 'cc', providerId: 'fixture', model: 'test-model' }]) as { id: string };
+    const task = await host.invoke('local-db:sessions:create', [{ id: 'original-session', title: 'Original', workingDir: root, agentKind: 'cc', providerId: 'fixture', model: 'test-model' }]) as { id: string; workingDir: string };
     expect(task.id).toBe('original-session');
     await host.invoke('local-db:sessions:patch-meta', [task.id, { title: 'Renamed', pinnedAt: '2026-01-01T00:00:00.000Z' }], remote);
     expect(await host.invoke('local-db:sessions:get-many', [[task.id, 'missing']])).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, title: 'Renamed' })]));
@@ -401,7 +401,7 @@ describe('terminal task host', () => {
     await expect(host.invoke('local-db:sessions:update', [task.id, { extraDirs: [root] }])).rejects.toThrow();
     await host.invoke('local-db:sessions:patch-meta', [task.id, { status: 'archived' }], remote);
     expect(await host.invoke('local-db:sessions:list', [100, 'archived'], remote)).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, status: 'archived' })]));
-    await host.invoke('local-db:sessions:restore-if-archived', [task.id, { workingDir: root, workspaceKind: 'project', remoteHostId: null }], remote);
+    await host.invoke('local-db:sessions:restore-if-archived', [task.id, { workingDir: task.workingDir, workspaceKind: 'project', remoteHostId: null }], remote);
     expect(await host.invoke('local-db:sessions:get', [task.id], remote)).toMatchObject({ id: task.id, status: 'active', title: 'Renamed' });
     const db = await host.storage.database();
     await db.db.exec("INSERT INTO sessions (id,title,agent_kind,working_dir,source,parent_session_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", ['side-original', 'Side', 'cc', root, 'side-chat', task.id, Date.now(), Date.now()]);
@@ -656,10 +656,11 @@ describe('terminal task host', () => {
     const dialogue=await f.host.invoke('maker:create-session',[{}]) as {id:string};
     const dialogueRow=await f.host.storage.get(dialogue.id);
     expect(dialogueRow).toMatchObject({workspaceKind:'dialogue'});
-    expect(dialogueRow!.workDir.startsWith(path.join(f.root,'dialogues')+path.sep)).toBe(true);
+    expect(path.normalize(dialogueRow!.workDir).startsWith(path.join(f.root,'dialogues')+path.sep)).toBe(true);
     await expect(access(path.join(dialogueRow!.workDir,'.git'))).rejects.toMatchObject({code:'ENOENT'});
     const repo=path.join(f.root,'project');await mkdir(repo);
-    const git=(...args:string[])=>promisify(execFile)('git',args,{cwd:repo,env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:os.devNull}});
+    const gitConfig=path.join(f.root,'empty-gitconfig');await writeFile(gitConfig,'');
+    const git=(...args:string[])=>promisify(execFile)('git',args,{cwd:repo,env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:gitConfig}});
     await git('init');await git('config','user.name','Fixture');await git('config','user.email','fixture@example.invalid');
     await writeFile(path.join(repo,'seed.txt'),'before native edit\n');await git('add','seed.txt');await git('commit','--no-gpg-sign','-m','seed');
     const head=(await git('rev-parse','HEAD')).stdout.trim();
@@ -752,7 +753,7 @@ describe('terminal task host', () => {
     await enqueueMessage({invoke:(channel:string,args:unknown[]=[])=>host.invoke(channel,args)} as TerminalClient,task.id,'after removing directory','dir-after');
     await resumed;
     await expect(access(workingDir)).resolves.toBeUndefined();
-    expect((await host.storage.get(task.id))?.workDir).toBe(workingDir);
+    expect(path.normalize((await host.storage.get(task.id))!.workDir)).toBe(workingDir);
     expect(native.sent).toHaveLength(2);
     expect(JSON.stringify(native.sent.at(-1))).toContain('after removing directory');
     const rows=await host.invoke('local-db:messages:list',[task.id]) as Array<{clientId:string}>;
@@ -976,7 +977,7 @@ describe('terminal task host', () => {
     expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
     const task = await f.host.invoke('maker:create-session', [{ id, workingDir: created.meta.path }], remote) as { sessionId: string };
     expect(task.sessionId).toBe(id);
-    expect(f.native.starts.at(-1)?.workingDir).toBe(created.meta.path);
+    expect(path.normalize(f.native.starts.at(-1)!.workingDir!)).toBe(path.normalize(created.meta.path));
     expect(await f.host.invoke('local-db:sessions:get', [id])).toMatchObject({ id, worktreePath: created.meta.path });
     await expect(f.host.invoke('worktree:cancel-precreated', [{ sessionId: id, recoveryKey: 'gui-recovery-key-0001' }], remote)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     await writeFile(path.join(created.meta.path, 'file.txt'), 'retained user changes');
@@ -1000,7 +1001,7 @@ describe('terminal task host', () => {
     const worker = await f.host.invoke('maker:session:enable-orca', [lead.id, { workerAgent: 'claude-code', label: 'Isolated', worktree: { sourceBranch: 'main' } }], remote) as { workerId: string; workerSessionId: string };
     const workerRow = await f.host.storage.get(worker.workerSessionId);
     expect(workerRow?.worktreePath).toBeTruthy();
-    expect(workerRow?.workDir).toBe(workerRow?.worktreePath);
+    expect(path.normalize(workerRow!.workDir)).toBe(path.normalize(workerRow!.worktreePath!));
     expect(workerRow?.workDir).not.toBe(repo);
     expect(f.native.starts.at(-1)?.workingDir).toBe(workerRow?.workDir);
     await worktrees.manager.awaitBackgroundCheckout(worker.workerSessionId);
@@ -1025,7 +1026,7 @@ describe('terminal task host', () => {
     const runs = await scheduler.invoke('maker:schedule:list-runs', [schedule.id]) as Array<{ status: string; sessionId: string }>;
     expect(runs[0]).toMatchObject({ status: 'success' });
     const scheduledTask = await f.host.storage.get(runs[0]!.sessionId);
-    expect(scheduledTask?.worktreePath).toBe(scheduledTask?.workDir);
+    expect(path.normalize(scheduledTask!.worktreePath!)).toBe(path.normalize(scheduledTask!.workDir));
     expect(scheduledTask?.workDir).not.toBe(repo);
     expect(await readFile(path.join(scheduledTask!.workDir, 'file.txt'), 'utf8')).toBe('original');
     await scheduler.invoke('maker:schedule:run-now', [schedule.id]);
@@ -2606,7 +2607,7 @@ describe('terminal task host', () => {
       expect(canonical.canonicalSessionId).toBeTruthy();
       const id=canonical.canonicalSessionId!;
       const task=await host.storage.get(id);expect(task).toMatchObject({source:'bot',agentKind:'claude-code'});
-      expect(task!.workDir).toBe(path.join(root,'bots',profile.id,'workspace'));
+      expect(path.normalize(task!.workDir)).toBe(path.join(root,'bots',profile.id,'workspace'));
       await host.invoke('local-db:bots:update',[{id:profile.id,identitySource:'Updated original identity',capabilities:{toolsetMode:'allowlist',toolsets:[]}}]);
       const local=await host.invoke('local-db:bots:get',[profile.id]) as {identitySource:string;currentVersion:number};
       expect(local.identitySource).toBe('Updated original identity');
@@ -3515,7 +3516,7 @@ describe('terminal task host', () => {
       await expect.poll(()=>host.storage.queued(existing.id),{interval:5}).toEqual([]);
       expect(native.sentFor(existing.id)).toHaveLength(2);installed.targetCapabilityApproved=true;
       const project=await target('send',{target:{kind:'project',id:root},requestKey:'project-target',text:'Project target',title:'Project target'});
-      expect(project.ok).toBe(true);expect(await host.storage.get(project.data.taskId)).toMatchObject({workDir:await realpath(root)});
+      expect(project.ok).toBe(true);expect(await realpath((await host.storage.get(project.data.taskId))!.workDir)).toBe(await realpath(root));
       const profile=await companions.create({name:'Target companion'});
       expect((await target('list',{targetKind:'bot'})).data.targets).toContainEqual(expect.objectContaining({id:profile.id}));
       const companionRequest={target:{kind:'bot',id:profile.id},requestKey:'companion-target',text:'Companion queue'};
