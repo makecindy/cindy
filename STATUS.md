@@ -10,6 +10,17 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Owner live check after disabling `superpowers` (`live-proven`)
+
+Owner disabled the Hermes `superpowers` plugin via the `hermes-cindy` launcher, then ran a new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, 262,144 loaded) with three turns. Screenshot evidence:
+- Header kept `google/gemma-4-26b-a4b-qat` across all three turns. This proves the 2.2b-3 label fix past turn 2.
+- No false context banner at 87.3k tokens; the ring reads 21%. This proves the 2.2b-5 banner fix in the running app.
+- Replies are direct, with no `skill_view` calls and no "Using superpowers:..." preamble. This is consistent with the 2.2b-4 diagnosis.
+
+Qwen 8B was not re-run with the plugin off, so 2.2b-4 is not yet proven fixed for Qwen.
+
+---
+
 ## 2026-11-01 — Diagnosis: qwen3-8b `skill_view` loop (ROADMAP 2.2b-4) (`unverified` fix, diagnosis only)
 
 **Evidence:** the owner pasted one `skill_view` call's input and output from the looping Qwen turn. Call: `{"name": "superpowers:using-superpowers"}`. Skill path: `~/.hermes-cindy/plugins/superpowers/skills/using-superpowers`. The skill body requires invoking skills "BEFORE any response including clarifying questions" when there is "even a 1% chance" one applies, and lists 14 sibling skills.
