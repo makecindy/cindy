@@ -40,6 +40,9 @@ import {
 /** 空索引 = 不做定时任务分组,每次运行各占一行。 */
 const NO_AUTOMATION_GROUPING: SessionEntryListProps['scheduleSessionIndex'] = new Map();
 
+const FOCUS_RING_CLASS =
+  'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]';
+
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
   'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
@@ -115,7 +118,11 @@ export function InProgressSection({
             type="button"
             onClick={toggleCollapsed}
             aria-expanded={!collapsed}
-            className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
+            className={cn(
+              'rounded-md text-sm leading-5 font-medium text-[var(--sidebar-list-muted)]',
+              'transition-colors hover:text-[var(--sidebar-nav-text)]',
+              FOCUS_RING_CLASS,
+            )}
           >
             {t('ccAgent.sidebar.inProgress')}
           </button>
@@ -130,6 +137,7 @@ export function InProgressSection({
                   'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
+                  FOCUS_RING_CLASS,
                 )}
               >
                 <ToggleIcon size={13} strokeWidth={2} />
