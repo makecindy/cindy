@@ -10,6 +10,15 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Owner click-throughs: 1.9b-3b, 2.1b-live, 2.4b-live (results + two defects found)
+
+- **1.9b-3b ✅ `live-proven` with a defect.** The header token chip opened the panel: "3 turns · in 56.0k · out 387 · cache R 2.8k · Cost ~$0.0046 (partial)"; per model "deepseek/google/gemma-4-… 41.5k tok · unpriced", "deepseek/deepseek-flash 17.7k tok · $0.0046"; unpriced notice for gemma. **Defect (new 1.9b-3c):** `sessionHermesTurnUsage.ts` stamps every Hermes turn with the *home* route provider (`readHermesRoute` → deepseek), even when the turn ran on a per-session custom route (LM Studio). Gemma is labelled `deepseek/…`, and a local model whose id matches a priced provider model could be mis-priced.
+- **2.1b-live ✅ `live-proven`.** Owner confirmed the providers card in Settings → General → Hermes Harness.
+- **2.4b-live ❌ not proven.** Gemma chat, LM Studio quit, "hi" sent. **No paid fallback happened** (safety rule held). But (a) no blocked banner, and (b) the turn sat on "Working…" for 3m27s+ with no error. Causes: (a) the chat model was `google/gemma-4-26b-a4b-qat:2` (LM Studio loaded a second instance), which does not exactly match the owner's `gemma-local` route model; more generally `assessSessionRouteHealth` only checks `routing.yaml` routes, so discovered-endpoint models are never checked. (b) Nothing preflights the custom endpoint before a Hermes turn, so the CLI waits on a dead `127.0.0.1:1234`. **Proposed 2.4c:** preflight the resolved custom endpoint before a Hermes send and fail fast with a named error and one-click alternative (hot path; needs `live-proven`).
+- 2.5b-live not yet run.
+
+---
+
 ## 2026-11-01 — ROADMAP 1.6b plugin switch `live-proven` (owner)
 
 After pulling `claude/jolly-brown-n5edmp` and restarting, the owner used Settings → General → Hermes Harness → Plugins:
