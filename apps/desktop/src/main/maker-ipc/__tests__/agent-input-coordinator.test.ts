@@ -2,7 +2,10 @@ import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createQueuedEditProvenance, registerMakerInputSubmission, type MakerInputSubmissionHost } from '@cindy/app-runtime/makerInputSubmission';
+import { createQueuedAttachmentLifecycle } from '@cindy/app-runtime/queuedAttachmentLifecycle';
+import { createSessionControlCoordinator } from '@cindy/app-runtime/sessionControlCoordinator';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
@@ -51,7 +54,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON, isAutomaticInputOriginKind } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import { buildRemoteWorkerQueuedMessage, createOrcaRemoteWorkerRuntime, type RemoteWorkerTurnEnd } from '../orcaRemoteWorkerRuntime.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
@@ -121,21 +124,12 @@ describe('task action dispatch authorization', () => {
 // coordinator edit/dispatch path. The old immutable body discarded owner edits.
 // Guard tier wiring is exercised here alongside the existing coordinator cases.
 describe('trusted owner queue edits', () => {
-  const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
-  const start = registerSource.indexOf('  function stampQueuedEditProvenance(');
-  const end = registerSource.indexOf('  ipcMain.handle(', start);
-  const loadFinalizer = new Function('inputCoordinator', 'getDeviceLinkInvokeContext',
-    'captureDataOwnerBroadcastScope', 'isDataOwnerBroadcastScopeCurrent',
-    'bindTaskActionInput', 'taskActionInputGuard', 'stampTrustedDeviceLinkQueuedOrigin',
-    'stampTrustedDesktopQueuedOrigin', 'stampMobileClientOrigin',
-    transpileModule(registerSource.slice(start, end) + '\nreturn stampQueuedEditProvenance;',
-      { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText);
-
   it.each(['text', 'content', 'guest'] as const)('handles a %s edit without inheriting stale body authorization', async mode => {
     const h = createHarness(), sid = 'edited-target';
-    const finalized = loadFinalizer(h.coordinator, () => mode === 'guest' ? { sharedTask: {} } : null,
-      () => 'account', () => true, bindTaskActionInput, taskActionInputGuard,
-      stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin, stampMobileClientOrigin);
+    const finalized = createQueuedEditProvenance({
+      inputCoordinator: h.coordinator, isSharedTaskInvoke: () => mode === 'guest',
+      captureOwner: () => 'account', isOwnerCurrent: () => true,
+    });
     const dispatched = vi.fn();
     h.sendToAgent.mockImplementation(async (_id, message, _opts, sendOpts) => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
@@ -372,60 +366,53 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
-  const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
-  const handlerEnd = source.indexOf('\n  );', handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
-  const compiled = transpileModule(`return (${handler});`, {
-    compilerOptions: { target: ScriptTarget.ES2022 },
-  }).outputText;
-
+  // Exercise the registered shared handler, including its real input validation.
+  // Source extraction from Desktop stopped covering this path after migration.
   function hostInput(h: ReturnType<typeof createHarness>, remote = true, mobile = false) {
     const noop = () => undefined;
     const sameItem = (item: AgentInputQueuedMessage) => item;
     const owner = {};
-    const bindings = {
+    type Host = MakerInputSubmissionHost<object, unknown>;
+    type Handler = Parameters<Host['ipcMain']['handle']>[1];
+    const handlers = new Map<string, Handler>();
+    const bindings: Host = {
+      ...createQueuedAttachmentLifecycle(mocks.logger, async () => undefined),
+      ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler); } },
       inputCoordinator: h.coordinator,
-      requireSessionId: (id: string) => id,
-      requireQueuedMessage: sameItem,
-      prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
+      prepareSharedTaskInput: async (_sid, item) => item,
       getCurrentDbClientSnapshot: () => owner,
       isDeviceLinkInvoke: () => remote,
       isMobileControllerInvoke: () => mobile,
       readDeviceLinkInvokeSourceDevice: () => mobile
-        ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
-        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
-      readClaimedUiLanguage: noop,
+        ? { deviceId: 'phone', name: 'Phone', platform: 'mobile' }
+        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'desktop' },
       getResolvedMainLocale: () => 'zh-CN',
-      getInputSessionRow: async () => ({ clearedAt: null }),
+      getInputSessionRow: async () => ({ status: 'active', title: null, userSendAt: null,
+        workingDir: '/repo', workspaceKind: null, providerId: null, clearedAt: null }),
       getMakerIfReady: () => null,
-      beginRemoteSendTrace: noop,
-      remoteInputClientIdWasPersisted: () => false,
+      remoteInputClientIdWasPersisted: async () => false,
       hasInputDeliveryCancellation: () => false,
-      materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
-      hydrateQueuedAgentReferences: sameItem,
-      stampTurnUiLanguage: sameItem,
-      stampTrustedDesktopQueuedOrigin,
-      stampTrustedDeviceLinkQueuedOrigin,
-      stampMobileClientOrigin,
-      isAutomaticInputOriginKind,
+      materializeQueuedOssAttachmentsDeferred: async (_sid, item) => ({ item }),
+      hydrateQueuedAgentReferences: async item => item,
       prepareDeviceLinkAutoTitle: async () => noop,
-      queuedAttachmentOwnership: { activateCurrentOwner: noop },
-      throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
-      ...Object.fromEntries([
-        'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
-        'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
-        'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
-        'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
-        'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
-      ].map(name => [name, noop])),
+      assertReviewExternalInputAllowed: async () => undefined,
+      assertTrustedAppRendererEvent: noop,
+      withSessionPermissionChange: async (_id, work) => work(),
+      awaitAgentInputQueueSnapshotPersistence: async () => undefined,
+      assertRemoteInputClearNotInFlight: noop,
+      readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
+      observeLocalInputClearBoundary: async () => undefined,
+      assertExpectedRemoteInputClearBoundary: noop,
+      assertRemoteInputControlBoundary: async () => ({ expectedClearBoundaryMs: null, expectedInputGeneration: 0 }),
+      trustedDesktopSteerText: new AsyncLocalStorage<string>(),
+      collectQueuedAttachmentRefs: () => new Set(),
+      readQueuedEditorProvenance: () => ({ sourceDevice: undefined, isMobile: mobile }),
+      stampQueuedEditProvenance: (_sid, item) => sameItem(item),
     };
-    expect(start).toBeGreaterThan(0);
-    expect(handlerStart).toBeGreaterThan(start);
-    expect(handlerEnd).toBeGreaterThan(handlerStart);
-    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
-      (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+    registerMakerInputSubmission(bindings);
+    const enqueue = handlers.get('maker:input:enqueue');
+    if (!enqueue) throw new Error('Input enqueue handler was not registered');
+    return enqueue;
   }
 
   function leadInput(clientId = 'lead-input') {
@@ -7043,22 +7030,31 @@ describe('AgentInputCoordinator steer transaction', () => {
     const h = createHarness();
     const sid = 'group-steer-guard';
     h.setRunning(true);
+    const session = {
+      agentKind: 'codex' as const, capabilities: { sameTurnSteer: { supported: true } },
+      isTurnRunning: () => true, getTurnGeneration: () => 0,
+      requestGracefulStop: vi.fn(), getTurnControlSnapshot: vi.fn(),
+    };
+    h.setTurnSessionIdentity(session);
     let revoked = false;
     const failure = new Error('Fixture authority revoked');
     const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
     h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
     h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
-    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
-    const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
-    const end = source.indexOf('    getQueueSnapshot:', start);
-    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
-    const adapter = transpileModule(`return ({${source.slice(start, end)}}).steerQueuedMessage;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
-    const host = new Function('inputCoordinator', adapter)({
-      ensureQueueRestored: async () => { if (boundary === 'restore') revoked = true; },
-      steer: h.coordinator.steer.bind(h.coordinator),
+    const { steerQueuedMessage: host } = createSessionControlCoordinator({
+      inputCoordinator: {
+        ensureQueueRestored: async () => { if (boundary === 'restore') revoked = true; },
+        steer: h.coordinator.steer.bind(h.coordinator),
+        isQueueRestored: () => true,
+        getQueueControlSnapshot: vi.fn(), getQueueInspection: vi.fn(),
+        hasQueuedItemWhere: vi.fn(), replaceQueuedMessage: vi.fn(), remove: vi.fn(),
+      },
+      captureSessionAgentRequest: vi.fn(), getSessionMeta: vi.fn(),
+      buildSessionControlInputItem: vi.fn(), readSenderIdentity: vi.fn(),
+      steerStoredControlMessage: vi.fn(), moveStoredControlMessage: vi.fn(),
     });
     const result = host(sid, makeItem('guarded-input', 'Private task input', { sessionRefs: [{ sessionId: 'reference' }] }),
-      { session: h.getTurnSessionIdentity(), turnGeneration: 0, beforeMutation });
+      { session, turnGeneration: 0, beforeMutation });
     if (boundary === 'valid') { await expect(result).resolves.toBe(true); expect(h.steerToAgent).toHaveBeenCalledOnce(); }
     else {
       await expect(result).rejects.toBe(failure);

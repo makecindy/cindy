@@ -92,3 +92,11 @@ sessionControlService.test.ts 的新增 unit 回归通过真实三个工厂复�
 deviceProvidersCache、useFeishuBot、WebMicAudioEngine.keepAliveIdle 保留既有行为断言，改用生产缓存驱逐／解绑／音频模块释放入口隔离用例，不再逐例 resetModules。麦克风竞态用例完成断言后显式停止录音。三文件单独运行墙钟分别为 3.49、4.47、2.47 秒；与 sessionControlService 合跑 90 项通过（Vitest 6.49 秒）。这些测试只调整夹具，不新增产品清理 API。
 
 app-runtime 与 cindy-terminal 类型检查通过。Desktop 完整复查仍有 259 条诊断（此前 270），本批涉及的测试与共享队列模块无诊断；并非全量通过。test-hygiene --update 仍在可信基线比较阶段拒绝五项既有上调，未执行收紧，基线未修改；其中三个 resetModules 源码问题已修复，两处源码读取测试仍待迁移。主干冲突、完整 CI 与余下类型错误仍未解决，不修改在线 VPS。
+
+### 队列测试迁回生产入口（2026-11-01）
+
+agent-input-coordinator.test.ts 的远程入队与插话测试曾从 register.ts 截取已迁走的实现；主人编辑测试还误截取相邻清理代码。现改为注册共享 makerInputSubmission 处理器、调用 sessionControlCoordinator，并将现有编辑来源与授权判定原样提取为 createQueuedEditProvenance，由 Desktop 和测试共用。主人编辑刷新正文授权、共享访客保留原授权、账号与输入代次检查均保留；不改 wire、持久化或插件批准机制。入队夹具现在经过真实参数验证，并使用真实附件生命周期组件。
+
+保留原有三组 unit 断言，15 passed、582 skipped，最终定向运行 11.71 秒（收集 11.02 秒、执行 227ms）；未新增测试文件。该存量巨型文件包含 597 项测试和大量运行时依赖，冷收集已超过 5 秒预算，本轮不增加逐例加载或真实等待。完整文件复查 583 passed、14 failed，29.18 秒；此前 576 passed、21 failed，消除 7 项失效源码夹具造成的失败。余下失败涉及插话失败后的活跃状态、调度人工恢复、拒绝 compact 后的恢复与伙伴原话转发，不能宣称队列整体通过。
+
+共享 app-runtime、cindy-terminal 类型检查通过；Desktop 完整检查仍为 259 条诊断，本次夹具和 makerInputSubmission 无新增诊断。门禁原始 scanRepository 复查先前五个文件，仅 orcaWorkerCreationService.test.ts 仍有 sourceReads=1，其余不再命中。正式门禁仍受当前分支的既有基线上调阻挡，尚未收紧基线。继续处理 Orca 生产授权入口和共享运行时的行为迁移；PR 仍为草稿。

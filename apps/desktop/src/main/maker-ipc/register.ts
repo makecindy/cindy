@@ -43,7 +43,7 @@ import {createSessionEventGuards} from '@cindy/app-runtime/sessionEventGuards';
 import {createSilentStopRuntime} from '@cindy/app-runtime/silentStopRuntime';
 import { redactEventForRenderer } from '@cindy/app-runtime/sessionEventRedaction';
 import { createRemoteInputAutoTitle } from '@cindy/app-runtime/remoteInputAutoTitle';
-import { registerMakerInputSubmission } from '@cindy/app-runtime/makerInputSubmission';
+import { createQueuedEditProvenance, registerMakerInputSubmission } from '@cindy/app-runtime/makerInputSubmission';
 import { createQueuedAttachmentLifecycle } from '@cindy/app-runtime/queuedAttachmentLifecycle';
 import { createMakerInputValidation } from '@cindy/app-runtime/makerInputValidation';
 import { registerMakerInputControls } from '@cindy/app-runtime/makerInputControls';
@@ -971,7 +971,7 @@ import {
 } from './orcaInterAgentDispatcher.js';
 import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionGuard, hasTaskActionAuthorization, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -16724,6 +16724,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
 
+  const stampQueuedEditProvenance = createQueuedEditProvenance({
+    inputCoordinator,
+    isSharedTaskInvoke: () => !!getDeviceLinkInvokeContext()?.sharedTask,
+    captureOwner: captureDataOwnerBroadcastScope,
+    isOwnerCurrent: isDataOwnerBroadcastScopeCurrent,
+  });
+
   registerMakerInputControls({
     inputCoordinator, ipcMain, isDeviceLinkInvoke, assertTrustedAppRendererEvent,
     getInputSessionRow: (...args) => getInputSessionRow(...args),
@@ -16886,29 +16893,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isMobile: boolean;
   } {
     return { sourceDevice: readDeviceLinkInvokeSourceDevice(), isMobile: isMobileControllerInvoke() };
-  }
-  function stampQueuedEditProvenance(
-    sessionId: string,
-    updated: AgentInputQueuedMessage,
-    remote: boolean,
-    editor: ReturnType<typeof readQueuedEditorProvenance>,
-  ): AgentInputQueuedMessage {
-    // Only the authenticated owner's edit renews authorization. Guest edits and
-    // tool edits retain the original grant; neither can turn attribution into consent.
-    if (!getDeviceLinkInvokeContext()?.sharedTask && taskActionInputGuard(sessionId, updated)) {
-      const owner = captureDataOwnerBroadcastScope();
-      const generation = inputCoordinator.getGeneration(sessionId);
-      bindTaskActionInput(sessionId, updated, async () => {
-        if (!isDataOwnerBroadcastScopeCurrent(owner)
-          || !inputCoordinator.isGenerationCurrent(sessionId, generation))
-          throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-      });
-    }
-    return stampTrustedDeviceLinkQueuedOrigin(
-      stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true),
-      remote,
-      editor.sourceDevice,
-    );
   }
 
 

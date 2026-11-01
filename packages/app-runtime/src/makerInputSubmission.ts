@@ -21,6 +21,36 @@ import type { createQueuedAttachmentLifecycle } from "./queuedAttachmentLifecycl
 import type { MakerInputControlsHost } from "./makerInputControls.js";
 import type { AgentInputCoordinator } from "./agent-input-coordinator.js";
 import type { AsyncLocalStorage } from "node:async_hooks";
+import { bindTaskActionInput, taskActionInputGuard } from './taskActionAuthorization.js';
+
+/** Authenticated owner edits renew the body grant; guest edits retain it. */
+export function createQueuedEditProvenance<Owner>(host: {
+  isSharedTaskInvoke(): boolean;
+  captureOwner(): Owner;
+  isOwnerCurrent(owner: Owner): boolean;
+  inputCoordinator: Pick<AgentInputCoordinator, 'getGeneration' | 'isGenerationCurrent'>;
+}) {
+  return (sessionId: string, updated: AgentInputQueuedMessage, remote: boolean,
+    editor: { isMobile: boolean; sourceDevice?: AgentInputQueuedMessage['sourceDevice'] },
+  ): AgentInputQueuedMessage => {
+    // Attribution cannot turn a guest or tool edit into owner consent.
+    if (!host.isSharedTaskInvoke() && taskActionInputGuard(sessionId, updated)) {
+      const owner = host.captureOwner();
+      const generation = host.inputCoordinator.getGeneration(sessionId);
+      bindTaskActionInput(sessionId, updated, async () => {
+        if (!host.isOwnerCurrent(owner)
+          || !host.inputCoordinator.isGenerationCurrent(sessionId, generation))
+          throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      });
+    }
+    return stampTrustedDeviceLinkQueuedOrigin(
+      stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true),
+      remote,
+      editor.sourceDevice,
+    );
+  };
+}
+
 export interface MakerInputSubmissionHost<Event, Context>
   extends
     Pick<
