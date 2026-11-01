@@ -33,7 +33,7 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { CompanionThreadRoot, useCompanionThreads } from '@/session/CompanionThreads';
 import { CompanionHeader } from '@/session/CompanionHeader';
-import { CloudHomeUnreachableNotice, useSustained } from '@/session/CloudHomeUnreachableNotice';
+import { CloudHomeUnreachableNotice, isMessageWaitingForCloudHome, useSustained } from '@/session/CloudHomeUnreachableNotice';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from '@/session/ChatIdentityHeader';
 import { useHiddenHistoryChase } from '@/session/hiddenHistoryChase';
@@ -2378,7 +2378,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const cloudHomeActor = cloudHome.supported && companionResource
     ? cloudHome.actors.find(actor => actor.kind === 'bot' && actor.externalId === companionResource.ref.id && actor.homeDeviceId === deviceId) ?? null
     : null;
-  const cloudHomeUnreachable = useSustained(!!cloudHomeActor && outboxItems.length > 0 && outboxConnectionDispatchBlocked);
+  const cloudHomeUnreachable = useSustained(!!cloudHomeActor
+    && isMessageWaitingForCloudHome(durableOutboxRecords, { deviceId, sessionId }, outboxConnectionState));
   const quietConnection = !!cloudHomeActor;
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
