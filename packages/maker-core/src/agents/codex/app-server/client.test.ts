@@ -60,6 +60,58 @@ const logger: Logger = {
   child: () => logger,
 };
 
+describe('AppServerClient incoming envelopes', () => {
+  // Unit regression for the host crash on the valid JSON line `4`: existing
+  // tests cover structured messages, but not primitive/null/array envelopes.
+  // Exercise the public transport callback and verify the pending response and
+  // next notification still reach their consumers after each invalid line.
+  it.each([
+    ['4', 'number'],
+    ['null', 'null'],
+    ['"banner"', 'string'],
+    ['true', 'boolean'],
+    ['[]', 'array'],
+    ['[{"id":1,"result":{"ok":false}}]', 'array'],
+  ])('ignores invalid envelope %s without losing subsequent messages', async (line, type) => {
+    const transport = new FakeTransport();
+    const warn = vi.fn();
+    const testLogger: Logger = { ...logger, warn, child: () => testLogger };
+    const onTransportError = vi.fn();
+    const onNotification = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport,
+      logger: testLogger,
+      onTransportError,
+    });
+    client.onNotification('test/notification', onNotification);
+    client.start();
+    // Handle rejection immediately so cleanup after a failed assertion cannot
+    // leave an unhandled rejection from the still-pending request.
+    const response = client.request('test/read', {}, { timeoutMs: 1_000 }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+
+    try {
+      expect(() => transport.emitLine(line)).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith('invalid JSON-RPC envelope', { type });
+      expect(onTransportError).not.toHaveBeenCalled();
+
+      const { id } = JSON.parse(transport.lines[0]) as { id: number };
+      transport.emitLine({ id, result: { ok: true } });
+      await expect(response).resolves.toEqual({ result: { ok: true } });
+
+      transport.emitLine({ method: 'test/notification', params: { afterInvalidLine: true } });
+      expect(onNotification).toHaveBeenCalledTimes(1);
+      expect(onNotification).toHaveBeenCalledWith({ afterInvalidLine: true });
+      expect(onTransportError).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('detectAuthInvalidationReason', () => {
   const revokedRateLimitsError = {
     code: -32603,
