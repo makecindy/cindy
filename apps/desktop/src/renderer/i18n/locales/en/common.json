@@ -11374,7 +11374,8 @@
         "empty": "No guests yet. A guest appears here after their first private message.",
         "noProjects": "Link a project in Linked Projects to bind a guest to it.",
         "loadFailed": "Couldn't load guests",
-        "saveFailed": "Not saved. Try again."
+        "saveFailed": "Not saved. Try again.",
+        "refusedNotice": "🔒 This bot isn't open to you yet."
       },
       "add": {
         "button": "Add platform",

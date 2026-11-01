@@ -513,5 +513,5 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 
 **有意不同**：只有伙伴自有连接（含 Telegram）有访客绑定。主人把某位私聊访客绑定到伙伴关联的
 本机项目后，访客的专线只在该项目里运行、使用独立记忆；未绑定访客按连接策略沿用伙伴 Home（缺省）
-或只收到固定提示「🔒 这个机器人暂未向你开放。」（`ui.agent.guestRefused`，不起轮次）。个人 bot
+或只收到一句固定提示（`bots.channels.guests.refusedNotice`，跟随主人的 App 语言，`ui.agent.guestRefused`，不起轮次）。个人 bot
 与官方 bot 没有访客专线，不适用。规则正文见 `cindy-bots-runtime.md` 工作目录一节的第二个例外。

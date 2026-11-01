@@ -11328,7 +11328,8 @@
         "empty": "尚無賓客。賓客初私語後現於此。",
         "noProjects": "先於「相關之案」繫一案，乃可繫賓客。",
         "loadFailed": "未能讀賓客",
-        "saveFailed": "未能存，請再試。"
+        "saveFailed": "未能存，請再試。",
+        "refusedNotice": "🔒 此機器人尚未為汝開放。"
       },
       "add": {
         "button": "增平台",

@@ -11468,7 +11468,8 @@
         "empty": "Aún no hay invitados. Un invitado aparece aquí tras su primer mensaje privado.",
         "noProjects": "Vincula primero un proyecto en Proyectos vinculados para asignarle un invitado.",
         "loadFailed": "No se pudieron cargar los invitados",
-        "saveFailed": "No se guardó. Inténtalo de nuevo."
+        "saveFailed": "No se guardó. Inténtalo de nuevo.",
+        "refusedNotice": "🔒 Este bot aún no está disponible para ti."
       },
       "add": {
         "button": "Agregar plataforma",

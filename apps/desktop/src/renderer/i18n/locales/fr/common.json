@@ -11468,7 +11468,8 @@
         "empty": "Aucun invité pour l'instant. Un invité apparaît ici après son premier message privé.",
         "noProjects": "Liez d'abord un projet dans Projets liés pour y associer un invité.",
         "loadFailed": "Impossible de charger les invités",
-        "saveFailed": "Non enregistré. Réessayez."
+        "saveFailed": "Non enregistré. Réessayez.",
+        "refusedNotice": "🔒 Ce bot n'est pas encore ouvert pour vous."
       },
       "add": {
         "button": "Ajouter une plateforme",

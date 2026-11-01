@@ -11328,7 +11328,8 @@
         "empty": "尚无宾客。宾客初私语后现于此。",
         "noProjects": "先于「相关之案」系一案，乃可系宾客。",
         "loadFailed": "未能读宾客",
-        "saveFailed": "未能存，请再试。"
+        "saveFailed": "未能存，请再试。",
+        "refusedNotice": "🔒 此机器人尚未为汝开放。"
       },
       "add": {
         "button": "增平台",

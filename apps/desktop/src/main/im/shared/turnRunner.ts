@@ -1499,7 +1499,7 @@ export function createTurnRunner(
           const guestRefused = blocked === COMPANION_GUEST_REFUSED;
           const rejectReason = guestRefused ? 'guest_refused' : 'companion_unavailable';
           const text = guestRefused
-            ? (ui.agent.guestRefused ?? ui.agent.runtimeError(blocked))
+            ? (ui.agent.guestRefused?.() ?? ui.agent.runtimeError(blocked))
             : (ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked));
           if (item.turn.queueMode === 'internal') {
             const consumed = (await item.onEarlyReject?.(rejectReason, text)) ?? false;

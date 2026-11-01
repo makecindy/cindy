@@ -11374,7 +11374,8 @@
         "empty": "Noch keine Gäste. Ein Gast erscheint hier nach seiner ersten Direktnachricht.",
         "noProjects": "Verknüpfe zuerst unter „Verknüpfte Projekte“ ein Projekt, um einen Gast zuzuordnen.",
         "loadFailed": "Gäste konnten nicht geladen werden",
-        "saveFailed": "Nicht gespeichert. Versuche es erneut."
+        "saveFailed": "Nicht gespeichert. Versuche es erneut.",
+        "refusedNotice": "🔒 Dieser Bot ist für dich noch nicht freigegeben."
       },
       "add": {
         "button": "Plattform hinzufügen",

@@ -11468,7 +11468,8 @@
         "empty": "Ainda não há convidados. Um convidado aparece aqui após a primeira mensagem privada.",
         "noProjects": "Associe primeiro um projeto em Projetos associados para lhe atribuir um convidado.",
         "loadFailed": "Não foi possível carregar os convidados",
-        "saveFailed": "Não guardado. Tente novamente."
+        "saveFailed": "Não guardado. Tente novamente.",
+        "refusedNotice": "🔒 Este bot ainda não está disponível para si."
       },
       "add": {
         "button": "Adicionar plataforma",

@@ -11328,7 +11328,8 @@
         "empty": "还没有访客。访客第一次私聊后会出现在这里。",
         "noProjects": "先在「关联项目」里关联一个项目，才能绑定访客。",
         "loadFailed": "访客读取失败",
-        "saveFailed": "没保存上，请重试。"
+        "saveFailed": "没保存上，请重试。",
+        "refusedNotice": "🔒 这个机器人暂未向你开放。"
       },
       "add": {
         "button": "添加平台",
