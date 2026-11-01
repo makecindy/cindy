@@ -62,7 +62,6 @@ import {
   createVllmResponsesCompatibilityRule,
   sanitizeXaiModelInputBody,
   sanitizeXaiModelInputFromBody,
-  stripEncryptedContentFromBody,
   stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonCanonicalResponsesItemIdsFromBody,
@@ -232,10 +231,41 @@ let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
-const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
-  enabled: () => readSilentEncryptedRetrySettings().enabled,
-  onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
-});
+/** Only provider-bound reasoning is disposable; messages, tool data and compacted context are not. */
+function stripCodexEncryptedReasoning(rawBody: Buffer): Buffer | null {
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  const input = body.input.filter(item => !(isPlainObject(item) && item.type === 'reasoning'
+    && typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0));
+  return input.length === body.input.length ? null : Buffer.from(JSON.stringify({ ...body, input }));
+}
+
+const encryptedContentRecoveryRule = {
+  ...createEncryptedContentRecoveryRule({
+    enabled: () => readSilentEncryptedRetrySettings().enabled,
+    onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
+  }),
+  strip: stripCodexEncryptedReasoning,
+  unrecoverableCode: (rawBody: Buffer): string | null => {
+    // Classification must share strip's protocol boundary: business fields
+    // named encrypted_content cannot make opaque compaction recoverable.
+    if (stripCodexEncryptedReasoning(rawBody)) return null;
+    try {
+      const body: unknown = JSON.parse(rawBody.toString('utf8'));
+      return isPlainObject(body) && Array.isArray(body.input) && body.input.some(item =>
+        isPlainObject(item) && item.type === 'compaction'
+        && typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0)
+        ? 'CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE' : null;
+    } catch {
+      return null;
+    }
+  },
+};
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
   onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
 });
@@ -300,6 +330,8 @@ export function armCodexHttpRecovery(args: {
   threadId: string;
   message: string;
   additionalDetails?: string | null;
+  /** Trusted maker-core fact, never inferred from missing sockets or model names. */
+  httpOnly?: boolean;
 }): string | null {
   const threadId = args.threadId.trim();
   if (!threadId) return null;
@@ -331,7 +363,14 @@ export function armCodexHttpRecovery(args: {
     disconnectedWebSockets += handle.disconnectWebSocketsForThread?.(threadId) ?? 0;
     provenScopedWebSocket ||= handle.hasProvenWebSocketForThread?.(threadId) === true;
   }
-  if (disconnectedWebSockets === 0 && !provenScopedWebSocket) {
+  // Use the same live hosted-owner policy as resolveWebSocketUpstream: native
+  // WS support does not imply a WS transport when the proxy rejects upgrades.
+  const httpOnly = args.httpOnly === true || hasHostedSessionModelAccess(sessionId);
+  const scopedHttpRecovery = httpOnly && reason === 'encrypted_content'
+    && Boolean(sessionId) && existingSessionId === sessionId;
+  // API-only and proxy-forced HTTP threads have no scoped WS proof. A 200 SSE error
+  // needs the same one-shot body repair, with no socket teardown or global fallback.
+  if (disconnectedWebSockets === 0 && !provenScopedWebSocket && !scopedHttpRecovery) {
     httpRecoveryReasonByThread.delete(threadId);
     // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
     // 复用这些连接。不能为恢复 thread A 而全局断开匿名连接（可能正承载 thread B）；
@@ -362,7 +401,8 @@ export function armCodexHttpRecovery(args: {
     threadId,
     reason,
     disconnectedWebSockets,
-    ...(disconnectedWebSockets === 0 ? { scopedSocketAlreadyClosed: true } : {}),
+    ...(scopedHttpRecovery ? { httpOnly: true }
+      : disconnectedWebSockets === 0 ? { scopedSocketAlreadyClosed: true } : {}),
   });
   return reason;
 }
@@ -3224,6 +3264,7 @@ function createTransformRequestChain(
   pricing: XaiRequestPricing = new Map(),
   /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
   guest = false,
+  encryptedRecoveryTransforms: RequestTransform[] = [],
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3255,12 +3296,7 @@ function createTransformRequestChain(
     execAdapter.releaseResponse(requestId);
   };
   const transforms: RequestTransform[] = [
-    createArmedHttpRecoveryStripTransform(),
-    createActiveStripTransform({
-      controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
-      strip: stripEncryptedContentFromBody,
-    }),
+    ...encryptedRecoveryTransforms,
     createActiveStripTransform({
       controller: imageGenerationStripController,
       enabled: () => true,
@@ -3456,6 +3492,14 @@ async function createCodexProxyHandle(
     }
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
+  const encryptedRecoveryTransforms = [
+    createArmedHttpRecoveryStripTransform(),
+    createActiveStripTransform({
+      controller: encryptedStripController,
+      enabled: () => readSilentEncryptedRetrySettings().enabled,
+      strip: stripCodexEncryptedReasoning,
+    }),
+  ];
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
@@ -3504,16 +3548,17 @@ async function createCodexProxyHandle(
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined, encryptedRecoveryTransforms).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
-        // fields and model. The dedicated transform below reconciles effort
-        // against that same snapshot; ordinary session/catalog transforms stay out.
+        // fields and model. Only the explicit encrypted-reasoning recovery may
+        // cross this boundary; ordinary session/catalog transforms stay out.
         const scoped: RequestTransform = (body, ctx) => {
           if (crossProviderRequests.has(ctx.headers)) {
             return transform(body, { ...ctx, url: '/responses' });
           }
           return isCodexCustomProviderNamespacePath(ctx.url) && transform !== normalizeResponsesToolItemIds
+            && !encryptedRecoveryTransforms.includes(transform)
             ? null : transform(body, ctx);
         };
         // Keep adapter rejection and request-state cleanup on ordinary routes.

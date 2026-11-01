@@ -11569,7 +11569,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     const ENCRYPTED_ERROR =
       'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content';
 
-    function installRecoveryHost(agent: CodexAgent): ReturnType<typeof installFakeHost> {
+    function installRecoveryHost(agent: CodexAgent, httpOnly = false): ReturnType<typeof installFakeHost> {
       let turnSeq = 0;
       return installFakeHost(agent, (method) => {
         if (method === Method.TurnStart) {
@@ -11577,17 +11577,20 @@ describe('CodexAgent MCP thread context hooks', () => {
           return { turn: { id: `turn-${turnSeq}` } };
         }
         return undefined;
-      });
+      }, { codexProxyActive: httpOnly, openAiWebSocketsEnabled: !httpOnly });
     }
 
     it.each([
-      ['encrypted_content', ENCRYPTED_ERROR],
+      ['encrypted_content', ENCRYPTED_ERROR, false],
+      // #6711: API-only native thread has no scoped WS handshake. Reuse the
+      // same zero-output/terminal-ownership retry, with the frozen HTTP fact.
+      ['encrypted_content', ENCRYPTED_ERROR, true],
       ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
       ['responses_reasoning_content', "Invalid 'input[15].content': array too long. Expected an array with maximum length 0, but got an array with length 1 instead."],
-    ])('arms HTTP fallback and retries the same zero-output turn once (%s)', async (reason, recoveryError) => {
+    ] as const)('arms HTTP fallback and retries the same zero-output turn once (%s)', async (reason, recoveryError, httpOnly = false) => {
       const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
-      const host = installRecoveryHost(agent);
+      const host = installRecoveryHost(agent, httpOnly);
       const handle = await agent.startSession({
         sessionId: 'session-ws-body-recovery',
         model: 'gpt-5.4',
@@ -11635,6 +11638,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         threadId: 'start-thread-id',
         message: 'Bad request',
         additionalDetails: recoveryError,
+        httpOnly,
       });
       expect(
         events.some(
@@ -11665,12 +11669,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     });
 
-    it('does not arm HTTP fallback for remote compact encrypted-content 400', async () => {
+    it.each([false, true])('does not arm HTTP fallback for remote compact encrypted-content 400 (HTTP-only=%s)', async (httpOnly) => {
       const compactEncrypted =
         'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }';
       const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
-      const host = installRecoveryHost(agent);
+      const host = installRecoveryHost(agent, httpOnly);
       const handle = await agent.startSession({
         sessionId: 'session-ws-remote-compact-encrypted',
         model: 'gpt-5.4',
@@ -11972,10 +11976,11 @@ describe('CodexAgent MCP thread context hooks', () => {
     it.each([
       ['image_generation_id', 'Image generation items without `id` are not supported for this request.'],
       ['tool_item_id', "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'."],
+      ['encrypted_content', ENCRYPTED_ERROR],
     ])('does not replay a recovery error after the turn has produced output (%s)', async (reason, recoveryError) => {
       const armCodexHttpRecovery = vi.fn(() => reason);
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
-      const host = installRecoveryHost(agent);
+      const host = installRecoveryHost(agent, reason === 'encrypted_content');
       const handle = await agent.startSession({
         sessionId: 'session-ws-body-recovery-output',
         model: 'gpt-5.4',
@@ -11985,7 +11990,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       const handlers = host.getThreadHandlers();
       if (!handlers?.error || !handlers.reasoningTextDelta) throw new Error('expected handlers');
 
-      handlers.reasoningTextDelta({
+      if (reason === 'encrypted_content') handlers.itemStarted?.({
+        threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { id: 'side-effect-1', type: 'commandExecution', command: 'write-output', cwd: '/repo' },
+      });
+      else handlers.reasoningTextDelta({
         threadId: 'start-thread-id',
         turnId: 'turn-1',
         itemId: 'reasoning-1',
@@ -12011,10 +12020,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     });
 
-    it('does not retry the same logical send again when the HTTP retry also fails', async () => {
+    it.each([false, true])('does not retry the same logical send again when the HTTP retry also fails (HTTP-only=%s)', async (httpOnly) => {
       const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
       const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
-      const host = installRecoveryHost(agent);
+      const host = installRecoveryHost(agent, httpOnly);
       const handle = await agent.startSession({
         sessionId: 'session-ws-body-recovery-once',
         model: 'gpt-5.4',
