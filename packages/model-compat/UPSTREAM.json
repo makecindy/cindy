@@ -6,7 +6,7 @@
       "source": "src/adapters/google-tool-schema.ts",
       "target": "src/upstream/adapters/google-tool-schema.ts",
       "upstreamSha256": "d5bcf65418bfade8a3d98a26c7ffc1b657f943eca0e44528e8817a9ef4f5e4ac",
-      "portedSha256": "d5bcf65418bfade8a3d98a26c7ffc1b657f943eca0e44528e8817a9ef4f5e4ac"
+      "portedSha256": "0c0d2e0c067c23ea3b5cc311c64ae17045c19dd16e8bc0bcce806c7b11e1094d"
     },
     {
       "source": "src/adapters/opencode-go-additional-tools.ts",

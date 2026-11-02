@@ -263,7 +263,12 @@ it('keeps native Gemini tool signatures across two turns through Responses histo
     const send = createPiProviderFetch({ row, providerId: 'user-google-connection', apiKey: 'fixture-key',
       fetchImpl: async () => { throw new Error('Google uses its native SDK transport'); } });
     const firstInput = [{ role: 'user', content: [{ type: 'input_text', text: 'What is the weather?' }] }];
-    const tools = [{ type: 'function', name: 'weather', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } }];
+    // Full JSON Schema accepts this MCP union; the legacy Google `parameters` field does not (#7843).
+    const jsonValue = { type: ['null', 'boolean', 'object', 'array', 'number', 'string'], items: {} };
+    const parameters = { type: 'object', properties: {
+      city: { type: 'string' }, values: { type: 'array', items: jsonValue },
+    }, required: ['city'] };
+    const tools = [{ type: 'function', name: 'weather', parameters }];
     const first = await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: firstInput, tools, stream: true }) })).text();
     const events = first.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
     const final = events.find(event => event.type === 'response.completed')?.response;
@@ -275,6 +280,12 @@ it('keeps native Gemini tool signatures across two turns through Responses histo
       input: [...firstInput, ...final.output, { type: 'function_call_output', call_id: tool.call_id, output: 'Sunny' }],
     }) })).text();
     expect(second).toContain('Sunny');
+    for (const body of sent) {
+      expect(body.tools).toEqual([{ functionDeclarations: [expect.objectContaining({
+        name: 'weather', parametersJsonSchema: parameters,
+      })] }]);
+      expect(JSON.stringify(body)).not.toContain('"parameters":');
+    }
     expect(JSON.stringify(sent[1])).toContain('c2lnbmF0dXJl');
     expect(JSON.stringify(sent[1])).toContain('functionResponse');
     expect(JSON.stringify(sent[1])).not.toContain('cindy-pi-history-v1');
