@@ -86,11 +86,10 @@ import { t } from '../../i18n.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
-import { buildBotGroupCapabilityNotice } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
-import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
+import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 
@@ -1056,24 +1055,38 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
-  it.each([false, true])('posts a tool denial as the companion without settling or replaying its active turn (retry: %s)', async retry => {
+  it.each([[false, 0], [true, 0], [false, 1], [true, 1], [true, 3]] as const)('posts a validation failure as the companion without settling or replaying its turn (temporary: %s, retry: %s)', async (temporary, retry) => {
     const posted: unknown[] = [];
+    let invalid = false;
     fixture.handle.mockImplementation((route, method, body) => {
-      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'tools' }; claimed = true; return { body: { execution: next } }; }
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/members')) return invalid && temporary ? { status: 503, body: { code: 'UNAVAILABLE' } } : { body: [
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', accessRevision: invalid ? 2 : 1 },
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined' },
+      ] };
       if (route === `/conversations/${roomId}/messages` && method === 'POST') {
         posted.push(body);
-        return retry && posted.length === 1 ? { status: 503, body: { error: { code: 'UNAVAILABLE' } } } : { body: { id: 'notice' } };
+        return posted.length <= retry ? { status: 503, body: { error: { code: 'UNAVAILABLE' } } } : { body: { id: 'notice' } };
       }
       return response(route);
     });
     await start();
-    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
-    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    invalid = true;
+    const code = temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED';
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
     await vi.advanceTimersByTimeAsync(0);
-    if (retry) await vi.advanceTimersByTimeAsync(1000);
-    expect(posted).toHaveLength(retry ? 2 : 1);
+    if (retry) await vi.advanceTimersByTimeAsync(3000);
+    const attempts = retry === 3 ? 3 : retry + 1;
+    expect(posted).toHaveLength(attempts);
     if (retry) expect(posted[1]).toEqual(posted[0]);
-    expect(posted[0]).toMatchObject({ content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code: 'GROUP_AUTHORIZATION_REQUIRED' } }], mentions: [] });
+    if (retry === 3) {
+      // #8443: exhausting delivery must not reset the budget on the next denial.
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(posted).toHaveLength(3);
+    }
+    expect(posted[0]).toMatchObject({ content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code } }], mentions: [] });
     expect(fixture.requests.filter(request => request.url.endsWith(`/conversations/${roomId}/messages`)).at(-1)?.actor).toBe(botId);
     expect(deliveries()).toHaveLength(0);
     expect(deps.dispatch).toHaveBeenCalledOnce();

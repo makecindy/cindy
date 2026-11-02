@@ -40,7 +40,7 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
   const assertCurrent = () => {
     if (!authority || authorities.get(sessionId) !== authority || authority.botId !== botId
       || !authority.isCurrent() || authority.mode === 'chat'
-      || (operation === 'owner-action' && authority.mode !== 'owner')) throw denied();
+      || (operation === 'owner-action' && authority.mode !== 'owner')) throw new GroupToolAuthorizationError();
   };
   assertCurrent();
   try { await authority!.validate(); } catch (error) {

@@ -1,6 +1,5 @@
-import { buildBotGroupCapabilityNotice, readBotGroupCapabilityNotice } from '../botGroupChat.js';
 import { describe, expect, it } from 'vitest';
-import { readImportedBotGroupRuntimeFailureCode } from '../botGroupChat.js';
+import { buildBotGroupCapabilityNotice, readBotGroupCapabilityNotice, readImportedBotGroupRuntimeFailureCode } from '../botGroupChat.js';
 
 const card = { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1,
   fallback: 'group activity', data: { kind: 'notice', authorKind: 'system', runtimeFailureCode: 'AUTH_REQUIRED' } };

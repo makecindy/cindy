@@ -1,5 +1,3 @@
-import { readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode } from '../../shared/botGroupChat.js';
-import { botGroupProcessCard, readBotGroupProcessCard } from '../../shared/botGroupChat.js';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -55,7 +53,8 @@ import {
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
-  readBotGroupTaskCard, botGroupMessageSummaryText,
+  readBotGroupTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
+  readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
@@ -2035,7 +2034,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           return;
         } catch (error) {
           if (attempt === 2 || error instanceof ChatResponseError && !retryableResponse(error)) {
-            notices.delete(code);
+            // Keep the completed attempt budget: another denial in this turn
+            // must not restart delivery after all retries have failed.
             deps.log?.warn('Group capability notice could not be delivered', { noticeCode: code, ...chatErrorDiagnostic(error) });
             return;
           }

@@ -1,5 +1,3 @@
-import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
-import { isBotGroupCapabilityNoticeCode } from '../../../shared/botGroupChat';
 import { BotGroupProcess } from './BotGroupProcess';
 /**
  * 群聊时间线的一行（主时间线与话题面板共用），与伙伴私聊同一套气泡：
@@ -23,6 +21,7 @@ import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import { memo, useEffect, useState, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, CornerDownRight, RefreshCcw } from 'lucide-react';
+import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
 import { BotGroupThreadPreview, BotGroupThreadShareQuote, botGroupThreadShareLabel } from './BotGroupThreadViews';
 import { toast } from '@/lib/toast';
 import { editBotGroupSend, retryBotGroupSend, type BotGroupOutboxEntry } from './botGroupOutbox';
@@ -42,7 +41,7 @@ import type {
   BotGroupQuoteDisplay,
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
-import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
+import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';

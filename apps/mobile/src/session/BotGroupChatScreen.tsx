@@ -1,4 +1,3 @@
-import { isBotGroupCapabilityNoticeCode } from '@cindy/maker-shared/botGroupChat';
 import { BotGroupProcess } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
@@ -47,6 +46,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   isBotGroupRuntimeFailureCode,
+  isBotGroupCapabilityNoticeCode,
   resolveBotGroupQuote,
   BOT_GROUP_MEMBER_LINK_REL,
   botGroupQuoteFromMessage,

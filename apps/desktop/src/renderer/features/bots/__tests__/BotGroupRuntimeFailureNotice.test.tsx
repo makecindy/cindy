@@ -1,7 +1,7 @@
-import { BotGroupCapabilityNotice } from '../BotGroupCapabilityNotice';
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BotGroupCapabilityNotice } from '../BotGroupCapabilityNotice';
 import { BotGroupRuntimeFailureNotice } from '../BotGroupRuntimeFailureNotice';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 
