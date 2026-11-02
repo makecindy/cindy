@@ -25,6 +25,7 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { normalizeMobileAgentCapabilities } from "@/session/agentCapabilities";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
+import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { SheetModal } from "@/session/SheetModal";
 import {
   fontWeight,
@@ -53,6 +54,11 @@ export function PluginScheduleDraft({
   const link = useDeviceLink(),
     maker = useMobileMakerTransport(deviceId),
     providers = useDeviceProviders(deviceId);
+  const remoteSupported = providers.providers.some(
+    (provider) =>
+      typeof (provider as { remoteInvocationEnabled?: unknown })
+        .remoteInvocationEnabled === "boolean",
+  );
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
     sent = useRef(false),
@@ -90,6 +96,11 @@ export function PluginScheduleDraft({
   const [picker, setPicker] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
+  const remoteCatalogs = useRemoteAgentCatalogs({
+    enabled: (picker || !!draft.modelAgentDeviceId) && remoteSupported,
+    controlledDeviceId: deviceId,
+    keepDeviceIds: draft.modelAgentDeviceId ? [draft.modelAgentDeviceId] : [],
+  });
   useEffect(
     () => () => {
       alive.current = false;
@@ -156,11 +167,15 @@ export function PluginScheduleDraft({
             translate: (_key, _fallback, _values) =>
               t("plugins.automationInvalid"),
           });
-  const modelName =
-    providers.providers
+  const remoteCatalog = draft.modelAgentDeviceId
+    ? remoteCatalogs.find((catalog) => catalog.deviceId === draft.modelAgentDeviceId)
+    : undefined;
+  const shownModel =
+    (remoteCatalog?.providers ?? providers.providers)
       .find((provider) => provider.id === draft.providerId)
       ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
       ?.name ?? draft.model;
+  const modelName = remoteCatalog ? `${shownModel} · ${remoteCatalog.name}` : shownModel;
   return (
     <>
       <SheetModal
@@ -354,6 +369,14 @@ export function PluginScheduleDraft({
         keyboardAvoidingBehavior={Platform.OS === "ios" ? "padding" : "height"}
         emptyHint={t("plugins.modelsUnavailable")}
         unified={{
+          // 旧版电脑不认运行位置，不能把远程模型列出来再悄悄在本机运行。
+          remote: remoteSupported
+            ? {
+                catalogs: remoteCatalogs,
+                selectedDeviceId: draft.modelAgentDeviceId || null,
+                hostDeviceId: deviceId,
+              }
+            : undefined,
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
           loadCapabilities: async (kind) => {
@@ -363,10 +386,13 @@ export function PluginScheduleDraft({
             if (!caps) throw new Error("CAPABILITIES_UNAVAILABLE");
             return caps;
           },
-          onSelect: async (value) => {
+          onSelect: async (value, source) => {
             assertCurrent();
             setDraft((d) => ({
               ...d,
+              ...(source?.deviceId
+                ? { modelAgentKind: value.agent, modelAgentDeviceId: source.deviceId }
+                : { modelAgentKind: undefined, modelAgentDeviceId: undefined }),
               agentKind: value.agent,
               model: value.modelId,
               providerId: value.providerId,
