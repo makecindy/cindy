@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import { openBrowserAsync } from 'expo-web-browser';
+import { writeClipboardText } from '@/session/messageActions';
 import { withDownloadedRemoteMediaFile } from '@/session/remoteMediaDiskCacheExpo';
 import {
   BotGroupTextAttachmentPreview,
@@ -11,35 +12,28 @@ import {
 } from '@/session/BotGroupTextAttachmentPreview';
 
 const downloadState = vi.hoisted(() => ({ text: '', tooLargeCount: 0, failedCount: 0 }));
+const nativeList = vi.hoisted(() => ({ scrollToIndex: vi.fn() }));
 
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ withDownloadedRemoteMediaFile: vi.fn() }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
-vi.mock('lucide-react-native', () => ({
-  ExternalLink: () => null,
-  X: () => null,
-}));
+vi.mock('lucide-react-native', () => Object.fromEntries(['ExternalLink','X','Copy','Search','WrapText','ListOrdered','ChevronLeft','ChevronRight','Ellipsis'].map(key => [key, () => null])));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/theme', () => ({
-  fontWeight: { semibold: '600' },
-  iconSize: { action: 20, md: 16 },
-  lineHeight: { bodySmall: 20 },
-  monoFont: 'monospace',
-  radius: { pill: 9999 },
-  spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 },
-  textStyles: { body: {}, footnote: {}, bodySmall: {}, caption: {} },
-  typeScale: { bodySmall: 15 },
-  useTheme: () => ({ colors: {
-    border: 'border',
-    surface: 'surface',
-    surfaceElevated: 'surface-elevated',
-    textPrimary: 'primary',
-    textSecondary: 'secondary',
-    textTertiary: 'tertiary',
-  } }),
-}));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (make: any) => make(tokens.lightColors) };
+});
+vi.mock('@legendapp/list/react-native', async () => ({ LegendList: (await import('react-native')).FlatList }));
+vi.mock('@/session/messageActions', () => ({ writeClipboardText: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('expo-file-system', () => ({ File: class {} }));
+vi.mock('expo-sharing', () => ({ shareAsync: vi.fn() }));
+vi.mock('@/session/DiagramDocumentPreview', () => ({ DiagramDocumentPreview: () => null }));
+vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ visible, children }: any) => visible ? children : null }));
 vi.mock('@/components/AppText', async () => {
   const React = await import('react');
-  return { Text: ({ children, testID }: any) => React.createElement('span', { 'data-testid': testID }, children) };
+  return {
+    Text: ({ children, testID }: any) => React.createElement('span', { 'data-testid': testID }, children),
+    TextInput: (await import('react-native')).TextInput,
+  };
 });
 vi.mock('@/session/HtmlFileReader', async () => {
   const React = await import('react');
@@ -62,23 +56,33 @@ vi.mock('@/session/MarkdownFileReader', async () => {
 vi.mock('react-native-safe-area-context', async () => {
   const React = await import('react');
   return {
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
     SafeAreaProvider: ({ children }: any) => React.createElement('div', null, children),
     SafeAreaView: ({ children }: any) => React.createElement('div', null, children),
   };
 });
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const render = (tag: string) => ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement(tag, {
+  const render = (tag: string) => ({ children, testID, accessibilityLabel, onPress, onChangeText, value }: any) => React.createElement(tag, {
     'data-testid': testID,
     'aria-label': accessibilityLabel,
+    value,
+    onChange: onChangeText ? (event: any) => onChangeText(event.target.value) : undefined,
     onClick: onPress,
   }, children);
   return {
+    Alert: { alert: vi.fn() },
+    ScrollView: render('div'),
+    TextInput: render('input'),
     ActivityIndicator: render('span'),
-    FlatList: ({ data, renderItem, testID }: any) => React.createElement('div', {
+    FlatList: React.forwardRef((props: any, ref) => {
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: nativeList.scrollToIndex }));
+      const { data, renderItem, testID } = props;
+      return React.createElement('div', {
       'data-testid': testID,
       'data-row-count': String(data.length),
-    }, ...data.slice(0, 5).map((item: string, index: number) => React.createElement(React.Fragment, { key: String(index) }, renderItem({ item, index })))),
+    }, ...data.slice(0, 5).map((item: string, index: number) => React.createElement(React.Fragment, { key: String(index) }, renderItem({ item, index }))));
+    }),
     Modal: ({ children, visible }: any) => visible ? React.createElement('div', { 'data-testid': 'modal' }, children) : null,
     Pressable: render('button'),
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
@@ -157,8 +161,8 @@ describe('bot-group text attachment preview kinds', () => {
     ['notes.md', 'markdown'],
     ['notes.markdown', 'markdown'],
     ['summary.json', 'json'],
-    ['page.xhtml', null],
-    ['source.ts', null],
+    ['page.xhtml', 'text'],
+    ['source.ts', 'text'],
     ['archive.zip', null],
   ] as const)('classifies %s as %s', (name, expected) => {
     expect(botGroupTextAttachmentPreviewKind(name)).toBe(expected);
@@ -215,6 +219,8 @@ describe('BotGroupTextAttachmentPreview', () => {
     const { container } = await renderPreview('json', 'compact.json', '{"value":"' + 'x'.repeat(256_000) + '"}');
     const list = container.querySelector('[data-testid="groupChat.server.attachmentJsonPreview"]');
     expect(list?.textContent?.length).toBeLessThanOrEqual(4_097);
+    await act(async () => (container.querySelector('[aria-label="message.renderer.copyDetailContent"]') as HTMLButtonElement).click());
+    expect(writeClipboardText).toHaveBeenLastCalledWith('{"value":"' + 'x'.repeat(256_000) + '"}');
     expect(container.textContent).toContain('groupChat.server.attachmentPreviewTruncated');
   });
 
@@ -224,6 +230,22 @@ describe('BotGroupTextAttachmentPreview', () => {
     const list = container.querySelector('[data-testid="groupChat.server.attachmentJsonPreview"]');
     expect(list?.getAttribute('data-row-count')).toBe('25');
     expect(container.textContent).toContain('groupChat.server.attachmentPreviewTruncated');
+  });
+
+  // The 10,001-line device fixture found the match but RN FlatList clamped
+  // jumps to its measured tail. Exercise the source reader's search-to-list
+  // boundary; actual LegendList positioning is verified on iOS and Android.
+  it('finds the distant visible line and asks the virtual list to position it', async () => {
+    const body = Array.from({ length: 10_001 }, (_, index) => String(index)).join('\n');
+    const { container } = await renderPreview('json', 'large.json', body);
+    await act(async () => (container.querySelector('[aria-label="message.attachmentPreview.find"]') as HTMLButtonElement).click());
+    const field = container.querySelector('input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, '9999');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => (container.querySelector('[aria-label="message.attachmentPreview.next"]') as HTMLButtonElement).click());
+    expect(nativeList.scrollToIndex).toHaveBeenLastCalledWith({ index: 9999, viewPosition: 0.3, animated: false });
   });
 
   it('shows an explicit empty state for an empty text attachment', async () => {

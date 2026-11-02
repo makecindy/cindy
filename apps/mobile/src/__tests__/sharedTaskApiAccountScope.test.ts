@@ -8,6 +8,7 @@ import { SharedTaskScopeChangedError } from '@cindy/device-link';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
 import {
   __testing as relayRoutingTesting,
+  deviceLinkMediaApiBaseUrl,
   isSelfHostedRelayBaseUrl,
   setActiveSelfHostedRelay,
 } from '@/device-link/selfHostedRelayRouting';
@@ -18,6 +19,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('react', () => ({ useMemo: (factory: () => unknown) => factory() }));
 vi.mock('@/config/env', () => ({
   DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
+  getOfficialDeviceLinkApiBaseUrl: () => 'https://official.example.invalid',
   setDeviceLinkApiBaseOverride: () => {},
 }));
 
@@ -109,6 +111,18 @@ describe('shared-task HTTP account fence', () => {
     await expect(auth.apiFetch('/resource', { baseUrl: 'https://relay.example.invalid' })).resolves.toEqual(closed);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+  // Shared-task membership lives on the official service (docs/self-hosted-relay-plan.md §7): the
+  // API and its attachments stay there with the account token while a self-hosted relay is active.
+  it('keeps shared-task requests and attachments on the official service while a self-hosted relay is active', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.home.example', credential: 'relay-credential', signing: null });
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ sharedTasks: [] }) } as unknown as Response);
+    await expect(useSharedTaskApi().list()).resolves.toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://official.example.invalid/api/device-link/shared-tasks');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toMatch(/^Bearer /);
+    expect(deviceLinkMediaApiBaseUrl('cindy/device-link/shared-task/task-a/member/file.png')).toBe('https://official.example.invalid');
+    expect(deviceLinkMediaApiBaseUrl('cindy/device-link/account/file.png')).toBe('https://relay.example.invalid');
+  });
+
   // Self-hosted relay (docs/self-hosted-relay-plan.md §5.3): even a proxy-style 401 (HTTP_401, normally
   // refreshable) from the relay must not fetch, refresh or send the account token, nor end the session.
   it('sends self-hosted relay requests with the relay credential only, without refresh or sign-out on 401', async () => {

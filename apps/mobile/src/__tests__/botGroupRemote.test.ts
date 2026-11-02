@@ -116,6 +116,16 @@ describe('parseBotGroupChatData', () => {
     expect(parseBotGroupChatData(chatData())!.messages.every(message => !message.quote && !message.deleted)).toBe(true);
   });
 
+  it('preserves an owned-host process reference through remote group and thread data', () => {
+    const process = { groupId: 'g1', executionId: 'turn', sessionId: 'lane', clientId: 'source' };
+    const base = { id: 'p', sequence: 7, kind: 'message', authorKind: 'bot', authorBotId: 'mimi', authorName: '',
+      content: 'Result', noticeCode: null, planId: null, files: [], createdAt: 70, process, threadRootId: 'root' };
+    const view = parseBotGroupChatData(chatData({ messages: [base, { ...base, id: 'human', authorKind: 'user' },
+      { ...base, id: 'bad', process: { ...process, sessionId: '' } }, { ...base, id: 'deleted', deleted: true }] }))!;
+    expect(view.messages[0]).toMatchObject({ process, threadRootId: 'root', content: 'Result' });
+    expect(view.messages.slice(1).every(row => !row.process)).toBe(true);
+  });
+
   it('keeps a validated task card only on a teammate message (bot-group-chat.md §10)', () => {
     const meta = { v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'mimi', fromBotName: '咪咪', toBotId: null,
       toBotName: 'Cindy', parentSessionId: 'group-lane', childSessionId: 'child-1', objective: '写官网首页' };

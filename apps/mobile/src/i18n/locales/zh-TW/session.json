@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "管理 PR 連結",
+    "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
+    "empty": "貼上 GitHub PR 連結即可新增",
+    "removed": "已移除 {{count}} 個",
+    "legacy": "未確認的歷史引用：{{count}}",
+    "addLabel": "新增 PR 連結",
+    "add": "新增 PR",
+    "loading": "正在讀取…",
+    "restore": "還原 PR",
+    "pin": "固定至頂列",
+    "unpin": "取消固定",
+    "pinLimit": "最多固定 3 個 PR",
+    "reorderHint": "按 Alt+↑/↓ 在已固定或未固定群組內調整順序。",
+    "dragHandle": "拖曳排序 {{repo}} #{{number}}",
+    "remove": "移除 PR",
+    "errors": {
+      "duplicate": "此 PR 已關聯；已移除的連結可在清單中還原",
+      "notFound": "找不到此 PR，或沒有存取權限",
+      "invalidUrl": "請輸入有效的 GitHub PR 連結",
+      "reorderFailed": "順序未儲存，請重試",
+      "verifyFailed": "無法驗證 PR，請檢查 GitHub 登入與存取權限",
+      "unsupported": "這台電腦的版本暫不支援管理 PR 連結",
+      "failed": "無法更新 PR 連結"
+    },
+    "moveUp": "上移"
+  },
   "paneResize": {
     "label": "分欄寬度",
     "hint": "左右拖動可調整兩欄寬度"
@@ -185,7 +212,7 @@
       },
       "actionCopy": {
         "pending": "請先處理待處理請求，完成後輸入區會恢復。",
-        "archived": "任務已封存，還原後才能繼續傳送。",
+        "archived": "任務已封存，傳送訊息會自動取消封存。",
         "deleted": "任務已刪除，無法繼續操作。",
         "queuePaused": "佇列已暫停，可在佇列面板繼續執行。"
       }
@@ -428,7 +455,7 @@
     "copyLinkAction": "複製任務連結",
     "unpin": "取消置頂",
     "pin": "置頂",
-    "restore": "恢復",
+    "restore": "取消歸檔",
     "archive": "歸檔",
     "deleteAction": "刪除任務",
     "deleteConversation": "刪除任務",
@@ -566,6 +593,7 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多個工具呼叫之間來回循環，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "codexThreadLost": "Codex 鑑權模式已切換，當前任務無法繼續，請新建任務。",
+    "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
     "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協議加密內容，在新任務裡繼續）。"
   },
   "row": {
@@ -762,5 +790,17 @@
     "confirm": "換過去",
     "remember": "換過去，以後自動換（僅此任務）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在編輯訊息",
+    "discard": "放棄編輯訊息",
+    "stopTimeout": "等待任務停止超時，請稍後重試",
+    "queueNotEmpty": "任務有排隊中的訊息，先傳送或移除佇列內容後再編輯",
+    "notLast": "任務裡已有更新的訊息，這條不再是最後一條，無法編輯重發",
+    "failed": "編輯重發失敗，請重試",
+    "noPriorAssistant": "這條訊息前面還沒有 AI 回覆，電腦端目前版本暫不支援編輯；更新電腦端 Cindy 後再試。",
+    "uploadsPending": "還有附件正在上傳，等上傳完成後再編輯訊息。",
+    "rollbackHint": "傳送將撤銷上一輪對 {{count}} 個檔案的改動",
+    "conversationOnlyHint": "傳送不會恢復專案檔案，上一輪的檔案改動會保留"
   }
 }

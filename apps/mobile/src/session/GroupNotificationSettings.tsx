@@ -8,8 +8,8 @@ const key = (name: string) => `groupChat.settings.notifications.${name}`;
 const modes = ['all', 'mentions', 'none'] as const;
 
 /** Uses the server-confirmed value; ordinary members can edit their own alerts. */
-export function GroupNotificationSettings({ mode, disabled, save }: {
-  mode: ChatGroupNotificationMode; disabled: boolean; save(mode: ChatGroupNotificationMode): Promise<unknown>;
+export function GroupNotificationSettings({ mode, disabled, save, title }: {
+  mode: ChatGroupNotificationMode; disabled: boolean; save(mode: ChatGroupNotificationMode): Promise<unknown>; title?: string;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
@@ -28,7 +28,7 @@ export function GroupNotificationSettings({ mode, disabled, save }: {
     catch { if (mounted.current && confirmed.current !== value) setError(true); }
     finally { writing.current = false; if (mounted.current) setBusy(false); }
   }
-  return <SettingsGroup footer={t(key(`${mode}Hint`))}
+  return <SettingsGroup title={title} footer={t(key(`${mode}Hint`))}
     messages={[error && { text: t(key('saveFailed')), testID: 'botGroup.settings.notifications.error' }]}>
     <BotGroupMenu title={label} accessibilityLabel={`${label}: ${value}`} disabled={disabled || busy}
       testID="botGroup.settings.notifications" sections={[{ id: 'notifications', options: modes.map(value => ({ id: value, title: t(key(value)), selected: value === mode })) }]}

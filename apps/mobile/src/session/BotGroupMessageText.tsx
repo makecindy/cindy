@@ -153,5 +153,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   tableText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   tableHeaderText: { color: colors.textSecondary, fontWeight: fontWeight.medium },
-  mention: { fontWeight: fontWeight.medium, backgroundColor: colors.surfaceChip },
+  // Match desktop's text-only mention highlight without a chip fill.
+  mention: { fontWeight: fontWeight.medium },
 });

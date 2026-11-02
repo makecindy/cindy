@@ -24,8 +24,53 @@ function fixture() {
 }
 
 describe('durable chat history', () => {
+  // Unit, topic latency reproduction: each new head kept an overlapping page;
+  // one reply then re-downloaded every copy of the root before either UI could refresh.
+  // Exercise receive/page/projection with two windows and one changed reply count.
+  it('refreshes a changed root once across overlapping head windows', async () => {
+    const f = fixture(); const cache = f.open(); let head = 4, replies = 0;
+    const root = () => ({ ...f.message('1'), replyCount: replies });
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room' }, messages: [], cursor: '10' };
+      const q = new URL(`https://fixture${route}`).searchParams;
+      if (q.get('limit') === '1') return [root()];
+      const before = Number(q.get('before') ?? head + 1);
+      return Array.from({ length: before - 1 }, (_, n) => before - 1 - n).map(n => n === 1 ? root() : f.message(String(n)));
+    });
+    const main = new URLSearchParams('limit=100');
+    await cache.page('room', main);
+    await cache.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: f.message('5') } }] }, '10');
+    head = 5; await cache.page('room', main);
+    replies = 1;
+    await cache.receive('room', { cursor: '12', changes: [{ type: 'message.created', data: { message: { ...f.message('6'), threadRootId: '1' } } }] }, '10');
+    f.api.mockClear();
+    const shown = await cache.projection('room', ['1', '2', '3', '4', '5']);
+    expect(shown.messages.find(m => m.id === '1')).toMatchObject({ replyCount: 1 });
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/conversations/room/messages?limit=1&before=2']);
+    f.api.mockClear();
+    expect((await cache.page('room', main)).map(m => m.id)).toEqual(['5', '4', '3', '2', '1']);
+    expect(f.api).not.toHaveBeenCalled();
+    await cache.receive('room', { cursor: '13', changes: ['1', '2'].map(id => ({ type: 'reaction.changed', data: { message: f.message(id) } })) }, '12');
+    f.api.mockClear();
+    expect((await cache.projection('room', ['1', '2'])).messages).toHaveLength(2);
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/conversations/room/messages?limit=100']);
+    const legacy = f.disk.get('room')!;
+    // A rolled-back old writer preserves the unknown empty target list while setting stale pages.
+    legacy.staleAggregates = []; legacy.stalePages = Object.keys(legacy.pages); replies = 2;
+    const reopened = f.open(); f.setBatch({ cursor: '13', changes: [] });
+    const original = f.api.getMockImplementation()!;
+    f.api.mockImplementation(async route => route.startsWith('/changes?') ? { cursor: '13', changes: [] } : original(route));
+    expect((await reopened.projection('room', ['1'])).messages[0]).toMatchObject({ replyCount: 2 });
+    expect(f.api.mock.calls.some(([route]) => route.includes('limit=100'))).toBe(true);
+    await reopened.receive('room', { cursor: '14', changes: [{ type: 'reaction.changed', data: { message: root() } }] }, '13');
+    // The exact row disappearing is a visibility boundary, never permission to keep stale content.
+    f.api.mockImplementation(async route => route.endsWith('/snapshot')
+      ? { room: { id: 'room' }, cursor: '14', messages: [] } : []);
+    expect((await reopened.projection('room', ['1'])).messages).toEqual([]);
+  });
+
   // Unit: unrelated room activity must not evict another topic's downloaded head page.
-  it('invalidates only the latest pages whose filter includes a new message', async () => {
+  it('updates only the latest pages whose filter includes a new message', async () => {
     const f = fixture(); const cache = f.open();
     const topic = new URLSearchParams('threadRootId=root&limit=50');
     const main = new URLSearchParams('limit=100');
@@ -34,8 +79,8 @@ describe('durable chat history', () => {
     f.api.mockClear();
     await cache.page('room', topic);
     expect(f.api).not.toHaveBeenCalled();
-    await cache.page('room', main);
-    expect(f.api).toHaveBeenCalledWith('/conversations/room/messages?limit=100');
+    expect((await cache.page('room', main)).map(m => m.id)).toEqual(['11', '2', '1']);
+    expect(f.api).not.toHaveBeenCalled();
   });
 
   // Unit: old topic roots need durable single-message coverage and aggregate refreshes,
@@ -44,11 +89,12 @@ describe('durable chat history', () => {
     const f = fixture(); let replies = 0;
     const original = f.api.getMockImplementation()!;
     f.api.mockImplementation(async route => route.endsWith('/messages/1')
-      ? { ...f.message('1'), replyCount: replies } : original(route));
+      ? f.message('1') : route.includes('/messages?limit=1&before=2')
+        ? [{ ...f.message('1'), replyCount: replies }] : original(route));
     const cache = f.open();
     await cache.message('room', '1');
     const restarted = f.open(); f.api.mockClear();
-    expect(await restarted.message('room', '1')).toMatchObject({ replyCount: 0 });
+    expect(await restarted.message('room', '1')).toMatchObject({ id: '1' });
     expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/changes?scope=conversation:room&after=10&limit=100']);
     replies = 1;
     await restarted.receive('room', { cursor: '11', changes: [{ type: 'message.created', data: { message: { ...f.message('11'), threadRootId: '1' } } }] }, '10');
@@ -118,7 +164,7 @@ describe('durable chat history', () => {
     newest = 7; f.api.mockClear();
     expect((await cache.page('room', new URLSearchParams('limit=3'))).map(m => m.id)).toEqual(['7', '6', '5']);
     expect((await cache.page('room', new URLSearchParams('limit=3&before=5'))).map(m => m.id)).toEqual(['4', '3', '2']);
-    expect(f.api).toHaveBeenCalledTimes(1);
+    expect(f.api).not.toHaveBeenCalled();
   });
   it('reuses covered pages after restart and applies edits and tombstones outside the latest window', async () => {
     const f = fixture();
@@ -165,7 +211,7 @@ describe('durable chat history', () => {
       const query = new URLSearchParams(seq === 501 ? 'limit=1' : `limit=1&before=${seq + 1}`);
       expect((await cache.page('room', query)).map(message => message.id)).toEqual([String(seq)]);
     }
-    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages?'))).toHaveLength(1);
+    expect(f.api.mock.calls.filter(([route]) => route.includes('/messages?'))).toHaveLength(0);
     expect(Object.keys(f.disk.get('room')!.pages)).toHaveLength(500);
     // Evicting old coverage must not prune the very page the caller is receiving.
     expect(await cache.page('room', new URLSearchParams('limit=1&before=2'))).toEqual([f.message('1')]);
@@ -189,6 +235,29 @@ describe('durable chat history', () => {
     expect(await restarted.snapshot('room')).toMatchObject({ reads: [{ read_seq: '10' }] });
   });
 
+  // Unit: each ordinary read previously invalidated the full room snapshot, blocking
+  // message deltas behind a 100-message download. Use real receipt/event cache entry points.
+  it('applies read receipts without a snapshot and keeps a newer preference event over a late HTTP receipt', async () => {
+    const f = fixture(); const original = f.api.getMockImplementation()!;
+    f.api.mockImplementation(async route => route.endsWith('/snapshot')
+      ? { room: { id: 'room' }, cursor: '10', messages: [], reads: [] } : original(route));
+    const cache = f.open(); await cache.snapshot('room'); f.api.mockClear();
+    expect(await cache.readState('room', { threadRootId: 'root', readSeq: '5', following: false, muted: false }, true)).toBe(true);
+    const writes = vi.mocked(f.store.write).mock.calls.length;
+    expect(await cache.readState('room', [
+      { threadRootId: 'root', readSeq: '6', following: false, muted: true },
+      { threadRootId: 'root', readSeq: '7', following: true, muted: true },
+    ])).toBe(true);
+    expect(vi.mocked(f.store.write).mock.calls.length - writes).toBe(1);
+    expect(await cache.readState('room', { threadRootId: 'root', readSeq: '6', following: false, muted: false }, true)).toBe(true);
+    expect(await cache.snapshot('room')).toMatchObject({ reads: [{ thread_key: 'root', read_seq: '7', following: true, muted: true }] });
+    expect(f.api).not.toHaveBeenCalled();
+    expect(await cache.readState('room', { threadRootId: 'root', readSeq: 'not-a-sequence' })).toBe(false);
+    f.api.mockClear(); f.setBatch({ cursor: '10', changes: [] });
+    expect(await f.open().snapshot('room')).toMatchObject({ reads: [{ read_seq: '7', following: true }] });
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/changes?scope=conversation:room&after=10&limit=100']);
+  });
+
   it('drops every older range on RESET_REQUIRED and changes the renderer generation', async () => {
     const f = fixture(); const cache = f.open();
     await cache.page('room', f.page);
@@ -206,9 +275,9 @@ describe('durable chat history', () => {
     const f = fixture(); const cache = f.open(); await cache.page('room', f.page);
     await cache.receive('room', { cursor: '11', changes: [{ type: 'reaction.changed', entityId: '1', data: { message: f.message('1') } }] }, '10');
     f.api.mockClear();
-    f.api.mockResolvedValueOnce([{ ...f.message('2') }, { ...f.message('1'), reactions: [{ emoji: 'like', count: 2 }] }]);
+    f.api.mockResolvedValueOnce([{ ...f.message('1'), reactions: [{ emoji: 'like', count: 2 }] }]);
     expect((await cache.projection('room', ['1'])).messages).toEqual([{ ...f.message('1'), reactions: [{ emoji: 'like', count: 2 }] }]);
-    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/conversations/room/messages?limit=100&before=5']);
+    expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/conversations/room/messages?limit=1&before=2']);
   });
 
   // Unit: snapshot() must expose refreshed reactions after reaction.changed; the wire body has no aggregates.

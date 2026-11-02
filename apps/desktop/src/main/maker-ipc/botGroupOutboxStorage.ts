@@ -11,7 +11,7 @@ import type { BotGroupOutboxStoredEntry } from '../../shared/botGroupOutboxStora
 
 const identifier = z.string().min(1).max(200);
 const entrySchema = z.object({ input: z.object({ groupId: identifier, clientId: identifier, text: z.string().max(8000),
-  mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }) }).passthrough(),
+  mentions: z.object({ all: z.boolean(), allBots: z.boolean().optional(), botIds: z.array(z.string()) }) }).passthrough(),
   createdAt: z.number().finite(), status: z.enum(['sending', 'sent', 'failed']),
   draft: z.string(), signature: z.string(), attachmentScope: z.string(), after: z.number().finite(),
   tracked: z.array(z.unknown()), attachments: z.array(z.unknown()),

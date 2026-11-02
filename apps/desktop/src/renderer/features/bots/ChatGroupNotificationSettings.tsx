@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FormField } from '@/components/ui/form-field';
 import { Select } from '@/components/ui/select';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { ChatGroupNotificationMode } from '../../../shared/botGroupChat';
 import { refreshBotGroups } from './botGroupStore';
+import { SettingsRow } from './ChatGroupSettingsRows';
 
 const key = (name: string) => `bots.groupChat.server.settings.notifications.${name}`;
 const modes = ['all', 'mentions', 'none'] as const;
@@ -35,12 +35,11 @@ export function ChatGroupNotificationSettings({ groupId, mode, disabled }: {
       if (current()) { setBusy(false); refreshBotGroups(); }
     }
   }
-  return <div className="space-y-2">
-    <FormField label={t(key('title'))} hint={t(key(`${mode}Hint`))}>{props =>
-      <Select {...props} label={t(key('title'))} value={mode} disabled={disabled || busy}
+  return <>
+    <SettingsRow wrap title={t(key('title'))} hint={t(key(`${mode}Hint`))} trailing={
+      <Select label={t(key('title'))} value={mode} disabled={disabled || busy} className="h-8 max-w-[220px]"
         triggerAdornment={busy ? <span role="status">{t(key('saving'))}</span> : undefined}
-        options={modes.map(value => ({ value, label: t(key(value)) }))} onValueChange={value => void change(value)} />}
-    </FormField>
-    {error && <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">{t(key('saveFailed'))}</p>}
-  </div>;
+        options={modes.map(value => ({ value, label: t(key(value)) }))} onValueChange={value => void change(value)} />} />
+    {error && <p role="alert" className="px-4 pb-3 text-12 leading-5 text-[var(--error-fg)]">{t(key('saveFailed'))}</p>}
+  </>;
 }

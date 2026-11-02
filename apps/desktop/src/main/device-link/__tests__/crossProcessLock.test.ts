@@ -1024,6 +1024,73 @@ describe('接管陈旧锁', () => {
     }
   });
 
+  // #5918: a temporary read failure must not strand this live process's own
+  // held record. Existing release-failure tests only cover write/rename errors.
+  // Exercise the public strict entry with real files and EACCES at the read
+  // boundary; recovery must still reject an unverifiable or successor record.
+  it.each(['publication', 'release'] as const)(
+    'recovers its own strict lock after a temporary %s read failure',
+    async (phase) => {
+      const lock = path.join(dir, 'lock');
+      const originalOpen = fsp.open;
+      let unreadable = phase === 'publication';
+      const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+        if (args[0] === lock && typeof args[1] === 'number' && unreadable) {
+          throw Object.assign(new Error('temporary read denied'), { code: 'EACCES' });
+        }
+        return originalOpen(...args);
+      }) as typeof fsp.open);
+      try {
+        const first = await withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => {
+          unreadable = true;
+          return status;
+        });
+        expect(first).toEqual(phase === 'publication' ? { held: false, reason: 'busy' } : { held: true });
+        expect(JSON.parse(await fsp.readFile(lock, 'utf8')).state).toBe('held');
+        unreadable = false;
+
+        await expect(withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => status))
+          .resolves.toEqual({ held: true });
+        expect(fs.existsSync(lock)).toBe(false);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(['successor', 'malformed'] as const)(
+    'preserves a %s record when retrying an unreadable release',
+    async (replacement) => {
+      const lock = path.join(dir, 'lock');
+      const originalOpen = fsp.open;
+      let unreadable = false;
+      const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+        if (args[0] === lock && typeof args[1] === 'number' && unreadable) {
+          throw Object.assign(new Error('temporary read denied'), { code: 'EACCES' });
+        }
+        return originalOpen(...args);
+      }) as typeof fsp.open);
+      try {
+        await withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => {
+          expect(status).toEqual({ held: true });
+          unreadable = true;
+        });
+        const record = JSON.parse(await fsp.readFile(lock, 'utf8'));
+        const bytes = replacement === 'malformed'
+          ? '{'
+          : JSON.stringify({ ...record, nonce: '00000000-0000-4000-8000-000000000002' });
+        await fsp.writeFile(lock, bytes);
+        unreadable = false;
+
+        await expect(withCrossProcessLock(lock, { label: 'read-recovery', waitMs: 0 }, async (status) => status))
+          .resolves.toEqual({ held: false, reason: 'busy' });
+        expect(await fsp.readFile(lock, 'utf8')).toBe(bytes);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
   it('keeps strict acquisition available when current-process identity commands fail', async () => {
     const identity = await __testing.readProcessIdentity(
       process.pid,

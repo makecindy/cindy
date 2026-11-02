@@ -11,6 +11,8 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { seedBotGroupReadState } from './botReadState';
+import { discardDraftTree } from '@/lib/composerDraftStore';
+import { botGroupAttachmentScope } from './botGroupAttachments';
 
 import {
   getDataOwnerGeneration,
@@ -193,7 +195,9 @@ export function startBotGroupSync(): () => void {
       unsubscribePush = api.onBotGroupChanged((payload, ownerStamp) => {
         if (!isDataOwnerPushCurrent(ownerStamp)) return;
         ensureOwner();
+        if (payload.change === 'deleted') discardDraftTree(botGroupAttachmentScope(payload.groupId));
         if (payload.change === 'list' && payload.listState && (personalList.get(payload.groupId)?.revision ?? 0) < payload.listState.revision) {
+          if (payload.listState.hidden) discardDraftTree(botGroupAttachmentScope(payload.groupId));
           personalList.set(payload.groupId, payload.listState);
           listReadVersion++;
           const groups = visibleGroups(snapshot.groups);
@@ -304,5 +308,6 @@ export function resetBotGroupStoreForTests(): void {
   readFailures = 0;
   owner = getDataOwnerGeneration();
   snapshot = EMPTY_SNAPSHOT;
+  personalList.clear();
   listeners.clear();
 }

@@ -10,8 +10,9 @@
 | pacman/AUR or another third-party package | That package manager | Use that package manager, not the in-app installer |
 
 The user installer supports x64 and arm64 payload identities, but requires a
-matching published artifact. Arm64 does not currently support the Beta channel;
-this change's host checks use x64 Omarchy; release acceptance is listed below.
+matching published artifact. Both architectures support the Beta channel when a
+matching Beta installer is available. Host checks here use x64 Omarchy;
+release acceptance is listed below.
 Alpine/musl, root desktop sessions,
 and unpacking old releases by hand are not supported user-install routes.
 This does not add Linux equivalents of features that require macOS or Windows.

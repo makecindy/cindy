@@ -1,6 +1,8 @@
-import type { WorkerWorktreeRequest, WorkerOwnedWorktree } from '../../shared/orca-worker-project';
+import { resolveWorkerCreationDefaults, type OrcaWorkerCreateRequest, type WorkerDefaultsResolution } from './orcaWorkerDefaults';
+import type { WorkerCreationSelection } from '../../shared/workerCreationSelection';
+import type { WorkerWorktreeRequest, WorkerOwnedWorktree, WorkerWorktreeSourceSelection } from '../../shared/orca-worker-project';
 import type { AgentKind } from '@cindy/maker-core';
-import { isCodexGatewayWireModel, type AuthStrategy } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, type AuthStrategy, type CatalogModel, type ProviderAccess } from '@cindy/model-providers';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole, orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import path from 'node:path';
 
@@ -74,6 +76,12 @@ export interface OrcaWorkerProviderSnapshot {
   id: string;
   name: string;
   models: readonly string[];
+  access?: ProviderAccess;
+  /** Non-secret picker metadata for automation model discovery, scoped to this source. */
+  modelDetailsByModel?: Readonly<Record<string, Pick<CatalogModel,
+    'description' | 'contextWindow' | 'efforts' | 'defaultEffort' | 'effortsUnknown' | 'supportsFastMode'
+    | 'supportsUltrafastMode' | 'supportsToolCalls' | 'cost' | 'currency' | 'costDiscount' | 'displayPricing'
+  >>>;
   /**
    * 运行 model id 对应的 Model Registry 稳定身份。缺失表示目录无法证明该路由 model
    * 与规范身份相同；这种情况下只能使用精确 ID，不能仅凭后缀推断 managed alias。
@@ -191,6 +199,7 @@ export type OrcaWorkerCreationResult =
       workerSessionId: string;
       workingDir: string;
       worktree?: WorkerOwnedWorktree;
+      worktreeSource?: WorkerWorktreeSourceSelection;
       softLimitExceeded?: boolean;
       dispatched?: boolean;
       dispatchOutcome?: DispatchWorkerTaskResult['dispatchOutcome'];
@@ -199,6 +208,7 @@ export type OrcaWorkerCreationResult =
       limit?: OrcaWorkerLimitSnapshot;
       /** 在另一台电脑运行的 Worker 才有；workerSessionId 此时是本机代理任务。 */
       executionDeviceId?: string;
+      defaults?: WorkerDefaultsResolution;
       resolved: {
         agent: AgentKind;
         model: string;
@@ -209,6 +219,7 @@ export type OrcaWorkerCreationResult =
         label: string;
         /** Worker 的 Agent 所在电脑；null = Worker 的任务所在电脑。 */
         agentDeviceId?: string | null;
+        remoteHostId?: string | null;
       };
     }
   | {
@@ -296,10 +307,11 @@ export interface OrcaWorkerCreationDeps {
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
+  getCreationSelection?(): WorkerCreationSelection | null;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
   /** Validate existence and target project policy before reserving or bootstrapping. */
   resolveWorkerWorkingDir(dir: string, lead: OrcaLeadSessionSnapshot): Promise<string>;
-  resolveWorkerWorktreeSource?(directory: string, sourceBranch?: string): Promise<string>;
+  resolveWorkerWorktreeSource?(directory: string, sourceBranch?: string, leadDirectory?: string | null): Promise<string | WorkerWorktreeSourceSelection>;
   getWorkerWorktree?(sessionId: string): WorkerOwnedWorktree | undefined;
   createWorkerWorktree?(sessionId: string, directory: string, sourceBranch: string): Promise<string>;
   discardWorkerWorktree?(sessionId: string): Promise<void>;
@@ -408,8 +420,8 @@ export interface OrcaWorkerCreationDeps {
 
 /** Orca worker 创建服务，只负责创建既有 team 下的新 worker，不负责 team lifecycle。 */
 export interface OrcaWorkerCreationService {
-  createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+  createWorker(params: OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
@@ -996,7 +1008,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
+  async function createWorker(params: OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
@@ -1011,17 +1023,14 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }, assertCurrent);
   }
 
-  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
-    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
-    const role = normalizeOrcaWorkerRole(params.role);
-    if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
-    const label = normalizeOrcaWorkerLabel(params.label);
-    if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
-    params = { ...params, label: label.value };
-
-    const existing = await deps.listWorkersByLead(params.leadSessionId);
-    if (existing.some((worker) => worker.label?.toLowerCase() === label.value)) {
-      return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
+  async function checkWorkerCreationAdmission(leadSessionId: string, label: string,
+    assertCurrent?: () => Promise<void>): Promise<
+      | { ok: true; settings: ReturnType<OrcaWorkerCreationDeps['readCollaborationSettings']> }
+      | Extract<OrcaWorkerCreationResult, { ok: false }>
+    > {
+    const existing = await deps.listWorkersByLead(leadSessionId);
+    if (existing.some((worker) => worker.label?.toLowerCase() === label)) {
+      return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
     }
 
     await assertCurrent?.();
@@ -1035,6 +1044,46 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         limit: limitSnapshot(settings.workerHardLimit, activeCount),
       };
     }
+    return { ok: true, settings };
+  }
+
+  async function createWorkerInTeam(request: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest,
+    assertCurrent?: () => Promise<void>, onCreated?: (guard: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
+    if (!request.useCreationPrefs && request.agent) {
+      return createResolvedWorkerInTeam({ ...request, agent: request.agent }, assertCurrent, onCreated);
+    }
+    const role = normalizeOrcaWorkerRole(request.role);
+    if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
+    const label = normalizeOrcaWorkerLabel(request.label);
+    if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    request = { ...request, role: role.value, label: label.value };
+    // Preserve admission before catalog I/O, including remote routes restored from memory.
+    await assertCurrent?.();
+    const admission = await checkWorkerCreationAdmission(request.leadSessionId, label.value, assertCurrent);
+    if (!admission.ok) return admission;
+    const lead = await deps.getLeadSessionRow(request.leadSessionId);
+    if (!lead) return { ok: false, errorCode: 'NOT_FOUND', message: 'Lead session not found' };
+    const selection = await resolveWorkerCreationDefaults(request, lead, deps);
+    if (!selection.ok) return selection;
+    await assertCurrent?.();
+    const result = await createResolvedWorkerInTeam({ ...request, ...selection.params }, assertCurrent, onCreated,
+      selection.defaults.source === 'memory' ? selection.routing : undefined);
+    return result.ok ? { ...result, defaults: selection.defaults }
+      : selection.defaults.fallbackReason ? { ...result, message: `${selection.defaults.fallbackReason} ${result.message}` } : result;
+  }
+
+  async function createResolvedWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void,
+    rememberedRouting?: OrcaWorkerProviderRoutingContext): Promise<OrcaWorkerCreationResult> {
+    const role = normalizeOrcaWorkerRole(params.role);
+    if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
+    const label = normalizeOrcaWorkerLabel(params.label);
+    if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    params = { ...params, label: label.value };
+
+    const admission = await checkWorkerCreationAdmission(params.leadSessionId, label.value, assertCurrent);
+    if (!admission.ok) return admission;
+    const { settings } = admission;
     const lead = await deps.getLeadSessionRow(params.leadSessionId);
     if (!lead) {
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
@@ -1070,7 +1119,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         : null;
     // Lead 归在供应商组里：跟 Lead 的 Worker 跟那个组(组按策略给它选电脑、出问题时换电脑，与普通任务选组那一项
     // 一样)。组那一项不提供这个模型或读不到时照旧跟 Lead 所在那台。
-    let groupFollow = leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
+    let groupFollow = rememberedRouting ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
     let groupFollowRouting: OrcaWorkerProviderRoutingContext | undefined;
     if (groupFollow) {
       try {
@@ -1096,7 +1145,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       ? followedLead
       : { ...lead, providerId: null };
     let providerRouting: OrcaWorkerProviderRoutingContext;
-    if (groupFollow && groupFollowRouting) {
+    if (rememberedRouting) {
+      providerRouting = rememberedRouting;
+    } else if (groupFollow && groupFollowRouting) {
       providerRouting = groupFollowRouting;
     } else if (workerAgentDeviceId) {
       try {
@@ -1162,9 +1213,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
 
     let worktreeSource: string | undefined;
+    let worktreeSourceSelection: WorkerWorktreeSourceSelection | undefined;
     if (params.worktree) {
       try {
-        worktreeSource = await deps.resolveWorkerWorktreeSource!(workingDir, params.worktree.sourceBranch);
+        const source = await deps.resolveWorkerWorktreeSource!(workingDir, params.worktree.sourceBranch, lead.workingDir);
+        worktreeSourceSelection = typeof source === 'string' ? { sourceBranch: source, source: params.worktree.sourceBranch ? 'explicit' : 'current' } : source;
+        worktreeSource = worktreeSourceSelection.sourceBranch;
       } catch (error) {
         return { ok: false, errorCode: 'INVALID_PARAMS', message: error instanceof Error ? error.message : 'Worker worktree target is unavailable' };
       }
@@ -1628,7 +1682,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         workerId,
         workerSessionId: workerSession.id,
         workingDir,
-        ...(ownedWorktree ? { worktree: ownedWorktree } : {}),
+        ...(ownedWorktree ? { worktree: ownedWorktree, worktreeSource: worktreeSourceSelection } : {}),
         softLimitExceeded,
         limit: limitSnapshot(settings.workerHardLimit, reservation.occupiedSlotsBefore + 1),
         resolved: {
@@ -1640,6 +1694,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           role: role.value,
           label: label.value,
           agentDeviceId: workerAgentDeviceId,
+          remoteHostId: lead.remoteHostId,
         },
       };
     } catch (err) {

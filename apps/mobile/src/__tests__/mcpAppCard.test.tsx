@@ -193,7 +193,7 @@ it('binds a served resource origin and gates declared frame navigation', async (
     data: dispatchEvent.mock.calls[0][0].data,
   });
   const appFrame = shell.querySelector('iframe')!;
-  expect(appFrame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+  expect(appFrame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
   expect(appFrame.srcdoc).toBe('');
   expect(appFrame.src).toBe('http://127.0.0.1:5001/resource.html');
   // The same WindowProxy can now name a frame-domain replacement document.
@@ -434,4 +434,40 @@ it.each(['light', 'dark'])('keeps saved text readable after App failures and ret
   await act(async () => state.props.onError());
   expect(container.textContent).toContain(saved);
   expect(container.querySelector('[data-testid="mcp-webview"], script')).toBeNull();
+});
+
+/* 依据：本期不转发执行电脑文件（含对话交接副本 handoff:）。缺口：已有 App 测试没有本插件文件引用。
+ * 最小输入：Host 向 View 发送含一个 local resource_link 的工具结果；tier: unit，真实卡片/controller。 */
+it.each(['cindy-media://blobs/file.png', 'library:reports/one.pdf', 'handoff:00000000-0000-4000-8000-000000000000', 'https://example.org/image.png'])(
+  'only downgrades execution-computer file references (%s)', async (uri) => {
+    let delivered = false;
+    state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+      if (input.op === 'open') return { ...doc };
+      if (input.op === 'poll') {
+        if (delivered) return new Promise(() => {});
+        delivered = true;
+        return [{ seq: 1, message: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: {
+          content: [{ type: 'resource_link', uri, name: 'file' }],
+        } } }];
+      }
+      return {};
+    });
+    await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" fallbackText="Saved text" />));
+    await act(async () => state.props.onMessage({ nativeEvent: { data: JSON.stringify({ key: state.prepare.mock.calls[0][1],
+      message: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' } }) } }));
+    const local = !uri.startsWith('https:');
+    expect(container.textContent?.includes('mcpApps.filesOnExecutionComputer')).toBe(local);
+    expect(container.textContent?.includes('Saved text')).toBe(local);
+    expect(container.textContent).not.toContain('mcpApps.loadFailed');
+    expect(container.querySelector('button')).toBeNull();
+    expect(state.inject.mock.calls.some(([script]) => script.includes(uri))).toBe(!local);
+    expect(container.querySelector('[data-slot]') === null).toBe(local);
+  },
+);
+it.each(['MCP_APP_FILES_LOCAL_ONLY', '[PRECONDITION_FAILED] MCP_APP_FILES_LOCAL_ONLY'])('renders a local-files Host refusal without a retry error (%s)', async message => {
+  state.invoke.mockRejectedValueOnce(new Error(message));
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" fallbackText="Report" />));
+  expect(container.textContent).toContain('mcpApps.filesOnExecutionComputer');
+  expect(container.textContent).toContain('Report');
+  expect(container.querySelector('button, [data-testid="mcp-webview"]')).toBeNull();
 });

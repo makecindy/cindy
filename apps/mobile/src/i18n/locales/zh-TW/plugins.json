@@ -16,7 +16,22 @@
     "bcc": "密件副本",
     "subject": "主旨",
     "choosePlugin": "選擇用哪個插件開啟這封郵件。",
-    "personalPlugin": "個人插件"
+    "personalPlugin": "個人插件",
+    "reply": "回覆",
+    "replyAll": "全部回覆",
+    "forward": "轉寄",
+    "quote": {
+      "reply": "回覆這封郵件",
+      "replyAll": "回覆全部收件人",
+      "forward": "轉寄這封郵件"
+    },
+    "messageCount_one": "共 {{count}} 封郵件",
+    "messageCount_other": "共 {{count}} 封郵件",
+    "showMessages_one": "展開 {{count}} 封郵件",
+    "showMessages_other": "展開 {{count}} 封郵件",
+    "conversationFailed": "暫時無法讀取前後郵件。",
+    "expandMessage": "展開來自 {{from}} 的郵件",
+    "collapseMessage": "收起來自 {{from}} 的郵件"
   },
   "title": "插件",
   "all": "全部",
@@ -148,8 +163,6 @@
   "demo": {
     "hint": "示範資料 · 不會修改真實設定"
   },
-  "mailPreview": "郵件預覽",
-  "mailEnlarge": "放大檢視",
   "mailInsertImage": "插入內文",
   "mailAttach": "新增附件",
   "mailUpdated": "草稿已更新（唯讀）",
@@ -277,13 +290,22 @@
       "nodeChildSpawnDetail": "只能啟動它自己包裡申報過的 JS 檔案(與主程式同樣的本機權限)，不能執行任意命令；插件停用或退出時子處理程序一併關閉。",
       "skill": "為 AI 助手新增技能「{{name}}」",
       "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本插件沙箱約束。插件啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本插件不會隱藏它。此處無法預覽技能全文——請只安裝你信任的插件。",
-      "routineEvents": "例行任務事件"
+      "routineEvents": "例行任務事件",
+      "mcpUi": "可在對話中顯示互動頁面",
+      "mcpUiDomains": "頁面可連線網域：{{domains}}",
+      "uiPageAccess": "頁面：{{pages}}\n頁面可連線網域：{{domains}}\n頁面可呼叫工具：{{tools}}"
     },
     "releaseChanged": "可用版本已變更，請查看更新後的版本，再選擇安裝。",
     "settingsUnavailable": "插件設定載入失敗，請重新載入設定後再試。",
     "settingsResultUnknown": "尚未確認操作結果。請先重新讀取電腦上的設定，再決定是否提交。",
     "settingsOperationFailed": "設定操作未能完成，請檢查連線後再試。",
-    "settingsReload": "重試"
+    "settingsReload": "重試",
+    "trust": {
+      "cindy-official": "官方",
+      "reviewed": "已審核",
+      "verified-publisher": "發佈者已驗證",
+      "unverified": "未驗證"
+    }
   },
   "notice": {
     "title": {
@@ -311,5 +333,13 @@
       "agent": "由 Agent 發起"
     },
     "taskCapability": "用於目前任務"
+  },
+  "uiApproval": {
+    "title": "插件「{{name}}」新增了互動頁面，需要你確認後才能使用",
+    "enable": "查看並啟用",
+    "later": "稍後再說",
+    "purpose": "確認互動頁面權限",
+    "updateHost": "請更新執行電腦上的 Cindy，再在此確認。文字工具仍可使用。",
+    "failed": "互動頁面未能啟用，請檢查連線和插件版本後重試。"
   }
 }

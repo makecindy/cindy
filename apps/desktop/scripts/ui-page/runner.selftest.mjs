@@ -8,8 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { scanPage, buildPage } from './build.mjs';
+import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
+import { parseOptions, variantsFor } from './options.mjs';
+import { scanPage, buildPage } from './build.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -110,9 +112,10 @@ function Page({ kind }: { kind: string }) {
       <p>bots.list.startChat</p>
       <p>bots.send</p>
       <p>cindy.app</p>
+      <p>v1.0.0</p>
     </div>
   ) : (
-    <div>Ready</div>
+    <div>Ready <span>v1.0.0</span></div>
   );
 }
 mountPage({
@@ -162,15 +165,48 @@ mountPage({
 // verify resizing. Dedicated Electron integration tier, not default unit tests.
 test('captures exact viewports and overviews in a hidden Electron window', async () => {
   const file = await entry('viewport', 'mountPage({ render: () => <div>Viewport ready</div> });');
-  const { code, stdout } = await run([
-    '--entry', file, '--engine', 'electron', '--theme', 'all',
-    '--viewport', '560x400,360x640', '--json',
+  const options = parseOptions([
+    '--entry',
+    file,
+    '--engine',
+    'electron',
+    '--theme',
+    'all',
+    '--viewport',
+    '560x400,360x640',
+    '--json',
   ]);
-  const summary = JSON.parse(stdout);
-  assert.equal(code, 0, JSON.stringify(summary.variants.map((v) => v.errors)));
+  const definition = adhocPage(file);
+  // Integration regression: region capture changes CDP viewport size. It must not
+  // leak into the next variant, even when a scenario fails after changing it.
+  definition.check = async (page, ui) => {
+    if (ui.theme === 'light' && ui.viewport.width === 560) {
+      await page.setViewportSize({ width: 700, height: 500 });
+      throw new Error('intentional scenario failure after resizing');
+    }
+    // Real HTML fullscreen must resolve on the isolated test origin. Media
+    // permission remains denied; enabling fullscreen is not a general grant.
+    await page.locator('#root').evaluate((el) => el.requestFullscreen());
+    assert.equal(await page.evaluate(() => document.fullscreenElement?.id), 'root');
+    await page.evaluate(() => document.exitFullscreen());
+    assert.equal(await page.evaluate(() => document.fullscreenElement), null);
+    assert.equal(
+      await page.evaluate(
+        async () => (await navigator.permissions.query({ name: 'camera' })).state,
+      ),
+      'denied',
+    );
+  };
+  const summary = await runPlan(
+    { pages: [{ definition, variants: variantsFor(definition, options) }] },
+    options,
+  );
+  assert.equal(summary.status, 'failed');
   assert.equal(summary.variants.length, 4);
   for (const variant of summary.variants) {
-    assert.equal(variant.status, 'passed');
+    if (variant === summary.variants[0])
+      assert.match(variant.errors.join('\n'), /intentional scenario failure/);
+    else assert.equal(variant.status, 'passed', JSON.stringify(variant.errors));
     assert.ok(variant.screenshots.length);
     const png = await readFile(path.join(summary.evidence, variant.screenshots[0]));
     assert.deepEqual(
@@ -181,6 +217,20 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.ok(summary.overviews.length);
   for (const overview of summary.overviews) assert.ok(existsSync(overview));
   assert.equal(summary.cleanup.scratchRemoved, true);
+});
+
+// #7395 extended UI regression: the idle editor installs a 900x400 CDP
+// override. The next theme must return to its declared native 900x700 viewport.
+// The existing viewport test never resizes within a scenario. Electron tier.
+test('a scenario viewport resize does not leak into the next theme', async () => {
+  const { code, stdout } = await run([
+    '--page', 'region-capture', '--case', 'idle', '--theme', 'all', '--json',
+  ]);
+  const summary = JSON.parse(stdout);
+  assert.equal(code, 0, JSON.stringify(summary.variants.map((v) => v.errors)));
+  assert.equal(summary.variants.length, 2);
+  assert.ok(summary.variants.every((v) => v.status === 'passed'));
+  assert.equal(summary.cleanup.runtimeClosed, true);
 });
 
 test('a page that never mounts fails at the timeout and leaves no runtime behind', async () => {

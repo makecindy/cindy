@@ -190,7 +190,7 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
       return { username: state.botUsername ?? null, ownerUserId: state.ownerUserId ?? null };
     }
     case 'feishu':
-      return { username: null, ownerUserId: null };
+      return { username: null, ownerUserId: transport.im.getOwnerOpenId() };
     case 'wecom':
     case 'dingtalk':
       return { username: null, ownerUserId: transport.im.getOwnerUserId() || null };

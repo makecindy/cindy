@@ -10,6 +10,7 @@ export default {
     'src/renderer/features/bots/botStore': 'export const useBotProfiles = () => [];',
     'src/renderer/features/bots/botGroupStore': 'export const refreshBotGroups = () => {};',
     'src/renderer/features/bots/ChatServerControls': 'export const chatErrorKey = () => "bots.groupChat.server.requestFailed";',
+    'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
     default: { about: 'Ordinary member can choose and save a personal notification preference' },

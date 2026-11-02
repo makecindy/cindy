@@ -23,7 +23,25 @@ Windows 的 SIGTERM 也会强杀进程，因此先通过 CDP `Browser.close` 请
 
 工具支持 `browser({action:"setBackend", backend:"rsb-webview"|"external"})`,由 MCP 层调用宿主注入的 `setBackend`,复用设置页的 `setActiveBrowserBackendKind`。这是全局持久选择,影响其他任务,可能中断旧浏览器操作;不迁移 Cookie、标签页或元素引用。`status.data.backend` 明确返回实际模式。切换后重新获取状态和标签页,不能把 `start` 当成切换。非 Desktop 宿主可以不提供此能力,工具会明确返回不支持。
 
-用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `.../Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。Cookies 缺失或复制失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。Login Data、Login Data For Account、Web Data 是可选的密码/自动填充库,锁定、权限或其它复制失败时跳过并清除目标中的旧副本,不阻止 Cookies 复用。SQLite 备份先取得读事务,可选库不等待锁;不直接复制活跃数据库及 WAL 文件。每次重拍快照会清掉 dest `Default` 里上一份来源留下的站点数据(Local Storage、站点 IndexedDB、Service Worker 等),但**扩展状态归 Agent 浏览器自己**,必须跨快照保留:`Default` 下名字含 `Extension` 的全部条目(`Extensions`、`Local Extension Settings`、`DNR Extension Rules`、`Extension Cookies` 及其 SQLite 边车等,按词匹配而非枚举,避免漏掉新存储)、`Secure Preferences`(扩展登记与 MAC)、`IndexedDB/chrome-extension_*`,以及 dest `Preferences` 的 `extensions` 子树(其余键仍从来源刷新);来源的扩展状态永不拷入。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 暴露 `{ enabled, applied, source, warnings? }`,warnings 仅包含可选库名称与受控原因(locked / permission-denied / copy-failed),不暴露路径或原始错误。启动及隐式启动的工具结果附面向 Agent 的非阻塞诊断，指示继续执行且仅在实际登录需要协助时告知用户；设置页仍显示普通打开成功提示，不展示复制细节。快照状态跟本进程是否仍有已套用真实登录快照的托管浏览器走，不跟原操作的 ok：没有 live 浏览器时不得发布 applied / warnings；隐式 open/tabs/snapshot 拉起 Chrome 后即使失败或抛错，只要 status 仍是本进程 live pid 就必须发布。内部 stop 返回成功、或 vendored status 为 running:false 时都不得清除这些字段：readiness 下降不代表进程退出，证明 gone 是外层 resolveLiveness 的职责。诊断保留到下一次启动准备看不到本进程 live occupancy 为止。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`；chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
+用户可在设置 → 自动操作打开「使用我的浏览器登录态」(默认关)。打开后,host 在 `start` 前把系统 Chrome / Edge / Brave **当前 `profile.last_used`** 的 Cookies / Login Data 等 SQLite 库拷进 `browser-runtime/browser/Cindy-real/user-data/Default`(vendored `--user-data-dir` 是 `.../Cindy-real/user-data`),并把 dest `Local State` 的 `last_used` / `last_active_profiles` / `profiles_order` **改写成 Default**(原样拷贝会让 Chrome 打开空的 `Profile N`,窗口看起来已登出)。Chrome 右上角 chip **始终显示 `Cindy`**:磁盘目录必须叫 `Cindy-real`(不能叠到隔离身份 `Cindy` 上),host 通过 `displayName: "Cindy"` 传给 runtime,`launchOpenClawChrome` 用它 decorate,而不是用 map key。再用**同一只浏览器二进制**启动该目录。不 attach 日常 Chrome(Chrome 136+ 会拒绝调试默认 user-data-dir)。关掉开关即删除 `Cindy-real`,`Cindy` 隔离身份不动。Cookies 缺失或复制失败必须 fail-closed,禁止启动一个看起来在浏览、其实全是登出的窗口。Login Data、Login Data For Account、Web Data 是可选的密码/自动填充库,锁定、权限或其它复制失败时跳过并清除目标中的旧副本,不阻止 Cookies 复用。SQLite 备份先取得读事务,可选库不等待锁;不直接复制活跃数据库及 WAL 文件。每次重拍快照会清掉 dest `Default` 里上一份来源留下的站点数据(Local Storage、站点 IndexedDB、Service Worker 等),但**扩展状态归 Agent 浏览器自己**,必须跨快照保留:`Default` 下名字含 `Extension` 的全部条目(`Extensions`、`Local Extension Settings`、`DNR Extension Rules`、`Extension Cookies` 及其 SQLite 边车等,按词匹配而非枚举,避免漏掉新存储)、`Secure Preferences`(扩展登记与 MAC)、`IndexedDB/chrome-extension_*`,以及 dest `Preferences` 的 `extensions` 子树(其余非账号键从来源刷新，账号身份按下文清理);来源的扩展状态永不拷入。快照当凭证:不要写进日志正文、backup、device-link 或 worktree;`status` 暴露 `{ enabled, applied, source, warnings? }`,warnings 仅包含可选库名称与受控原因(locked / permission-denied / copy-failed),不暴露路径或原始错误。启动及隐式启动的工具结果附面向 Agent 的非阻塞诊断，指示继续执行且仅在实际登录需要协助时告知用户；设置页仍显示普通打开成功提示，不展示复制细节。快照状态跟本进程是否仍有已套用真实登录快照的托管浏览器走，不跟原操作的 ok：没有 live 浏览器时不得发布 applied / warnings；隐式 open/tabs/snapshot 拉起 Chrome 后即使失败或抛错，只要 status 仍是本进程 live pid 就必须发布。内部 stop 返回成功、或 vendored status 为 running:false 时都不得清除这些字段：readiness 下降不代表进程退出，证明 gone 是外层 resolveLiveness 的职责。诊断保留到下一次启动准备看不到本进程 live occupancy 为止。快照实现在 `apps/desktop/src/main/mcp-integrations/browser-real-profile/`；chip 名例外见 `sync.mjs` 对 `chrome.ts` 的 LOCAL_PATCH。
+
+复用网站登录态时，必须在 Chrome 启动前离线清理浏览器账号身份：`Local State` 仅保留
+来源 `os_crypt` 解密元数据，并新建 Cindy 的 Default profile；`Preferences` 清除
+`account_info`、`account_values`、`account_tracker_service_last_update`、`google`、
+`gaia_cookie`、`sync`，整个 `signin` 替换为 `allowed:false` 与
+`allowed_on_next_startup:false`；`Web Data` 在 staging 备份后删除 `token_service` 中
+的浏览器 OAuth 令牌，之后才允许发布。清理失败按可选库失败处理，删除目标旧库及边车，
+继续保留网站 Cookies。直连和代理启动均传 `--allow-browser-signin=false`。
+
+不能只加禁用登录开关而保留旧账号和令牌：Chromium 的账号策略可能清除已登录主账号并
+撤销复制的令牌；启用 DICE 时，Cookie 与浏览器令牌不一致也可能触发 Google 登出。
+两者都可能影响来源浏览器的服务端会话。依据 Chrome 151 的
+[账号策略](https://github.com/chromium/chromium/blob/151.0.7922.176/chrome/browser/signin/accounts_policy_manager.cc)、
+[主账号清理](https://github.com/chromium/chromium/blob/151.0.7922.176/components/signin/internal/identity_manager/primary_account_manager.cc)、
+[账号协调器](https://github.com/chromium/chromium/blob/151.0.7922.176/components/signin/core/browser/account_reconcilor.cc)
+与[登录开关](https://github.com/chromium/chromium/blob/151.0.7922.176/chrome/browser/signin/account_consistency_mode_manager.cc)。
+该隔离阻断浏览器后台账号协调路径，不能保证站点主动登出或 Google 风控不会使共享 Cookie 失效。
+已有运行进程须经过正常停止、重新快照和新代码启动，不能只改运行中的磁盘文件。
 
 ## 2. 三层架构 + 文件清单
 
@@ -75,7 +93,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |
 | 9 | 代理切换后仍走旧出口 / 并发 start-stop 互相踩配置 | route 被当成普通请求参数、或运行中改共享 config | route 是进程 launch state;所有 external call 串行;不同/未知 route 必须 stop→recreate→start,失败后不得继续服务旧 route |
 | 10 | 认证代理凭据出现在进程参数、日志、结果或数据库 | 曾接受带 userinfo 的 proxy URL | **不支持认证代理**:`parseBrowserProxyServer` 见到 userinfo 直接抛错,凭据因此根本进不来。tool input 跨持久化/UI 边界前仍走同一 parser 验证,不能解析(含带凭据)的整值替换为 `[REDACTED]`。想恢复支持前先读 §4.1 的那条不变量 |
-| 11 | 开了「使用我的浏览器登录态」但窗口仍是登出 | 快照把 `last_used` 的 cookie 放进 dest `Default`,却原样拷了 `Local State`;Chrome 按 `last_used` 打开空的 `Profile N` | 写入 dest `Local State` 时必须把 `last_used` / `last_active_profiles` / `profiles_order` 改成 `Default`,`info_cache` 只留 Default(元数据从源 last_used 挪过来),并删掉 dest 里其它 `Profile N` |
+| 11 | 开了「使用我的浏览器登录态」但窗口仍是登出 | 快照把 `last_used` 的 cookie 放进 dest `Default`,却原样拷了 `Local State`;Chrome 按 `last_used` 打开空的 `Profile N` | 写入 dest `Local State` 时必须把 `last_used` / `last_active_profiles` / `profiles_order` 改成 `Default`,`info_cache` 只留 Default(新建 Cindy 元数据，禁止携带源账号身份),并删掉 dest 里其它 `Profile N` |
 | 12 | Chrome 右上角 chip 显示 `Cindy-real` / 源 profile 名 | 磁盘 key 必须是 `Cindy-real`;vendored decorate 默认用 `profile.name`(map key)。host 只改 Local State 不够,下次 launch 会盖回去 | `profiles[Cindy-real].displayName = "Cindy"`;`launchOpenClawChrome` 用 `displayName ?? name` decorate。快照写入时也把 `info_cache.Default.name` 写成 `Cindy` |
 | 13 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
 | 14 | macOS 上用户在别的 App 点链接，打开的是 Agent 浏览器而不是自己的浏览器 | Agent 浏览器优先选用系统默认浏览器的同一个 App，只换 `--user-data-dir`；LaunchServices 按 bundle id 投递打开链接事件，会落到任意一个同 App 实例 | host 的 `ExternalLinkHandoff`（`browser-backend/external-link-handoff.ts`，仅 macOS）在浏览器级 `Fetch.enable` 只暂停 Document 请求：新标签无 opener、创建时即带 http(s) URL、首个请求无 Referer，且当时没有 Agent `open` 在途（含 1 秒余量），即判为外部链接——先 `open -n -a <App> --args <url>`（新进程经 Chrome 单例转交给用户的默认 profile 实例，未运行则启动它），成功后 `failRequest` + `closeTarget`，请求从未发出，一次性登录链接不会被用掉；转交失败则放行。⌘ 点击靠 Referer、网页弹窗靠 opener 排除。新增建标签的 action 必须同样计入 `trackTabOpen`，否则 Agent 标签会被当成外部链接转走 |
@@ -101,7 +119,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
   **只对代理挑战生效**的凭据通道(例如让 runtime 自己 launch 浏览器而非 `connectOverCDP`,
   用 launch 期的 `proxy:{username,password}`),并重新做 origin 泄漏验证。
 - 调用方的原生 Agent transcript 是 host 边界之前的上游记录:Claude/Codex 可能在 Cindy 收到 MCP 请求前已持久化模型生成的原始 tool input。由于本接口现在直接拒绝带 userinfo 的 URL,正常路径下不存在可被上游 transcript 保留的代理凭据;但调用方若**尝试**传入凭据,那次尝试仍可能留在其自身 transcript 里。
-- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 target 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。
+- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 page / iframe 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。**worker 例外**(`service_worker` / `shared_worker` / `worker` / `worklet`,启动时已存在的与 auto-attach 新建的同样适用):Chromium 不保证 worker 暴露 Fetch / Target 域,单个 worker 准备失败只用 `Target.closeTarget` 关闭该 worker(同一 targetId 的并发关闭共享一次执行,结束后淘汰记录),它不会在未受门控的状态下运行;关闭失败时先重查 `Target.getTargets`,目标已不存在(`No target with given id`)视为幂等成功,仅目标仍存活才回落为整机 fail-closed(先标 blocked 再 `Browser.close`)。
 - 后续 target 的认证安装失败要先把 host route 标成 blocked,再尝试 `Browser.close`;即使 CDP 关闭命令失败,普通调用与 `start` 仍须拒绝,直到 `stop` 被验证成功。
 - 认证协调器初始化期间的异步 target 失败不得被最终成功赋值覆盖;认证 CDP WebSocket 意外断开也必须立即把 route 标成 blocked。只有显式 dispose/stop 的主动断开可以忽略。
 - 认证启动返回前必须用 CDP 命令响应作为消息屏障,等待屏障前收到的 auto-attach 认证任务全部完成;屏障内失败时 `start` 必须失败,不能先报告代理可用再异步改成 unknown。
@@ -232,7 +250,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - 第三个 `BackendKind` `user-browser`:`apps/desktop/src/main/mcp-integrations/browser-backend/user-browser-backend.ts` 把 `BrowserControlRequest` 翻译成随包浏览器扩展的页面作业,经 `cindy-brain/browserExtensionSlot.ts` 持有的桥接(`main/browser-extension/bridge.ts`,从 Cindy Chrome 插件的接线进程原样迁入,线协议 `cindy-browser-extension/3` 不变,已装扩展无需更新)投递到用户正在使用的 Chrome / Edge。
 - 设置 →「自动操作」三选一:专用浏览器(默认)/ 侧边栏 / 我的浏览器;选哪一个是**默认**目标,Agent 的 `setBackend` 仍是同一个全局持久选择。没有声明 `browserExtension.pageControl` 的插件时该目标 `status.ready === false`,健康面板报 `extension-disconnected`,不提供恢复按钮。
 - 能力边界由扩展版本决定(`USER_BROWSER_PARITY_VERSION`,当前 0.4.43):
-  - 0.4.43 起与专用浏览器对齐:截图(含整页、元素、后台标签页)、evaluate、requests、上传、对话框、console、PDF、focus、关闭、坐标与拖拽、站点配方的协议会话都可用;调试接口(`chrome.debugger`)是可选权限,只在需要的动作里临时接上、用完断开,第一次用到时由扩展弹出授权页。
+  - 0.4.43 起与专用浏览器对齐:截图(只限可视区域)、evaluate、requests、上传(超过约 30 MB 由 0.4.61 起分块,最大 1 GB)、对话框、console、focus、关闭、坐标与拖拽可用;PDF、整页/元素/后台标签页截图和站点配方的协议会话需要 Chrome 调试接口(`chrome.debugger`),而 Chrome 不允许把它声明为可选权限(`chrome.permissions.request` 直接拒绝,2026-11-01 实测),发布版扩展没有它,能力表如实报 `pdf: false`、`rawProtocol: false`。不要恢复「首次用到时弹授权页」的流程。
   - 更旧的扩展只有基础能力(tabs / open / navigate / snapshot / extract / act),由 `deps.backendCapabilities()`(`userBrowserCapabilities`)让 MCP 层在派发前拒绝其余动作,错误文案要求模型告知用户而不是自行切换。没有任何连接时按完整能力报,具体断开由后端按作业报告。
   - extract 与登录墙检测走 PR #7432 的声明式 `domRead`,不需要任意脚本。
 - 寻址:新版扩展(≥ 0.4.43)按 tabId 寻址,后端维护 targetId ↔ {连接, 浏览器启动标识, tabId, url};targetId 带启动标识,浏览器重启后旧句柄不再解析。旧版扩展仍按精确 URL 寻址:作业前用 `tabs` 核对,URL 变化报 `PAGE_CHANGED` 并刷新记录,不猜新页。
