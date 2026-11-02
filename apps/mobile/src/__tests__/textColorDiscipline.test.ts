@@ -80,6 +80,7 @@ const KNOWN_TEXT_COLOR_DEBT = new Map<string, number>([
 const KNOWN_PLACEHOLDER_DEBT = new Map<string, number>([
   ['src/session/ContextSheet.tsx textTertiary', 1], // 占位字用了三级色,待有意可见 PR 改为 textPlaceholder
   ['src/session/SessionPrLinks.tsx textSecondary', 1], // main 上新合入:占位字用了次级色
+  ['src/session/TextDocumentPreview.tsx textTertiary', 1], // main 上新合入:占位字用了三级色
 ]);
 
 const THEME_TOKEN = /\b(?:colors|c)\.([A-Za-z_][\w.]*)/g;

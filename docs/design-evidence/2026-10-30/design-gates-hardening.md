@@ -40,7 +40,7 @@
 
 ## 3. Mobile 字色测试
 
-`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **16 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（14 次，13 条）与 `KNOWN_PLACEHOLDER_DEBT`（2 次，2 条）里，按「文件 样式名 token」加次数登记：
+`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **17 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（14 次，13 条）与 `KNOWN_PLACEHOLDER_DEBT`（3 次，3 条）里，按「文件 样式名 token」加次数登记：
 
 | 文件 | token | 次数 | 说明 |
 | --- | --- | --- | --- |
@@ -56,6 +56,7 @@
 | `ContextSheetGoalView.tsx` | `statusRecording`（`textColor` prop） | 1 | 该 token 定义只供状态指示 |
 | `ContextSheet.tsx`（占位字） | `textTertiary` | 1 | 应为 `textPlaceholder` |
 | `SessionPrLinks.tsx`（占位字） | `textSecondary` | 1 | main 新合入，应为 `textPlaceholder` |
+| `TextDocumentPreview.tsx`（占位字） | `textTertiary` | 1 | main 新合入，应为 `textPlaceholder` |
 
 另有一条**已登记例外**（不计入存量）：`BotGroupChatScreen.tsx` 的话题内「New」分界标签使用 `threadUnreadDivider`——手机设计指南 §3 与 DESIGN.md 的 Mobile thread new-reply divider 条款都明确登记了该标签与 0.5pt 横线同色，测试里按「文件 样式名 token」精确放行，不是全局白名单。（本文早先版本曾把它误记为存量，已更正。）`botUnread` 也已从全局白名单移出，仅未读点使用。
 
