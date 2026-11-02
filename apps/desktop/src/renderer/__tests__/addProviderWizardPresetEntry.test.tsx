@@ -13,7 +13,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelRegistry, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
 
 const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
@@ -402,6 +402,43 @@ it.each([
     });
   },
 );
+
+// Unit: a shared /models response cannot borrow a compatible interface to
+// override the Registry's CC/Codex membership. Verify the actual saved config.
+it('keeps Registry engine exclusions through shared discovery and saving', async () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const id = 'deepseek-v4-flash-vision-exp';
+  for (const runtime of Object.values(preset.runtimes)) runtime!.models = runtime!.models.filter(m => m.id !== id);
+  registry.models.push({ id: 'test/codex-only', name: 'Codex only', routes: [{
+    providerId: preset.id, modelId: id, agents: ['codex'],
+  }] });
+  registry.models.push({ id: 'test/media', name: 'Media only', mode: 'image_generation', routes: [{
+    providerId: preset.id, modelId: 'media-only', agents: [],
+  }] });
+  expect(parseModelRegistry(registry).ok).toBe(true);
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry: registry });
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+    { id, name: 'Codex only' }, { id: 'media-only', name: 'Media only' },
+  ] });
+  renderWizard(preset.id);
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-registry-membership-fake' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const row = (await screen.findByText('Codex only')).closest('button')!;
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(row);
+  fireEvent.click((await screen.findByText('Media only')).closest('button')!);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const idsFor = (agent: string) => saved.runtimes[agent]?.models.map((m: { id: string }) => m.id) ?? [];
+  expect(idsFor('claude-code')).not.toContain(id);
+  expect(idsFor('codex')).toContain(id);
+  expect(idsFor('claude-code')).not.toContain('media-only');
+  expect(idsFor('codex')).not.toContain('media-only');
+  expect(idsFor('pi')).toEqual(expect.arrayContaining([id, 'media-only']));
+});
 
 // Unit: replay the public declaration retained by the actual instance, including
 // its Pi Messages base (the earlier compact fixture used a different Pi base).

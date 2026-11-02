@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type ProviderPreset } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, parseModelRegistry, type ProviderPreset } from '@cindy/model-providers';
 import { presetCandidateRoute, presetModelCandidate, presetSupplementalModels } from '../providerModelCandidates';
 import { presetConnectionRuntime } from '../presetConnectionRuntime';
 
@@ -32,6 +32,27 @@ describe('supplemental preset candidates', () => {
     registry.models.push(entry);
     if (kind === 'duplicate') registry.models.push({ ...entry, id: 'test/duplicate' });
     expect(presetSupplementalModels(preset, 'claude-code', registry).some(m => m.id === id)).toBe(false);
+  });
+
+  // Interface compatibility is not engine membership. A shared inventory must
+  // not add a supplemental model to a non-Pi engine excluded by its exact route.
+  it.each([
+    ['claude-code', ['codex']], ['claude-code', []],
+    ['codex', ['claude-code']], ['codex', []],
+  ] as const)('respects exact Registry membership for %s with agents %j', (agent, agents) => {
+    const { preset, registry, model } = fixture();
+    const route = presetCandidateRoute(preset, agent);
+    registry.models.push({ id: 'test/vision', name: 'Vision',
+      ...(agents.length === 0 ? { mode: 'image_generation' as const } : {}),
+      routes: [{ providerId: preset.id, modelId: id, agents: [...agents] }] });
+    expect(parseModelRegistry(registry).ok).toBe(true);
+    expect(presetModelCandidate(preset, agent, model, registry, route)).toBeUndefined();
+    expect(presetModelCandidate(preset, agent, model, registry, route,
+      { ...route, requestPath: '/tenant/infer' })).toBeUndefined();
+    expect(presetSupplementalModels(preset, agent, registry).some(m => m.id === id)).toBe(false);
+    // Pi membership comes from its own inventory, not Registry's two-engine list.
+    expect(presetModelCandidate(preset, 'pi', model, registry, presetCandidateRoute(preset, 'pi')))
+      .toMatchObject({ id });
   });
 
   it('does not bypass missing required behavior via an explicit discovery path', () => {
