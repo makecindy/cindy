@@ -7,6 +7,7 @@ import { REMOTE_AGENT_CHANNEL, type ProviderShareOwned } from '@cindy/device-lin
 
 import type { ProviderShareManagementCommand } from '../../../shared/providerManagement';
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
 vi.mock('electron', () => ({
@@ -22,7 +23,7 @@ const host = vi.hoisted(() => ({
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -52,9 +53,12 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
-vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: vi.fn() }));
-vi.mock('../../usage/modelPricing.js', () => ({ getGatewayModelPricing: usageStores.pricing, getModelPriceQuote: vi.fn() }));
-vi.mock('../../usage/turnCostCalculator.js', () => ({ computePriceQuoteTurnMoney: vi.fn(), normalizeModelIdForPricing: vi.fn() }));
+vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
+vi.mock('../../usage/modelPricing.js', async () => ({
+  getGatewayModelPricing: usageStores.pricing,
+  getModelPriceQuote: (await import('../../../shared/modelPriceQuote.js')).getModelPriceQuote,
+}));
+vi.mock('../../usage/referenceModelPricing.js', () => ({ getReferenceModelPricing: usageStores.referencePricing }));
 vi.mock('../../usage/providerPartyUsageStore.js', () => ({
   currentProviderPartyUsageStore: () => ({ history: usageStores.ownHistory }),
 }));
@@ -66,7 +70,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: vi.fn() }));
+vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -167,6 +171,8 @@ beforeEach(() => {
   usageStores.enqueueDirectCleanup.mockResolvedValue(undefined);
   usageStores.listPendingDirectCleanup.mockReturnValue([]);
   usageStores.acknowledgeDirectCleanup.mockResolvedValue(undefined);
+  usageStores.pricing.mockResolvedValue(null);
+  usageStores.referencePricing.mockReturnValue({});
   startProviderShareRuntime(vi.fn());
 });
 
@@ -296,6 +302,75 @@ const historyWithRows = (rows: ProviderUsageHistoryView['self']['days']): Provid
   members: [],
 });
 
+// Unit regression: usage-history must return estimates for self, relay and shared
+// usage with no SDK cost. Existing wire-budget tests only covered SDK fallback
+// and mocked out quote lookup/calculation, hiding the missing reference-price source.
+describe('provider share usage estimates', () => {
+  const quote: ModelPriceQuote = {
+    providerId: 'openai', modelId: 'gpt-6.1-sol', currency: 'USD',
+    source: 'provider-reference', approximate: true,
+    inputPerMtok: 2, outputPerMtok: 10, cacheReadPerMtok: 0.2,
+  };
+  const row = () => ({
+    ...historyRow(0, 'gpt-6.1-sol [high]'), providerId: 'openai', kind: 'codex',
+    inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 2_000, sdkCostUsd: 0,
+  });
+
+  async function readEstimate(providerId = 'openai', sdkCostUsd = 0) {
+    usageStores.ownHistory.mockReturnValue({
+      self: { lastUsedAt: null, days: [{ ...row(), providerId, sdkCostUsd }] }, relays: [],
+    });
+    const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId }) as ProviderUsageHistoryView;
+    return result.self.days[0]?.amount;
+  }
+
+  it('prices OpenAI self, relay and member usage from engine-specific reference quotes', async () => {
+    usageStores.pricing.mockResolvedValue({ xd: { 'gpt-6.1-sol': { ...quote, providerId: 'xd', inputPerMtok: 999 } } });
+    usageStores.referencePricing.mockReturnValue({ openai: {
+      'gpt-6.1-sol': { ...quote, inputPerMtok: 999 },
+      'gpt-6.1-sol\u0000codex': quote,
+    } });
+    usageStores.ownHistory.mockReturnValue({
+      self: { lastUsedAt: null, days: [row()] },
+      relays: [{ deviceId: 'relay', lastUsedAt: null, days: [row()] }],
+    });
+    host.snapshot.mockReturnValue([{ providerId: 'openai', shareId: 's', members: [{ memberId: 'm1' }] }]);
+    usageStores.memberHistory.mockReturnValue([{ shareId: 's', memberId: 'm1', lastUsedAt: null, days: [row()] }]);
+    const result = await executeProviderShareManagementCommand({ action: 'usage-history', providerId: 'openai' }) as ProviderUsageHistoryView;
+    for (const usage of [result.self, result.relays[0]!, result.members[0]!]) {
+      expect(usage.days[0]?.amount?.amount).toBeCloseTo(0.0034, 8);
+      expect(usage.days[0]?.amount?.currency).toBe('USD');
+    }
+  });
+
+  it('keeps Cindy AI on Gateway prices and applies its discount once', async () => {
+    usageStores.pricing.mockResolvedValue({ xd: { 'gpt-6.1-sol': {
+      ...quote, providerId: 'xd', source: 'gateway', costDiscount: 0.5,
+    } } });
+    usageStores.referencePricing.mockReturnValue({ xd: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 999 } } });
+    expect(await readEstimate('xd')).toEqual({ amount: 0.0017, currency: 'USD' });
+  });
+
+  it('refreshes the reference snapshot on the next query after a price change', async () => {
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': quote } });
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0034, 8);
+    usageStores.referencePricing.mockReturnValue({ openai: { 'gpt-6.1-sol': { ...quote, inputPerMtok: 4 } } });
+    expect((await readEstimate())?.amount).toBeCloseTo(0.0054, 8);
+  });
+
+  it.each([
+    { sdkCostUsd: 0, expected: null },
+    { sdkCostUsd: 0.25, expected: { amount: 0.25, currency: 'USD' } },
+  ])('retains SDK fallback or unknown when no quote exists ($sdkCostUsd)', async ({ sdkCostUsd, expected }) => {
+    expect(await readEstimate('openai', sdkCostUsd)).toEqual(expected);
+  });
+
+  it('falls back to SDK cost when reference pricing cannot be read', async () => {
+    usageStores.referencePricing.mockImplementation(() => { throw new Error('pricing unavailable'); });
+    expect(await readEstimate('openai', 0.25)).toEqual({ amount: 0.25, currency: 'USD' });
+  });
+});
+
 // PR #7772: settings classification must not renew the management page's fast-poll window
 // or calculate usage. Existing management tests only read full owned/usage responses.
 // Minimal input: active, paused, pending-only and duplicate-provider shares. Tier: unit.
@@ -356,7 +431,7 @@ describe('provider share usage history wire budget', () => {
     expect(usageStores.memberHistory).toHaveBeenCalledWith(new Set(['s']), {
       maxRows: 5_001, memberKeys: new Set([JSON.stringify(['s', 'm1'])]),
     });
-    expect(usageStores.pricing).toHaveBeenCalledTimes(5_000);
+    expect(usageStores.referencePricing).toHaveBeenCalledTimes(1);
     expect(result.self.days).toHaveLength(5_000);
     expect(result.self.days[0]?.amount).toEqual({ amount: 0.25, currency: 'USD' });
     expect(result.self.days[0]).not.toHaveProperty('sdkCostUsd');

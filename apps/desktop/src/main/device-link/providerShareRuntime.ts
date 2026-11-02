@@ -61,6 +61,7 @@ import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getGatewayModelPricing, getModelPriceQuote } from '../usage/modelPricing.js';
+import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { computePriceQuoteTurnMoney, normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -573,21 +574,30 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
   }
 }
 
-async function estimate(row: Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number }): Promise<ProviderShareMoney | null> {
-  try {
-    const pricing = await getGatewayModelPricing();
-    const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
-    const price = getModelPriceQuote(pricing, row.providerId, normalizeModelIdForPricing(row.model), agent);
-    const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency());
-    if (money) return { amount: money.amount, currency: money.currency };
-  } catch (error) {
-    log.warn('provider share usage estimate failed', { error: String(error) });
-  }
-  return row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+/** 每次查询复用报价快照，避免为最多 5,000 行历史逐行重建参考价目录。 */
+function createUsageEstimator() {
+  let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
+  let referencePricing: ReturnType<typeof getReferenceModelPricing> | undefined;
+  return async (row: Omit<ProviderShareModelUsageView, 'amount'> & { sdkCostUsd: number }): Promise<ProviderShareMoney | null> => {
+    try {
+      // XD 的实际报价与其他供应商的参考价独立，不能跨来源借价。
+      const pricing = row.providerId === 'xd'
+        ? await (gatewayPricing ??= getGatewayModelPricing())
+        : (referencePricing ??= getReferenceModelPricing());
+      const agent = row.kind === 'claude-code' || row.kind === 'codex' || row.kind === 'pi' ? row.kind : undefined;
+      const price = getModelPriceQuote(pricing, row.providerId, normalizeModelIdForPricing(row.model), agent);
+      const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency());
+      if (money) return { amount: money.amount, currency: money.currency };
+    } catch (error) {
+      log.warn('provider share usage estimate failed', { error: String(error) });
+    }
+    return row.sdkCostUsd > 0 ? { amount: row.sdkCostUsd, currency: 'USD' } : null;
+  };
 }
 
 async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShareOwnerState> {
   if (!running) return { ready: false, shares: [] };
+  const estimate = createUsageEstimator();
   const shares = getProviderShareHostSnapshot();
   const usage = getProviderShareUsageStore()?.query(new Set(shares.map((share) => share.shareId)), range) ?? [];
   const reshares = listProviderShareReshares();
@@ -646,6 +656,7 @@ async function ownerState(range: ProviderShareUsageRange): Promise<ProviderShare
 
 /** 这个供应商按使用方的用量：本机与同账号的其他电脑(provider-groups.md §7)。只读本机账本，不经分享服务。 */
 async function ownUsage(providerId: string, range: ProviderShareUsageRange): Promise<ProviderOwnUsageView> {
+  const estimate = createUsageEstimator();
   const { local, devices, relays } = currentProviderPartyUsageStore().query(providerId, range);
   const lastKnownNames = readLastKnownDeviceNames();
   const view = async (party: ProviderPartyUsage): Promise<ProviderPartyUsageView> => ({
@@ -760,6 +771,7 @@ export function trimProviderUsageHistory(history: ProviderUsageHistoryView): Pro
  * (只含这个供应商的分享里现在的成员)。时间段、人与组内电脑由界面筛选。
  */
 async function usageHistory(providerId: string): Promise<ProviderUsageHistoryView> {
+  const estimate = createUsageEstimator();
   const own = currentProviderPartyUsageStore().history(providerId);
   const shares = running ? getProviderShareHostSnapshot().filter((share) => share.providerId === providerId) : [];
   const memberKeys = new Set(shares.flatMap((share) => share.members.map((member) => JSON.stringify([share.shareId, member.memberId]))));
