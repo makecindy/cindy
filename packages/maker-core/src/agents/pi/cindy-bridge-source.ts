@@ -2597,6 +2597,7 @@ const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
+const CINDY_LIST_MACHINES_TOOL = 'list_machines';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -4021,6 +4022,19 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeStartSessionTask(params, signal),
+      });
+    }
+
+    // The first step of any work across computers: behind the MCP gateway, models answered
+    // with their own ssh commands instead of finding it.
+    if (this.resolveDirectHelperTool(CINDY_LIST_MACHINES_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_LIST_MACHINES_TOOL,
+        label: 'List machines',
+        description: 'List the computers on this account and the SSH hosts configured here, with live CPU, memory and disk. Use it first whenever the user asks about their machines or SSH hosts, or work may need another computer, more resources or a different system; it reads all of them in one call, so do not run ssh or read ~/.ssh yourself for this. It reports facts and picks nothing. Each unreadable machine carries an availability reason: report it as given, and never call host_key_changed a password problem.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_LIST_MACHINES_TOOL, params, signal),
       });
     }
 
