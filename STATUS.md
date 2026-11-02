@@ -23,7 +23,7 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 - `apps/desktop/src/main/maker-ipc/orcaSessionStartOptions.ts`: `renderOrcaInstructionsFor` (same text `applyOrcaInstructions` gives other agents); wired in `maker-host/index.ts`.
 - No CC/Codex/Pi code, no lizi MCP schema, no existing prompt text changed.
 
-**Verification:** `unit-tested`. Bridge host 13/13 (+4, real bridge, stub providers), Hermes agent 38/38 (+2), Orca start options (+1). Mutation checks, each caught then restored: Orca instructions resent every turn; bridge patch not forwarded; policy keys patchable; collab gate ignoring team membership. `pnpm typecheck` (serial) exit 0; `pnpm test:runner` 607 pass / 0 fail; `pnpm check:test-hygiene` PASS. Desktop unit tier to run on the owner's Mac (8 shards).
+**Verification:** `unit-tested`. Bridge host 13/13 (+4, real bridge, stub providers), Hermes agent 38/38 (+2), Orca start options (+1). Mutation checks, each caught then restored: Orca instructions resent every turn; bridge patch not forwarded; policy keys patchable; collab gate ignoring team membership. `pnpm typecheck` (serial) exit 0; `pnpm test:runner` 607 pass / 0 fail; `pnpm check:test-hygiene` PASS. Owner's Mac (2026-11-02): `apps/desktop unit` 8/8 shards PASS first run (no SIGSEGV); `packages/maker-core unit` PASS (50.5 s).
 
 **Live check for the owner (closes 3.7):** Settings → collaboration on; new Hermes task in **Full access** on a strong route; ask "Start a team and create a Claude Code worker that replies with today's date, then tell me its answer." Expect: a worker session in the sidebar, its reply delivered back into the lead, the lead summarising it.
 
