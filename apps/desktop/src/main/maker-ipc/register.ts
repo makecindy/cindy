@@ -23215,7 +23215,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
     const requestedModelId = model;
-    let effectiveModelId = requestedModelId;
     const normalizedWireArgs =
       internalOptions.source === 'user'
         ? normalizeDeviceLinkSetModelWireArgs(
@@ -23443,7 +23442,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           guardProviderId === currentProviderId && !sshCodexProviders) {
         const sourceProvider = runtimeProviders.find(p => p.id === currentProviderId);
         const replacement = uniqueRenamedSessionModelId(sourceProvider, model, currentAgentKind);
-        if (replacement) model = effectiveModelId = replacement;
+        if (replacement) model = replacement;
       }
       const currentSourceId = currentProviderId ?? actualSourceIdForModel(
         runtimeProviders, null, currentModelId, currentAgentKind,
@@ -23651,6 +23650,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           deferred: true,
           superseded: false,
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         };
@@ -24760,6 +24760,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,
         });
@@ -24778,9 +24779,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw err;
       }
     };
-    const result = await (internalOptions.sessionLockHeld
-      ? applyLocked() : withSendToSessionLock(sessionId, applyLocked));
-    return Object.assign(result, { effectiveModelId });
+    return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
   };
   recoverRenamedSessionModelOnSend = async (sessionId) => {
     if (agentSwitchPending.get(sessionId)) return;
@@ -24800,9 +24799,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       allowSideEffects: false,
       catalog: getActiveCatalog(),
     });
+    const profiles = await readSessionRuntimeProfiles(sessionId);
     await recoverRenamedSessionModelBeforeSend({
       route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
-      hasPendingSelection: !!agentSwitchPending.get(sessionId),
+      effectiveRoute: profiles?.effective ?? null,
+      hasPendingSelection: !!agentSwitchPending.get(sessionId) || !!profiles?.pendingMutation,
       providers,
       apply: (model, providerId) => handleSetModel(
         sessionId, model, providerId, undefined,

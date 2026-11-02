@@ -7,6 +7,8 @@ const route = {
   model: 'gpt-6-luna',
   providerId: 'openai',
   agentKind: 'codex' as const,
+  effort: 'high',
+  fastMode: false,
   remoteHostId: null,
   agentDeviceId: null,
 };
@@ -19,7 +21,7 @@ describe('recoverRenamedSessionModelBeforeSend', () => {
   it('applies the unique replacement on a direct send with no pending selection', async () => {
     const apply = vi.fn(async () => ({ deferred: false, superseded: false }));
     const recovered = await recoverRenamedSessionModelBeforeSend({
-      route, hasPendingSelection: false,
+      route, effectiveRoute: route, hasPendingSelection: false,
       providers: [provider(['chatgpt/gpt-6-luna'])], apply,
     });
     expect(recovered).toBe(true);
@@ -29,19 +31,32 @@ describe('recoverRenamedSessionModelBeforeSend', () => {
   it('does not override a pending choice or guess between two replacements', async () => {
     const apply = vi.fn(async () => ({ deferred: false, superseded: false }));
     expect(await recoverRenamedSessionModelBeforeSend({
-      route, hasPendingSelection: true,
+      route, effectiveRoute: route, hasPendingSelection: true,
       providers: [provider(['chatgpt/gpt-6-luna'])], apply,
     })).toBe(false);
     expect(await recoverRenamedSessionModelBeforeSend({
-      route, hasPendingSelection: false,
+      route, effectiveRoute: route, hasPendingSelection: false,
       providers: [provider(['chatgpt/gpt-6-luna', 'xai/gpt-6-luna'])], apply,
+    })).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('preserves an accepted temporary route or axis override', async () => {
+    const apply = vi.fn(async () => ({ deferred: false, superseded: false }));
+    expect(await recoverRenamedSessionModelBeforeSend({
+      route, effectiveRoute: { ...route, model: 'available-fallback' },
+      hasPendingSelection: false, providers: [provider(['chatgpt/gpt-6-luna'])], apply,
+    })).toBe(false);
+    expect(await recoverRenamedSessionModelBeforeSend({
+      route, effectiveRoute: { ...route, effort: 'low', fastMode: true },
+      hasPendingSelection: false, providers: [provider(['chatgpt/gpt-6-luna'])], apply,
     })).toBe(false);
     expect(apply).not.toHaveBeenCalled();
   });
 
   it('refuses to send when applying the replacement did not finish', async () => {
     await expect(recoverRenamedSessionModelBeforeSend({
-      route, hasPendingSelection: false,
+      route, effectiveRoute: route, hasPendingSelection: false,
       providers: [provider(['chatgpt/gpt-6-luna'])],
       apply: async () => ({ deferred: true, superseded: false }),
     })).rejects.toThrow('could not be applied before send');
