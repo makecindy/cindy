@@ -245,11 +245,13 @@ function isAsymmetricOpener(
   // Every edge tip is excluded, not just the plain ones: `-->`, `==>`, `-.->`, the
   // stretched dotted forms `-..->`/`-...->`, and the bidirectional `<-->` / `<==>`
   // which leave a `<` at the start of the run.
-  // A run right behind a source head belongs to the target id, not to the edge: in
-  // `S--o-.>go -> stop]` the circle head ends in front of `-.`, and the `>` opens a
-  // label on the id `-.`.
-  const behindSourceHead = text[start - 1] === 'o' || text[start - 1] === 'x' || text[start - 1] === '<';
-  if (!behindSourceHead && isEdgeTipRun(text, start, i, prefixes)) return false;
+  // A run behind a source head belongs to the target id, not to the edge. The head
+  // has to sit on an edge body, otherwise a plain id that happens to end in o or x
+  // is mistaken for one.
+  const headChar = text[start - 1];
+  const behindEdgeHead =
+    (headChar === 'o' || headChar === 'x' || headChar === '<') && (text[start - 2] === '-' || text[start - 2] === '=');
+  if (!behindEdgeHead && isEdgeTipRun(text, start, i, prefixes)) return false;
   // A compact dotted edge (`A -.label.-> B`) glues its label to the token start, so
   // the whole token begins with `-.` while a real id never does. The token start is
   // maintained by the forward scan for the same reason as the run start: walking
@@ -336,9 +338,9 @@ function completeEdgeTokenEnd(
     const run = same - i;
     // `A--foo--->B` ends the text with a stretched tip, so the head belongs to the
     // token; leaving it behind hands it to the asymmetric opener check.
-    // `A-.--B` is the dotted token `-.-` followed by the target id `-B`, so the whole
-    // token has to be consumed here. Left alone, the scan starts at `--B`, reads it as
-    // a bare edge text, and runs over the rest of the line.
+    // A single dash, dots and a closing dash form a token without a tip, so the
+    // whole token has to be consumed here. Left alone, the scan starts behind it,
+    // reads the rest as a bare edge text, and runs over the next node's label.
     if (run === 1 && text[same] === '.') {
       let dots = same;
       while (text[dots] === '.') dots += 1;
@@ -347,9 +349,8 @@ function completeEdgeTokenEnd(
     if (run >= 3) return text[same] === '>' ? same + 1 : same;
     if (run !== 2) return -1;
     const head = text[same];
-    // A plain arrow (`-->`, `==>`) is complete in front of its tip, so the next
-    // character starts the target id: `S -->.>go -> stop]` links to the id `.` and
-    // the `>` opens the label.
+    // A plain arrow is complete in front of its tip, so the next character starts
+    // the target id: a punctuation target then opens the asymmetric label.
     if (head === '>') return same + 1;
     if (head !== 'o' && head !== 'x') return -1;
     // `A--oB` ends the edge with a circle head. A target id may start with `-` or
@@ -445,6 +446,10 @@ function skipBareEdgeText(
   memo?: EdgeTokenMemo,
 ): number {
   const lineEnd = text.indexOf('\n', from) === -1 ? text.length : text.indexOf('\n', from);
+  // A bare text ends at a tip of the same style as the edge that opened it: a dotted
+  // edge carries complete arrows inside its text, and only its own dotted tip ends it.
+  // Otherwise an inner arrow ends the scan and the real tip is read as a label opener.
+  const dottedText = text[from] === '-' && text[from + 1] === '.';
   let start = from;
   // A quoted bare edge text (`A -- "go --> stop" --> B`) is visible text: the first
   // tip inside the quotes does not end the segment, so the quotes keep their
@@ -463,7 +468,11 @@ function skipBareEdgeText(
       // carry the next node's label into the rewritten segment.
       if (at > from) {
         const tokenEnd = completeEdgeTokenEnd(text, at, true, memo);
-        if (tokenEnd > at) return tokenEnd;
+        if (tokenEnd > at) {
+          if (!dottedText || text[at] === '.') return tokenEnd;
+          at = tokenEnd - 1;
+          continue;
+        }
       }
     }
     if (text[at] === '>' && at > start && isEdgeTipRun(text, start, at, prefixes)) return at + 1;
@@ -763,7 +772,7 @@ function mapOutsideQuotesAndLabels(text: string, fn: (segment: string) => string
       if (tokenEnd > i) {
         plain += text.slice(i, tokenEnd);
         // A completed arrow tip ends the punctuation run: what follows is a new target
-        // id, so a `>` right behind it opens an asymmetric label (`S -->.>go -> stop]`).
+        // id, so a punctuation target starts its own run and opens the label on it.
         if (text[tokenEnd - 1] === '>') {
           runStart = tokenEnd;
           tokenStart = tokenEnd;

@@ -861,4 +861,26 @@ describe('quotes, complete edges and block headers', () => {
     expect(output).toContain('S -->.>go → stop]');
     expect(output).toContain('E --> F');
   });
+
+  it('does not read an id that ends in o or x as an edge head', () => {
+    // video is a plain id in video-.->B, so the dotted edge tip still owns the
+    // > behind it. Reading the trailing o as a circle head would let the >
+    // open a cross-statement label and leave the unicode arrow in place.
+    const source = ['flowchart TD', '  video-.->B', '  E → F', '  C[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('video-.->B');
+    expect(output).toContain('E --> F');
+    expect(output).toContain('C[label]');
+  });
+
+  it('ends a dotted bare edge text only at its own dotted tip', () => {
+    // The edge text of A-.foo-->bar.->B is foo-->bar: the inner --> is visible
+    // text, and the .-> behind it is the real tip. Ending the scan at the inner
+    // arrow would leave the tip outside the text and let it open a label.
+    const source = ['flowchart TD', '  A-.foo-->bar.->B', '  E → F', '  Z[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A-.foo-->bar.->B');
+    expect(output).toContain('E --> F');
+    expect(output).toContain('Z[label]');
+  });
 });
