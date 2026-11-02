@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('react-native', () => ({
   View: ({ children, testID, accessibilityLabel }: any) => el('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children),
+  Pressable: ({ children, onPress, disabled, testID }: any) => el('button', { onClick: onPress, disabled, 'data-testid': testID }, children),
   StyleSheet: { create: (value: unknown) => value },
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
@@ -69,7 +70,7 @@ beforeEach(async () => {
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
 });
-afterEach(async () => { await act(async () => root.unmount()); });
+afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 it('follows the speaking lane while focused and seeds its pending prompts', async () => {
   await render({});
@@ -105,7 +106,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'needs-interaction', compactDetail: '' };
   await render({});
-  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: identity.name }));
+  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: '' }));
   expect(h.panel).toBeNull();
 });
 
@@ -140,11 +141,31 @@ it.each([
   expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(expected);
 });
 
+// PR #7806 unit: real row actions and timestamp; existing cases only cover task navigation.
+// Minimal input: one active execution with a known start, followed by a pending stop.
+it('shows real elapsed time and disables the group stop action while pending', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(20_000);
+  const stop = vi.fn(async () => undefined);
+  await render({ startedAt: 15_000, onStop: stop });
+  expect(node.textContent).toContain('已工作 5 秒');
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(node.textContent).toContain('已工作 6 秒');
+  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
+  expect(stop).toHaveBeenCalledTimes(1);
+  await render({ startedAt: 15_000, onStop: stop, stopPending: true });
+  const button = node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe(i18n.t('groupChat.speaking.stopping'));
+  vi.useRealTimers();
+});
+
 // Unit regression: real store refuses new text after task-detail blur unless
 // the focused group owns a message lease. Previous row tests mocked this store.
 it('keeps new stage text visible after returning from the task and releases it on blur', async () => {
   h.invoke.mockResolvedValue([]);
-  const props = { groupId: 'g1', executionId: 'exec', startedAt: 0 };
+  const stop = vi.fn(async () => undefined);
+  const props = { groupId: 'g1', executionId: 'exec', startedAt: 0, onStop: stop };
   await render(props);
   h.focused = false;
   await render(props);
@@ -157,6 +178,8 @@ it('keeps new stage text visible after returning from the task and releases it o
   }, 'continued'));
   expect(remoteSessionStore.getMessages('s1').some(message => message.content === 'New stage after return')).toBe(true);
   expect(node.textContent).toContain('New stage after return');
+  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
+  expect(stop).toHaveBeenCalledTimes(1);
   h.focused = false;
   await render(props);
   await act(async () => remoteSessionStore.applyMakerEvent('s1', {

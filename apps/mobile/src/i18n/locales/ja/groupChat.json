@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "停止"
+  },
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",

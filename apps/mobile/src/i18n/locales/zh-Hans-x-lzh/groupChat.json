@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "止"
+  },
   "title": "群议",
   "memberSeparator": "、",
   "memberCount_one": "成员 {{count}} 位",
