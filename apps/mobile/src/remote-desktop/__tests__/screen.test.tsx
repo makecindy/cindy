@@ -6449,6 +6449,15 @@ describe("live screen controls", () => {
     ]);
   });
 
+  it("opens the phone keyboard from the panel to type on the device", async () => {
+    await open();
+    expect(control("remoteDesktop.keyboardPanel")).toBeNull();
+    openPanel();
+    act(() => control("liveScreen.action.keyboard")!.click());
+    expect(control("liveScreen.panel")).toBeNull();
+    expect(control("remoteDesktop.keyboardPanel")).not.toBeNull();
+  });
+
   it("turns the device by hand, then follows the phone again", async () => {
     await open();
     const presses = () =>
