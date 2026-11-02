@@ -92,10 +92,15 @@ export function useBotSettingsAutosave(
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-  const failedRef = useRef(false);
+  // A failure belongs to the draft that was sent, not to whatever is on screen when it
+  // settles: each committable edit bumps the generation, each commit records the generation
+  // it carried, and failed() is true only while the current draft is the one that failed.
+  // Otherwise an older in-flight save failing after a new edit would make leaving skip the
+  // new draft's save and offer to discard a draft that was never submitted.
+  const editGenerationRef = useRef(0);
+  const failedGenerationRef = useRef<number | null>(null);
 
   const handleStatus = useCallback((next: BotAutosaveStatus) => {
-    failedRef.current = next === 'error';
     if (!mountedRef.current) return;
     if (savedTimerRef.current !== null) {
       clearTimeout(savedTimerRef.current);
@@ -118,7 +123,14 @@ export function useBotSettingsAutosave(
       readBaseline: () => baselineRef.current,
       commit: async (next, modelSelection) => {
         if (!enabledRef.current) return;
-        await commitRef.current(next, modelSelection);
+        const generation = editGenerationRef.current;
+        try {
+          await commitRef.current(next, modelSelection);
+        } catch (error) {
+          failedGenerationRef.current = generation;
+          throw error;
+        }
+        if (failedGenerationRef.current === generation) failedGenerationRef.current = null;
       },
       onStatusChange: handleStatus,
     });
@@ -144,7 +156,7 @@ export function useBotSettingsAutosave(
       discardedRef.current = false;
       if (trigger === 'text' && composingRef.current) return;
       // A fresh draft must flush normally when leaving, even after an older failure.
-      failedRef.current = false;
+      editGenerationRef.current += 1;
       autosave.schedule(trigger);
     },
     [autosave],
@@ -159,7 +171,7 @@ export function useBotSettingsAutosave(
         committablePayloadRef.current = payloadRef.current;
         if (enabledRef.current) {
           discardedRef.current = false;
-          failedRef.current = false;
+          editGenerationRef.current += 1;
           autosave.schedule('text');
         }
       },
@@ -187,7 +199,7 @@ export function useBotSettingsAutosave(
     handleStatus('idle');
   }, [autosave, handleStatus]);
 
-  const failed = useCallback(() => failedRef.current, []);
+  const failed = useCallback(() => failedGenerationRef.current === editGenerationRef.current, []);
 
   return { status, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, failed, discard, composition };
 }
