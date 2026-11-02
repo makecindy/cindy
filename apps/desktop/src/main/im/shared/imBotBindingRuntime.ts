@@ -22,7 +22,7 @@ import {
 import { botProfiles, botSessionLinks, sessions } from '../../localDb/schema';
 import { resolveBotGuestLaneAccess } from '../../maker-ipc/botWorkspaceRuntime';
 import { resolveBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionRegistry';
-import { prepareBotSessionForImSend, tryGetBotDelegationService } from '../../maker-ipc/register';
+import { prepareBotSessionForImSend, previewBotSessionRoute, tryGetBotDelegationService } from '../../maker-ipc/register';
 import {
   COMPANION_GUEST_REFUSED,
   type ImCompanionRouteDeps,
@@ -61,10 +61,15 @@ async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
     .limit(1);
   if (!link || link.role !== 'channel') return false;
   const access = await resolveBotGuestLaneAccess(link.botId, link.routeKey);
+  if (access.kind !== 'bound') return access.kind === 'refused';
   // Pi cannot confine a bound guest (it refuses to start), nor can an engine on
-  // another computer; answer with the same plain notice instead of a start failure.
-  return access.kind === 'refused'
-    || (access.kind === 'bound' && (link.agentKind === 'pi' || !!link.agentDeviceId));
+  // another computer; answer with the same plain notice instead of a start
+  // failure. Judge the route the next start will use (the model chain may have
+  // moved since this row was written), not the stored one; hydration re-checks.
+  const route = await previewBotSessionRoute(sessionId).catch(() => null);
+  const agentKind = route ? route.agentKind : link.agentKind;
+  const agentDeviceId = route ? route.agentDeviceId : link.agentDeviceId;
+  return agentKind === 'pi' || !!agentDeviceId;
 }
 
 export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {

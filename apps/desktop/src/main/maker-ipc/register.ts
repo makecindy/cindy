@@ -5276,6 +5276,21 @@ export async function prepareBotSessionForImSend(sessionId: string): Promise<str
   return prepareBotSessionForImSendHolder ? prepareBotSessionForImSendHolder(sessionId) : null;
 }
 
+let previewBotSessionRouteHolder: ((sessionId: string) => Promise<{
+  agentKind: AgentKind; agentDeviceId: string | null;
+} | null>) | null = null;
+
+/**
+ * The route a Bot session's next start will use (model chain applied, read
+ * only). Null when the session is not a Bot session or the reconciler is not
+ * ready; the caller then falls back to the stored row.
+ */
+export async function previewBotSessionRoute(
+  sessionId: string,
+): Promise<{ agentKind: AgentKind; agentDeviceId: string | null } | null> {
+  return previewBotSessionRouteHolder ? previewBotSessionRouteHolder(sessionId) : null;
+}
+
 let applyPiImModelSelectionHolder: ((
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
@@ -17318,6 +17333,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       onApplied: async (sessionId) => { await updateScheduledPreference(sessionId, null); },
     }),
   });
+  previewBotSessionRouteHolder = async (sessionId) => {
+    const route = await reconcileBotModelRoute.preview(sessionId);
+    return route ? { agentKind: route.agentKind, agentDeviceId: route.agentDeviceId ?? null } : null;
+  };
 
   configureBotModelSelectionCoordinator(createBotModelSelectionCoordinator({
     acquireSessionLock: (sessionId) => acquireSendToSessionLock(sessionId),
