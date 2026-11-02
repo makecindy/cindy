@@ -6,11 +6,12 @@
  *   用户已离开 Lead 时断言 HashRouter 的当前页面不被改写；仍停在该 Lead 的地址上（旧协同
  *   路由 /cc-agent/orca/<lead>）时断言仍回到普通 Lead 路由，跟转判断两侧的改坏都会被发现。
  * - Bug／规则依据：结束协同要等 Worker worktree 回收（实测数秒到数十秒，未提交文件越多越久），
- *   期间用户点「新建」、切到其他任务或删除 Lead，请求完成后页面仍被 replace 回 Lead。
+ *   期间用户点「新建」、切到其他任务、打开同一任务的文件页或删除 Lead，请求完成后页面仍被 replace 回 Lead。
  * - 现有覆盖缺口：此前没有任何测试覆盖结束协同完成后的跳转；相邻的
  *   useSessionLifecycleActions.test.tsx 测的是另一个 hook，且 mock 掉了 useNavigate 与
  *   sessionsStore（形状不同），并入会让两边互相牵制，故单独成文件。
- * - 最小失败输入：disableOrca 挂起 → 路由切到其他页面 → disableOrca 完成；以及停在
+ *   原有用例未覆盖等待期间打开同一任务文件页的情况，无法发现复用删除/归档路由判据导致的误跳转。
+ * - 最小失败输入：disableOrca 挂起 → 路由切到其他页面（含同一任务的文件页）→ disableOrca 完成；以及停在
  *   /cc-agent/orca/<lead> → disableOrca 完成（判断恒为 false 时失败）。注意当前 /cc-agent/orca/:id
  *   只是兼容转发页，CCAgentSessionView 不会停在该地址，这条守的是 hook 自身的跳转约定。
  * - tier：unit（jsdom + 真实 HashRouter，其余依赖进程内 fake）。
@@ -91,6 +92,7 @@ describe('useStopOrcaCollab navigation after disableOrca', () => {
   it.each([
     ['新建任务页', '/cc-agent/new'],
     ['其他任务', '/cc-agent/other-task'],
+    ['同一任务的文件页', `/cc-agent/files/${LEAD_ID}`],
   ])('keeps the page the user moved to (%s) while the stop request was pending', async (_label, route) => {
     let finishDisable!: (value: { ok: true }) => void;
     mocks.disableOrca.mockReturnValue(
