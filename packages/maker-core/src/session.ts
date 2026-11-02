@@ -1736,6 +1736,11 @@ export class Session {
     return this.handle.getRuntimeCapabilities?.();
   }
 
+  getPersonalRuleConsumerReady(): boolean | undefined {
+    return this.status === 'active' && !this.terminationStarted
+      ? this.handle.getPersonalRuleConsumerReady?.() : false;
+  }
+
   getDisabledSkillPaths(): readonly string[] | undefined {
     return this.handle.disabledSkillPaths;
   }

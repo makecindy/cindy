@@ -1753,10 +1753,14 @@ describe('same-Query personal rules in CC Auto', () => {
 // Existing callback/timing coverage cannot prove that missing routing decision.
 describe('whole personal requirements at the registered Bash hook boundary', () => {
   const original = 'Read(private)\r\n  保留完整原文 🧪 e\u0301\n末行  ';
-  const observe: TestObserve = async request => {
+  const observation = (legacyAsk = false): TestObserve => async request => {
     const scope = { ownerId: 'test-owner', executionHostId: 'test-host',
       projectId: request.workingDir, harnesses: ['claude-code' as const] };
-    const group = normalizeRuleGroup(requirementsOrigin('hook-routing'), scope, [
+    const group = legacyAsk ? normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-bash:hook-routing',
+      locator: 'cindy://personal-approval/exact-bash/hook-routing', dialectVersion: '1', decisionDomain: 'personal-approval' },
+    scope, [{ id: 'known', original: 'Bash(pwd)', decision: 'ask', tool: { domain: 'exec', name: 'Bash' },
+      matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' } }])
+      : normalizeRuleGroup(requirementsOrigin('hook-routing'), scope, [
       { id: 'requirement', original, decision: 'requirement', reason: 'user-authored-verbatim',
         tool: { domain: 'exec', name: 'Bash' } },
       { id: 'known', original: 'Read(explicit exec pwd)', decision: 'allow',
@@ -1767,11 +1771,12 @@ describe('whole personal requirements at the registered Bash hook boundary', () 
       revalidate: async () => request.execution?.isCurrent() === true,
       readManaged: async () => ({ scope, groups: snapshot.groups, fingerprint: JSON.stringify(snapshot.groups) }) };
   };
-  it.each(['cindy', 'native', 'default', 'full-access', 'plan', 'descendant', 'no-observer', 'text-only'] as const)(
+  const observe = observation();
+  it.each(['cindy', 'compound', 'legacy-ask', 'native', 'default', 'full-access', 'plan', 'descendant', 'no-observer', 'text-only'] as const)(
     'routes only the qualified Cindy Auto root to its callback (%s)', async scenario => {
       const mode = scenario === 'default' ? 'ask' : scenario === 'full-access' ? 'bypassPermissions' : 'auto';
       const h = await startSession(mode, {
-        observe: scenario === 'no-observer' ? undefined : observe,
+        observe: scenario === 'no-observer' ? undefined : scenario === 'legacy-ask' ? observation(true) : observe,
         initMcpServerNames: ['routing-fixture'],
         ...(scenario === 'native' ? { providerId: 'anthropic', authSource: 'oauth' as const } : {}),
       });
@@ -1786,12 +1791,12 @@ describe('whole personal requirements at the registered Bash hook boundary', () 
           if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test('Bash')) continue;
           for (const hook of matcher.hooks) results.push(await hook({
             hook_event_name: 'PreToolUse', session_id: 'sdk-auto-review', cwd: h.workingDir,
-            transcript_path: '', tool_name: 'Bash', tool_input: { command: 'pwd' },
+            transcript_path: '', tool_name: 'Bash', tool_input: { command: scenario === 'compound' ? 'pwd -L && printf done' : 'pwd' },
             ...(scenario === 'descendant' ? { agent_id: 'child-1', agent_type: 'worker' } : {}),
           }, 'hook-routing-pwd', { signal: new AbortController().signal }));
         }
         const ask = expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'ask' }) });
-        if (scenario === 'cindy') expect(results).toContainEqual(ask);
+        if (scenario === 'cindy' || scenario === 'compound' || scenario === 'legacy-ask') expect(results).toContainEqual(ask);
         else expect(results).not.toContainEqual(ask);
         if (scenario === 'text-only') expect(results).toContainEqual(expect.objectContaining({
           hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }),

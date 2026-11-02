@@ -31,7 +31,7 @@ export interface ApprovalRuleCommandDeps {
   readSession(sessionId: string): Promise<SessionRowSnapshot | null>;
   isProvisional(sessionId: string): boolean;
   consumerState?(sessionId: string): { instanceId: string; harness: RuleHarness; active: boolean;
-    local: boolean; mode?: string; plan?: boolean; reviewOwner?: string } | undefined;
+    local: boolean; mode?: string; plan?: boolean; reviewOwner?: string; personalRuleConsumerReady?: boolean } | undefined;
   withSessionLock<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   createStore(owner: Owner, assertCurrent: () => void,
     consumer?: { scope: RuleScope; sessionId: string; sessionInstanceId: string }): Store;
@@ -325,7 +325,8 @@ export async function readPersonalRuleStatus(deps: ApprovalRuleCommandDeps, sess
       : consumableRules !== savedRules ? 'unsupported-rules' : !runtime ? 'runtime-unverified'
       : runtime.harness !== harness || !runtime.active ? 'no-current-task'
       : !runtime.local || !runtime.instanceId ? 'runtime-unverified' : runtime.plan ? 'plan-mode'
-      : runtime.mode !== 'auto' ? 'auto-required' : runtime.reviewOwner !== 'cindy' ? 'native-owned' : 'ready';
+      : runtime.mode !== 'auto' ? 'auto-required' : runtime.reviewOwner !== 'cindy' ? 'native-owned'
+      : harness === 'pi' && runtime.personalRuleConsumerReady !== true ? 'runtime-unverified' : 'ready';
     states.push({ harness, savedRules, consumableRules, state: reason === 'ready' ? 'available' : 'not-effective',
       reason, nativeQualification: 'unverified' });
   }

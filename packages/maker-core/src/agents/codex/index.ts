@@ -137,7 +137,6 @@ import {
   type ManagedAutoReviewFence,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
-import { isSupportedManagedCommand } from '../shared/approval-rules/evaluate.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
@@ -9318,7 +9317,7 @@ assertRouteCurrent();
         && !hosted && !opts.remoteHostId && !opts.botRuntimeProfile
         && opts.sessionInstanceId && params.threadId === threadId && typeof params.turnId === 'string'
         && !!params.turnId && typeof params.itemId === 'string' && !!params.itemId
-        && typeof command === 'string' && isSupportedManagedCommand(command, 'codex')
+        && typeof command === 'string' && !!command.trim()
         && typeof commandCwd === 'string' && !!commandCwd.trim() && current()) {
         managed = {
           execution: { sessionInstanceId: opts.sessionInstanceId, toolName: 'exec',

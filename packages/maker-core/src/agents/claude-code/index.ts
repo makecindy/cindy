@@ -46,7 +46,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { readClaudeLiveSourceContents, type ClaudeLiveUserRules, type ClaudeLiveSourceContents } from '../shared/approval-rules/readers/claude-code.js';
-import { literalCommandArgv, ruleScopeMatches } from '../shared/approval-rules/evaluate.js';
+import { ruleScopeMatches } from '../shared/approval-rules/evaluate.js';
 import { requirementsKey } from '../shared/approval-rules/requirements.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
@@ -2652,7 +2652,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (hasPersonalObserver && toolName === 'Bash' && !options.agentID
         && mutablePermissionMode === 'auto' && !mutablePlanMode && !planTurnActive
         && !usesNativeClaudeAutoReview() && typeof (input as Record<string, unknown>).command === 'string'
-        && literalCommandArgv((input as { command: string }).command) && personalState?.kind !== 'verified')
+        && !!(input as { command: string }).command.trim() && personalState?.kind !== 'verified')
         return { behavior: 'deny', message: 'Personal rule execution is unverified; retry the request.' };
       const personal = personalState?.kind === 'verified' ? personalState : undefined;
       let requirements: PersonalRequirements | undefined = personal?.observation;
@@ -4576,7 +4576,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const command = (pre.tool_input as Record<string, unknown> | undefined)?.command;
         const personal = personalTurn;
         if (pre.tool_name !== 'Bash' || pre.agent_id != null || pre.agent_type != null
-          || typeof command !== 'string' || !literalCommandArgv(command)
+          || typeof command !== 'string' || !command.trim()
           || typeof toolUseId !== 'string' || !toolUseId) return unchanged;
         const actualInput = structuredClone(pre.tool_input);
         const requestSessionId = pre.session_id;
@@ -4613,7 +4613,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           const applicable = managed.groups.some(group => requirementsKey(group) !== undefined
             && ruleScopeMatches(group.scope, personal.observation.scope, 'claude-code')
             && group.clauses.some(clause => clause.decision === 'requirement'));
-          return applicable ? decide('ask', 'Cindy reviews the complete current personal requirements.') : unchanged;
+          const known = evaluatePersonalRequirements(managed, command);
+          return applicable || (known.status === 'matched' && known.decision !== 'allow')
+            ? decide('ask', 'Cindy reviews the complete current personal requirements.') : unchanged;
         } catch {
           // readManaged converts storage faults to unavailable. An exception
           // here cannot be treated as absence of restrictions or a human grant.

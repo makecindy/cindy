@@ -1,4 +1,3 @@
-import { isSupportedManagedCommand } from '../shared/approval-rules/evaluate.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
@@ -4085,6 +4084,12 @@ export class PiAgent extends BaseAgent {
           ),
         }
       : collectedProjectResources;
+    // Execution and the read-only status use the same current builtin proof.
+    // Native packages/extensions stay enabled; unknown tool identity is not a
+    // claim that the installed personal rules can be consumed by this runtime.
+    const isPersonalRuleBuiltinCurrent = (): boolean => isManagedBuiltinBashCurrent()
+      && nativePackagePaths.length === 0 && managedPackageResources.extensions.length === 0
+      && projectResourceCli.extensions.length === 0;
 
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
@@ -5943,9 +5948,7 @@ export class PiAgent extends BaseAgent {
                   && autoReviewActionContext.precedingBlockedActions === actions
                   && autoReviewDirectoryGeneration === directory;
               },
-              managedBuiltinBash: isManagedBuiltinBashCurrent() && nativePackagePaths.length === 0
-                && managedPackageResources.extensions.length === 0
-                && projectResourceCli.extensions.length === 0,
+              managedBuiltinBash: isPersonalRuleBuiltinCurrent(),
               allowPiPackageManagement,
               piPackageManagementToken,
               resumeSubagent,
@@ -7741,6 +7744,8 @@ export class PiAgent extends BaseAgent {
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
       },
+      getPersonalRuleConsumerReady: () => !closed && !piProcessExited && !proc.isClosed
+        && !accountBoundaryTeardown && isPersonalRuleBuiltinCurrent(),
       disabledSkillPaths: disabledSkillSnapshot,
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
@@ -9875,7 +9880,7 @@ export class PiAgent extends BaseAgent {
           const piQualified = permissionMode === 'auto' && !turnPolicyForcePrompt && !mcpTarget && toolName === 'bash'
             && getPermissionCtx().managedBuiltinBash && getPermissionCtx().personalAutoApplicable
             && !getPermissionCtx().remote && !getPermissionCtx().deviceHosted
-            && typeof input.command === 'string' && isSupportedManagedCommand(input.command, 'pi');
+            && typeof input.command === 'string' && !!input.command.trim();
           const actualInput = piQualified ? Object.freeze(JSON.parse(JSON.stringify(input)) as Record<string, unknown>) : undefined;
           const actualKey = JSON.stringify(actualInput);
           const modeGeneration = getPermissionCtx().personalPermissionGeneration;

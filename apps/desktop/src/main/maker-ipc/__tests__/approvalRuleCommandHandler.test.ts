@@ -143,7 +143,7 @@ function setup() {
 // Pi root RPC -> reviewer/confirmation. Existing B/C2 inject generic groups and
 // cannot prove new-namespace consumption or initial storage-fault delivery.
 // All HOME/data/cwd files are synthetic mkdtemp; no native Pi/model/network runs.
-async function setupPiIntegration() {
+async function setupPiIntegration(nativePackage = false) {
   const h = setup();
   const workDir = fs.realpathSync(h.dir);
   h.setRow({ agentKind: 'pi', workingDir: workDir });
@@ -169,6 +169,10 @@ async function setupPiIntegration() {
     capabilityAdditions: { availableModels: [{ id: 'm', displayName: 'M', contextWindow: 200000, efforts: [], defaultEffort: null,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, maxOutputTokens: 64000 }] }, reviewAutoPermissionAction: review,
   };
+  if (nativePackage) {
+    const packageRoot = path.join(home, 'native-package'); fs.mkdirSync(packageRoot);
+    deps.resolvePiNativePackagePaths = async () => [packageRoot];
+  }
   piRpc.responses = []; piRpc.abortAccepted = true; piRpc.abortReceipts = [];
   const handle = await new PiAgent(deps).startSession({ sessionId: 'task', sessionInstanceId: 'root',
     workingDir: workDir, model: 'm', permissionMode: 'auto' });
@@ -180,8 +184,8 @@ async function setupPiIntegration() {
     h.command(requirementsCommand(scope, { id: 'integrated-pi', targets: ['pi'], text,
       clauses: [{ id: 'known', decision, exact: 'pwd', original: '明确的 pwd 条款' }] }));
   const remove = (scope: 'user' | 'project') => h.command(requirementsCommand(scope, { id: 'integrated-pi', targets: ['pi'] }, true));
-  const fire = (id: string) => piRpc.onEvent!({ type: 'extension_ui_request', method: 'input', id, title: 'cindy:permission',
-    placeholder: JSON.stringify({ toolName: 'bash', input: { command: 'pwd' }, resolvedCredentialPaths: [] }) });
+  const fire = (id: string, command = 'pwd') => piRpc.onEvent!({ type: 'extension_ui_request', method: 'input', id, title: 'cindy:permission',
+    placeholder: JSON.stringify({ toolName: 'bash', input: { command }, resolvedCredentialPaths: [] }) });
   const response = async (id: string) => { await vi.waitFor(() => expect(piRpc.responses.find(row => row.id === id)).toBeDefined());
     return String(piRpc.responses.find(row => row.id === id)!.value); };
   const effective = () => createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir, assertCurrent: () => {},
@@ -248,8 +252,8 @@ async function setupCodexIntegration() {
     h.command(requirementsCommand(scope, { id: 'integrated-codex', targets: ['codex'], text,
       clauses: [{ id: 'known', decision, exact: 'pwd', original: '显式 pwd 条款' }] }));
   const remove = (scope: 'user' | 'project') => h.command(requirementsCommand(scope, { id: 'integrated-codex', targets: ['codex'] }, true));
-  const fire = (id: string) => handlers!.commandExecutionApproval!({ threadId: 'root-thread', turnId: 'root-turn', itemId: id,
-    approvalId: 'approval-' + id, command: 'pwd', cwd: workDir });
+  const fire = (id: string, command = 'pwd') => handlers!.commandExecutionApproval!({ threadId: 'root-thread', turnId: 'root-turn', itemId: id,
+    approvalId: 'approval-' + id, command, cwd: workDir });
   const mode = async () => { session.stablePermissionModeState = { mode: 'bypassPermissions', generation: 2 }; await handle.setPermissionMode!('bypassPermissions'); };
   const effective = () => createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir, assertCurrent: () => {}, localManagedCommandHostId: 'host',
     resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['codex'], projectId: workDir }, sessionId: 'task', sessionInstanceId: 'root' }) }).readPublishedManagedSnapshot();
@@ -494,6 +498,16 @@ describe('local approval command IPC', () => {
       expect(next.statuses.find(value => value.harness === 'codex')).toMatchObject({ state: 'not-effective', reason });
       runtime = before;
     }
+    // Final-review F2: the same saved group is not available to an unqualified
+    // Pi runtime. This read-only fact must not disable native extensions.
+    const codexRuntime = runtime;
+    for (const ready of [false, true, undefined]) {
+      runtime = { ...codexRuntime, harness: 'pi', personalRuleConsumerReady: ready };
+      const next = await h.command('/approval-rule status') as typeof status;
+      expect(next.statuses.find(value => value.harness === 'pi')).toMatchObject({
+        state: ready === true ? 'available' : 'not-effective', reason: ready === true ? 'ready' : 'runtime-unverified', savedRules: 1 });
+    }
+    runtime = codexRuntime;
     expect(approvalBytes(h.dir)).toEqual(bytes);
     const snapshot = await h.store.readSnapshot({ ...h.scope, harnesses: ['codex'] });
     const old = snapshot.groups[0]!;
@@ -913,11 +927,11 @@ describe('local approval command IPC', () => {
 
   // Unit integration: production IPC -> store reopen -> Main -> actual registered
   // Codex callback. The previous component reds cannot prove this connection.
-  it('Codex integration: sends the complete reopened group, version and project scope to the actual reviewer', async () => {
+  it.each(['pwd', "/bin/bash -lc 'pwd -L && printf done'"])('Codex integration: sends reopened complete group for %s', async command => {
     const h = await setupCodexIntegration(); const original = '  Read(private) 保留全文 🧪\r\n末行 e\u0301  ';
     try {
       expect(await h.set(original)).toMatchObject({ kind: 'saved' });
-      expect(await h.fire('v1')).toEqual({ decision: 'accept' });
+      expect(await h.fire('v1', command)).toEqual({ decision: 'accept' });
       const effective = await h.effective(); expect(effective.kind).toBe('published-managed');
       expect(h.requests[0]?.personalRequirements?.groups).toEqual(effective.kind === 'published-managed' ? effective.groups : []);
       expect(h.requests[0]?.personalRequirements?.groups[0]?.clauses).toMatchObject([{ decision: 'requirement', original }, { decision: 'allow' }]);
@@ -1029,7 +1043,7 @@ describe('local approval command IPC', () => {
 
   // Unit: default composer -> real store/Main -> registered Pi RPC handler.
   // The RPC transport is injected; this does not execute a host native CLI.
-  it('Pi integration: consumes the shared default complete group', async () => {
+  it.each(['pwd', 'pwd -L && printf done'])('Pi integration: consumes shared complete group for %s', async command => {
     const h = await setupPiIntegration();
     const original = '共享原文：不要执行危险命令 🧪\r\n  保留末行  ';
     try {
@@ -1037,13 +1051,35 @@ describe('local approval command IPC', () => {
         .toMatchObject({ kind: 'saved' });
       const effective = await h.effective();
       expect(effective.kind).toBe('published-managed');
-      h.fire('shared-pi'); expect(await h.response('shared-pi')).toBe('allow');
+      h.fire('shared-pi', command); expect(await h.response('shared-pi')).toBe('allow');
       expect(h.requests).toHaveLength(1);
       expect(h.requests[0]!.personalRequirements?.groups).toEqual(effective.kind === 'published-managed' ? effective.groups : []);
       expect(h.requests[0]!.personalRequirements?.groups[0]?.scope.harnesses).toEqual(['claude-code', 'codex', 'pi']);
       expect(h.requests[0]!.personalRequirements?.groups[0]?.clauses[0]?.original).toBe(original);
       expect(h.requests[0]!.userIntent).toBe('Inspect only this isolated test directory.');
       expect(h.cards).toHaveLength(0);
+    } finally { await h.handle.close(); }
+  });
+
+  // Unit / F2: actual Pi startup/package and retired builtin proof -> read-only
+  // status handler. The injected RPC does not execute a native CLI or user DB.
+  it.each([false, true])('Pi integration: status follows actual builtin eligibility (native package %s)', async nativePackage => {
+    const h = await setupPiIntegration(nativePackage);
+    h.deps.consumerState = () => ({ instanceId: 'root', harness: 'pi', active: true, local: true,
+      mode: 'auto', plan: false, reviewOwner: 'cindy', personalRuleConsumerReady: h.handle.getPersonalRuleConsumerReady?.() });
+    const read = async () => {
+      const result = await h.command('/approval-rule status') as Extract<ApprovalRuleCommandResult, { kind: 'status' }>;
+      return result.statuses.find(value => value.harness === 'pi');
+    };
+    try {
+      await h.set('Saved rule remains intact'); const bytes = approvalBytes(h.dir);
+      expect(await read()).toMatchObject({ savedRules: 1, state: nativePackage ? 'not-effective' : 'available',
+        reason: nativePackage ? 'runtime-unverified' : 'ready' });
+      h.retireBuiltin();
+      expect(await read()).toMatchObject({ savedRules: 1, state: 'not-effective', reason: 'runtime-unverified' });
+      expect(approvalBytes(h.dir)).toEqual(bytes);
+      h.fire('status-native-route'); expect(await h.response('status-native-route')).toBe('allow');
+      expect(h.requests.every(request => !request.personalRequirements)).toBe(true);
     } finally { await h.handle.close(); }
   });
 

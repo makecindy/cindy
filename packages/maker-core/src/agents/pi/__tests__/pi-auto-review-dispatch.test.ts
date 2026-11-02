@@ -494,7 +494,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     return { fingerprint: `pi-residual-v${version}`, scope, groups: snapshot.groups };
   }
 
-  it('Pi requirements B: sends the complete residual before pwd local shortcut without a human card', async () => {
+  it.each(['pwd', 'pwd -L && printf done'])('Pi requirements B: sends complete residual for %s without a human card', async command => {
     let payload = piResidual(1, 'pwd');
     const seen: AutoReviewRequest[] = [];
     const checks: AutoReviewRequest[] = [];
@@ -509,18 +509,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     handle.setInteractionResolver?.(confirm);
     try {
       await handle.send({ type: 'user', content: 'Show the working directory only.' });
-      firePermissionInputRequest('pi-residual-pwd', 'bash', { command: 'pwd' }, { resolvedCredentialPaths: [] });
+      firePermissionInputRequest('pi-residual-pwd', 'bash', { command }, { resolvedCredentialPaths: [] });
       expect(await waitForResponse('pi-residual-pwd')).toMatchObject({ value: 'allow' });
       // This envelope is minted by the production dispatcher after startup's
       // builtin generation/no-replacement proof, not injected by the test event.
       expect(checks.length).toBeGreaterThan(0);
       expect(checks.every(request => request.managedToolExecution?.sessionInstanceId === 'root')).toBe(true);
-      expect(checks[0]?.managedToolExecution).toEqual({ sessionInstanceId: 'root', toolName: 'bash', input: { command: 'pwd' },
-        piExecution: { rpcId: 'pi-residual-pwd', input: { command: 'pwd' }, isCurrent: expect.any(Function), isAuto: expect.any(Function) } });
+      expect(checks[0]?.managedToolExecution).toEqual({ sessionInstanceId: 'root', toolName: 'bash', input: { command },
+        piExecution: { rpcId: 'pi-residual-pwd', input: { command }, isCurrent: expect.any(Function), isAuto: expect.any(Function) } });
       expect(checks[0]!.managedToolExecution!.piExecution!.isCurrent()).toBe(true);
       expect(Object.isFrozen(checks[0]!.managedToolExecution!.piExecution!.input)).toBe(true);
-      expect.soft(checks[0]?.action).toEqual({ kind: 'exec', command: 'pwd' });
-      expect.soft(classifyLocalAutoReviewTier(checks[0]!)).toBe('auto-approve');
+      expect.soft(checks[0]?.action).toEqual({ kind: 'exec', command });
+      if (command === 'pwd') expect.soft(classifyLocalAutoReviewTier(checks[0]!)).toBe('auto-approve');
       expect.soft(review).toHaveBeenCalledOnce();
       expect.soft(seen[0]?.personalRequirements).toEqual(payload);
       expect.soft(seen[0]?.userIntent).toBe(checks[0]?.userIntent);

@@ -5,7 +5,6 @@ import { requirementsKey } from '../../../../../packages/maker-core/src/agents/s
 import { evaluatePersonalRequirements } from '../../../../../packages/maker-core/src/agents/shared/auto-review-decision.js';
 import { isDeepStrictEqual } from 'node:util';
 import type { AutoReviewRequest, ManagedAutoReviewCheck } from '../../../../../packages/maker-core/src/agents/shared/auto-review-decision.js';
-import { isSupportedManagedCommand } from '../../../../../packages/maker-core/src/agents/shared/approval-rules/evaluate.js';
 import type { SessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createApprovalRuleStore } from './approval-rule-store.js';
 import type { ManagedBashDenyDeps } from './claude-hooks/managed-bash-deny-hook.js';
@@ -31,7 +30,7 @@ export function createManagedAutoReviewPrecheck(deps: ManagedBashDenyDeps) {
     const harness = request.agentKind;
     if ((harness !== 'pi' && harness !== 'codex') || !request.sessionId || !execution?.sessionInstanceId
       || execution.toolName !== (harness === 'pi' ? 'bash' : 'exec')
-      || typeof command !== 'string' || !isSupportedManagedCommand(command, harness))
+      || typeof command !== 'string' || !command.trim())
       return unavailable('managed-execution-unverified');
     const piCheck = harness === 'pi' ? checkPi : undefined;
     if (piCheck) return piCheck(request, deps);

@@ -2465,6 +2465,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** Pi-only live builtin qualification; read-only and never serialized as authority. */
+  getPersonalRuleConsumerReady?(): boolean;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,

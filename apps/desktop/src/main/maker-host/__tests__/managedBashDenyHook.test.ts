@@ -77,6 +77,37 @@ function setup() {
   };
 }
 
+// Unit / final-review F1: real published store -> Host -> existing reviewer.
+// Literal-only fixtures missed residual loss for an unsupported compound input;
+// no shell parsing or program match is granted by forwarding its original text.
+it.each(['pi', 'codex'] as const)('reviewer receives complex command residual through Main for %s', async harness => {
+  const h = setup(); h.session.agentKind = harness; h.session.autoReviewOwner = 'cindy';
+  const directory = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+  h.session.workDir = directory; h.setRow({ agentKind: harness, workingDir: directory });
+  const scope = { ...h.scope, harnesses: [harness] };
+  const group = normalizeRuleGroup(requirementsOrigin('compound'), scope, [{ id: 'requirement',
+    decision: 'requirement', original: '  完整规则 🧪\r\n不要执行危险命令  ', reason: 'user-authored-verbatim',
+    tool: { domain: 'exec', name: harness === 'pi' ? 'bash' : 'exec' } }]);
+  const saved = await h.store.applyManagedEdit(0, scope, [group]); await h.store.publish(saved.revision);
+  const effective = await h.store.readSnapshot(scope);
+  const command = harness === 'pi' ? 'pwd -L && printf done' : "/bin/bash -lc 'pwd -L && printf done'";
+  expect(evaluateApprovalRules(effective, scope, command, harness)).toMatchObject({ status: 'uncovered', actionConstraint: 'unsupported-input' });
+  const input = { command, cwd: directory };
+  const request: AutoReviewRequest = { sessionId: 'task', agentKind: harness, model: 'm',
+    userIntent: 'Show the working directory', workspaceRoots: [directory], platform: 'linux', action: { kind: 'exec', command },
+    managedToolExecution: { sessionInstanceId: 'instance-1', toolName: harness === 'pi' ? 'bash' : 'exec', input,
+      ...(harness === 'pi' ? { piExecution: { rpcId: 'compound', input, isCurrent: () => true, isAuto: () => true } }
+        : { codexApproval: { threadId: 'thread', turnId: 'turn', itemId: 'item', hostGeneration: 1, inputGeneration: 1,
+          directoryGeneration: 1, isCurrent: () => true } }) } };
+  let reviewed: AutoReviewRequest | undefined;
+  const review: AutoReviewDelegate = async prepared => { reviewed = prepared; return { verdict: 'block', reason: 'existing reviewer' }; };
+  review.precheckManagedAction = createManagedAutoReviewPrecheck(h.deps);
+  expect(await withAutoReviewContext(request, review, prepared => resolveAutoReviewDecision(prepared, review, true)))
+    .toMatchObject({ verdict: 'block', reason: 'existing reviewer' });
+  expect(reviewed?.personalRequirements?.groups).toEqual(effective.groups);
+  expect(reviewed?.userIntent).toBe(request.userIntent);
+});
+
 // Host precheck + real store, including revision changes visible to its final fence.
 it.each(['pi', 'codex'] as const)('consumes only the current exact cwd project delta for %s Auto', async harness => {
   const h = setup(); h.session.agentKind = harness; h.session.autoReviewOwner = 'cindy';

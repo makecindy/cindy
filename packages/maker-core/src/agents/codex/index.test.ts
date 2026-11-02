@@ -393,13 +393,15 @@ describe('Codex managed command approvals', () => {
     parseApprovalRuleSnapshot({ schemaVersion: 1, revision: 1, groups: [group], tombstones: [], managedOverrides: [] });
     return { scope, groups: [group], fingerprint: text };
   }
-  it.each(['unknown', 'known-deny', 'known-ask'] as const)(
+  it.each(['unknown', 'compound', 'known-deny', 'known-ask'] as const)(
     'Codex requirements B: %s whole group is consumed before the local shortcut', async scenario => {
+      const command = scenario === 'compound' ? "/bin/bash -lc 'pwd -L && printf done'" : 'pwd';
       const data = residualData('  保留完整原文\r\nUnicode 🧪  ', 'pwd', scenario === 'known-deny' ? 'deny' : scenario === 'known-ask' ? 'ask' : undefined);
       const review: AutoReviewDelegate = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
       const envelopes: AutoReviewRequest[] = [];
       review.precheckManagedAction = async request => {
         envelopes.push(request);
+        if (!request.managedToolExecution) return { kind: 'unavailable', reason: 'unverified execution' };
         return { kind: 'clear', contextKey: 'root', revision: 1, isCurrent: () => true,
           isExecutionCurrent: request.managedToolExecution!.codexApproval!.isCurrent, personalRequirements: data };
       };
@@ -413,11 +415,11 @@ describe('Codex managed command approvals', () => {
       try {
         await handle.send({ type: 'user', content: 'Show current directory' });
         const result = await host.getThreadHandlers()!.commandExecutionApproval!({ threadId: 'start-thread-id',
-          turnId: 'managed-turn', itemId: 'residual-item', approvalId: 'residual-approval', command: 'pwd', cwd: '/repo' });
-        expect(envelopes[0]).toMatchObject({ managedToolExecution: { toolName: 'exec', input: { command: 'pwd', cwd: '/repo' },
+          turnId: 'managed-turn', itemId: 'residual-item', approvalId: 'residual-approval', command, cwd: '/repo' });
+        expect(envelopes[0]).toMatchObject({ managedToolExecution: { toolName: 'exec', input: { command, cwd: '/repo' },
           codexApproval: { threadId: 'start-thread-id', turnId: 'managed-turn', itemId: 'residual-item', approvalId: 'residual-approval' } } });
         expect(envelopes[0]!.managedToolExecution!.codexApproval!.isCurrent()).toBe(true);
-        expect.soft(result).toEqual({ decision: scenario === 'unknown' ? 'accept' : 'decline' });
+        expect.soft(result).toEqual({ decision: scenario === 'unknown' || scenario === 'compound' ? 'accept' : 'decline' });
         expect.soft(review).toHaveBeenCalledTimes(scenario === 'known-deny' ? 0 : 1);
         if (scenario !== 'known-deny') expect.soft(review).toHaveBeenCalledWith(expect.objectContaining({
           userIntent: 'Show current directory', personalRequirements: data }));

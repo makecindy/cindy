@@ -21765,7 +21765,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return { instanceId: live.instanceId, harness: live.agentKind as 'claude-code' | 'codex' | 'pi',
         active: live.getStatus() === 'active', local: !live.remoteHostId && !live.agentDeviceId,
         mode: live.stablePermissionModeState?.mode ?? undefined, plan: live.stablePlanModeState?.enabled,
-        reviewOwner: live.autoReviewOwner };
+        reviewOwner: live.autoReviewOwner, personalRuleConsumerReady: live.getPersonalRuleConsumerReady() };
     },
     withSessionLock: withSendToSessionLock,
     createStore: (owner, assertCurrent, consumer) => createApprovalRuleStore({
