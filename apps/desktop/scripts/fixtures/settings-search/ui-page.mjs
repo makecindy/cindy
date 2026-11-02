@@ -22,6 +22,16 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    // Caller annotations must survive custom components, including the two
+    // classical selectors sharing a definition distinct from display language.
+    if (ui.data.tab === 'general') {
+      assert.equal(await panel.locator('#settings-language [role="combobox"]').getAttribute('data-setting-id'), 'general.displayLanguage');
+      if (ui.locale.includes('lzh')) {
+        const classical = panel.locator('#settings-classical-language [role="combobox"]');
+        assert.equal(await classical.count(), 2);
+        for (const control of await classical.all()) assert.equal(await control.getAttribute('data-setting-id'), 'general.classicalLanguage');
+      }
+    }
     // Expand actual disclosure buttons without opening selects or write actions.
     for (let i = 0; i < 20; i++) {
       const disclosure = panel.locator('button[aria-expanded="false"]:not([aria-haspopup]):not([role="combobox"]):not([data-state])').first();

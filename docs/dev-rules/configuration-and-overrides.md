@@ -141,6 +141,8 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 取消、重试等普通操作可用 `data-settings-search-action` 说明具体理由，不得用它豁免设置项。
 检查覆盖设置目录及通用页引用的伙伴设置；新增外置设置组件或特殊控件时需同步扩展检查范围。
 静态检查不能判断文案语义或任意自定义控件，仍须 review 核对真实设置入口。
+已登记的自定义选择器还需将调用方的 `data-setting-id` 传到实际 DOM；门禁同时读取组件
+实现，检查参数转发，不能仅凭调用处绑定放行。新增自定义控件时同步登记此检查并验证真实渲染。
 
 现有非空设置索引模块已统一为命名的 `defineSettings` 集合；快捷键继续附加原有快捷键
 注册表生成的条目。常规行示例见 `AdditionalSettings.settings-search.ts`，复杂页面和选项

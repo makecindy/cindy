@@ -30,6 +30,7 @@ const TRIGGER_CLASS = cn(
 );
 
 interface PillSelectProps<T extends string> {
+  'data-setting-id': string;
   value: T;
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (value: T) => void;
@@ -38,6 +39,7 @@ interface PillSelectProps<T extends string> {
 }
 
 function PillSelect<T extends string>({
+  'data-setting-id': settingId,
   value,
   options,
   onChange,
@@ -47,7 +49,7 @@ function PillSelect<T extends string>({
   return (
     <Select.Root value={value} onValueChange={(next) => onChange(next as T)}>
       <Select.Trigger
-        data-setting-id={languageSettings.language.id}
+        data-setting-id={settingId}
         aria-label={ariaLabel}
         className={cn(TRIGGER_CLASS, className)}
       >

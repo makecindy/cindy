@@ -18,6 +18,25 @@ function Page() { const item = useSettingDefinition(settings.enabled);
 return <Switch {...item.controlProps} checked={true} />; }`;
 
 describe("settings search coverage gate", () => {
+  it("rejects custom controls that discard or replace a registered caller ID", () => {
+    for (const name of ['SegmentedControl', 'FontFamilyPicker', 'BotModelChainEditor', 'PillSelect', 'Select']) {
+      const page = `${imports}\nconst page = <${name} data-setting-id={settings.enabled.id} />;`;
+      const discarded = `function ${name}({ value }) { return <div />; }`;
+      const replaced = `function ${name}({ 'data-setting-id': settingId }) { return <button data-setting-id={settings.other.id} />; }`;
+      const forwarded = `function ${name}({ 'data-setting-id': settingId }) { return <button data-setting-id={settingId} />; }`;
+      assert.ok(inspectSettingsControls(page + discarded, '', registered).length > 0, name);
+      assert.ok(inspectSettingsControls(page + replaced, '', registered).length > 0, name);
+      assert.deepEqual(inspectSettingsControls(page + forwarded, '', registered), []);
+    }
+  });
+  it("checks imported custom-control implementations even through aliases", () => {
+    const page = `${imports}\nimport { SegmentedControl as Choice } from './Choice';
+      const item = useSettingDefinition(settings.enabled); const page = <Choice {...item.controlProps} />;`;
+    const forwarding = `export function SegmentedControl({ 'data-setting-id': settingId }) { return <div data-setting-id={settingId} />; }`;
+    assert.equal(inspectSettingsControls(page, '', registered).length, 1);
+    assert.deepEqual(inspectSettingsControls(page, '', registered, new Set(), new Map([['./Choice#SegmentedControl', forwarding]])), []);
+    assert.equal(inspectSettingsControls(page, '', registered, new Set(), new Map([['./Choice#SegmentedControl', forwarding.replace('{settingId}', '"wrong"')]])).length, 1);
+  });
   it("catches a new label even when the legacy control opening is unchanged", () => {
     const old = "const page = <Switch checked={true} />;";
     const source = old + "const label = t('settings.newFeature.label');";
@@ -65,10 +84,11 @@ describe("settings search coverage gate", () => {
       const item = useSettingDefinition(definition);
       return <SegmentedControl {...item.controlProps} />;
     }`;
-    assert.deepEqual(inspectSettingsControls(conditional, "", registered), []);
+    const implementation = `function SegmentedControl({ 'data-setting-id': settingId }) { return <div data-setting-id={settingId} />; }`;
+    assert.deepEqual(inspectSettingsControls(conditional + implementation, "", registered), []);
     assert.equal(
       inspectSettingsControls(
-        conditional.replace("settings.local", "unregistered.local"),
+        conditional.replace("settings.local", "unregistered.local") + implementation,
         "",
         registered,
       ).length,

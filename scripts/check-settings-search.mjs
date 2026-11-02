@@ -37,6 +37,11 @@ const controls = new Set([
   "VoiceInputSelect",
   "PillSelect",
 ]);
+// These application controls do not spread DOM props by contract. Check their
+// implementation as well as every caller, including aliases and same-file controls.
+const customControls = new Set([
+  "SegmentedControl", "FontFamilyPicker", "BotModelChainEditor", "VoiceInputSelect", "PillSelect", "Select",
+]);
 const parse = (source) =>
   ts.createSourceFile(
     "settings.tsx",
@@ -51,17 +56,49 @@ const walk = (node, visit) => {
 };
 const canonical = (node, source) => node.getText(source).replace(/\s+/g, " ");
 
+function forwardedIdParameter(owner) {
+  return owner.parameters.flatMap(({ name }) => ts.isObjectBindingPattern(name) ? name.elements : [])
+    .find(binding => binding.propertyName && ts.isStringLiteral(binding.propertyName) &&
+      binding.propertyName.text === "data-setting-id" && ts.isIdentifier(binding.name) &&
+      !binding.initializer && !binding.dotDotDotToken)?.name.text;
+}
+
+function forwardsIdToDom(source, name) {
+  const file = parse(source);
+  let forwarded = false;
+  walk(file, owner => {
+    if (!ts.isFunctionDeclaration(owner) || owner.name?.text !== name || !owner.body) return;
+    const parameter = forwardedIdParameter(owner);
+    if (!parameter) return;
+    walk(owner.body, node => {
+      if (!ts.isJsxOpeningElement(node) && !ts.isJsxSelfClosingElement(node)) return;
+      const tag = node.tagName.getText(file);
+      // Intrinsic elements and the existing DOM-prop-forwarding UI primitives.
+      if (!/^[a-z]/.test(tag) && tag !== "Button" && tag !== "Select.Trigger") return;
+      if (node.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) &&
+        attribute.name.getText(file) === "data-setting-id" && attribute.initializer &&
+        ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression &&
+        ts.isIdentifier(attribute.initializer.expression) && attribute.initializer.expression.text === parameter)) {
+        forwarded = true;
+      }
+    });
+  });
+  return forwarded;
+}
+
 /** Pure checker; registry keys are module-specifier#named-export, supplied by the CLI. */
 export function inspectSettingsControls(
   source,
   previous = "",
   registeredExports = new Set(),
   indexedTextKeys = new Set(),
+  controlSources = new Map(),
 ) {
   const file = parse(source);
   const errors = [];
   const aliases = new Set(controls);
   const imports = new Map();
+  const customNames = new Map([...customControls].map(name => [name, name]));
   const definitionImports = new Set();
   const hooks = new Set();
   const bindings = new Set();
@@ -81,6 +118,7 @@ export function inspectSettingsControls(
       if (registeredExports.has(`${from}#${name}`))
         definitionImports.add(item.name.text);
       if (controls.has(name)) aliases.add(item.name.text);
+      if (customControls.has(name)) customNames.set(item.name.text, name);
       if (
         name === "useSettingDefinition" &&
         /(?:^|\/)useSettingDefinition$/.test(from)
@@ -174,14 +212,7 @@ export function inspectSettingsControls(
     for (let owner = node.parent; owner; owner = owner.parent) {
       if (!ts.isFunctionDeclaration(owner)) continue;
       if (!owner.name || !controls.has(owner.name.text)) return false;
-      return owner.parameters.some(({ name }) =>
-        ts.isObjectBindingPattern(name) && name.elements.some((binding) =>
-          binding.propertyName && ts.isStringLiteral(binding.propertyName) &&
-          binding.propertyName.text === "data-setting-id" &&
-          ts.isIdentifier(binding.name) && binding.name.text === value.text &&
-          !binding.initializer && !binding.dotDotDotToken,
-        ),
-      );
+      return forwardedIdParameter(owner) === value.text;
     }
     return false;
   };
@@ -232,6 +263,15 @@ export function inspectSettingsControls(
         line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1,
         message: `${node.tagName.getText(file)} needs {...setting.controlProps} from a registered useSettingDefinition, or data-settings-search-action with an operation-specific reason`,
       });
+    else {
+      const tag = node.tagName.getText(file);
+      const customName = customNames.get(tag);
+      if (customName && !forwardsIdToDom(controlSources.get(imports.get(tag)) ?? source, customName))
+        errors.push({
+          line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1,
+          message: `${tag} must forward the caller data-setting-id to rendered DOM`,
+        });
+    }
   }
   return errors;
 }
@@ -391,6 +431,7 @@ export function checkSettingsSearch(baseRef = "HEAD") {
     // A missing path at a verified base is a new file; other Git failures remain errors.
     if (baseFiles.has(file)) previous = git(["show", `${baseRef}:${file}`]);
     const registered = new Set();
+    const controlSources = new Map();
     walk(parse(source), (node) => {
       if (
         !ts.isImportDeclaration(node) ||
@@ -398,6 +439,18 @@ export function checkSettingsSearch(baseRef = "HEAD") {
       )
         return;
       const from = node.moduleSpecifier.text;
+      const named = node.importClause?.namedBindings;
+      if (named && ts.isNamedImports(named)) {
+        for (const item of named.elements) {
+          const name = item.propertyName?.text ?? item.name.text;
+          if (!customControls.has(name)) continue;
+          const stem = from.startsWith("@/")
+            ? path.join(root, "apps/desktop/src/renderer", from.slice(2))
+            : path.resolve(root, path.dirname(file), from);
+          const resolved = `${stem}.tsx`;
+          if (existsSync(resolved)) controlSources.set(`${from}#${name}`, readFileSync(resolved, "utf8"));
+        }
+      }
       if (!from.endsWith(".settings-search")) return;
       const resolved = from.startsWith("@/")
         ? path.join(root, "apps/desktop/src/renderer", from.slice(2) + ".ts")
@@ -420,6 +473,7 @@ export function checkSettingsSearch(baseRef = "HEAD") {
       previous,
       registered,
       indexedTextKeys,
+      controlSources,
     ))
       errors.push(`${file}:${error.line}: ${error.message}`);
   }
