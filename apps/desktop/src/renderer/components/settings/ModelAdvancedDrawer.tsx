@@ -573,12 +573,12 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.manage.connectionRequired')}
                         </p>
                       )}
-                      {protocols.reference && protocolLabel(protocols.reference) && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                      {protocols.upstreamApis.length > 0 && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.protocol.reference')}
+                          {t('settings.providers.models.advanced.protocol.upstream')}
                         </span>
                         <span className="text-[var(--text-secondary)]">
-                          {protocolLabel(protocols.reference)}
+                          {protocols.upstreamApis.map(api => MODEL_PROTOCOL_LABEL[api as PiModelApi] ?? api).join(' · ')}
                         </span>
                       </div>}
                       {provider.agents.map((agent) => {
@@ -586,7 +586,7 @@ export function ModelAdvancedDrawer({
                         // Missing catalog membership proves no configured route, not upstream incompatibility.
                         const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
                         const protocol = protocols.forAgent(agent);
-                        const compatibility = protocol?.mode === 'compatibility';
+                        const compatibility = protocol?.path === 'local';
                         const protocolId = `model-protocol-${agent}`;
                         const notes: string[] = [];
                         if (model) {
@@ -633,7 +633,10 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {canEditProtocol && (!model?.catalogPresetId || !!model.availableInterfaces?.length) && supported ? (
+                                  {/* Presets follow the catalog; any saved explicit choice, including older api/route-only
+                                      ones, keeps its way back to automatic. */}
+                                  {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
+                                    model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}
@@ -653,14 +656,10 @@ export function ModelAdvancedDrawer({
                                       </DropdownMenuContent>
                                     </DropdownMenu>
                                   ) : protocolLabel(protocol.outbound)}
-                                  {/* Missing manufacturer metadata does not make a configured
-                                      outbound protocol unconfirmed. Keep that distinction in
-                                      the manufacturer reference when one is declared. */}
-                                  {(protocol.mode !== 'unknown' || !protocol.outbound) && <>
-                                    {protocolLabel(protocol.outbound) && ' · '}
-                                    {compatibility ? <ModelCompatibilityNotice /> : t(
-                                      `settings.providers.models.advanced.protocol.${protocol.mode}`,
-                                    )}
+                                  {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
+                                  {compatibility && <>
+                                    <span className="hidden min-[400px]:inline"> · </span>
+                                    <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
                                   </>}
                                 </p>
                               )}

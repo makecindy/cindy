@@ -743,6 +743,23 @@ describe('deviceId / sessionId 归一化', () => {
 });
 
 describe('session list', () => {
+  // #7972: cold-start/offline list projection must retain project identity, not cwd.
+  // Unit round trip with a new cache instance; remote POSIX paths, including old payloads.
+  it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(
+    'preserves optional project membership on disk: %j',
+    async (membership) => {
+      await cache().writeSessionList([{
+        deviceId: 'dev-1', deviceName: 'Mac', sessions: [{
+          id: 's1', status: 'active', workingDir: '/tmp/checkout', ...membership,
+        }],
+      }]);
+      const [cached] = await cache().readSessionList();
+      expect(cached.sessions[0]).toEqual({
+        id: 's1', status: 'active', workingDir: '/tmp/checkout', ...membership,
+      });
+    },
+  );
+
   it('写入后读回,live 态字段不落盘', async () => {
     const c = cache();
     await c.writeSessionList([

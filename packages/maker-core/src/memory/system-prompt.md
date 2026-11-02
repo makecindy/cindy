@@ -27,7 +27,7 @@ If you cannot write a one-line `description` hook for the index, the memory isn'
 
 ## How to save
 
-First time: call `list_tools()` then `list_tools({category: "write"})` to see signatures. Then call `memory_write` with `{type, name, title, description, body}`. The tool layer enforces schema (type enum, slug format, length limits, etc.) — if you get back `INVALID_ARGS` it returns the JSON schema, follow it.
+First time: call `list_tools()` then `list_tools({category: "write"})` to see signatures. Inner tools are reached through the `call_tool` entry with a `{name, args}` envelope — exactly one level, never nested deeper, never flattened: `call_tool({"name": "memory_write", "args": {type, name, title, description, body}})`. The tool layer enforces schema (type enum, slug format, length limits, etc.) — if you get back `INVALID_ARGS` it returns the JSON schema, follow it.
 
 Before creating a new entry, check `MEMORY.md` (already in your context below). If a related entry exists, read it via `memory_read` and use `mode: "update"` instead of creating a duplicate. Creating a duplicate name returns `ALREADY_EXISTS`.
 

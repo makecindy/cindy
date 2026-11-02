@@ -43,7 +43,11 @@ vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
 }));
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+const ownerGeneration = vi.hoisted(() => ({ value: 1 }));
+vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalAuthUser: () => null,
+  useOptionalDataOwnerGeneration: () => ownerGeneration.value,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -437,6 +441,20 @@ describe('Ghost plugin detail sections', () => {
     await waitFor(() => expect(button.disabled).toBe(false));
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+  });
+  // unit: a declined first-use observe prompt is not retried by the plugin; this Host button is the only re-approval path.
+  it('offers a separate observe permission retry that requests only observe', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { observe: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { observeCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' }));
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'observe');
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
   });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
@@ -1288,4 +1306,102 @@ it('adds shared counts to installed detail metadata while preserving author and 
   expect(container.textContent).toContain('By Cindy·v1.7.5');
   expect(container.textContent).toContain('1,284 settings.ghosts.usage.downloadsValue');
   expect(container.textContent).toContain('8,932 settings.ghosts.usage.usesValue');
+});
+
+// Chat files handed to a plugin: the user sees each 7-day copy and deletes one
+// only after confirming. Rule: plugin-security-and-authoring.md §4 handoff.
+// Gap: new local section. Tier: renderer unit with the shared confirm dialog.
+it('deletes one handed-over file only after confirmation', async () => {
+  const { ConfirmDialogProvider } = await import('@/components/ui/confirm-dialog-provider');
+  const { GhostHandoffFilesSection } = await import('../GhostHandoffFilesSection');
+  const file = (name: string, n: number) => ({ ref: `handoff:0000000${n}-0000-4000-8000-000000000000`, name, mimeType: 'text/csv', size: 2048, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 });
+  const [first, second] = [file('first.csv', 1), file('second.csv', 2)];
+  const handoffList = vi.fn().mockResolvedValueOnce([first, second]).mockResolvedValue([second]);
+  const handoffDelete = vi.fn(async () => ({ existed: true }));
+  Object.assign(window.electronAPI, { ghosts: { handoffList, handoffDelete, handoffFolder: vi.fn(async () => null) } });
+  render(<ConfirmDialogProvider><GhostHandoffFilesSection ghostId="art" declared /></ConfirmDialogProvider>);
+
+  const row = (await screen.findByText('first.csv')).closest('li') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button'));
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'settings.ghosts.handoff.cancel' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  expect(handoffDelete).not.toHaveBeenCalled();
+
+  fireEvent.click(within(row).getByRole('button'));
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'settings.ghosts.handoff.delete' }));
+  await waitFor(() => expect(screen.queryByText('first.csv')).toBeNull());
+  expect(handoffDelete).toHaveBeenCalledExactlyOnceWith('art', first.ref);
+  expect(screen.getByText('second.csv')).toBeTruthy();
+});
+
+// Copies are account data: an account switch with the same instance id reloads the list.
+it('reloads handed-over files when the data owner changes', async () => {
+  const { ConfirmDialogProvider } = await import('@/components/ui/confirm-dialog-provider');
+  const { GhostHandoffFilesSection } = await import('../GhostHandoffFilesSection');
+  const file = (name: string) => ({ ref: 'handoff:00000000-0000-4000-8000-000000000009', name, mimeType: 'text/csv', size: 1, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 });
+  const handoffList = vi.fn().mockResolvedValueOnce([file('owner-a.csv')]).mockResolvedValue([file('owner-b.csv')]);
+  Object.assign(window.electronAPI, { ghosts: { handoffList, handoffDelete: vi.fn(), handoffFolder: vi.fn(async () => null) } });
+  const view = (
+    <ConfirmDialogProvider><GhostHandoffFilesSection ghostId="art" declared /></ConfirmDialogProvider>
+  );
+  ownerGeneration.value = 1;
+  const { rerender } = render(view);
+  await screen.findByText('owner-a.csv');
+  ownerGeneration.value = 2;
+  rerender(<ConfirmDialogProvider><GhostHandoffFilesSection ghostId="art" declared /></ConfirmDialogProvider>);
+  await screen.findByText('owner-b.csv');
+  expect(screen.queryByText('owner-a.csv')).toBeNull();
+});
+
+// The user can see the copies in Finder / Explorer; with nothing handed over the
+// folder button stays unavailable. Tier: renderer unit through the real section.
+it('opens the instance handoff folder only once a copy exists', async () => {
+  const { ConfirmDialogProvider } = await import('@/components/ui/confirm-dialog-provider');
+  const { GhostHandoffFilesSection } = await import('../GhostHandoffFilesSection');
+  const copy = { ref: 'handoff:00000000-0000-4000-8000-000000000003', name: 'sales.csv', mimeType: 'text/csv', size: 1, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 };
+  const handoffList = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([copy]);
+  const handoffFolder = vi.fn(async () => '/data/ghost-handoff/art');
+  const openPath = vi.fn().mockResolvedValue({ success: true });
+  Object.assign(window.electronAPI, { openPath, ghosts: { handoffList, handoffDelete: vi.fn(), handoffFolder } });
+  render(<ConfirmDialogProvider><GhostHandoffFilesSection ghostId="art" declared /></ConfirmDialogProvider>);
+
+  await screen.findByText('settings.ghosts.handoff.empty');
+  const open = screen.getByRole('button', { name: /settings\.ghosts\.handoff\.openIn/ });
+  expect(open).toHaveProperty('disabled', true);
+
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.handoff.refresh' }));
+  await screen.findByText('sales.csv');
+  expect(open).toHaveProperty('disabled', false);
+  fireEvent.click(open);
+  expect(openPath).toHaveBeenCalledExactlyOnceWith('/data/ghost-handoff/art');
+  expect(handoffFolder).toHaveBeenCalledWith('art');
+});
+
+// Codex 4431547660: a delete that finishes after switching plugins must not show
+// the previous plugin's files or folder. Tier: renderer unit, same mounted section.
+it('ignores the refresh of a delete that finishes after switching plugins', async () => {
+  const { ConfirmDialogProvider } = await import('@/components/ui/confirm-dialog-provider');
+  const { GhostHandoffFilesSection } = await import('../GhostHandoffFilesSection');
+  const copy = (id: string) => ({ ref: 'handoff:00000000-0000-4000-8000-000000000004', name: `${id}.csv`, mimeType: 'text/csv', size: 1, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 });
+  let finishDelete!: () => void;
+  const handoffDelete = vi.fn(() => new Promise<{ existed: boolean }>((resolve) => { finishDelete = () => resolve({ existed: true }); }));
+  const handoffList = vi.fn(async (id: string) => [copy(id)]);
+  const handoffFolder = vi.fn(async (id: string) => `/data/ghost-handoff/${id}`);
+  Object.assign(window.electronAPI, { ghosts: { handoffList, handoffDelete, handoffFolder } });
+  const view = (id: string) => <ConfirmDialogProvider><GhostHandoffFilesSection ghostId={id} declared /></ConfirmDialogProvider>;
+  const { rerender } = render(view('plugin-a'));
+
+  const row = (await screen.findByText('plugin-a.csv')).closest('li') as HTMLElement;
+  fireEvent.click(within(row).getByRole('button'));
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'settings.ghosts.handoff.delete' }));
+  await waitFor(() => expect(handoffDelete).toHaveBeenCalledOnce());
+  rerender(view('plugin-b'));
+  await screen.findByText('plugin-b.csv');
+  finishDelete();
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(screen.queryByText('plugin-a.csv')).toBeNull();
+  expect(screen.getByText('plugin-b.csv')).toBeTruthy();
+  expect(handoffList.mock.calls.map(([id]) => id)).toEqual(['plugin-a', 'plugin-b']);
 });

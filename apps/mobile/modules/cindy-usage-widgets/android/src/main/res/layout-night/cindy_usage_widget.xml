@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Both themes are drawn; the host picks this layout by its own night mode, so a theme change needs no redraw. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/cindy_usage_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent">
+  <ImageView
+    android:id="@+id/cindy_usage_widget_image"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:scaleType="fitXY"
+    android:visibility="gone"
+    android:importantForAccessibility="yes" />
+  <ImageView
+    android:id="@+id/cindy_usage_widget_image_dark"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:scaleType="fitXY"
+    android:visibility="visible"
+    android:importantForAccessibility="yes" />
+</FrameLayout>

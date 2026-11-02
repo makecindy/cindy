@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -454,6 +455,7 @@ export function useRemoteSessionSync(
       recovery.request(canRead());
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      if (isSharedTaskPeer(deviceId)) return;
       const online = p.status === 'online';
       const changed = relayAvailable !== online;
       relayAvailable = online;

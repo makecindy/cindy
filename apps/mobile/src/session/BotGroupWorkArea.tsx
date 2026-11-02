@@ -108,6 +108,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError
         return <BotGroupSpeakerRow key={speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}
           deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
           identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={speaker.sessionId ?? target?.sessionId ?? null}
+          executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
           collapsed={!expanded} revealWaiting={member.isOwned !== false}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}

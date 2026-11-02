@@ -114,6 +114,7 @@ import {
   getConfirmedCrossRegionReceivedRegions,
   isCrossRegionReceivedReady,
   refreshProviderShareCrossRegion,
+  waitForCrossRegionReceived,
   isCrossRegionProviderShareTarget,
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
@@ -212,6 +213,9 @@ describe('cross-region provider share', () => {
     startProviderShareGuest({ changed, settled: vi.fn() }, { userDataDir: dir });
     await vi.waitFor(() => expect(getReceivedSharesSnapshot().received.map(item => item.shareId))
       .toEqual(['share-local', 'share-x']));
+    // The snapshot precedes async marker persistence, client startup and the
+    // changed event. Join automatic discovery without issuing another request.
+    await waitForCrossRegionReceived();
     expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]));
     expect(state.calls.map(call => call.path)).toEqual(['/api/device-link/provider-shares/x/session']);
     expect(state.calls[0].opts).toMatchObject({ token: null, baseUrl: peer === 'global' ? PEER : LOCAL, skipSessionInvalidation: true });
@@ -260,6 +264,8 @@ describe('cross-region provider share', () => {
     await vi.waitFor(() => expect(getCrossRegionReceived()).toEqual([nextShare]));
     oldResponse.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
     await oldRefresh;
+    // The old account settling does not mean the new account finished its I/O.
+    await waitForCrossRegionReceived();
     expect(getCrossRegionReceived()).toEqual([nextShare]);
     expect(__testing.readMarkers()).toEqual({ [sha256Hex('cn:user-2')]: ['global'] });
     expect(state.clients).toHaveLength(1);

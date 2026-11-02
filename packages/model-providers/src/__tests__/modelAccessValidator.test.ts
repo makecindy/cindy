@@ -1239,4 +1239,32 @@ describe('V6 interface contract', () => {
     const value = registry(); value.interfaceProfiles![0].requires = ['future-runtime-v99'];
     expect(parseModelRegistry(value)).toEqual({ ok: true, value });
   });
+  // Recommendations are capability-gated: capable clients accept them, released parsers never see them.
+  it('accepts recommended engines only as exact-or-prefix rules and strips them for older clients', async () => {
+    const { withoutRecommendedAgents, projectRegistryV5 } = await import('../modelInterfaceContract.js');
+    const { resolveRecommendedAgent } = await import('../modelRegistry.js');
+    const value = registry();
+    value.recommendedAgents = [
+      { providerId: 'vendor', modelIdPrefix: 'mod', agent: 'pi' },
+      { providerId: 'vendor', modelIdPrefix: 'model', agent: 'codex' },
+      { providerId: 'vendor', modelId: 'model', agent: 'claude-code' },
+    ];
+    expect(parseModelRegistry(value)).toEqual({ ok: true, value });
+    expect(resolveRecommendedAgent(value, 'vendor', 'model')).toBe('claude-code');
+    expect(resolveRecommendedAgent(value, 'vendor', 'model-2')).toBe('codex');
+    expect(resolveRecommendedAgent(value, 'other', 'model')).toBeUndefined();
+    expect(withoutRecommendedAgents(value)).not.toHaveProperty('recommendedAgents');
+    expect(projectRegistryV5(value)).not.toHaveProperty('recommendedAgents');
+    for (const bad of [
+      { providerId: 'vendor', agent: 'pi' },
+      { providerId: 'vendor', modelId: 'model', modelIdPrefix: 'm', agent: 'pi' },
+      { providerId: 'vendor', modelId: 'model', agent: 'gemini' },
+      { providerId: 'vendor', modelId: 'model', agent: 'pi', reason: 'x' },
+    ]) {
+      expect(parseModelRegistry({ ...value, recommendedAgents: [bad] } as unknown as ModelRegistry).ok).toBe(false);
+    }
+    expect(parseModelRegistry({ ...value, recommendedAgents: [value.recommendedAgents[2], value.recommendedAgents[2]] }).ok).toBe(false);
+    expect(parseModelRegistry({ ...value, schemaVersion: 5, recommendedAgents: value.recommendedAgents } as unknown as ModelRegistry).ok).toBe(false);
+    expect(parseModelRegistry({ ...value, recommendedAgents: null } as unknown as ModelRegistry).ok).toBe(false);
+  });
 });

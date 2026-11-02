@@ -994,7 +994,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-responses', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-responses' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',

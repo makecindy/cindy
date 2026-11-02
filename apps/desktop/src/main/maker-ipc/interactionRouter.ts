@@ -84,6 +84,7 @@ interface PendingRequest {
   routeToken: symbol | null;
   request: InteractionRequest;
   cancel(decision: InteractionDecision): void;
+  allowPage(): void;
 }
 
 export interface InteractionRouteLease {
@@ -120,6 +121,7 @@ function safeDecision(
 class SessionInteractionRouter {
   private desktopHandler: InteractionHandler | null = null;
   private desktopCancel: ((requestId: string, decision: InteractionDecision) => void) | undefined;
+  private desktopDecide: ((requestId: string, decision: InteractionDecision) => void) | undefined;
   private lifecycleObserver: InteractionLifecycleObserver | null = null;
   private activeRoute: ActiveRoute | null = null;
   private readonly pending = new Map<string, PendingRequest>();
@@ -128,9 +130,10 @@ class SessionInteractionRouter {
     session.setInteractionListener((request, signal) => this.dispatch(request, signal));
   }
 
-  setDesktopHandler(handler: InteractionHandler, cancel?: (requestId: string, decision: InteractionDecision) => void): void {
+  setDesktopHandler(handler: InteractionHandler, cancel?: (requestId: string, decision: InteractionDecision) => void, decide?: (requestId: string, decision: InteractionDecision) => void): void {
     this.desktopHandler = handler;
     this.desktopCancel = cancel;
+    this.desktopDecide = decide;
   }
 
   setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
@@ -198,6 +201,11 @@ class SessionInteractionRouter {
     };
   }
 
+  allowPage(requestId: string): void {
+    const pending = this.pending.get(requestId);
+    if (pending?.request.kind === 'permission' && pending.request.metadata?.mcpApp) pending.allowPage();
+  }
+
   async dispatch(request: InteractionRequest, signal?: AbortSignal): Promise<InteractionDecision> {
     if (signal?.aborted) return safeDecision(request, 'session_aborted');
     if (this.pending.has(request.requestId)) {
@@ -258,6 +266,12 @@ class SessionInteractionRouter {
       routeToken: active?.token ?? null,
       request,
       cancel,
+      allowPage: () => {
+        const decision: InteractionDecision = { kind: 'permission', behavior: 'allow' };
+        if (shared) { shared.decide(decision); return; }
+        // Never use cancellation: unlike a user answer it bypasses the pause gate.
+        callSafely(() => this.desktopDecide?.(request.requestId, decision));
+      },
     });
     const abort = () => {
       const decision = safeDecision(request, 'session_aborted');
@@ -342,8 +356,9 @@ export function installDesktopInteractionHandler(
   session: InteractionSession,
   handler: InteractionHandler,
   cancel?: (requestId: string, decision: InteractionDecision) => void,
+  decide?: (requestId: string, decision: InteractionDecision) => void,
 ): void {
-  routerFor(session).setDesktopHandler(handler, cancel);
+  routerFor(session).setDesktopHandler(handler, cancel, decide);
 }
 
 /** Host permissions use the same UI, remote responses and route lease as Agent permissions. */
@@ -385,4 +400,9 @@ export function beginInteractionRoute(
   registration: RouteRegistration,
 ): InteractionRouteLease {
   return routerFor(session).begin(registration);
+}
+
+/** Host-only response to a committed Full Access change; never settles model requests. */
+export function allowHostPagePermission(session: InteractionSession, requestId: string): void {
+  routers.get(session as object)?.allowPage(requestId);
 }

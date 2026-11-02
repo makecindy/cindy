@@ -7,7 +7,7 @@ import { useTeammateStatus, useRosterActivities, teammateAttention } from './use
  * 收起默认显示原有头像条；用户关闭「收起时显示头像」后只保留段头。两个选择分别按账号记住。
  * 伙伴与群聊按最近活动混排；不跟随顶栏的电脑范围筛选（与桌面一致）。手机没有单独的伙伴首页，
  * 搜索时本段只列出名字匹配的伙伴与群聊。只在首页（有共享伙伴名册）出现；没有伙伴也没有能新建的
- * 电脑时整段不显示。
+ * 电脑时保留紧凑的邀请入口。
  * Android 把首页列表挂到根节点渲染（ResidentHomeList），所以名册与路由的导航上下文要在路由里取，
  * 再由本段重新提供。
  */
@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, ChevronUp, Plus, RefreshCw, UsersRound } from 'lucide-react-native';
 import { resolveRemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
+import { openManualChatInvite } from '@/chat/chatInviteIntent';
 import { Text } from '@/components/AppText';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -46,10 +47,9 @@ import { getHomeViewSession, useRetainedHomeState } from './homeViewSession';
 
 /** Desktop previews five in a 260px sidebar; three keeps the first screen of tasks on a phone. */
 export const HOME_TEAMMATE_PREVIEW_LIMIT = 3;
-/** The collapsed avatar uses the shared 48pt size. */
+/** A smaller portrait inside a full touch target, with room for the corner dot. */
 const STRIP_AVATAR_SIZE = TEAMMATE_AVATAR.strip;
-/** One strip cell: the avatar plus 4pt on each side, so a 12/18 name fits under it. */
-const STRIP_CELL_WIDTH = STRIP_AVATAR_SIZE + spacing.sm;
+const STRIP_CELL_WIDTH = TEAMMATE_AVATAR.stripTarget;
 const SHOW_ALL_ROW_HEIGHT = 48;
 const ADD_ROW_HEIGHT = 64;
 
@@ -142,11 +142,14 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
   const createTargets = useStableValue(roster.createTargets, sameHosts);
   const groupCreateTargets = useStableValue(roster.groupTargets.filter(groups.isOnline), sameHosts);
   const canCreate = createTargets.length > 0 || groupCreateTargets.length > 0;
-  const showCreate = canCreate && !search;
+  const { user } = useAuth();
+  const canInvite = !!user;
+  const showCreate = (canCreate || canInvite) && !search;
   // One controller for every trigger placement: the first teammate arriving while its form closes
   // swaps the empty row for the rows, and must not take the form or its receipt with it.
   const creator = useTeammateCreateController({ targets: createTargets, groupTargets: groupCreateTargets,
     preferredDeviceId: navigation.lastTeammate?.deviceId,
+    onInvite: canInvite ? () => { Keyboard.dismiss(); openManualChatInvite(); } : undefined,
     onCreated: (host, ref) => { void navigation.openCreatedTeammate(host, ref); },
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
   // Keep cached rows during recovery. A lasting failure only adds a header action,
@@ -162,8 +165,8 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
     if (groups.error) void groups.refresh();
     if (cloud.error) void refreshCloud();
   };
-  // A first read with nothing cached stays out of the way instead of flashing an empty section.
-  const shown = visible && (search ? entries.length > 0 : !!error || !(!entries.length && (!canCreate || roster.loading)));
+  // The invitation trigger is independent of device/roster loading; no empty body is reserved.
+  const shown = visible && (search ? entries.length > 0 : canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
   const create = (trigger: (press: () => void, label: string) => ReactElement) => showCreate
     ? creator.renderTrigger(trigger(creator.press, creator.label)) : null;
@@ -191,16 +194,16 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
         {retrying ? <ActivityIndicator color={colors.textTertiary} /> : <RefreshCw size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />}
       </Pressable> : null}
       {/* Keep a single create entry: in the header when the body is hidden. */}
-      {!headerOnly && (collapsed || !entries.length) ? null : create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label}
+      {!headerOnly && ((collapsed && entries.length > 0) || (!entries.length && canCreate)) ? null : create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label}
         onPress={press} hitSlop={spacing.xs} style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesCreate">
         <Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </Pressable>)}
     </View>
-    {headerOnly ? null : !entries.length ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
+    {headerOnly ? null : !entries.length ? (canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
       style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
       <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
       <Text style={styles.addText} numberOfLines={1}>{t('devices.companions.createTeammate')}</Text>
-    </Pressable>)}</DisclosureItem>
+    </Pressable>)}</DisclosureItem> : null)
       : collapsed ? <DisclosureItem exit>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip} testID="home.teammatesStrip">
           {entries.map(entry => <StripCell key={`${entry.kind}:${entry.row.key}`} entry={entry}
@@ -210,7 +213,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
             onPress={() => entry.kind === 'group' ? openGroup(entry.row) : openTeammate(entry.row)} />)}
           {create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
             style={({ pressed }) => [styles.cell, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesStripCreate">
-            <View style={[styles.addCircle, styles.addCircleStrip]}><Plus color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} /></View>
+            <View style={[styles.addCircle, styles.addCircleStrip]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
             <View style={styles.cellNameSpace} />
           </Pressable>)}
         </ScrollView>
@@ -309,7 +312,7 @@ const BotStripCell = memo(function BotStripCell({ deviceId, botId, title, lastRe
       </View>
       <TeammateStatusDot status={status} />
     </View>
-    <Text style={[styles.cellName, unread && styles.cellNameUnread]} numberOfLines={1}>{title}</Text>
+    <Text style={styles.cellName} numberOfLines={1}>{title}</Text>
   </Pressable>;
 });
 
@@ -345,7 +348,7 @@ function GroupStripCell({ entry, online, connected, quiet, onPress }: StripCellP
       </View>
       <TeammateStatusDot status={status} />
     </View>
-    <Text style={[styles.cellName, unread && styles.cellNameUnread]} numberOfLines={1}>{title}</Text>
+    <Text style={styles.cellName} numberOfLines={1}>{title}</Text>
   </Pressable>;
 }
 
@@ -362,11 +365,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 44 target whose glyph sits on the row's 16pt right edge (36 + hitSlop 4 each side).
   headerAdd: { width: 36, height: 36, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
   strip: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-  cell: { width: STRIP_CELL_WIDTH, alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs, borderRadius: radius.container },
+  cell: { width: STRIP_CELL_WIDTH, minHeight: TEAMMATE_AVATAR.stripTarget, alignItems: 'center', gap: spacing.xs,
+    paddingVertical: (TEAMMATE_AVATAR.stripTarget - STRIP_AVATAR_SIZE) / 2, borderRadius: radius.container },
   cellAvatar: { width: STRIP_AVATAR_SIZE, height: STRIP_AVATAR_SIZE },
-  cellName: { width: STRIP_CELL_WIDTH, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption,
-    fontWeight: fontWeight.regular, textAlign: 'center' },
-  cellNameUnread: { color: colors.textPrimary, fontWeight: fontWeight.medium },
+  cellName: { width: STRIP_CELL_WIDTH, color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium, textAlign: 'center' },
   cellNameSpace: { height: lineHeight.caption },
   unreadDot: { width: TEAMMATE_AVATAR.dot, height: TEAMMATE_AVATAR.dot, borderRadius: radius.pill, backgroundColor: colors.botUnread },
   attentionDot: { backgroundColor: colors.statusAwaiting },

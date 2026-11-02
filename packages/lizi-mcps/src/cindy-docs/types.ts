@@ -122,7 +122,7 @@ export type InspectPdfFn = (input: {
  * cindy_docs MCP server 工厂参数。
  *
  * writeDocsOutput / renderHtmlToPdf / inspectPdf 缺省 = host 没接对应能力→
- * 对应工具不注册,与 memory 的 session_search / contacts 的系统通讯录同模式:
+ * 对应工具不注册,与 memory 的 session_search 同模式:
  * 能力不具备就不注册该顶层工具,而不是注册了再运行期报错。
  */
 export interface DocsMcpDeps {

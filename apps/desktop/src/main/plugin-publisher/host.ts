@@ -139,7 +139,7 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
         const inspected = await getGhostManager().inspect(filePath);
         if ('rejection' in inspected) {
           log.warn('plugin publish inspect rejected', { code: inspected.rejection.code });
-          throw new Error('插件包无法发布');
+          throw new Error(`插件包无法发布：${inspected.rejection.reason}`);
         }
         if (isReservedConnectionPluginSlug(inspected.canonicalManifest.id)) {
           throw new Error('该插件 id 不可发布');

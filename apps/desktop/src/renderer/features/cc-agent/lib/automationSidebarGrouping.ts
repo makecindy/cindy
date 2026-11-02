@@ -94,7 +94,7 @@ interface ScopedAutomationGroupKey {
 
 function fallbackAutomationGroupKey(session: Session): ScopedAutomationGroupKey {
   const workspace = session.workspaceKind ?? 'project';
-  const dir = normalizeWorkingDir(session.workingDir) ?? '__no_working_dir__';
+  const dir = normalizeWorkingDir(session.projectDir ?? session.workingDir) ?? '__no_working_dir__';
   const title = getAutomationSessionDisplayTitle(session).trim() || session.id;
   return scopeAutomationGroupKey(`fallback:${workspace}:${dir}:${title}`, session);
 }

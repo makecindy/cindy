@@ -2361,7 +2361,7 @@ describe('pi translator live token speed', () => {
       update({ type: 'toolcall_start', contentIndex: 1, toolCall: { name: 'bash' } }, 1_600);
       update({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls -la"}', toolCall: { name: 'bash' } }, 1_700);
       update({ type: 'toolcall_end', contentIndex: 1, toolCall: { name: 'bash' } }, 2_000);
-      expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000 });
+      expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000, streaming: false });
       update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_000);
 
       vi.setSystemTime(12_500);
@@ -2424,6 +2424,221 @@ describe('pi translator live token speed', () => {
       events.length = 0;
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       expect(usageSnapshotOf(ctx).tokenSpeed).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps delegated subagent output out of the parent generation meter', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      vi.setSystemTime(1_500);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
+      } }), queue, ctx);
+
+      // A subagent runs during the tool window and reports its own output.
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'toolcall_end', toolCall: { name: 'subagent' },
+      } }), queue, ctx);
+      translatePiEvent(ev({
+        type: 'tool_execution_update',
+        toolCallId: 'sa-1',
+        partialResult: { details: { __cindySubagent: 1, taskId: 'sa-1', status: 'running',
+          usage: { input: 100, output: 900, cacheRead: 0, cacheWrite: 0, cost: 0 } } },
+      }), queue, ctx);
+      vi.setSystemTime(12_000);
+      expect(ctx.turnOutput).toBe(900);
+      // The child ran inside the tool pause: its tokens do not join the meter, and
+      // the 10s tool window is still excluded from the parent's generation time.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6, elapsedMs: 1_000 });
+
+      // The parent's own message_end calibrates the meter to its own output only.
+      vi.setSystemTime(12_500);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnOutput).toBe(904);
+      // Downwards calibration: the parent billed 4 output tokens, not the 6 estimated.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()?.tokens).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the streamed estimate when message_end reports no output usage', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      vi.setSystemTime(1_500);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(6);
+
+      // An error/billed-nothing response carries no usage: the estimate must survive
+      // instead of being erased by a turnMainOutput of 0.
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6, streaming: false });
+
+      // A usage object without a numeric output is not a report either.
+      vi.setSystemTime(2_500);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10 },
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(6);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the late streamed estimate when a later call ends without output usage', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev({ type: 'message_update', assistantMessageEvent }), queue, ctx);
+      };
+
+      // First call reports its own usage (output 4), calibrating the meter to 4.
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 1_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+      expect(ctx.turnMainOutputUsageComplete).toBe(true);
+
+      // A tool runs, then the second call streams 6 more tokens but ends with an
+      // error and no usage: only the estimate accounts for them.
+      vi.setSystemTime(3_000);
+      translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash', args: { command: 'ls' } }), queue, ctx);
+      vi.setSystemTime(8_000);
+      translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'bash-1', result: 'ok', isError: false }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 8_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight nine ten five six' }, 8_500);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(10);
+      vi.setSystemTime(9_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'seven eight nine ten five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.turnMainOutputUsageComplete).toBe(false);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 10, streaming: false });
+
+      // Settlement must not overwrite the estimate with the incomplete total (4).
+      vi.setSystemTime(9_500);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const settled = ctx.tokenSpeed.snapshot()!;
+      expect(settled.tokens).toBe(10);
+      // The paused window (2s→8s) stays out of generation time: 1s + 1s of generation.
+      expect(settled.elapsedMs).toBe(2_000);
+      expect(settled.average).toBe(5);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('carries estimates from usage-less calls across a later successful calibration', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev({ type: 'message_update', assistantMessageEvent }), queue, ctx);
+      };
+
+      // First call reports output 4: the meter calibrates down from the 6 estimated.
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 1_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.unreportedEstimatedOutput).toBe(0);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+
+      // Second call streams 6 tokens but reports no usage at all: its estimate is
+      // parked as real generation the provider did not bill.
+      vi.setSystemTime(3_000);
+      translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash', args: { command: 'ls' } }), queue, ctx);
+      vi.setSystemTime(8_000);
+      translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'bash-1', result: 'ok', isError: false }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 8_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight nine ten five six' }, 8_500);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(10);
+      vi.setSystemTime(9_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'seven eight nine ten five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.unreportedEstimatedOutput).toBe(6);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 10, streaming: false });
+
+      // Third attempt succeeds and reports output 8. The calibration is the whole
+      // turn (4 reported + 6 estimated + 8 reported = 18), not 4 + 8 = 12: the
+      // usage-less call's tokens must not be overwritten by the retry.
+      vi.setSystemTime(9_500);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 9_500);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'a b c d e f g h' }, 9_800);
+      vi.setSystemTime(10_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'a b c d e f g h' }],
+        stopReason: 'stop', usage: { input: 12, output: 8 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(12);
+      expect(ctx.unreportedEstimatedOutput).toBe(6);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 18, streaming: false });
+
+      // Settlement keeps the same 18 instead of falling back to 12.
+      vi.setSystemTime(10_500);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const settled = ctx.tokenSpeed.snapshot()!;
+      expect(settled.tokens).toBe(18);
+      // Generation time excludes the tool window and inter-message gaps: 1s, 1s and 0.5s of generation.
+      expect(settled.elapsedMs).toBe(2_500);
+      // 18 tokens over 2.5s of generation.
+      expect(settled.average).toBeCloseTo(18_000 / 2_500, 6);
+      expect(settled.rate).toBe(settled.average);
+      disposePiTranslateContext(ctx);
     } finally {
       vi.useRealTimers();
     }

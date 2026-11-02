@@ -159,13 +159,16 @@ export function InfoRow({
 /**
  * 可点击信息行:进入子页、轻量编辑或打开外部信息;右侧统一 lg + textTertiary 箭头。
  * 原地执行的动作(检查更新、清空日志)传 chevron={false},不画进入箭头。
+ * `lead` 是行首 28–36 的头像或图标;`destructive` 只用于退出、解散这类不可逆动作。
  */
 export function ActionInfoRow({
   accessibilityLabel,
   accessibilityRole = 'button',
   chevron = true,
+  destructive = false,
   disabled = false,
   label,
+  lead,
   onPress,
   testID,
   value = '',
@@ -173,9 +176,11 @@ export function ActionInfoRow({
   accessibilityLabel: string;
   accessibilityRole?: 'button' | 'link';
   chevron?: boolean;
+  destructive?: boolean;
   disabled?: boolean;
   label: string;
-  onPress(): void;
+  lead?: ReactNode;
+  onPress?(): void;
   testID?: string;
   value?: string;
 }) {
@@ -188,11 +193,12 @@ export function ActionInfoRow({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, (pressed || disabled) && styles.pressed]}
+      style={({ pressed }) => [styles.row, lead ? styles.mediaRow : null, (pressed || disabled) && styles.pressed]}
       testID={testID}
     >
       <View style={styles.rowLine}>
-        <Text style={styles.rowLabel}>{label}</Text>
+        {lead}
+        <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
         {value ? <Text style={styles.rowValue} numberOfLines={1}>{value}</Text> : null}
         {chevron ? <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} /> : null}
       </View>
@@ -263,6 +269,8 @@ const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
   divider: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginLeft: spacing.lg },
   // —— 行 ——
   row: { gap: spacing.xs, justifyContent: 'center', minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  // Rows led by an avatar keep the 52pt rhythm: the avatar, not the padding, sets the height.
+  mediaRow: { paddingVertical: spacing.sm },
   rowLine: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   // 左侧标签可换行(flex 1 + shrink);右侧取值右对齐、不收缩,过长截断在行宽 60% 内。
   rowLabel: { color: colors.textPrimary, flex: 1, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body, minWidth: 0 },

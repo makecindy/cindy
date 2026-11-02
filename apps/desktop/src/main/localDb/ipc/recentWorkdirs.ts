@@ -149,6 +149,7 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
   const sessionRows = await db
     .selectDistinct({
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       agentKind: sessions.agentKind,
     })
     .from(sessions)
@@ -163,7 +164,7 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
   const knownKindsByPath = new Map<string, Set<string>>();
   for (const session of sessionRows) {
     if (!session.workingDir) continue;
-    const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
+    const identity = recentWorkdirProjectIdentity(session.projectDir ?? session.workingDir, process.platform);
     if (!identity) continue;
     const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
     kinds.add(session.agentKind ?? 'cc');
