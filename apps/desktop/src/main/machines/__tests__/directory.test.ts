@@ -43,6 +43,9 @@ describe('list_machines directory', () => {
     expect(result.computers.map(item => [item.name, item.isSelf, item.availability, item.status?.cpu.logicalCores]))
       .toEqual([['this-mac', true, 'available', 16]]);
     expect(result.ssh).toEqual([unreachable]);
+    const stuck = await listMachines({ ...deps([], async () => status), listDevices: () => new Promise(() => {}) });
+    expect(stuck.computersError).toBe('[INVOKE_TIMEOUT]');
+    expect(stuck.computers.map(item => item.availability)).toEqual(['available']);
   });
 
   it('reads the live status of this computer and of reachable ones, and leaves phones out', async () => {

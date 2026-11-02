@@ -13,8 +13,8 @@ import { parseVmStatAvailableBytes } from './sshStatus.js';
 const run = promisify(execFile);
 const CPU_SAMPLE_MS = 200;
 
-let runningTasks: (() => number) | null = null;
-export function configureLocalMachineActivity(read: () => number): void { runningTasks = read; }
+let runningTasks: (() => Promise<number>) | null = null;
+export function configureLocalMachineActivity(read: () => Promise<number>): void { runningTasks = read; }
 
 const attempt = <T>(read: () => T): T | null => { try { return read(); } catch { return null; } };
 
@@ -59,6 +59,6 @@ export async function readLocalMachineStatus(): Promise<MachineStatus> {
     disk,
     idleSeconds: attempt(() => powerMonitor.getSystemIdleTime()),
     onBattery: attempt(() => powerMonitor.isOnBatteryPower()),
-    runningTasks: runningTasks ? attempt(runningTasks) : null,
+    runningTasks: runningTasks ? await runningTasks().catch(() => null) : null,
   };
 }

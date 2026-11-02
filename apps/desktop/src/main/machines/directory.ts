@@ -124,7 +124,8 @@ async function probe(device: DeviceLinkDeviceView, deps: MachineDirectoryDeps): 
 }
 
 export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineDirectory> {
-  const listed = await deps.listDevices().then(devices => ({ devices }), (error: unknown) => ({ error: message(error) }));
+  const listed = await withTimeout(deps.listDevices(), deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS)
+    .then(devices => ({ devices }), (error: unknown) => ({ error: message(error) }));
   const known = 'devices' in listed ? listed.devices.filter(device => !isMobilePlatform(device.platform)) : [];
   // 本机不依赖账号服务：没登录或连不上时仍然报这台电脑和 SSH 主机。
   const devices = known.some(device => device.isSelf) ? known : [...known, {
