@@ -7815,6 +7815,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
       effective: 'immediate';
     }> => ipcRenderer.invoke('maker:session-runtime-fallback:reset'),
 
+    // 任务级额度备用路线（per task）。设置类写操作：仅本机主页面可调，不进 device-link。
+    sessionUsageLimitFallbackGet: (
+      sessionId: string,
+    ): Promise<{
+      target: { providerId: string; model: string } | null;
+      stale: boolean;
+    }> => ipcRenderer.invoke('maker:session-usage-limit-fallback:get', sessionId),
+    sessionUsageLimitFallbackSet: (
+      sessionId: string,
+      target: { providerId: string; model: string } | null,
+    ): Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    > => ipcRenderer.invoke('maker:session-usage-limit-fallback:set', sessionId, target),
+    sessionUsageLimitFallbackClear: (
+      sessionId: string,
+    ): Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    > => ipcRenderer.invoke('maker:session-usage-limit-fallback:clear', sessionId),
+
     // Claude Code 自动上下文压缩阈值。仅对新建会话生效。
     compactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:compaction:get-pct'),
     compactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>

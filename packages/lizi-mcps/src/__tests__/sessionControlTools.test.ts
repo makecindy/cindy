@@ -150,6 +150,109 @@ describe('cindy_helper session control tools', () => {
     });
   });
 
+  it('configures the per-task usage-limit fallback route on its own', async () => {
+    const { deps, registry } = setup();
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      status: 'applied',
+      generation: 3,
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'high' as const,
+        fastMode: false,
+      },
+      pendingMutation: null,
+      usageLimitFallback: { providerId: 'xd', model: 'deepseek-v4-flash' },
+    });
+    const result = parse(
+      await registry.call('set_session_runtime', {
+        usage_limit_fallback: { provider_id: 'xd', model: 'deepseek-v4-flash' },
+        expected_generation: 3,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      session_id: 'caller-session',
+      status: 'applied',
+      usage_limit_fallback: { provider_id: 'xd', model: 'deepseek-v4-flash' },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'caller-session',
+      expectedGeneration: 3,
+      patch: { usageLimitFallback: { providerId: 'xd', model: 'deepseek-v4-flash' } },
+    });
+  });
+
+  it('refuses to mix the usage-limit fallback with a route selection', async () => {
+    const { deps, registry } = setup();
+    expect(
+      parse(
+        await registry.call('set_session_runtime', {
+          model: 'gpt-5.6-sol',
+          usage_limit_fallback: { provider_id: 'xd', model: 'deepseek-v4-flash' },
+          expected_generation: 1,
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it('projects the configured fallback route and clears it with null', async () => {
+    const { deps, registry } = setup();
+    vi.mocked(deps.getSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      runtime: {
+        sessionId: 'target-session',
+        phase: 'idle' as const,
+        recordStatus: 'active' as const,
+        attention: false,
+        workflow: null,
+        source: 'live' as const,
+        turnGeneration: null,
+        startedAtMs: null,
+        lastActivityAtMs: null,
+        currentActionSummary: null,
+        gracefulStopState: 'none' as const,
+        usageLimitFallback: { providerId: 'xd', model: 'deepseek-v4-flash' },
+      },
+    });
+    expect(parse(await registry.call('get_session_runtime', {}))).toMatchObject({
+      ok: true,
+      usage_limit_fallback: { provider_id: 'xd', model: 'deepseek-v4-flash' },
+    });
+
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true,
+      status: 'applied',
+      generation: 4,
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: 'gpt-5.6-sol',
+        providerId: 'openai',
+        effort: 'high' as const,
+        fastMode: false,
+      },
+      pendingMutation: null,
+      usageLimitFallback: null,
+    });
+    expect(
+      parse(
+        await registry.call('set_session_runtime', {
+          usage_limit_fallback: null,
+          expected_generation: 4,
+        }),
+      ),
+    ).toMatchObject({ ok: true, usage_limit_fallback: null });
+    expect(deps.setSessionRuntime).toHaveBeenLastCalledWith({
+      targetSessionId: 'caller-session',
+      expectedGeneration: 4,
+      patch: { usageLimitFallback: null },
+    });
+  });
+
   it('requires a bound current session when session_id is omitted', async () => {
     // expected_generation 已是 schema 必填(#3535):带上合法值,隔离验证
     // 会话上下文缺失的分支。
