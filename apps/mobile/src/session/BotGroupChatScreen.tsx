@@ -227,11 +227,11 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     planPendingRef.current = null;
     setPlanPending(null);
     return () => { planPendingRef.current = null; };
-  }, [viewportOwner]);
+  }, [viewportOwner]));
   const shareScope = `bot-group:${viewportOwner}`;
   const imageSelectionActive = useShareSelectionActive(shareScope);
   useShareSelectionRevision();

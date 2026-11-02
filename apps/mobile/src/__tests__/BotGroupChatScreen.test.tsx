@@ -107,7 +107,7 @@ vi.mock('expo-router', () => ({
   },
   useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
   useNavigation: () => ({ getState: () => h.navigation }),
-  useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
+  useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
@@ -646,6 +646,21 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'reassign', botId: 'xiaoman' });
     await click('botGroup.plan.stepMenu.0.action.remove');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
+  });
+
+  // #5759: a retained background group must not alert on its cancelled plan action (unit).
+  it('drops the pending plan UI on blur and ignores its late cancellation after returning', async () => {
+    let reject!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_, no) => { reject = no; }));
+    await render();
+    await click('botGroup.plan.start');
+    h.focused = false; await render();
+    h.focused = true; await render();
+    expect(byId('botGroup.plan.start')?.disabled).toBe(false);
+    await act(async () => { reject(new Error('OWNER_CHANGED')); });
+    expect(h.alert).not.toHaveBeenCalled();
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
   });
 
   // #5759, unit: direct-server plans used to bypass role checks on the existing

@@ -261,9 +261,15 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const olderPending = useRef<Promise<void> | null>(null);
-  const planAction = useRef<{ identity: string; key: string; operationId: string; pending: boolean } | null>(null);
-  if (!enabled || planAction.current?.identity !== identity) planAction.current = null;
-  useEffect(() => () => { planAction.current = null; }, [identity, enabled]);
+  const planAction = useRef<{ identity: string; key: string; operationId: string; pending: boolean; controller: AbortController } | null>(null);
+  if (!enabled || !focused || planAction.current?.identity !== identity) {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }
+  useFocusEffect(useCallback(() => () => {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }, [identity, enabled]));
   const valid = () => api.current() && active.current === identity;
   const loseAccess = () => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
@@ -404,7 +410,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
     if (['plan-start', 'plan-dismiss', 'plan-continue', 'plan-retry', 'plan-edit'].includes(action)) {
-      if (!enabled || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
       const latest = page.current;
       const plan = latest?.identity === identity ? latest.page.plans?.find(plan => plan.id === input?.planId) : undefined;
       if (!plan || !freshRead.current) throw new Error('CHAT_READ_FAILED');
@@ -416,14 +422,14 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         : { action: action.slice(5) as 'start' | 'dismiss' | 'continue' | 'retry' };
       const key = JSON.stringify([plan.id, plan.revision, command]);
       const previous = planAction.current;
-      const attempt = { identity, key, pending: true,
+      const attempt = { identity, key, pending: true, controller: new AbortController(),
         operationId: previous?.identity === identity && previous.key === key ? previous.operationId : '' };
       planAction.current = attempt;
       const generation = accessGeneration.current;
       const current = () => valid() && accessGeneration.current === generation && planAction.current === attempt;
       try {
         attempt.operationId ||= (await import('expo-crypto')).randomUUID();
-        await api.client.actPlan(groupId, plan, command, attempt.operationId, current);
+        await api.client.actPlan(groupId, plan, command, attempt.operationId, current, attempt.controller.signal);
         if (!current()) throw new Error('OWNER_CHANGED');
         return { effects: [] };
       } finally {

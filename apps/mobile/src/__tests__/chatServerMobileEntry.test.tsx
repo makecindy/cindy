@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   disk: new Map<string, string>(),
   history: new Map<string, string>(),
   historyWriteFails: false,
+  focused: true,
   foreground: new Set<(state: string) => void>(),
   put: vi.fn(async (..._args: unknown[]) => {}),
 }));
@@ -29,7 +30,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('@/session/mobileAttachmentUpload', () => ({ putMobileAttachmentUploadFromFile: (...args: unknown[]) => h.put(...args) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => h.focused, useFocusEffect: (fn: any) => useEffect(() => h.focused ? fn() : undefined, [fn, h.focused]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
@@ -39,6 +40,7 @@ vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => n
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 import { useBotGroupChat } from '@/session/useBotGroupChat';
+import { apiFetchRaw } from '@/api/client';
 import { useBotGroupRoster } from '@/session/useBotGroupRoster';
 import { botGroupRoute } from '@/session/botGroupNavigation';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
@@ -73,6 +75,7 @@ async function send(input: Record<string, unknown>) {
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
   h.historyWriteFails = false;
+  h.focused = true;
   setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
@@ -130,23 +133,31 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlob
 
 // #5759, unit: exercise the actual direct hook/client, not the remote-resource
 // mock. A human-signed proposal previously rendered as text and rejected plan-start.
-it.each(['receipt', 'leave', 'unmount'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
+// The blur cases retain the original group in the navigation stack while its snapshot is pending.
+it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
   const planId = '00000000-0000-4000-8000-000000000040';
   let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
     request_text: 'Build', kind: 'work', status: 'proposed', current_step: null as number | null,
     created_at: '2026-10-09', updated_at: '2026-10-09',
     steps: [{ position: 0, botId: self, botName: 'Builder', task: 'Build', status: 'pending' }] };
   let finish!: () => void;
+  let writes = 0;
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
   const mutation = new Promise<void>(resolve => { finish = resolve; });
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
-    if (path.includes('/plans') && options.method === 'POST') { await mutation; return { ok: true }; }
+    if (path.includes('/plans') && options.method === 'POST') {
+      await mutation;
+      if (transition === 'blur-before-submit') return apiFetchRaw(path, options);
+      writes++;
+      return { ok: true };
+    }
     if (path.includes('/plans')) return [plan];
     return original(path, options);
   });
   showChat = true; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ id: planId, status: 'proposed' }] } });
-  if (transition !== 'receipt') {
+  if (transition !== 'receipt' && transition !== 'blur-before-submit') {
     const loaded = h.auth.apiFetch.getMockImplementation()!;
     h.auth.apiFetch.mockImplementation(async (path, options) => {
       if (path.endsWith('/snapshot')) await mutation;
@@ -159,10 +170,25 @@ it.each(['receipt', 'leave', 'unmount'])('handles a direct plan action across %s
   if (transition !== 'receipt') {
     await act(async () => {
       if (transition === 'unmount') { root!.unmount(); root = undefined; }
+      else if (transition === 'blur' || transition === 'refocus' || transition === 'blur-before-submit') { h.focused = false; await render(); }
       else { showChat = false; await render(); }
     });
-    await act(async () => { finish(); await expect(first).rejects.toThrow('OWNER_CHANGED'); });
-    expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toBe(false);
+    if (transition === 'refocus') { h.focused = true; await render(); }
+    await act(async () => {
+      finish();
+      await expect(first).rejects.toThrow(transition === 'blur-before-submit' ? 'Request cancelled' : 'OWNER_CHANGED');
+    });
+    expect(writes).toBe(0);
+    if (transition !== 'blur-before-submit') {
+      expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toBe(false);
+    } else {
+      // Auth can still be awaiting a token after preflight; the real transport must not send.
+      expect(fetch).not.toHaveBeenCalled();
+    }
+    if (transition === 'refocus') {
+      await act(async () => { await chat.act('plan-start', { planId }); });
+      expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+    }
     return;
   }
   plan = { ...plan, revision: 3, status: 'running', current_step: 0, steps: [{ ...plan.steps[0], status: 'running' }] };

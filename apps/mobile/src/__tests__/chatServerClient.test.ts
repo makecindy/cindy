@@ -57,9 +57,10 @@ describe('direct group plans', () => {
     state.snapshot.members.push({ ...state.snapshot.members[0], id: id(12), kind: 'bot', role: 'admin', ownerActorId: id(10) });
     const page = await client.load(id(1));
     expect(chatGroupView(page, id(10)).plans[0].canManage).toBe(true);
-    await client.actPlan(id(1), page.plans![0], { action: 'dismiss' }, 'operation-plan-dismiss');
+    const controller = new AbortController();
+    await client.actPlan(id(1), page.plans![0], { action: 'dismiss' }, 'operation-plan-dismiss', () => true, controller.signal);
     expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
-      { operationId: 'operation-plan-dismiss', expectedRevision: 3, action: 'stop' }, id(12));
+      { operationId: 'operation-plan-dismiss', expectedRevision: 3, action: 'stop' }, id(12), controller.signal);
   });
   it('refuses another member’s plan and rejects a lost manager role before writing', async () => {
     const { client, state, request } = fixture();
@@ -86,7 +87,7 @@ describe('direct group plans', () => {
       ? Promise.reject(Object.assign(new Error('REVISION_CONFLICT'), { status: 409 })) : original(path, method));
     await expect(client.actPlan(id(1), page.plans![0], { action: action as any }, 'operation-plan-conflict')).rejects.toThrow('REVISION_CONFLICT');
     expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
-      { operationId: 'operation-plan-conflict', expectedRevision: 3, action }, undefined);
+      { operationId: 'operation-plan-conflict', expectedRevision: 3, action }, undefined, undefined);
   });
   it('keeps unsupported plan cards distinct from own messages without hiding access errors', async () => {
     const { client, request } = fixture();
@@ -119,7 +120,7 @@ describe('direct group plans', () => {
     const page = await client.load(id(1));
     await client.actPlan(id(1), page.plans![0], { action: 'reassign', position: 0, botId: id(14) }, 'reassign');
     expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
-      { action: 'reassign', position: 0, botId: id(14), expectedRevision: 3, operationId: 'reassign' }, undefined);
+      { action: 'reassign', position: 0, botId: id(14), expectedRevision: 3, operationId: 'reassign' }, undefined, undefined);
     await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'talk' }, { action: 'remove', position: 0 }, 'remove')).rejects.toThrow('PLAN_CLOSED');
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
   });

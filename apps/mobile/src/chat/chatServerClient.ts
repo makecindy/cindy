@@ -795,7 +795,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
         ...(Array.isArray(executions) ? { executions } : {}) };
     },
-    async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true) {
+    async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
       const room = chatId(roomId);
       const planId = chatId(plan.id);
       if (!Number.isSafeInteger(plan.revision) || plan.revision < 1) throw new Error('INVALID_CHAT_RESPONSE');
@@ -826,7 +826,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       // Use the revision the user saw. Never rebase a click onto a later step/revision.
       await request(`/conversations/${room}/plans/${planId}`, 'POST',
-        { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id);
+        { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
     },
     async stop(roomId: string, operationId: string) {
       const room = chatId(roomId);
