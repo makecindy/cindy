@@ -408,6 +408,9 @@ function createWarmRealtimeSession(
         // leave that unauthenticated/idle socket alive after its promise has
         // rejected; it can otherwise linger until the upstream closes it.
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          // Terminating a CONNECTING ws emits an error after cleanup removes
+          // onError. Keep a listener until the socket is gone.
+          if (socket.readyState === WebSocket.CONNECTING) socket.on('error', () => undefined);
           socket.terminate();
         }
         reject(error);
