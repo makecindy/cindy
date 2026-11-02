@@ -10,6 +10,23 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — ROADMAP 3.8a: expert creator (`unit-tested`)
+
+**Changes (ADR 0007):**
+- `packages/maker-core/src/experts/expert-draft.ts` (subpath `@cindy/maker-core/expert-draft`): `validateExpertDraft` (loader rules plus limits; rejects `tools`/non-Hermes `agent`), `renderExpertMarkdown`, `writeExpertDraft` (hidden temp folder in the experts root → `expert.md` → loaded back → rename; refuses an existing slug before and right before the rename).
+- `apps/desktop/src/main/mcp-integrations/expertsMcpServer.ts`: server `cindy_experts`, tool `draft_expert`. Refuses non-Hermes / no-session calls and sessions not bound to an expert listing `draft_expert`; sends invalid drafts and taken slugs back to the model without asking the owner; otherwise waits for the owner, then writes or returns `rejected` (with the owner's note) / `no_answer`.
+- `apps/desktop/src/main/maker-ipc/expertDraftConfirm.ts`: one waiting draft per session, 9-minute timeout (`HOST_CONFIRM_TIMEOUT_MS`) = no answer; anything but `approved: true` counts as Reject. IPC in `expertsHandlers.ts` (`maker:experts:draft-list`, `maker:experts:draft-decide`, push `maker:experts:draft-event`), `channels.ts`, `register.ts`, preload, `vite-env.d.ts`.
+- `expertSessions.ts`: `ExpertSessionStore.expertAllowsTool` (bound expert; the pending pick only for the start-of-session tool list).
+- `hermesBridgeHost.ts`: `HERMES_BRIDGE_EXPERT_SERVERS = ['cindy_experts']`, dep `expertCreator`. `piEnvironment.ts`: `setHermesOnlyBridgeProviders` appends Hermes-only providers to the shared bridge whoever starts it; Pi's `capabilityGated` drops them, so Pi's tool set, provider array and Bot catalogs are unchanged. `maker-host/index.ts` wires both.
+- Renderer: `HermesExpertDraftCard.tsx` (portal card: exact `expert.md`, target path, model, memory, tags, optional note, Approve / Reject), mounted in `SessionContentHeader.tsx`.
+- `docs/experts-examples/expert-creator/expert.md` (new prompt text, `tools: [draft_expert]`), README note; `docs/decisions/0007-expert-creator-tool.md`.
+
+**Verification:** `unit-tested`. New/extended tests: expert-draft 18, starter experts +1, expertsMcpServer 7 (in-memory MCP client), expertDraftConfirm 4, expertSessions +2 (gate, draft IPC), hermesBridgeHost +2 (incl. real shared bridge: creator session reaches `cindy_experts`, plain session blocked and its shim entry removed, Pi session never mounts it), draft card +1. Mutation checks: 11 of 12 caught on first run; the miss on "approved must be exactly true" got a new test, now caught; the other miss (first exists-check in `writeExpertDraft` removed) is covered by the second check, behaviour unchanged. Gates in the cloud container: `pnpm typecheck` exit 0 (needed `NODE_OPTIONS=--max-old-space-size=7168`; `apps/mobile` ran out of heap without it), `pnpm test:runner` exit 0, `pnpm check:test-hygiene` exit 0. `pnpm test:unit:related` selected the full desktop suite (shared files touched); cindy-headless PASS, then stopped at the owner's request ("just push it, I'll run the 8 shards"): desktop/maker-core/lizi-mcps/orca-workflow unit to be run on the owner's Mac (desktop as 8 shards).
+
+**Open (3.8b):** live proof on the Mac. Surprising: Hermes shares Pi's bridge, and the bridge keeps the provider list of whichever agent started it first, so a Hermes-only tool cannot simply be passed through the Hermes preparer.
+
+---
+
 ## 2026-11-02 — 3.7b `live-proven` (owner)
 
 - Gate: `apps/desktop unit` 8/8 shards PASS on the owner's Mac (PR #7 head `dda2a8e4`).
