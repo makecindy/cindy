@@ -384,11 +384,31 @@ type DeviceListResult = { devices: DeviceLinkDeviceView[] };
  * 不能进入 reconcile 写回旧名称/空值，也不能把旧列表重新交给 UI。
  */
 let deviceListRequestSequence = 0;
-let latestDeviceListRequest: { sequence: number; promise: Promise<DeviceListResult> } | null = null;
+let latestDeviceListRequest: {
+  sequence: number;
+  promise: Promise<DeviceListResult>;
+  startedAt: number;
+  settled: boolean;
+} | null = null;
+/**
+ * 启动与重连时 3–4 个 renderer 入口(侧栏、切换栏、设置页、main 自身)在同一拍里各发一次
+ * /devices。在途请求在这个窗口内的后来者直接共用它:目录快照本来就是同一时刻的,
+ * 多发只是多占一次往返和服务端查询。窗口外(或已结束)的请求仍代表新的目录意图,照常新发。
+ */
+const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
+
+/** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
+export function __resetDeviceListCoalescingForTests(): void {
+  latestDeviceListRequest = null;
+}
 
 export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
+  const inFlight = latestDeviceListRequest;
+  if (inFlight && !inFlight.settled && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+    return inFlight.promise;
+  }
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
@@ -424,7 +444,12 @@ export function handleListDevices(
       rethrowServerError(err);
     },
   );
-  latestDeviceListRequest = { sequence, promise: request };
+  const entry = { sequence, promise: request, startedAt: Date.now(), settled: false };
+  latestDeviceListRequest = entry;
+  void request.then(
+    () => { entry.settled = true; },
+    () => { entry.settled = true; },
+  );
   return request;
 }
 
