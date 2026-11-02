@@ -77,6 +77,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     dialogues: [],
     allKnownProjects: [],
     allProjectKeysForOrder: [],
+    dataOwnerId: null,
     bots: [],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),

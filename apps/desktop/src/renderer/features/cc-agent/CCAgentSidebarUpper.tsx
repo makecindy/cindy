@@ -1664,8 +1664,11 @@ function ExpandedView({
   // 并非不存在;codex)。collapse 仍用机器过滤后的 activeWorkingDirs(collapseAll / isAllCollapsed
   // 针对当前可见项目),渲染也仍走机器过滤后的 allGroups / groups。
   const unfilteredProjectSessions = useMemo(
-    () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
-    [sessions, remoteProjectSessions, passesOrcaAndStatus],
+    () =>
+      [...allSessionsForAttention, ...remoteProjectSessions].filter(
+        (session) => !isOrcaWorkerSession(session),
+      ),
+    [allSessionsForAttention, remoteProjectSessions],
   );
   const projectUniverse = useProjectGroups(
     unfilteredProjectSessions,
@@ -3906,6 +3909,7 @@ function ExpandedView({
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}
                   filter={filter}
+                  dataOwnerId={sidebarSettingsSnapshot.dataOwnerId}
                   collapsed={collapse.collapsed}
                   isAllCollapsed={collapse.isAllCollapsed}
                   activeSessionId={activeSessionId}

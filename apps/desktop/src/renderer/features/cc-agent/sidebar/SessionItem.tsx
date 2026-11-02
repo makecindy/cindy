@@ -299,6 +299,7 @@ export interface SessionItemProps {
    * 自己行上展示立即运行入口。
    */
   insideAutomationGroup?: boolean;
+  sessionOrderHandle?: boolean;
 }
 
 export interface SessionClickModifiers {
@@ -345,6 +346,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
+  sessionOrderHandle = false,
   navigationOnly = false,
   sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
@@ -644,6 +646,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     inSortableContainer: true,
     sortableDragBlocked: false,
     nativeSortable: false,
+    projectSessionOrder: false,
   });
   useEffect(() => {
     const row = rowRef.current;
@@ -651,6 +654,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
       nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
+      projectSessionOrder: Boolean(row?.closest('[data-sortable-session-order]')),
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
@@ -914,6 +918,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       data-session-id={session.id}
       data-sidebar-session-row={navigationOnly ? undefined : 'true'}
       data-sidebar-navigation-row={navigationOnly ? 'true' : undefined}
+      data-sidebar-session-order-handle={sessionOrderHandle ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
