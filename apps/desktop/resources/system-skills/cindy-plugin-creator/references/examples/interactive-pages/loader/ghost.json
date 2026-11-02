@@ -3,7 +3,7 @@
   "id": "interactive-loader",
   "name": "动态页面示例",
   "version": "1.0.0",
-  "minCindyVersion": "0.1.123-beta",
+  "minCindyVersion": "0.1.122-beta",
   "entry": "main.js",
   "command": "interactive-loader",
   "whenToUse": "需要查看和编辑记录、显示交互表单时使用",
