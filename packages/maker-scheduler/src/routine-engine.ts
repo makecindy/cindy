@@ -175,6 +175,23 @@ export class RoutineEngine {
         return loaded;
       });
       this.state = saved;
+      // Legacy saves could persist an empty id. Restore manageability and keep history,
+      // but only remap ids keyed by the empty value when it is unambiguous.
+      const emptyIdRoutines = this.state.routines.filter((routine) => routine.id === "");
+      for (const routine of emptyIdRoutines) routine.id = this.deps.id();
+      if (emptyIdRoutines.length === 1) {
+        const [legacy] = emptyIdRoutines;
+        for (const run of this.state.runs)
+          if (run.routineId === "") run.routineId = legacy.id;
+      }
+      // A ":"-prefixed cursor has no possible owner; rekey the unambiguous legacy
+      // routine's cursors, otherwise drop the unreachable junk.
+      for (const key of Object.keys(this.state.next))
+        if (key.startsWith(":")) {
+          if (emptyIdRoutines.length === 1)
+            this.state.next[`${emptyIdRoutines[0].id}${key}`] = this.state.next[key];
+          delete this.state.next[key];
+        }
     }
     this.state.receipts = compactRoutineReceipts(this.state.receipts, this.deps.now());
     for (const [botId, status] of botStates ?? []) this.applyBotState(this.state, botId, status);
@@ -330,7 +347,8 @@ export class RoutineEngine {
 
   private async writeRoutine(botId: string, raw: RoutineInput, options: { id?: string; expectedRevision?: number; creationId?: string; builtin?: RoutineBuiltin; builtinVersion?: number }): Promise<Routine> {
     const { expectedRevision, creationId } = options;
-    const id = options.id ?? creationId;
+    // Some models send "" to mean "no id"; treat it exactly like an omitted id.
+    const id = options.id || creationId;
     const parsed = parseRoutineInput(raw);
     return this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
