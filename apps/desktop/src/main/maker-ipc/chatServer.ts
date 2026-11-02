@@ -3044,7 +3044,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (message.threadRootId) throw new Error('MAIN_MESSAGE_REQUIRED');
         const read = snapshot.reads.find(entry => entry.thread_key === 'main')?.read_seq ?? '0';
         if (BigInt(message.seq) > BigInt(read)) {
-          await writeReadState(target, { operationId: `read-main:${message.seq}`, readSeq: message.seq });
+          await writeReadState(target, { operationId: `read-main:${target}:${message.seq}`, readSeq: message.seq });
         }
         return {};
       }
