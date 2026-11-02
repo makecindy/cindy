@@ -10,6 +10,15 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.2a fail-closed route check `live-proven` (owner)
+
+- Throwaway expert `~/.cindy-harness/experts/route-test` (`model: lmstudio-local/google/gemma-4-26b-a4b-qat`), new Hermes task on `qwen3-8b (lmstudio-local)`, sent "hi".
+- Observed: "Could not complete the reply" with details `Expert "Route Test": this expert runs on route "lmstudio-local/google/gemma-4-26b-a4b-qat" (lmstudio-local/google/gemma-4-26b-a4b-qat), but the session is on "qwen3-8b". Pick google/gemma-4-26b-a4b-qat in the model menu and send again.` No model reply (0% context), model unchanged.
+- First attempt used `model: local-small`; it was correctly *allowed*, because the owner's `local-small` route is `lmstudio-local/qwen3-8b` (same model as the session). The expert prompt was visibly applied ("testing tasks"). A second Code Reviewer session also answered in role.
+- Learned (polish, 2.4-style): the named reason sits behind "Details"; the generic banner says only "Could not complete the reply". Logged under 2.4 polish, not fixed here.
+
+---
+
 ## 2026-11-01 — ROADMAP 3.2a `live-proven`; 3.5b Code Reviewer passed (owner)
 
 - Setup: `docs/experts-examples/code-reviewer` copied to `~/.cindy-harness/experts/code-reviewer` (new file, nothing overwritten). App restarted on `main` at `c958a9e7` (PR #4 merged).
