@@ -79,4 +79,5 @@ export * from "./taskMigration.js";
 export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
+export * from "./machineStatus.js";
 export * from "./pluginPages.js";
