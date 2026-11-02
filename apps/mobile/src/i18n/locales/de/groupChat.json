@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "Stoppen"
+  },
   "title": "Gruppenchats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} Mitglied",

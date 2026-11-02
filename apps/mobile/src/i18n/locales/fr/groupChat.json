@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "Arrêter"
+  },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",

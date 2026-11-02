@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "Detener"
+  },
   "title": "Chats grupales",
   "memberSeparator": ", ",
   "memberCount_one": "Miembro de {{count}}",
