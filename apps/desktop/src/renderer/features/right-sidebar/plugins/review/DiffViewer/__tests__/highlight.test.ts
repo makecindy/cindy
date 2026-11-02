@@ -5,7 +5,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { useMemo } from 'react';
 import type { FileDiff } from '@/lib/gitReview.types';
 import { buildDiffRows } from '../diffRows';
-import { highlightLine } from '../highlight';
+import { getCachedHighlight, highlightLine } from '../highlight';
 import { useDiffHighlights } from '../useDiffHighlights';
 
 type WorkerListener = (event: MessageEvent | ErrorEvent) => void;
@@ -65,6 +65,8 @@ describe('DiffViewer highlight worker', () => {
   // Unit regression: revisiting a diff must show its cached highlighting on the
   // first render, without replacing plain text in a second accessibility update.
   // Existing worker tests did not cover the hook's unmount/remount lifecycle.
+  // PR #8490: after a cached remount, evict the shared cache and refresh identical
+  // rows. Every render must retain highlighting, avoiding a plain-text AX update.
   it('reuses cached highlighting on the first render after returning to a diff', async () => {
     vi.stubGlobal('Worker', MockHighlightWorker);
     const content = 'const revisited = 1;';
@@ -97,6 +99,19 @@ describe('DiffViewer highlight worker', () => {
       return highlights;
     }, { initialProps: { value: diff } });
     expect(rendered[0]).toBe(html);
+
+    // Fill the real shared LRU through its production entry point; no fake timers
+    // or module reset can substitute for the eviction that caused this regression.
+    for (let i = 0; i < 2000; i += 1) {
+      const otherContent = `const cachePressure${i} = 0;`;
+      const pending = highlightLine('typescript', otherContent);
+      MockHighlightWorker.instances[0].respond(otherContent);
+      await pending;
+    }
+    expect(getCachedHighlight('typescript', content)).toBeUndefined();
+    const beforeRefresh = rendered.length;
+    returned.rerender({ value: structuredClone(diff) });
+    expect(rendered.slice(beforeRefresh).every((value) => value === html)).toBe(true);
 
     const changed = structuredClone(diff);
     changed.hunks[0].lines[0].content = 'const revisited = 2;';

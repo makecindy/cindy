@@ -40,7 +40,13 @@ export function useDiffHighlights(diff: FileDiff, rows: readonly DiffRenderRow[]
     if (typeof Worker === 'undefined' || shouldSkipHighlightDiff(rows)) return;
 
     const lines = collectHighlightLines(rows);
-    if (lines.length === 0 || cachedHighlights.size === lines.length) return;
+    if (lines.length === 0) return;
+    if (cachedHighlights.size === lines.length) {
+      // Keep this diff's tokens even if other files later evict the shared LRU.
+      // Refreshing identical rows must not briefly publish plain text again.
+      setState((current) => current.signature === signature ? current : { signature, values: cachedHighlights });
+      return;
+    }
 
     let cancelled = false;
     void (async () => {
