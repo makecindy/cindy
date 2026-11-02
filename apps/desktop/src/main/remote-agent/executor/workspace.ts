@@ -583,16 +583,27 @@ export class ExecutorWorkspace {
 
   /** Agent 启动后才知道它那边的影子目录，届时设置。 */
   setAliases(aliases: readonly ExecutorPathAlias[]): void {
+    this.installAliases(this.expandAliases(aliases));
+  }
+
+  private expandAliases(
+    aliases: readonly ExecutorPathAlias[],
+    canonicalPathsByTarget = new Map<string, readonly string[]>(),
+  ): ExecutorPathAlias[] {
     const expanded: ExecutorPathAlias[] = [];
     for (const alias of aliases) {
       if (!alias.from || !path.isAbsolute(alias.to)) continue;
       expanded.push(alias);
-      const canonicalPaths = [realPathOrAncestor(alias.to), realPathOrAncestorPortable(alias.to)];
+      let canonicalPaths = canonicalPathsByTarget.get(alias.to);
+      if (!canonicalPaths) {
+        canonicalPaths = [realPathOrAncestor(alias.to), realPathOrAncestorPortable(alias.to)];
+        canonicalPathsByTarget.set(alias.to, canonicalPaths);
+      }
       for (const canonical of canonicalPaths) {
         if (path.resolve(canonical) !== path.resolve(alias.to)) expanded.push({ from: alias.from, to: canonical });
       }
     }
-    this.installAliases(expanded);
+    return expanded;
   }
 
   private installAliases(expanded: readonly ExecutorPathAlias[]): void {
@@ -641,12 +652,15 @@ export class ExecutorWorkspace {
   virtualizeDirs(dirs: readonly string[]): string[] {
     if (!this.virtualRoot) return [...dirs];
     const native = /^[A-Za-z]:|^\\\\/.test(this.virtualRoot) ? path.win32 : path.posix;
+    // PATH 注册会逐个加入目录；同一批不应在每次加入时重开全部旧目录。
+    // 快照仅属于这次展示映射，下一批重新解析，权限判断不使用它。
+    const canonical = new Map<string, readonly string[]>();
     return dirs.map((dir) => {
       const real = this.resolve(dir);
       const exact = this.aliases.find((alias) => path.resolve(alias.to) === real);
       if (exact) return exact.from;
       const virtual = native.join(this.virtualRoot!, 'additional', 'runtime-' + this.aliases.length);
-      this.setAliases([...this.aliases, { from: virtual, to: real }]);
+      this.installAliases(this.expandAliases([...this.aliases, { from: virtual, to: real }], canonical));
       return virtual;
     });
   }
