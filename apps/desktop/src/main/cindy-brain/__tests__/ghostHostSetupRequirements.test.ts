@@ -20,12 +20,20 @@ function manifest(id: string, cindy = false): GhostManifest {
 
 describe('assessGhostHostSetupRequirements', () => {
   it('does not infer model-provider setup from unknown declarations', () => {
-    const parsed = validateGhostManifest({ schemaVersion: 3, minCindyVersion: '0.1.0',
-      id: 'future', name: 'Future', version: '1.0.0', entry: 'main.js',
-      cindy: { future: { enabled: true }, image: ['future-action'] } });
+    const parsed = validateGhostManifest({
+      schemaVersion: 3,
+      minCindyVersion: '0.1.0',
+      id: 'future',
+      name: 'Future',
+      version: '1.0.0',
+      entry: 'main.js',
+      cindy: { future: { enabled: true }, image: ['future-action'] },
+    });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(assessGhostHostSetupRequirements(parsed.manifest, { clientConfigReady: () => false })).toEqual([]);
+    expect(
+      assessGhostHostSetupRequirements(parsed.manifest, { clientConfigReady: () => false }),
+    ).toEqual([]);
   });
   beforeEach(() => {
     setMainLocale('en');
@@ -92,6 +100,16 @@ describe('assessGhostHostSetupRequirements', () => {
       assessGhostHostSetupRequirements(manifest('gmail'), {
         clientConfigReady: () => false,
       }),
+    ).toEqual([]);
+  });
+
+  it('does not require a model provider for media deposit', () => {
+    const depositOnly: GhostManifest = {
+      ...manifest('media-deposit'),
+      cindy: { media: ['deposit'] },
+    };
+    expect(
+      assessGhostHostSetupRequirements(depositOnly, { clientConfigReady: () => false }),
     ).toEqual([]);
   });
 });

@@ -142,6 +142,7 @@ OAuth 授权：
 - 生成允许执行的 action 白名单；
 - 校验 Agent setup plan，非法或缺失 plan 时生成安全默认 plan；
 - 在任何附件授权、目录票据、沙箱启动、卡片注册或插件派发前执行 setup gate；
+- `client_config:model-provider` 必须由实际执行能力的目录与凭证状态判定，不能把某一个供应商当作全部模型服务的代理；插件声明多类模型能力时，只要其中一条已声明的执行路线可用，就满足这项宿主配置，逐次请求的模型与凭证仍由执行层校验；
 - 执行 Action、订阅配置变更、重新判定、广播卡片更新；
 - ready 后继续原 `ghost_call`；
 - 配置变化后再次验证插件存在、enabled、workdir policy、tool existence 和 setup；

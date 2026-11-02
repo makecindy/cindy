@@ -733,6 +733,7 @@ import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTrack
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessGhostHostSetupRequirements } from './ghostHostSetupRequirements.js';
+import { isGhostModelProviderReady } from './ghostModelProviderReadiness.js';
 import { isModelAccessReady } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
@@ -6148,6 +6149,17 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   }
   const storeId = installedGhostStoragePart(ghost);
   const runtimeManifest = ghost.manifest;
+  // Use the same executable media catalog as Core/Art. The former xd-only
+  // probe blocked valid OpenAI, xAI, Gemini, BYOK and custom image routes.
+  const isModelProviderReady = isGhostModelProviderReady(runtimeManifest, {
+    imageGenerate: () => getCatalogImageConfig('generate').models.length > 0,
+    imageEdit: () => getCatalogImageConfig('edit').models.length > 0,
+    videoGenerate: () => getCatalogVideoConfig('generate').models.length > 0,
+    videoEdit: () => getCatalogVideoConfig('edit').models.length > 0,
+    textOneshot: isModelAccessReady,
+    embedText: () => getCatalogEmbedConfig().models.length > 0,
+    webSearch: isModelAccessReady,
+  });
   const assessment = evaluateGhostSetupAssessment(
     runtimeManifest,
     getGhostSetupProbes(storeId, runtimeManifest),
@@ -6155,7 +6167,7 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       revision: getGhostSetupChangeBus().currentRevision(storeId),
       strict: true,
       additionalGroups: assessGhostHostSetupRequirements(runtimeManifest, {
-        clientConfigReady: (configId) => configId === 'model-provider' && isModelAccessReady(),
+        clientConfigReady: (configId) => configId === 'model-provider' && isModelProviderReady,
       }),
     },
   );

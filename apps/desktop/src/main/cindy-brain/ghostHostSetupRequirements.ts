@@ -8,11 +8,11 @@
  */
 
 import type { GhostManifest, GhostSetupAssessmentGroup } from '../../shared/ghost.js';
-import { ghostPermissionItems } from '../../shared/ghost.js';
 import { t } from '../i18n.js';
+import { ghostRequiresModelProvider } from './ghostModelProviderReadiness.js';
 
 export interface GhostHostSetupRequirementProbes {
-  clientConfigReady(configId: string): boolean;
+  clientConfigReady(configId: string, manifest: GhostManifest): boolean;
 }
 
 interface GhostHostSetupRequirementProvider {
@@ -27,8 +27,7 @@ const providers: readonly GhostHostSetupRequirementProvider[] = [
     configId: 'model-provider',
     labelKey: 'newChat.pluginSetup.hostRequirements.modelProvider.label',
     descriptionKey: 'newChat.pluginSetup.hostRequirements.modelProvider.description',
-    matches: (manifest) =>
-      ghostPermissionItems(manifest).some((item) => item.kind === 'cindy'),
+    matches: ghostRequiresModelProvider,
   },
 ];
 
@@ -39,7 +38,7 @@ export function assessGhostHostSetupRequirements(
   return providers
     .filter((provider) => provider.matches(manifest))
     .map((provider) => {
-      const satisfied = probes.clientConfigReady(provider.configId);
+      const satisfied = probes.clientConfigReady(provider.configId, manifest);
       const ref = `client_config:${provider.configId}`;
       return {
         id: `host:${ref}`,
