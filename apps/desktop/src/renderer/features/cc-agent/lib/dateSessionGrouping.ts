@@ -42,10 +42,15 @@ function localDayKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function localDayOrdinal(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS;
+}
+
 function classifyActivityDate(activity: Date, now: Date): Pick<DateSessionGroup, 'kind' | 'dayKey' | 'date'> {
   const todayStart = startOfLocalDay(now);
   const activityStart = startOfLocalDay(activity);
-  const diffDays = Math.floor((todayStart.getTime() - activityStart.getTime()) / DAY_MS);
+  // 日历日差不能除以本地午夜的真实毫秒长度；DST 开始日只有 23 小时。
+  const diffDays = localDayOrdinal(now) - localDayOrdinal(activity);
 
   if (diffDays <= 0) {
     return { kind: 'today', dayKey: localDayKey(todayStart), date: todayStart };
