@@ -414,6 +414,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       const latest = page.current;
       const plan = latest?.identity === identity ? latest.page.plans?.find(plan => plan.id === input?.planId) : undefined;
       if (!plan || !freshRead.current) throw new Error('CHAT_READ_FAILED');
+      if (input?.expectedRevision !== plan.revision) { reload(); throw new Error('REVISION_CONFLICT'); }
       if (planAction.current?.identity === identity && planAction.current.pending) throw new Error('PLAN_OPEN');
       const edit = action === 'plan-edit';
       if (edit && (input?.action !== 'remove' && input?.action !== 'reassign' || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');

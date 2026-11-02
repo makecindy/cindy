@@ -187,7 +187,7 @@ export function BotGroupPlanCard({
             }],
           });
         }
-        return <BotGroupMenu key={step.position} title={t('groupChat.plan.stepMenuTitle')} sections={sections} disabled={busy}
+        return <BotGroupMenu key={`${plan.id}:${plan.revision ?? ''}:${step.position}`} title={t('groupChat.plan.stepMenuTitle')} sections={sections} disabled={busy}
           accessibilityLabel={label} testID={`botGroup.plan.stepMenu.${step.position}`}
           onSelect={(id) => {
             if (id === REMOVE_STEP_ID) onEditStep(step, 'remove');

@@ -132,7 +132,7 @@ function messagePlanId(message: ChatMessage): string | null {
 }
 
 function chatPlanView(plan: ChatPlan, snapshot: ChatSnapshot, self: string): BotGroupPlanView {
-  return { id: plan.id, status: plan.status, organizerBotId: plan.organizer_id,
+  return { id: plan.id, revision: plan.revision, status: plan.status, organizerBotId: plan.organizer_id,
     organizerName: snapshot.members.find(member => member.id === plan.organizer_id)?.name ?? '',
     steps: plan.steps, currentStep: plan.current_step, workDir: null, branch: null,
     ...(plan.kind ? { kind: plan.kind } : {}),

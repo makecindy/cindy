@@ -165,8 +165,8 @@ it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit']
     });
   }
   let first!: Promise<unknown>;
-  await act(async () => { first = chat.act('plan-start', { planId }); });
-  await act(async () => { await expect(chat.act('plan-start', { planId })).rejects.toThrow('PLAN_OPEN'); });
+  await act(async () => { first = chat.act('plan-start', { planId, expectedRevision: 2 }); });
+  await act(async () => { await expect(chat.act('plan-start', { planId, expectedRevision: 2 })).rejects.toThrow('PLAN_OPEN'); });
   if (transition !== 'receipt') {
     await act(async () => {
       if (transition === 'unmount') { root!.unmount(); root = undefined; }
@@ -186,7 +186,7 @@ it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit']
       expect(fetch).not.toHaveBeenCalled();
     }
     if (transition === 'refocus') {
-      await act(async () => { await chat.act('plan-start', { planId }); });
+      await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 2 }); });
       expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
     }
     return;
@@ -196,6 +196,30 @@ it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit']
   expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
   expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ status: 'running' }] } });
   expect(h.link.invoke).not.toHaveBeenCalled();
+});
+
+// #8456, unit: refresh while a positional edit is open; the old callback must not borrow a newer revision.
+it('rejects a stale step edit after refresh and sends the displayed revision on a new edit', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self,
+    status: 'proposed', current_step: null, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1, 2].map(position => ({ position, botId: self, botName: 'Builder', task: 'Build', status: 'pending' })) };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const writes: unknown[] = [];
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  const oldAct = chat.act;
+  plan = { ...plan, revision: 3, steps: plan.steps.slice(1).map((step, position) => ({ ...step, position })) };
+  await act(async () => { chat.reload(); });
+  await act(async () => { await expect(oldAct('plan-edit', { planId, position: 0, action: 'remove', expectedRevision: 2 })).rejects.toThrow('REVISION_CONFLICT'); });
+  expect(writes).toEqual([]);
+  await act(async () => { await expect(chat.act('plan-start', { planId })).rejects.toThrow('REVISION_CONFLICT'); });
+  await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 3 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 3, action: 'start' })]);
 });
 
 // #7847 review: real hook/client pagination must survive a concurrent summary read.
