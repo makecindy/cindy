@@ -19,7 +19,7 @@ import type { CompanionHomeRegistry } from './homes.js';
 import type { CompanionArrivalNotice } from './capabilities.js';
 import { materializeCompanion, rebuildPending, type CompanionHistoryAttachment, type CompanionMaterializeHost, type CompanionMaterializeResult, type CompanionRoomDownload } from './materialize.js';
 import { createCompanionMirror, type CompanionMediaUpload, type CompanionMirrorAttachment, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
-import { readAllRoomMessages, transcriptPageOf } from './room.js';
+import { readAllRoomMessages, searchCompanionRooms, transcriptPageOf, type CompanionRoomSearchResult } from './room.js';
 import { resolveCompanionSkillFiles } from './skillFiles.js';
 import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './merge.js';
 import { importCloudHistory } from './materialize.js';
@@ -85,6 +85,8 @@ export interface CompanionCloudRuntime {
   kickMirror: (botId?: string) => void;
   roomIdFor: (botId: string) => string | null;
   isDirectRoom: (roomId: string) => boolean;
+  /** Search the rooms of companions that run on another computer; this computer already holds its own. */
+  searchOtherRooms: (query: string, options: { teammateId?: string; limit: number }) => Promise<CompanionRoomSearchResult>;
   /** One full upload + mirror pass (tests and explicit refresh). */
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
@@ -815,6 +817,13 @@ export function startCompanionCloud(input: {
       transcripts.delete(roomId);
       publish();
       return true;
+    },
+
+    searchOtherRooms(query, { teammateId, limit }) {
+      const others = (input.actors?.() ?? []).filter(actor => actor.kind === 'bot' && !actor.disabled && actor.homeDeviceId
+        && actor.homeDeviceId !== input.selfDeviceId && (!teammateId || actor.externalId === teammateId));
+      return searchCompanionRooms(input.api, others.map(actor => ({ id: actor.id, externalId: actor.externalId, name: actor.name,
+        room: () => mirror.ensureRoom(actor.externalId, actor.id, actor.name) })), query, limit);
     },
 
     async transcript(botId, before) {

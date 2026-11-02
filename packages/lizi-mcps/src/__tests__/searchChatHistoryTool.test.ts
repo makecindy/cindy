@@ -241,3 +241,42 @@ describe('search_chat_history tool', () => {
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
 });
+
+describe('search_chat_history cloud companion rooms', () => {
+  const room = { teammateId: 'bot_a', teammateName: 'Cindy', messageId: 'm1', role: 'assistant' as const, text: 'brew', createdAt: 2_000 };
+  const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean } = {}) => {
+    const searchCompanionRooms = vi.fn(async () => ({ hits: [room, { ...room, messageId: 'm2', role: 'user' as const, createdAt: 500 }], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }] }));
+    const registry = new XdtHelperToolRegistry();
+    registerSearchChatHistoryTool(registry, {
+      history: {
+        searchChatHistory: async () => ({ ok: true, result: makeResult() }),
+        searchCompanionRooms,
+        ...(opts.scoped ? { resolveSessionScope: async () => ({ ok: true as const, sessionIds: ['own'] }) } : {}),
+      } as unknown as XdtHelperHistoryDeps,
+      getSessionContext: () => (opts.session === undefined ? undefined : { sessionId: opts.session } as never),
+    });
+    const result = await registry.call('search_chat_history', { query: ' brew ', ...input });
+    return { payload: JSON.parse((result.content[0] as { text: string }).text), searchCompanionRooms };
+  };
+
+  it('adds what companions on other computers said, and says which rooms it could not read', async () => {
+    const { payload, searchCompanionRooms } = await call({ teammate_id: 'bot_a', from: '1970-01-01T00:00:01.000Z' }, { session: 's1' });
+    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', limit: 10, callerSessionId: 's1', teammateId: 'bot_a' });
+    expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
+    expect(payload.cloud_hits[0].createdAt).toBe('1970-01-01T00:00:02.000Z');
+    expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);
+  });
+
+  it('stays local for a remote query, a scoped caller, later pages and filters the room cannot honor', async () => {
+    for (const [input, opts] of [
+      [{}, {}],
+      [{}, { session: 's1', scoped: true }],
+      [{ cursor: Buffer.from(JSON.stringify({ o: 10 }), 'utf8').toString('base64url') }, { session: 's1' }],
+      [{ workdir: '/w' }, { session: 's1' }],
+    ] as const) {
+      const { payload, searchCompanionRooms } = await call(input, opts);
+      expect(searchCompanionRooms).not.toHaveBeenCalled();
+      expect(payload.cloud_hits).toBeUndefined();
+    }
+  });
+});

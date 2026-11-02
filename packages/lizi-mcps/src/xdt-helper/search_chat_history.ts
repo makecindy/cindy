@@ -71,6 +71,9 @@ const DESCRIPTION = [
   '  - sessions: { [sessionId]: { workingDir, agentKind, title } } 命中涉及的 session 元数据。',
   '  - vector_used / vector_skip_reason / pool_size / pool_capped 诊断字段。',
   '',
+  '【云端伙伴】主力电脑在别的电脑上的伙伴，这台电脑没有完整记录：首页另带 cloud_hits（直接查伙伴的云端对话，那台电脑离线也能查）和 cloud_failed（没查到的伙伴）。',
+  '云端只做关键词子串匹配，自然语言整句通常搜不到，没结果时换短关键词再试。只支持 teammate_id、from、to、roles 过滤，用了其它过滤条件时不查云端。device=all 且那台电脑在线时，可能与该电脑的结果重复。',
+  '',
   '【分页】游标分页, 默认 limit=10(最大 50)。hasMore=true 时用 nextCursor 再调拿下一页。',
   '源设备可按完整命中及其上下文的 64 KiB 软预算提前分页；不截断单个命中，单条超大命中仍完整返回。limit 是上限，结束以 hasMore 为准。',
   'pool_capped=true 表示候选池已达上限, 更靠后的相关结果可能未进池(可缩小过滤范围再搜)。',
@@ -196,7 +199,18 @@ export function registerSearchChatHistoryTool(
       }
 
       const { result } = res;
+      // Only for a caller on this computer (a remote query has no session) that may read everything.
+      const callerSessionId = deps.getSessionContext?.()?.sessionId;
+      const cloud = callerSessionId && deps.history.searchCompanionRooms && (offset ?? 0) === 0
+        && scope.sessionIds === null && !workdir && !agent_kind && !args.source
+        ? await deps.history.searchCompanionRooms({ query: query.trim(), limit, callerSessionId,
+          ...(args.teammate_id ? { teammateId: args.teammate_id } : {}) }).catch(() => null)
+        : null;
+      const cloudHits = cloud?.hits.filter((hit) => effectiveRoles.includes(hit.role)
+        && (fromMs === null || hit.createdAt >= fromMs) && (toMs === null || hit.createdAt < toMs));
       return okPayload({
+        ...(cloudHits?.length ? { cloud_hits: cloudHits.map((hit) => ({ ...hit, createdAt: new Date(hit.createdAt).toISOString() })) } : {}),
+        ...(cloud?.failed.length ? { cloud_failed: cloud.failed } : {}),
         hits: result.hits.map((h) => {
           const out: Record<string, unknown> = {
             messageId: h.messageId,

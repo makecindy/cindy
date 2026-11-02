@@ -1,6 +1,6 @@
 /** Reading a companion's 1:1 room: the conversation layer every device can see. */
 import type { CompanionTranscriptMessage, CompanionTranscriptPage } from '../../shared/companionCloud.js';
-import type { CompanionApi } from './types.js';
+import { errorCode, type CompanionApi } from './types.js';
 
 export interface CompanionRoomMessage {
   id: string;
@@ -92,4 +92,40 @@ export function transcriptPageOf(messages: readonly CompanionTranscriptMessage[]
   while (start > 0 && messages[start - 1]!.createdAt === messages[start]!.createdAt) start -= 1;
   const page = messages.slice(start, end);
   return { messages: page, ...(start > 0 && page.length ? { nextBefore: String(page[0]!.createdAt) } : {}) };
+}
+
+export interface CompanionRoomSearchHit {
+  teammateId: string; teammateName: string; messageId: string; role: 'user' | 'assistant'; text: string; createdAt: number;
+}
+export interface CompanionRoomSearchResult {
+  hits: CompanionRoomSearchHit[];
+  /** Rooms that could not be searched: the result does not cover them. */
+  failed: Array<{ teammateId: string; teammateName: string; code: string }>;
+}
+const ROOM_SEARCH_QUERY_MAX = 200;
+const ROOM_SEARCH_TIMEOUT_MS = 8_000;
+
+/** Keyword search of companions' rooms (the server matches substrings); newest first. One slow room only costs itself. */
+export async function searchCompanionRooms(api: CompanionApi, companions: Array<{ id: string; externalId: string; name: string; room: () => Promise<string> }>,
+  query: string, limit: number, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
+  const params = new URLSearchParams({ q: query.slice(0, ROOM_SEARCH_QUERY_MAX), limit: String(limit) });
+  const result: CompanionRoomSearchResult = { hits: [], failed: [] };
+  await Promise.all(companions.map(async companion => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const search = async () => api<CompanionRoomMessage[]>(`/conversations/${await companion.room()}/search?${params}`);
+      const page = await Promise.race([search(), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('TIMEOUT')), timeoutMs);
+      })]);
+      for (const message of Array.isArray(page) ? page : []) {
+        const view = roomMessageView(message, companion.id);
+        if (view?.text) result.hits.push({ teammateId: companion.externalId, teammateName: companion.name, messageId: view.id, role: view.role, text: view.text, createdAt: view.createdAt });
+      }
+    } catch (error) {
+      result.failed.push({ teammateId: companion.externalId, teammateName: companion.name, code: errorCode(error) });
+    } finally { clearTimeout(timer); }
+  }));
+  result.hits.sort((a, b) => b.createdAt - a.createdAt);
+  result.hits.length = Math.min(result.hits.length, limit);
+  return result;
 }
