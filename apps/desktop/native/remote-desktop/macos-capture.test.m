@@ -190,9 +190,25 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
     fprintf(stderr, "FAIL first display query: kqueue setup failed (%d)\n", saved);
     exit(1);
   }
-  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} // reap
-  assert(WIFEXITED(status) && WEXITSTATUS(status) == 2);
-  puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
+  pid_t reaped;
+  do { // reap; unlike assert, these checks also hold in NDEBUG builds.
+    reaped = waitpid(pid, &status, 0);
+  } while (reaped < 0 && errno == EINTR);
+  if (reaped != pid) {
+    fprintf(stderr, "FAIL first display query: probe reap failed (%d)\n", errno);
+    exit(1);
+  }
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+    puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
+    return;
+  }
+  if (WIFSIGNALED(status))
+    fprintf(stderr, "FAIL first display query: probe died by signal %d\n", WTERMSIG(status));
+  else if (WIFEXITED(status))
+    fprintf(stderr, "FAIL first display query: probe exited %d, want 2\n", WEXITSTATUS(status));
+  else
+    fprintf(stderr, "FAIL first display query: unexpected probe status %d\n", status);
+  exit(1);
 }
 
 int main(int argc, const char *argv[]) {
