@@ -375,10 +375,11 @@ export async function readBotSkillFilesForBot(botId: string, slug: string, deps:
 
 /** Restore the files beside one own skill's SKILL.md (cloud companions). */
 export async function applyBotSkillFilesForBot(botId: string, slug: string, files: BotSkillFile[],
-  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }, deps: BotSkillServiceDeps = {}): Promise<void> {
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }, deps: BotSkillServiceDeps = {}): Promise<string[]> {
   const boundary = captureOwnerBoundary(deps);
-  await applyBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, files, fetch, options);
+  const missing = await applyBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, files, fetch, options);
   assertOwnerBoundary(deps, boundary);
+  return missing;
 }
 
 /** 设置页开关一条学会的技能：只移动文件夹，不改内容。 */

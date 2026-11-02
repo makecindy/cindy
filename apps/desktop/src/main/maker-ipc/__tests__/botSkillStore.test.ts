@@ -505,8 +505,8 @@ describe('skill files for cloud companions', () => {
     await write('a.md', 'local a');
     await write('b.md', 'local b');
     await write('c.md', 'local c');
-    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('a.md', 'cloud a'), entry('b.md', 'cloud b')],
-      async file => (file.path === 'a.md' ? null : source('tampered')), { removeOthers: false });
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('a.md', 'cloud a'), entry('b.md', 'cloud b')],
+      async file => (file.path === 'a.md' ? null : source('tampered')), { removeOthers: false })).toEqual(['a.md', 'b.md']);
     expect(await fs.readFile(path.join(skillDir(), 'a.md'), 'utf8')).toBe('local a');
     expect(await fs.readFile(path.join(skillDir(), 'b.md'), 'utf8')).toBe('local b');
     expect(await fs.readFile(path.join(skillDir(), 'c.md'), 'utf8')).toBe('local c');

@@ -149,8 +149,11 @@ export async function mergeCompanionsInto(input: {
       const slot = await mergeSlot(slug, suffix, content, async name => {
         const current = await host.readSkill(keep.externalId, name);
         if (current !== content || !list || !host.readSkillFiles) return current;
-        const local = new Map((await host.readSkillFiles(keep.externalId, name)).map(file => [file.path, file.sha256]));
-        return list.files.some(file => (local.get(file.path) ?? file.sha256) !== file.sha256) ? `${current}\0different files` : current;
+        const local = await host.readSkillFiles(keep.externalId, name);
+        const clash = list.files.some(file => local.some(other => (other.path === file.path && other.sha256 !== file.sha256)
+          // A file where the other side has a folder: neither can take the other's place.
+          || other.path.startsWith(`${file.path}/`) || file.path.startsWith(`${other.path}/`)));
+        return clash ? `${current}\0different files` : current;
       });
       if (!slot.present) {
         if (slot.name !== slug) summary.renamed.push(slot.name);

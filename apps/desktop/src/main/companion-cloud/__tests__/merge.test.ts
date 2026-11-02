@@ -154,6 +154,7 @@ describe('merging copies of Cindy', () => {
       const applied: Array<[string, Array<string | null>]> = [];
       const applySkillFiles = vi.fn(async (_bot: string, slug: string, files: Array<{ path: string }>, fetch: (file: never) => Promise<string | null>) => {
         applied.push([slug, await Promise.all(files.map(file => fetch(file as never)))]);
+        return [];
       });
       const run = mergeCompanionsInto({ api: t.api, host: { ...t.local.host, applySkillFiles, readSkillFiles: async () => kept.map(file => ({ ...file, size: 1 })) }, keep, from: [from], humanActorId: 'human',
         roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory: async () => undefined, media: { upload: vi.fn(), download }, fence: { assertCurrent: () => undefined } });
@@ -165,6 +166,12 @@ describe('merging copies of Cindy', () => {
       expect((await run).renamed).toContain('brew-macbook-pro');
       expect(t.local.skills.get('brew-macbook-pro')).toBe('steps');
       expect(applied).toEqual([['brew-macbook-pro', ['/d/run.sh']]]);
+    });
+
+    it('keeps its own copy when a file sits where the other side has a folder', async () => {
+      const { run, applied } = await merge([{ path: 'run.sh/old', sha256: 'x' }]);
+      expect((await run).renamed).toContain('brew-macbook-pro');
+      expect(applied[0]?.[0]).toBe('brew-macbook-pro');
     });
 
     it('fills in what an interrupted merge left out, without a second copy', async () => {

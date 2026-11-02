@@ -64,9 +64,9 @@ export interface CompanionMaterializeHost {
   saveSkill: (botId: string, slug: string, content: string, enabled: boolean, fence: CompanionWriteFence) => Promise<void>;
   removeSkill: (botId: string, slug: string, fence: CompanionWriteFence) => Promise<void>;
   readSkillFiles?: (botId: string, slug: string) => Promise<BotSkillFile[]>;
-  /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. */
+  /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
-    options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<void>;
+    options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
   /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
   applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
@@ -239,11 +239,13 @@ export async function materializeCompanion(input: {
       if (!list) continue;
       await apply('skill-files', async () => {
         const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
-        await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
+        const missing = await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
         state.update(botId, actor.id, entry => {
           entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.filter(file => file.mediaId).map(file => [file.sha256, file.mediaId])) };
           const { [slug]: _previous, ...gaps } = entry.skillFileGaps ?? {};
-          entry.skillFileGaps = list.omitted.length || list.truncated ? { ...gaps, [slug]: { omitted: list.omitted, ...(list.truncated ? { truncated: true } : {}) } } : gaps;
+          // A file that did not arrive still exists where it came from: this computer not having it is no deletion.
+          const omitted = [...list.omitted, ...missing];
+          entry.skillFileGaps = omitted.length || list.truncated ? { ...gaps, [slug]: { omitted, ...(list.truncated ? { truncated: true } : {}) } } : gaps;
         });
         applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
       });

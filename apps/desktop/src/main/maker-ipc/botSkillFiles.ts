@@ -103,10 +103,11 @@ async function removeEmptyFolders(dir: string, root: string): Promise<void> {
 /**
  * Makes the folder hold `files`. A file `fetch` cannot provide (null: gone for good) keeps any copy
  * already here; so does anything in `keep`. Without `removeOthers` nothing else is touched either,
- * because the list is incomplete.
+ * because the list is incomplete. Returns the listed files that did not arrive.
  */
 export async function applySkillFolderFiles(skillDir: string, files: BotSkillFile[],
-  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }): Promise<void> {
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }): Promise<string[]> {
+  const missing: string[] = [];
   const wanted = files.filter(file => isSkillFilePath(file.path));
   const current = new Map((await listSkillFolderFiles(skillDir)).map(file => [file.path, file]));
   if (options.removeOthers) {
@@ -122,10 +123,10 @@ export async function applySkillFolderFiles(skillDir: string, files: BotSkillFil
     if (current.get(file.path)?.sha256 !== file.sha256) {
       // An empty file is never uploaded, so there is nothing to fetch.
       const source = file.size === 0 ? null : await fetch(file);
-      if (source === null && file.size !== 0) continue;
+      if (source === null && file.size !== 0) { missing.push(file.path); continue; }
       const hash = createHash('sha256');
       if (source !== null) for await (const chunk of createReadStream(source)) hash.update(chunk as Buffer);
-      if (hash.digest('hex') !== file.sha256) continue;
+      if (hash.digest('hex') !== file.sha256) { missing.push(file.path); continue; }
       await assertRealParents(skillDir, target);
       await fs.mkdir(path.dirname(target), { recursive: true });
       const temporary = `${target}.${process.pid}.tmp`;
@@ -140,4 +141,5 @@ export async function applySkillFolderFiles(skillDir: string, files: BotSkillFil
     }
     if (process.platform !== 'win32') await fs.chmod(target, file.executable ? 0o755 : 0o644);
   }
+  return missing;
 }

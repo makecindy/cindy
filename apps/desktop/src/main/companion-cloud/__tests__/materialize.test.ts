@@ -458,6 +458,7 @@ describe('skill files on take-over', () => {
     const applySkillFiles = vi.fn(async (_bot: string, _slug: string, files: Array<{ path: string }>, fetch: (f: never) => Promise<string | null>, _options: { removeOthers: boolean }, _fence: unknown) => {
       order.push('files');
       for (const entry of files) fetched.push(await fetch(entry as never));
+      return fetched.flatMap((value, index) => (value === null ? [files[index]!.path] : []));
     });
     const { state } = memoryState();
     const run = materializeCompanion({ api, state, host: { ...local.host, applySkillFiles, saveSkill: async () => { order.push('skill'); } } as never, actor, roomId: async () => ROOM, download });
@@ -505,5 +506,7 @@ describe('skill files on take-over', () => {
     await gone.run;
     expect(gone.fetched).toEqual([null]);
     expect(gone.state.bot('bot_mia')?.demoted).toBeUndefined();
+    // Not having it here is no deletion: the next upload still says it exists, so the home keeps its copy.
+    expect(gone.state.bot('bot_mia')?.skillFileGaps).toEqual({ brew: { omitted: ['run.sh'] } });
   });
 });
