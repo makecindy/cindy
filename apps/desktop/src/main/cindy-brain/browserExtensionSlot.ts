@@ -517,7 +517,7 @@ export class GhostBrowserExtensionSlot {
 
   getPageControl(): UserBrowserPageControl | null {
     const candidates = [...this.entries.values()].filter(entry => !entry.closing &&
-      mayProvidePageControl(entry.ghost) && (!entry.native || entry.native.status() === 'ready'));
+      mayProvidePageControl(entry.ghost));
     let selected: Entry | undefined;
     try {
       const choice = JSON.parse(readBoundedFileNoFollowSync(path.join(this.deps.policyDir(), '.page-control.json'), 8192)?.toString('utf8') ?? '') as {

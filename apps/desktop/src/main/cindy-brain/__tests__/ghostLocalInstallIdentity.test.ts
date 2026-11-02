@@ -469,12 +469,18 @@ it('keeps an account-free local copy usable beside a same-ID account-managed mar
 });
 
 
-it('migrates the original censused Web Search key even before a market record exists', async () => {
+it.each([
+  { instanceKey: 'cindy-web-search', namespace: undefined, namespaceState: 'pending', original: true },
+  { instanceKey: 'cindy-web-search', namespace: null, namespaceState: 'confirmed', original: true },
+  { instanceKey: 'cindy-web-search', namespace: 'acme', namespaceState: 'confirmed', original: true },
+  { instanceKey: '_root__cindy-web-search', namespace: null, namespaceState: 'confirmed', original: false },
+  { instanceKey: '_ns__local__cindy-web-search', namespace: 'local', namespaceState: 'confirmed', original: false },
+] as const)('migrates only original bare Web Search: $instanceKey / $namespaceState', async ({ instanceKey, namespace, namespaceState, original }) => {
   const ghost = { manifest: { id: 'cindy-web-search' }, dir: '/plugins/cindy-web-search',
-    instanceKey: 'cindy-web-search', namespaceState: 'pending', approval: { state: 'approved' } };
+    instanceKey, namespace, namespaceState, approval: { state: 'approved' } };
   const manager = { list: () => [ghost], findInstalledInstance: () => ghost,
     migrateLegacyApprovalsOnce: async () => ({ retryPending: [] }), hasPendingLegacyApprovalMigration: () => false,
-    isPendingLegacyNamespace: () => true, runExclusiveMutation: async () => false };
+    isPendingLegacyNamespace: () => namespaceState === 'pending', runExclusiveMutation: async () => false };
   const migrate = vi.fn(() => true);
   const create = createGhostProductionCallbacks<{ reconcileBuiltinGhosts(reason: string, owner: string): Promise<string> }>({ functions: ['reconcileBuiltinGhosts'] });
   const callbacks = create({ getGhostManager: () => manager, captureGhostMutationOwner: () => 'owner',
@@ -483,5 +489,6 @@ it('migrates the original censused Web Search key even before a market record ex
     log: { info() {}, warn() {} },
   });
   expect(await callbacks.reconcileBuiltinGhosts('startup', 'owner')).toBe('completed');
-  expect(migrate).toHaveBeenCalledWith({ instanceKey: 'cindy-web-search', ghostId: 'cindy-web-search', eligible: true });
+  if (original) expect(migrate).toHaveBeenCalledWith({ instanceKey, ghostId: 'cindy-web-search', eligible: true });
+  else expect(migrate).not.toHaveBeenCalled();
 });

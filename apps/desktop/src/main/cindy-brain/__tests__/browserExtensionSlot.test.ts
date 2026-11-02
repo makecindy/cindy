@@ -417,6 +417,8 @@ describe('browserExtensionSlot · 管子上行', () => {
     slot.reconcile(ghosts);
     await settle();
     expect(installs).toBe(1);
+    // A manually paired bridge remains usable while optional native registration is unavailable.
+    expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
     await slot.handleRequest('_root__my-browser', { kind: 'status' });
     expect(installs).toBe(2);
     expect(bridges).toHaveLength(1);

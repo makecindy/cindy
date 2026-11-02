@@ -903,6 +903,23 @@ describe('Ghost plugin detail sections', () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
+  it('does not offer in-place file updates for a market instance', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const ghost = { manifest: { id: detail.ghostId, name: detail.name, version: '1.0.0', entry: 'main.js' },
+      dir: '/plugins/market', enabled: true, namespace: null, namespaceState: 'confirmed',
+      publishingSource: { kind: 'public-market', pluginId: 'published' },
+      approval: { state: 'approved', revision: 'receipt' } } as InstalledGhost;
+    const update = vi.fn();
+    render(<GhostPluginDetailView ghost={ghost} detail={detail} panelStatus={null} onBack={vi.fn()}
+      onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={update}
+      onUninstall={vi.fn()} toggleDisabled={false} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false });
+    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('hides the local .cindy update entry for reserved official ids outside dev builds', async () => {
     vi.stubGlobal(
       'ResizeObserver',

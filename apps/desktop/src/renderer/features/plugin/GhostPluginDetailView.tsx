@@ -200,7 +200,7 @@ export function GhostPluginDetailView({
     ? t('ccAgent.gitContext.pr.setup.account.summary')
     : ghostPluginSummary(detail.description, detail.ghostId);
   // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
-  const localUpdateAvailable = !remote || remoteFileUpdate;
+  const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
     ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&

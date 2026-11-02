@@ -1772,9 +1772,10 @@ async function reconcileBuiltinGhosts(
           const current = manager.findInstalledInstance(instanceKey);
           if (!current || current.approval.state !== 'approved') return;
           const loaded = loadGhostFirstPartyFactsForGhost(instanceKey, 'runtime');
-          // Web Search historically used aliases before market receipts existed. Only the
-          // original censused bare directory may retain that access, never a fresh copy.
-          const originalSearch = current.manifest.id === 'cindy-web-search' && manager.isPendingLegacyNamespace(instanceKey);
+          // The original bare storage key survives namespace confirmation. Fresh file/Forge
+          // root and local copies use qualified keys and are excluded above.
+          const originalSearch = current.manifest.id === 'cindy-web-search' &&
+            (manager.isPendingLegacyNamespace(instanceKey) || current.namespaceState === 'confirmed');
           const eligible = originalSearch || (loaded.kind === 'ready' && (current.manifest.id === 'xd-mivo'
             ? isTrustedMivoSecretAlias(loaded.facts, manager.isPendingLegacyNamespace(instanceKey))
             : manager.readLegacyFirstPartyEligible(instanceKey) || isTrustedPublicMarketPackage(loaded.facts)));
