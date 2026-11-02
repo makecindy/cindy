@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useRef } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MarketSkill } from '../hooks/useMarketList';
 
 const mocks = vi.hoisted(() => ({
   user: null as { membershipKind: 'org' } | null,
@@ -16,14 +18,14 @@ const mocks = vi.hoisted(() => ({
     syncResults: new Map(),
   },
   market: {
-    items: [], loading: false, loadingMore: false, hasMore: false,
-    resolvedScope: 'market', resolvedMine: false, categoryFilter: 'all',
+    items: [] as MarketSkill[], loading: false, loadingMore: false, hasMore: false,
+    resolvedScope: 'market', resolvedMine: false, categoryFilter: 'all', sortBy: 'downloads',
     setSearchQuery: vi.fn(), setSortBy: vi.fn(), setCatalogScope: vi.fn(),
     setCategoryFilter: vi.fn(), setVisibility: vi.fn(), loadMore: vi.fn(), reload: vi.fn(),
   },
 }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t, i18n: { language: 'en' } }) }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: mocks.user, dataOwnerId: mocks.dataOwnerId, mode: 'cloud' }),
 }));
@@ -31,7 +33,10 @@ vi.mock('../hooks/useSkillhub', () => ({ useSkillhub: () => mocks.store, refresh
 vi.mock('../hooks/useMarketList', () => ({
   MARKET_PAGE_SIZE: 24,
   useMarketList: () => mocks.market,
-  useCategoryList: () => ({ categories: [] }),
+  useCategoryList: (scope: string) => ({ categories: [{
+    slug: scope === 'team' ? 'team-only' : 'public-only',
+    name: scope === 'team' ? 'Team category' : 'Public category', count: 1, myCount: 0,
+  }] }),
 }));
 vi.mock('../hooks/useMarketManagement', () => ({
   useMarketManagement: () => ({}), MarketManagementDialogs: () => null,
@@ -128,7 +133,12 @@ function selectLocalAndSearch() {
   });
 }
 
+beforeAll(() => {
+  HTMLElement.prototype.scrollTo = vi.fn();
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 beforeEach(() => {
+  mocks.market.items = [];
   mocks.user = null;
   mocks.dataOwnerId = 'owner-a';
   mocks.store.skills = ['calendar-tools', 'design-tools'].map((name) => ({
@@ -141,9 +151,107 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Skill home navigation', () => {
+  // Review 4321140102: the real card entry must pass both catalog selections,
+  // not just the active filter encoded in returnTo (unit/jsdom).
+  it('passes the complete catalog snapshot when opening a market skill', () => {
+    mocks.user = { membershipKind: 'org' };
+    mocks.market.items = [{ name: 'market-demo', displayName: 'Market demo', description: '', authorName: 'Author',
+      authorId: 'author', authorAvatarUrl: null, avatarInitial: 'A', isMine: false, canManage: false,
+      latestVersion: '1.0.0', visibility: 'PUBLIC', visibleDeptIds: [], githubUrl: null,
+      publishedAt: '2026-10-20T00:00:00Z', relativeTime: '', installedLocally: false,
+      installedVersion: null, installedAbsolutePath: null, hasAnyInstall: false, latestPublishedFromDeviceId: null,
+      tags: [], categories: [], downloads: 0, cardState: 'not-installed', catalogScope: 'market' }];
+    renderCatalog();
+    fireEvent.click(screen.getByRole('radio', { name: 'Public category' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.organization' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Team category' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.public' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Market demo' }));
+    expect(screen.getByTestId('location').textContent).toContain('view=market');
+    expect(JSON.parse(screen.getByTestId('navigation-state').textContent!).skillhubHome.categoriesByCatalog)
+      .toEqual({ public: 'public-only', organization: 'team-only' });
+  });
+  it('offers download/update sorting and does not reset it when switching catalogs', async () => {
+    mocks.user = { membershipKind: 'org' };
+    mocks.market.setSortBy.mockClear();
+    renderCatalog();
+    const trigger = screen.getByRole('button', { name: 'skillhub.home.sortDownloads' });
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('menuitemradio', { name: 'skillhub.home.sortDownloads' }).getAttribute('aria-checked')).toBe('true');
+    mocks.market.setSortBy.mockClear();
+    const updateOption = await screen.findByRole('menuitemradio', { name: 'skillhub.home.sortUpdated' });
+    act(() => updateOption.focus());
+    await userEvent.keyboard('{Enter}');
+    expect(mocks.market.setSortBy).toHaveBeenCalledExactlyOnceWith('updated_at');
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('menuitemradio', { name: 'skillhub.home.sortUpdated' }).getAttribute('aria-checked')).toBe('true');
+    await userEvent.keyboard('{Escape}');
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.organization' }));
+    expect(mocks.market.setSortBy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.local' }));
+    expect(screen.queryByRole('button', { name: 'skillhub.home.sortDownloads' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave catalog' }));
+    mocks.market.setSortBy.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    expect(mocks.market.setSortBy).toHaveBeenLastCalledWith('updated_at');
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.public' }));
+    expect(screen.getByRole('button', { name: 'skillhub.home.sortUpdated' })).toBeTruthy();
+
+  });
+
   it('still opens a fresh catalog on Public', () => {
     renderCatalog();
     expectTab('public');
+  });
+
+  it.each(['/skillhub/local', '/settings?tab=ghosts#catalog'])('isolates categories and restores sorting across local, detail and history navigation: %s', async (entry) => {
+    mocks.user = { membershipKind: 'org' };
+    renderCatalog(entry);
+    await userEvent.click(screen.getByRole('button', { name: 'skillhub.home.sortDownloads' }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: 'skillhub.home.sortUpdated' }));
+    const currentCategory = () => JSON.parse(screen.getByTestId('navigation-state').textContent!).skillhubHome.category;
+    fireEvent.click(screen.getByRole('radio', { name: 'Public category' }));
+    expect(currentCategory()).toBe('public-only');
+    expect(screen.getByTestId('location').textContent).toBe(entry);
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    expect(screen.getByTestId('location').textContent).toBe('/before');
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Forward' }));
+    expect(currentCategory()).toBe('public-only');
+    expect(screen.getByRole('button', { name: 'skillhub.home.sortUpdated' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.organization' }));
+    expect(currentCategory()).toBe('all');
+    expect(mocks.market.setCategoryFilter).toHaveBeenLastCalledWith('all');
+    expect(screen.queryByRole('radio', { name: 'Public category' })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'Team category' }));
+    expect(currentCategory()).toBe('team-only');
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.local' }));
+    fireEvent.click(screen.getByRole('button', { name: /calendar-tools/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Detail Back' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.public' }));
+    expect(currentCategory()).toBe('public-only');
+    expect(mocks.market.setCategoryFilter).toHaveBeenLastCalledWith('public-only');
+    expect(screen.getByRole('button', { name: 'skillhub.home.sortUpdated' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave catalog' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'skillhub.home.catalogFilter.organization' }));
+    expect(currentCategory()).toBe('team-only');
+    expect(mocks.market.setCategoryFilter).toHaveBeenLastCalledWith('team-only');
+  });
+
+  // Review #4314523471: retain this distinct input-precedence case in the existing
+  // jsdom unit suite; a retained catalog URL must win over the active detail URL.
+  it('reads sorting and category from the retained catalog location while a detail is open', () => {
+    const retained = { pathname: '/skillhub/local', search: '?sort=updated_at&category=public-only', hash: '', key: 'catalog', state: null };
+    const { result } = renderHook(() => useSkillhubHomeNavigation(retained), {
+      wrapper: ({ children }) => (
+        <MemoryRouter initialEntries={['/skillhub/local/skill/global/calendar-tools?sort=downloads&category=all']}>
+          {children}
+        </MemoryRouter>
+      ),
+    });
+    expect(result.current.sort).toBe('updated_at');
+    expect(result.current.category).toBe('public-only');
   });
 
   it.each([

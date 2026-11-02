@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useLocation, useNavigate, type Location } from 'react-router-dom';
 
 import type { HomeCatalogTab } from '../lib/homeMarketFilter';
@@ -8,6 +8,9 @@ import { buildLocalSkillRoute } from '../lib/localRoutes';
 interface HomeViewState {
   catalogTab: HomeCatalogTab;
   query: string;
+  sort?: 'downloads' | 'updated_at';
+  category?: string;
+  categoriesByCatalog?: Partial<Record<Exclude<HomeCatalogTab, 'local'>, string>>;
 }
 
 interface SkillhubNavigationState {
@@ -29,19 +32,41 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
     : 'public';
   const query = typeof navState?.skillhubHome?.query === 'string' ? navState.skillhubHome.query : search.get('q') ?? '';
 
+  const savedSort = navState?.skillhubHome?.sort ?? search.get('sort');
+  const sort: 'downloads' | 'updated_at' = savedSort === 'updated_at' ? 'updated_at' : 'downloads';
+  const category = navState?.skillhubHome?.category ?? search.get('category') ?? 'all';
+  const savedCategories = navState?.skillhubHome?.categoriesByCatalog;
+  const homeState = useMemo<HomeViewState>(() => ({
+    catalogTab, query, sort, category,
+    categoriesByCatalog: {
+      ...savedCategories,
+      ...(catalogTab === 'local' ? {} : { [catalogTab]: category }),
+    },
+  }), [catalogTab, query, sort, category, savedCategories]);
+
   const updateHomeState = useCallback((patch: Partial<HomeViewState>) => {
     // Replace the current entry: typing or changing tabs must not add Back steps.
     navigate(`${location.pathname}${location.search}${location.hash}`, {
       replace: true,
-      state: { ...location.state, skillhubHome: { catalogTab, query, ...patch } },
+      state: { ...location.state, skillhubHome: { ...homeState, ...patch } },
     });
-  }, [catalogTab, location, navigate, query]);
+  }, [homeState, location, navigate]);
 
   const setCatalogTab = useCallback((tab: HomeCatalogTab) => {
-    updateHomeState({ catalogTab: tab });
-  }, [updateHomeState]);
+    updateHomeState({
+      catalogTab: tab,
+      category: tab === 'local' ? category : homeState.categoriesByCatalog?.[tab] ?? 'all',
+    });
+  }, [category, homeState.categoriesByCatalog, updateHomeState]);
   const setQuery = useCallback((value: string) => {
     updateHomeState({ query: value });
+  }, [updateHomeState]);
+
+  const setSort = useCallback((value: 'downloads' | 'updated_at') => {
+    updateHomeState({ sort: value });
+  }, [updateHomeState]);
+  const setCategory = useCallback((value: string) => {
+    updateHomeState({ category: value });
   }, [updateHomeState]);
 
   const openLocalSkill = (skill: Parameters<typeof buildLocalSkillRoute>[0]) => {
@@ -49,7 +74,7 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
       state: {
         from: '/skillhub/local',
         resetHistory: true,
-        skillhubHome: { catalogTab, query },
+        skillhubHome: homeState,
       } satisfies SkillhubNavigationState,
     });
   };
@@ -64,5 +89,5 @@ export function useSkillhubHomeNavigation(navigationLocation?: Location) {
     navigate(skillDetailReturnRoute(search, target), { state: { skillhubHome: navState?.skillhubHome } });
   };
 
-  return { catalogTab, query, setCatalogTab, setQuery, openLocalSkill, replaceLocalSkill, backToCatalog };
+  return { homeState, sort, category, setSort, setCategory, catalogTab, query, setCatalogTab, setQuery, openLocalSkill, replaceLocalSkill, backToCatalog };
 }

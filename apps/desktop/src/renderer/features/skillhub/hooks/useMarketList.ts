@@ -103,6 +103,7 @@ export interface MarketSkill {
   relativeTime: string;
   /** Hub 统计的下载次数。 */
   downloads: number;
+  downloadsAvailable?: boolean;
   /** 跨引用本地扫描结果:本地有同名 skill → true。 */
   installedLocally: boolean;
   /** 本地安装的版本号字符串,从 registryEntry.version 派生。null = 未装/未追踪。 */
@@ -123,7 +124,7 @@ export interface MarketSkill {
 
 interface ServerListItem {
   name: string;
-  icon?: string;
+  icon?: string | null;
   displayName: string;
   description: string;
   authorId: string;
@@ -153,6 +154,7 @@ interface ServerListItem {
   githubUrl?: string | null;
   publishedAt: string;
   downloads?: number;
+  downloadsAvailable?: boolean;
   /** 跨设备识别：null = pre-feature 历史版本 */
   latestPublishedFromDeviceId: string | null;
   catalogScope?: SkillhubCatalogScope;
@@ -284,7 +286,7 @@ export function deriveLocalInstall(
   };
 }
 
-function mapServerToView(
+export function mapServerToView(
   item: ServerListItem,
   localIndex: LocalSkillIndex,
   installingNames: Set<string>,
@@ -293,7 +295,7 @@ function mapServerToView(
   const group = localGroupForItem(item, localIndex);
   return {
     name: item.name,
-    icon: item.icon,
+    icon: item.icon ?? undefined,
     displayName: item.displayName,
     description: item.description,
     authorName: item.authorName,
@@ -317,7 +319,8 @@ function mapServerToView(
     githubUrl: item.githubUrl ?? null,
     publishedAt: item.publishedAt,
     relativeTime: formatMarketRelativeTime(item.publishedAt, translate),
-    downloads: Number.isFinite(item.downloads) ? item.downloads ?? 0 : 0,
+    downloads: typeof item.downloads === 'number' && Number.isFinite(item.downloads) && item.downloads >= 0 ? item.downloads : 0,
+    downloadsAvailable: item.downloadsAvailable !== false && typeof item.downloads === 'number' && Number.isFinite(item.downloads) && item.downloads >= 0,
     ...deriveLocalInstall(item, group),
     latestPublishedFromDeviceId: item.latestPublishedFromDeviceId,
     cardState: deriveCardState(item, group, installingNames.has(item.name)),

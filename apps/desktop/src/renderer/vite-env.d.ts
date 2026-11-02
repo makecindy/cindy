@@ -3626,6 +3626,8 @@ interface ElectronAPI {
         githubUrl?: string | null;
         publishedAt: string;
         downloads: number;
+        /** Missing on older hosts; false means the count was not supplied. */
+        downloadsAvailable?: boolean;
         /** 跨设备识别：null = pre-feature 历史版本 */
         latestPublishedFromDeviceId: string | null;
         catalogScope?: import('../shared/skillhubCatalog').SkillhubCatalogScope;
@@ -7653,6 +7655,8 @@ type SkillhubSyncResult =
       };
       publishedAt: string;
       downloads: number;
+      /** Missing on older hosts; false means the count was not supplied. */
+      downloadsAvailable?: boolean;
       /** 跨设备识别：null = pre-feature 历史版本 */
       latestPublishedFromDeviceId: string | null;
     };
@@ -7692,6 +7696,8 @@ interface SkillhubInfoResult {
   changelog?: string;
   publishedAt: string;
   downloads: number;
+  /** Missing on older hosts; false means the count was not supplied. */
+  downloadsAvailable?: boolean;
   currentUserDeptIds?: string[];
   currentUserDeptNames?: string[];
   /** 跨设备识别：null = pre-feature 历史版本 */
