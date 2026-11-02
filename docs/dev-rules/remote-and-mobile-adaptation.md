@@ -54,6 +54,20 @@ allowlist、重试或 relay 生命周期；手机端完整保留“主机 + 路�
 实现与回归：`device-link/remote-workdir-guard.ts`、`device-link/dispatch.ts`、
 `maker-ipc/register.ts` 与 `__tests__/deviceLinkHostDispatch.test.ts`（均相对 Desktop main）。
 
+## 远程供应商任务导出
+
+远程供应商任务的消息保存在发起任务的电脑，允许从任务菜单导出 `.cshare`，
+保留对话记录与本机可用媒体，沿用 `db-only` 提示说明导入后无法无缝续聊。
+原生转录在运行 Agent 的电脑上，不查找本机同名文件，也不保留不可恢复的原生会话 ID，
+包括历史 Agent 切换记录里的停泊 ID；切换记录的展示与交接内容仍保留。
+协同包包含这类 Worker 时同样不能标为完整。完整任务迁移仍要求原生历史。
+
+此路径复用本机导出 IPC 与文件选择，不新增跨设备协议。SSH 工作区与设备互联镜像任务
+仍不提供本机导出，手机端没有该本机文件导出入口；不能把它们当成远程供应商任务。
+实现见 [sessionShareExport.ts](../../apps/desktop/src/main/session-share/sessionShareExport.ts)，
+回归见 [导出测试](../../apps/desktop/src/main/session-share/__tests__/sessionShareExport.test.ts)
+与 [菜单测试](../../apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/SessionCard.visual.test.ts)。
+
 ## 远程任务存档的即时反馈
 
 桌面与手机的远程任务列表在点击存档后立即乐观移走任务行，不能等待远程预检或写入
