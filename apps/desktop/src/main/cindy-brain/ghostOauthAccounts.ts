@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   fetchGhostOauthAvatar,
+  type GhostOauthAvatarHop,
   fetchGhostOauthIdentity,
   refreshGhostOauthToken,
   startGhostOauthFlow,
@@ -166,8 +167,13 @@ export interface GhostOauthAccountManagerDeps {
    * 缺省拒绝。
    */
   isTokenBrokerAuthorized?: (instanceKey: string) => boolean;
-  /** Port reclaim / identity avatar. Missing = deny. */
+  /** Port reclaim. Missing = deny. */
   isHostPrimitiveAuthorized?: (instanceKey: string) => boolean;
+  /**
+   * 头像下载的受防护单跳请求(生产注入 guardedOutboundFetch)。头像地址来自身份
+   * 响应、对所有插件开放,只能经这条通道请求,缺省不下载头像。
+   */
+  fetchAvatarHop?: GhostOauthAvatarHop;
 }
 
 /**
@@ -1011,14 +1017,13 @@ export class GhostOauthAccountManager {
       });
       label = identity.label;
       display = identity.display;
-      // 头像下载只对第一方官方意识放行:
-      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束——放开
-      // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
+      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束,只走受防护
+      // 通道(拦截内网/回环、逐跳复核、限时限量),不能用普通 fetchImpl 代发。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
-      if (identity.avatarUrl !== null && this.deps.isHostPrimitiveAuthorized?.(instanceKey)) {
+      if (identity.avatarUrl !== null && this.deps.fetchAvatarHop) {
         avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: this.deps.fetchAvatarHop,
         });
       }
     }
@@ -1418,10 +1423,11 @@ export class GhostOauthAccountManager {
       const row = before.accounts.find((a) => a.id === accountId);
       if (!row) return;
       const needDisplay = template !== undefined && row.displayLabel === null;
-      // 头像回填同样只对第一方官方意识放行(connectAccount 处的 SSRF 口径)。
+      // 头像回填同样只走受防护通道(connectAccount 处的 SSRF 口径)。
+      const fetchAvatarHop = this.deps.fetchAvatarHop;
       const needAvatar =
         decl.identity.avatarPath !== undefined &&
-        this.deps.isHostPrimitiveAuthorized?.(instanceKey) === true &&
+        fetchAvatarHop !== undefined &&
         this.readAvatar(instanceKey, secretKey, accountId) === null;
       if (!needDisplay && !needAvatar) return;
       const identity = await fetchGhostOauthIdentity({
@@ -1448,11 +1454,11 @@ export class GhostOauthAccountManager {
         });
         this.deps.logger?.info('ghost oauth 账号展示名已回填', { ghostId: instanceKey, secretKey, accountId });
       }
-      if (needAvatar && identity.avatarUrl !== null) {
+      if (needAvatar && fetchAvatarHop && identity.avatarUrl !== null) {
         if (this.ghostGeneration(instanceKey) !== generation) return;
         const avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: fetchAvatarHop,
         });
         // 存前重验账号仍在清单(拉取期间可能被断开;断开后不再写孤儿头像键)。
         if (avatar !== null) {
