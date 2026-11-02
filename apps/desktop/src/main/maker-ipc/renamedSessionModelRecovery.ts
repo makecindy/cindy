@@ -1,7 +1,6 @@
 import {
   uniqueRenamedSessionModelId,
   type AgentKind,
-  type Provider,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -21,7 +20,7 @@ export async function recoverRenamedSessionModelBeforeSend(input: {
   route: SavedRoute | null;
   effectiveRoute: Pick<SavedRoute, 'model' | 'providerId' | 'agentKind' | 'effort' | 'fastMode'> | null;
   hasPendingSelection: boolean;
-  providers: readonly (Provider | ProviderView)[];
+  providers: readonly ProviderView[];
   apply: (model: string, providerId: string) => Promise<{
     deferred: boolean;
     superseded: boolean;
@@ -38,6 +37,8 @@ export async function recoverRenamedSessionModelBeforeSend(input: {
       effective.providerId !== route.providerId || effective.agentKind !== route.agentKind ||
       effective.effort !== route.effort || effective.fastMode !== route.fastMode) return false;
   const provider = input.providers.find(candidate => candidate.id === route.providerId);
+  // A suspended provider's existing route may continue without new-route admission.
+  if (provider?.suspended === true) return false;
   const replacement = uniqueRenamedSessionModelId(provider, route.model, route.agentKind);
   if (!replacement) return false;
   const result = await input.apply(replacement, route.providerId);

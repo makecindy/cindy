@@ -54,6 +54,16 @@ describe('recoverRenamedSessionModelBeforeSend', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it('does not turn an existing suspended provider into a rejected new route', async () => {
+    const apply = vi.fn(async () => ({ deferred: false, superseded: false }));
+    const suspended = { ...provider(['chatgpt/gpt-6-luna']), suspended: true };
+    expect(await recoverRenamedSessionModelBeforeSend({
+      route, effectiveRoute: route, hasPendingSelection: false,
+      providers: [suspended], apply,
+    })).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it('refuses to send when applying the replacement did not finish', async () => {
     await expect(recoverRenamedSessionModelBeforeSend({
       route, effectiveRoute: route, hasPendingSelection: false,

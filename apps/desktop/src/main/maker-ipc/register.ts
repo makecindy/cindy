@@ -16928,6 +16928,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     fastExplicit?: boolean;
     /** False only for Agent axis-only patches; model/provider routing stays untouched. */
     routeExplicit?: boolean;
+    /** A send-time ID rename must persist even without a user picker transaction. */
+    persistRenamedSessionModel?: boolean;
   };
   let applySessionRuntimeSelection: (
     sessionId: string,
@@ -24543,6 +24545,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           result.persistedRoute !== true &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
+            internalOptions.persistRenamedSessionModel === true ||
             (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)))
         ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
@@ -24810,6 +24813,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         { effort: row.effort as SessionRuntimeProfile['effort'], fastMode: row.fastMode },
         {
           source: 'agent', sessionLockHeld: true, applyingUserSelectionOnSend: true,
+          persistRenamedSessionModel: true,
           expectedGeneration: getSessionRuntimeControlSnapshot(sessionId).generation,
         },
       ),
