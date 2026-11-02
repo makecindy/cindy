@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
+import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
 import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
@@ -23,7 +24,7 @@ import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
 import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
-import { createGuestProviderRouteBinder } from '../host/providerAccess';
+import { createGuestProviderRouteBinder, resolveGuestProviderId } from '../host/providerAccess';
 import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
 import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
 import { memberBudgetStatus } from '../../device-link/providerShareBudgetCalculation';
@@ -46,6 +47,7 @@ let root: string;
 interface Started {
   input: HostedStartInput;
   sends: unknown[];
+  modelChanges: unknown[][];
   /** 让这台上的 Agent 发出一个事件。 */
   emit(event: AgentEvent): void;
   /** 这台上是否正在运行一轮(写进状态)。 */
@@ -91,6 +93,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       const record: Started = {
         input,
         sends: [],
+        modelChanges: [],
         running: false,
         emit(event) {
           queue.push(event);
@@ -114,6 +117,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
           await options.onSend?.(record);
         },
         async steer() {},
+        async setModel(...args: unknown[]) { record.modelChanges.push(args); },
         async abort() {},
         isTurnRunning: () => record.running,
         async close() {},
@@ -252,6 +256,7 @@ function setup(options: {
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
@@ -357,6 +362,123 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  const signedOutProvider: ProviderView = {
+    id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
+    connected: false, agents: ['claude-code'],
+    models: { 'claude-code': ['claude-opus', 'claude-sonnet'].map(id => ({
+      id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null,
+    })) },
+    routing: { 'claude-code': { upstream: 'https://example.invalid', authStrategy: 'none' } },
+  };
+  const signedOutResolver = (allowed = true): NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'] =>
+    async (kind, model, providerId, _controller, _sessionId, context) => resolveGuestProviderId(
+      [signedOutProvider], 'shared-provider', () => allowed, kind, model, providerId, context,
+    );
+
+  // Unit / PR #8475 review, provider-sharing.md §5.1: the real Host.open must reach group allocation
+  // and deliver a turn to M when O's own provider is signed out. Earlier relay fixtures returned a fixed
+  // provider ID and could not reproduce connected:false failing in resolveGuestProviderId before plan().
+  it('starts and sends through a signed-out group computer using the real provider resolver', async () => {
+    const env = setup({ owner: { resolveProvider: signedOutResolver() } });
+    try {
+      const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      await client.call('send', [{ content: 'hello', attachments: [] }, {}]);
+      expect(env.ownerStarted).toHaveLength(0);
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) {
+        await host.abortAll();
+        await host.dispose();
+      }
+    }
+  });
+
+  // PR #8475 follow-up: coordinator authorization also applies to ongoing model changes and forks.
+  // The startup regression alone never called these separate production paths with connected:false.
+  it.each(['model', 'fork'] as const)('performs %s on the executor through a signed-out coordinator', async operation => {
+    const env = setup({ owner: { resolveProvider: signedOutResolver() } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      if (operation === 'model') {
+        await expect(client.call('setModel', ['not-shared', {}])).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+        expect(env.memberStarted.mini[0].modelChanges).toHaveLength(0);
+        await client.call('setModel', ['claude-sonnet', {}]);
+        expect(env.memberStarted.mini[0].modelChanges).toEqual([['claude-sonnet', { providerId: 'anthropic-2' }]]);
+      } else {
+        const fork = await env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+          newSessionId: 'signed-out-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+          model: 'claude-opus', providerId: 'shared-provider' }) as { newSdkSessionId: string };
+        expect(fork.newSdkSessionId).toBe(`${started.id}-fork`);
+        const child = await openAsGuest(env, GUEST_A, openPayload('signed-out-fork', {
+          options: { resumeSessionId: fork.newSdkSessionId },
+        }));
+        expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(fork.newSdkSessionId);
+        await child.client.close('close', 'navigation');
+      }
+      await client.call('send', [{ content: 'after change', attachments: [] }, {}]);
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.ownerStarted).toHaveLength(0);
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
+    }
+  });
+
+  it('keeps a local fork on the raw login check after the coordinator signs out', async () => {
+    let connected = true;
+    const env = setup({ plans: [{ kind: 'local' }], owner: {
+      resolveProvider: async (kind, model, providerId, _controller, _sessionId, context) => resolveGuestProviderId(
+        [{ ...signedOutProvider, connected }], 'shared-provider', () => true, kind, model, providerId, context,
+      ),
+    } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      connected = false;
+      await expect(client.call('setModel', ['claude-sonnet', {}])).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(env.ownerStarted[0].modelChanges).toHaveLength(0);
+      await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+        newSessionId: 'local-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+        model: 'claude-opus', providerId: 'shared-provider' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
+    }
+  });
+
+  // The group preflight must not authorize local execution, assigned executions, other models or revoked access.
+  it.each([
+    ['local', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['no-group', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['unavailable', {}, true, 'REMOTE_AGENT_UNAVAILABLE'],
+    ['fallback', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['assigned', { groupAssigned: true }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['relayed', { relay: relayKeyFor(GUEST_A) }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['model', { options: { model: 'not-shared' } }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['revoked', {}, false, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+  ] as const)('rejects a signed-out group startup at the %s boundary', async (boundary, extra, allowed, code) => {
+    const release = vi.fn();
+    const local: GroupRelayPlan = { kind: 'local', load: { setRunning: vi.fn(), release } };
+    const plans: GroupRelayPlan[] = boundary === 'local'
+      ? [local]
+      : boundary === 'fallback' ? [{ kind: 'member', ...MEMBER_MINI }, local]
+      : boundary === 'unavailable' ? [{ kind: 'unavailable' }]
+      : boundary === 'no-group' ? [] : [{ kind: 'member', ...MEMBER_MINI }];
+    const env = setup({ plans, owner: { resolveProvider: signedOutResolver(allowed) },
+      mini: { failStart: boundary === 'fallback' } });
+    try {
+      await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, extra))).rejects.toThrow(code);
+      expect(env.ownerStarted).toHaveLength(0);
+      expect(env.memberStarted.mini).toHaveLength(0);
+      if (boundary === 'local' || boundary === 'fallback') expect(release).toHaveBeenCalledOnce();
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) {
+        await host.abortAll();
+        await host.dispose();
+      }
+    }
+  });
+
   // The member owner's deliberate disconnect must survive the intermediary and
   // must not offer the guest another computer to undo that decision.
   it('forwards an intentional member disconnect without offering a group switch', async () => {
