@@ -8,6 +8,12 @@ Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消�
 
 不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
 
+## 机器实时状态（2026-11-02）
+
+新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。
+没有新帧、能力位或 relay 行为，中转（含自建）只转发，不需要适配。旧被控端返回 `CHANNEL_NOT_ALLOWED`，控制端显示 `update_required`；
+解析按字段容错，新版本多报的字段被忽略，缺的字段是 `null`，只有 CPU 核数与内存总量缺失才视为无效。
+
 ## 仓库自动任务导入确认（2026-11-01）
 
 同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。

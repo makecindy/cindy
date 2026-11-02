@@ -119,6 +119,8 @@
   为准。
 - 修改 Orca 多 Agent 协同时，必须先读
   `docs/dev-rules/orca-team-architecture.md`。
+- 新增或修改 Agent 使用多台机器的能力（`list_machines`、机器状态、按机器执行），或要为 Agent 的资源使用加上限前，必须先读
+  `docs/product-rules/cindy-machines.md`：**宿主暴露情况，不替大脑做资源决策**，不写死「最多几个」这类决策上限；结果不完整必须明说。
 - 修改任何进入模型 system 段的提示词前（无论文件位于哪个模块），必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
