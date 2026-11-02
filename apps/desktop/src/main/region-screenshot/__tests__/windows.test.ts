@@ -68,6 +68,7 @@ vi.mock('../../appSessionState', () => ({
 }));
 vi.mock('../pageWindow', () => ({ createScreenshotPageWindow: mocks.create }));
 vi.mock('../compose', () => ({ handOffScreenshotToTask: vi.fn() }));
+vi.mock('../translationPreferences', () => ({ readScreenshotTranslationPreference: () => 'ui', writeScreenshotTranslationPreference: vi.fn(async () => 'fr') }));
 vi.mock('../save', () => ({ saveScreenshotImage: vi.fn(), saveRegionRecording: mocks.saveRecording }));
 vi.mock('../recordingClipboard', () => ({ copyRegionRecording: mocks.copyRecording }));
 vi.mock('../liveCapture', () => ({ captureLiveRegion: mocks.liveCapture, RegionVideoCapture: class { frame = mocks.liveCapture; stop() {} } }));
@@ -75,6 +76,7 @@ vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => 'en', t: (key: strin
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
 import { OverlayPool, hideScreenshotOverlay, showScreenshotOverlay } from '../overlays';
 import { RegionScreenshotSession } from '../session';
+import { writeScreenshotTranslationPreference } from '../translationPreferences';
 import { acquireOverlayEscape } from '../../overlayEscape';
 import { closeAllPins, openPin, registerPinIpc } from '../pins';
 import { ScreenshotEditor } from '../editor';
@@ -575,21 +577,23 @@ describe('screenshot window lifecycle', () => {
     expect(mocks.invalidations.size).toBe(0);
   });
 
-  // 用户反馈再次截图不可见; 现有覆盖没有验证用过的透明浮层与下一次会话隔离。
-  // 最小输入：上一轮导出后立即开启下一轮, 旧窗口随后销毁。tier: unit。
-  it('retires a used overlay so the next screenshot never re-shows it', async () => {
+  // 用户选择首次按需创建、后续复用。最小输入：导出后立即再截图，旧 PAINTED
+  // 不能揭示旧画面，新 token 绘制后同一窗口才显示；退出仍销毁。tier: unit。
+  it('reuses a used overlay but waits for the new frame and rejects the previous token', async () => {
     let active: RegionScreenshotSession;
+    const revealed = vi.fn();
     pool.setGoneHandler((overlay) => { if (active?.owns(overlay)) active.close(); });
-    const run = async () => {
+    const run = async (paint = true) => {
       const overlay = pool.ensure(display)!;
       const contents = overlay.window.webContents;
       pool.markShellReady(contents, contents.mainFrame);
-      active = new RegionScreenshotSession({ pool, captures: [{ display, image }], helper: {} as SnapshotHelper, windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+      active = new RegionScreenshotSession({ pool, captures: [{ display, image }], helper: {} as SnapshotHelper, windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn(), onRevealed: revealed });
       await active.open();
-      active.painted(contents, contents.mainFrame, active.token);
+      if (paint) active.painted(contents, contents.mainFrame, active.token);
       return windows.find((window) => window.webContents.id === contents.id)!;
     };
     const first = await run();
+    const previousToken = active!.token;
     const contents = first.webContents as unknown as Electron.WebContents;
     expect(active!.export(contents, contents.mainFrame, active!.token, {
       action: 'copy', selection: { x: 0, y: 0, width: 2, height: 2 },
@@ -597,12 +601,21 @@ describe('screenshot window lifecycle', () => {
     })).toBe(true);
     expect(first.isVisible()).toBe(false);
     expect(first.isDestroyed()).toBe(false);
-    expect(pool.forContents(contents)).toBeNull();
-    const second = await run();
-    expect(second).not.toBe(first);
+    expect(pool.forContents(contents)?.window).toBe(first);
+    expect(first.webContents.send).toHaveBeenLastCalledWith('region-screenshot:end');
+    expect(first.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+    const second = await run(false);
+    expect(second).toBe(first);
+    expect(first.setOpacity).toHaveBeenLastCalledWith(0);
+    active!.painted(contents, contents.mainFrame, previousToken);
+    expect(first.setOpacity).toHaveBeenLastCalledWith(0);
+    active!.painted(contents, contents.mainFrame, active!.token);
+    active!.painted(contents, contents.mainFrame, active!.token);
+    expect(first.setOpacity).toHaveBeenLastCalledWith(1);
+    expect(revealed).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(0);
-    expect(first.isDestroyed()).toBe(true);
-    expect(first.showInactive).toHaveBeenCalledTimes(1);
+    expect(first.isDestroyed()).toBe(false);
+    expect(first.showInactive).toHaveBeenCalledTimes(2);
     expect(active!.isClosed).toBe(false);
     expect(second.isVisible()).toBe(true);
     expect(pool.forContents(second.webContents as unknown as Electron.WebContents)?.window.webContents.id).toBe(second.webContents.id);
@@ -614,7 +627,7 @@ describe('screenshot window lifecycle', () => {
   // Independent editor adds a new IPC owner and per-document readiness to the shared lifecycle.
   // Minimal input: close, reopen, then deliver stale or foreign document signals. tier: unit.
   // Frameless controls must minimize only their own current document (IPC ownership contract).
-  it('prewarms an editor, waits for each image, reuses its window and rejects stale or foreign exports', () => {
+  it('prewarms an editor, waits for each image, reuses its window and rejects stale or foreign exports', async () => {
     const result = vi.fn();
     const editor = new ScreenshotEditor(result);
     editor.registerIpc();
@@ -652,12 +665,21 @@ describe('screenshot window lifecycle', () => {
       expect(win.isVisible()).toBe(false);
       signal(E.PAINTED, second.token);
       expect(win.isVisible()).toBe(true);
-      const payload = { action: 'copy', image: bitmap };
+      // Translation settings use the same document/frame boundary as export.
+      vi.mocked(writeScreenshotTranslationPreference).mockClear();
+      expect(await signal(E.SET_TRANSLATION_LANGUAGE, first.token, 'fr')).toBe(false);
+      expect(await mocks.handlers.get(E.SET_TRANSLATION_LANGUAGE)!({ ...event, senderFrame: {} }, second.token, 'fr')).toBe(false);
+      expect(writeScreenshotTranslationPreference).not.toHaveBeenCalled();
+      expect(await signal(E.SET_TRANSLATION_LANGUAGE, second.token, 'fr')).toBe(true);
+      expect(writeScreenshotTranslationPreference).toHaveBeenCalledWith('fr');
+      const payload = { action: 'translate', image: bitmap, translationLanguage: 'fr' };
       expect(signal(E.EXPORT, first.token, payload)).toBe(false);
       expect(mocks.handlers.get(E.EXPORT)!({ ...event, sender: {} }, second.token, payload)).toBe(false);
       expect(signal(E.EXPORT, second.token, { ...payload, image: { ...bitmap, height: 8 } })).toBe(false);
+      expect(signal(E.EXPORT, second.token, { ...payload, translationLanguage: 'invalid' })).toBe(false);
       expect(signal(E.EXPORT, second.token, payload)).toBe(true);
       expect(result).toHaveBeenCalledOnce();
+      expect(result.mock.calls[0][0].translationLanguage).toBe('fr');
       expect(result.mock.calls[0][0].image.getSize()).toEqual({ width: 4, height: 80 });
       expect(result.mock.calls[0][0].selection).toEqual(selection);
       expect(windows).toHaveLength(1);
@@ -696,9 +718,10 @@ describe('screenshot window lifecycle', () => {
     } finally { editor.dispose(); }
   });
 
-  it('prewarms without showing or transforming the macOS Dock identity, and reuses the shell', () => {
-    pool.prewarm();
-    pool.prewarm();
+  it('creates only on demand without showing or transforming the macOS Dock identity, and reuses the shell', () => {
+    expect(windows).toHaveLength(0);
+    pool.ensure(display);
+    pool.ensure(display);
     expect(windows).toHaveLength(1);
     expect(windows[0].showInactive).not.toHaveBeenCalled();
     expect(windows[0].setVisibleOnAllWorkspaces).toHaveBeenCalledWith(
@@ -826,6 +849,27 @@ describe('screenshot window lifecycle', () => {
     expect(session.isClosed).toBe(true);
   });
 
+  // Unit: screenshot translation adds a preference IPC and a target on export.
+  // Existing tests do not exercise them; stale token/subframe must not save a preference.
+  it('binds translation preferences and exports to the active screenshot', async () => {
+    const overlay = pool.ensure(display)!;
+    const contents = overlay.window.webContents;
+    pool.markShellReady(contents, contents.mainFrame);
+    const result = vi.fn();
+    const session = new RegionScreenshotSession({ pool, captures: [{ display, image }], helper: {} as SnapshotHelper,
+      windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: result });
+    await session.open();
+    vi.mocked(writeScreenshotTranslationPreference).mockClear();
+    expect(await session.setTranslationLanguage(contents, contents.mainFrame, 'stale', 'fr')).toBe(false);
+    expect(await session.setTranslationLanguage(contents, {} as Electron.WebFrameMain, session.token, 'fr')).toBe(false);
+    expect(writeScreenshotTranslationPreference).not.toHaveBeenCalled();
+    expect(await session.setTranslationLanguage(contents, contents.mainFrame, session.token, 'fr')).toBe(true);
+    const payload = { action: 'translate', translationLanguage: 'fr', selection: { x: 0, y: 0, width: 2, height: 2 }, image: { width: 4, height: 4, data: new Uint8Array(64) } };
+    expect(session.export(contents, contents.mainFrame, session.token, { ...payload, translationLanguage: 'invalid' })).toBe(false);
+    expect(session.export(contents, contents.mainFrame, session.token, payload)).toBe(true);
+    expect(result).toHaveBeenCalledWith(expect.objectContaining({ action: 'translate', translationLanguage: 'fr' }));
+  });
+
   it('sends pin pixel dimensions matching an exported 2x screenshot and only displays after painting', async () => {
     registerPinIpc();
     const overlay = pool.ensure(display)!;
@@ -904,11 +948,11 @@ describe('screenshot window lifecycle', () => {
     expect(mocks.unregister).toHaveBeenCalledExactlyOnceWith('Escape');
   });
 
-  it('contains synchronous window creation failures during prewarm', () => {
+  it('contains synchronous window creation failures on first use', () => {
     mocks.create.mockImplementation(() => {
       throw new Error('window unavailable');
     });
-    expect(() => pool.prewarm()).not.toThrow();
+    expect(() => pool.ensure(display)).not.toThrow();
     expect(pool.ensure(display)).toBeNull();
   });
 

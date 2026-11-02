@@ -4,6 +4,8 @@ import { activeOwnerScopeKey } from '../appSessionState';
 import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
 import { getResolvedMainLocale, t } from '../i18n';
+import { readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
+import { isScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { createScreenshotPageWindow } from './pageWindow';
 import { REGION_SCREENSHOT_EDITOR_CHANNEL as C, isRegionScreenshotAction, validateRegionBitmap, type RegionRect, type RegionScreenshotBitmap, type RegionScreenshotBegin } from '../../shared/regionScreenshot';
 import type { RegionScreenshotResult } from './session';
@@ -60,6 +62,7 @@ export class ScreenshotEditor {
     if (!window || window.isDestroyed()) return false;
     this.document = { display, selection, ownerScope, payload: {
       token: randomUUID(), locale: getResolvedMainLocale(),
+      translationPreference: readScreenshotTranslationPreference(),
       viewport: { width: image.width, height: image.height }, scaleFactor: 1,
       frame: image, windows: [], lastRegion: selection, cursor: null,
       safeArea: { x: 0, y: 0, width: image.width, height: image.height },
@@ -92,6 +95,11 @@ export class ScreenshotEditor {
   }
 
   registerIpc(): void {
+    ipcMain.handle(C.SET_TRANSLATION_LANGUAGE, async (event, token: unknown, value: unknown) => {
+      if (!this.document || typeof token !== 'string' || !this.owns(event, token)) return false;
+      await writeScreenshotTranslationPreference(value);
+      return true;
+    });
     ipcMain.on(C.MINIMIZE, (event, token: unknown) => {
       if (this.document && typeof token === 'string' && this.owns(event, token)) this.window?.minimize();
     });
@@ -113,14 +121,15 @@ export class ScreenshotEditor {
     ipcMain.handle(C.EXPORT, (event, token: unknown, raw: unknown) => {
       const doc = this.document;
       if (!doc || typeof token !== 'string' || !this.owns(event, token) || !raw || typeof raw !== 'object') return false;
-      const { action, image: rawImage } = raw as Record<string, unknown>;
+      const { action, image: rawImage, translationLanguage } = raw as Record<string, unknown>;
       if (!isRegionScreenshotAction(action)) return false;
+      if (translationLanguage !== undefined && !isScreenshotTranslationLanguage(translationLanguage)) return false;
       const bitmap = validateRegionBitmap(rawImage, doc.payload.frame);
       if (!bitmap || bitmap.width !== doc.payload.frame.width || bitmap.height !== doc.payload.frame.height) return false;
       const image = nativeImage.createFromBitmap(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), { width: bitmap.width, height: bitmap.height, scaleFactor: 1 });
       if (image.isEmpty()) return false;
       this.close();
-      this.onResult({ action, image, display: doc.display, selection: doc.selection, ownerScope: doc.ownerScope });
+      this.onResult({ action, image, display: doc.display, selection: doc.selection, ownerScope: doc.ownerScope, ...(action === 'translate' && translationLanguage ? { translationLanguage } : {}) });
       return true;
     });
   }

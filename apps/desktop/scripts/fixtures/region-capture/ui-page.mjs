@@ -4,6 +4,8 @@ export default {
   real: 'RegionScreenshotOverlay, ScrollCaptureOverlay, LiveCapturePanel, ScrollCapture, CaptureRecorder, real Chromium canvas/MediaRecorder and GIF encoding',
   notCovered: 'Native screen acquisition, global keyboard sampling, macOS permissions and native save dialogs; frame source is synthetic.',
   cases: {
+    translation: { about: 'Follow UI language, choose a remembered target, recover from save failure, and export the chosen language' },
+    'translation-editor': { about: 'The independent image editor uses the same translation controls and export language' },
     snapping: { about: 'Correct a transparent window guess, hover adjacent elements, cycle hierarchy and click to select' },
     default: { about: 'Scroll overlapping text, finish, export the actual stitched pixels' },
     idle: { about: 'Repainting before the first scroll keeps the gesture hint, then scrolling still exports a long image' },
@@ -15,6 +17,46 @@ export default {
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
   async check(page, ui) {
+    if (ui.case.startsWith('translation')) {
+      if (ui.case === 'translation') {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      const languageName = (tag) => new Intl.DisplayNames([ui.locale], { type: 'language' }).of(tag);
+      const uiTag = ui.locale === 'zh-CN' ? 'zh-Hans' : ui.locale === 'zh-TW' ? 'zh-Hant' : ui.locale;
+      const action = async (tag) => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.action', { language: languageName(tag) }), exact: true });
+      const openPicker = async () => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await (await action(uiTag)).waitFor();
+      await ui.capture('translation-default');
+      await openPicker();
+      await ui.capture('translation-languages');
+      await page.getByRole('menuitemradio', { name: languageName('fr'), exact: true }).click();
+      await (await action('fr')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'fr');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '', 'changing language never sends');
+      await openPicker();
+      await page.getByRole('menuitemradio', { name: await ui.t('regionScreenshot.translation.followUi'), exact: true }).click();
+      await (await action(uiTag)).waitFor();
+      await openPicker();
+      await page.evaluate(() => { window.captureQa.translationSaveFails = true; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'ui');
+      await ui.capture('translation-save-error');
+      await page.evaluate(() => { window.captureQa.translationSaveFails = false; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await (await action('de')).waitFor();
+      await openPicker();
+      await page.keyboard.press('Escape');
+      await (await action('de')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '');
+      await ui.capture('translation-selected');
+      await (await action('de')).click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), 'translate');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'de');
+      return;
+    }
     if (ui.case === 'snapping') {
       await page.getByText('180 × 140', { exact: true }).waitFor();
       await ui.capture('first-element');

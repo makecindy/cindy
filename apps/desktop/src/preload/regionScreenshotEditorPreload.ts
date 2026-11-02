@@ -5,6 +5,7 @@ import { exposeScreenshotPageElectronApi, onPayload } from './screenshotPageBrid
 exposeScreenshotPageElectronApi();
 // An image editor has no screen-capture, automation or window-discovery privileges.
 contextBridge.exposeInMainWorld('regionScreenshotEditor', {
+  setTranslationLanguage: (token: string, value: import('../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean> => ipcRenderer.invoke(C.SET_TRANSLATION_LANGUAGE, token, value),
   failed: () => ipcRenderer.send(C.FAILED),
   shellReady: () => ipcRenderer.send(C.READY),
   onBegin: (callback: (payload: RegionScreenshotBegin) => void) => onPayload(C.BEGIN, callback),

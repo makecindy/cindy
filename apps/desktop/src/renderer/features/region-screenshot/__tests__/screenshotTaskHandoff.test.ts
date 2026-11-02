@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComposerDraft } from '@/lib/composerDraftStore';
 import type { RegionScreenshotComposeRequest } from '../../../../shared/regionScreenshot';
 
-vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
+vi.mock('@/i18n', async () => {
+  const { createInstance } = await import('i18next');
+  const { default: en } = await import('@/i18n/locales/en/common.json');
+  const instance = createInstance();
+  await instance.init({ lng: 'en', fallbackLng: 'en', resources: { en: { translation: en } } });
+  return { default: instance };
+});
+import i18n from '@/i18n';
 import { getDraft, saveDraft, clearDraft, discardDraft, setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const drafts = {
@@ -119,5 +126,27 @@ describe('screenshot draft restoration', () => {
     expect(drafts.current).toEqual(original);
     expect(navigate).not.toHaveBeenCalled();
     expect(takeComposerSubmitRequest(NEW_MAKER_DRAFT_KEY)).toBeNull();
+  });
+  // User requirement: UI language by default, with explicit multilingual override.
+  // Existing cases only check draft retention. Minimum input: Japanese UI or French target.
+  // Unit: assert the actual draft and submit request, not just translator calls.
+  it.each([
+    ['ja', undefined],
+    ['ko', 'fr'],
+    ['en', 'zh-TW'],
+  ] as const)('sends the selected target with UI %s and override %s', async (locale, target) => {
+    await i18n.changeLanguage(locale);
+    // Fallback resources are English, while the active UI locale is under test.
+    i18n.resolvedLanguage = locale;
+    applyScreenshotComposeRequest({ ...request('language'), translationLanguage: target }, vi.fn());
+    const text = JSON.stringify(drafts.current?.text);
+    // Language display names are localized to the UI locale.
+    const tag = target === 'zh-TW' ? 'zh-Hant' : target ?? locale;
+    expect(text).toContain(new Intl.DisplayNames([locale], { type: 'language' }).of(tag));
+    expect(text).toContain('mixed-language');
+    expect(text).not.toContain('{{language}}');
+    expect(drafts.current?.attachments[0].url).toBe('image:language');
+    expect(takeComposerSubmitRequest(NEW_MAKER_DRAFT_KEY)?.attachmentUrl).toBe('image:language');
+    await i18n.changeLanguage('en');
   });
 });

@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { getResolvedMainLocale } from '../i18n';
+import { readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
+import { isScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';
 import { throwIpcError } from '../utils/ipcValidate';
 import { recordingControlsBounds, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes, type ScrollCaptureLayout, type RegionCaptureBegin, type RegionCaptureFrame, type RegionCaptureMode } from '../../shared/regionCapture';
@@ -42,11 +44,12 @@ const MAX_COLOR_TEXT = 64;
 
 export interface DisplayCapture {
   display: Display;
-  /** 定格原图 (desktopCapturer 缩略图), 浮层显示与最终导出的唯一来源。 */
+  /** 定格原图，浮层显示与最终导出的唯一来源。 */
   image: NativeImage;
 }
 
 export interface RegionScreenshotResult {
+  translationLanguage?: ScreenshotTranslationLanguage;
   ownerScope?: string;
   action: RegionScreenshotAction;
   image: NativeImage;
@@ -74,6 +77,7 @@ export interface RegionScreenshotSessionDeps {
   openEditor?: (image: RegionScreenshotBitmap, display: Display, selection: RegionRect) => boolean;
   openRecording?: (bytes: Uint8Array<ArrayBuffer>, format: 'webm' | 'gif', display: Display) => boolean;
   onClosed: () => void;
+  onRevealed?: () => void;
 }
 
 /** 识别程序的矩形 → 全局 DIP。Windows 程序按物理像素回报, macOS 已是 DIP。 */
@@ -102,6 +106,7 @@ export class RegionScreenshotSession {
   private live: { member: Member; selection: RegionRect; mode: RegionCaptureMode; sampling: boolean; lastSample: number; editing: boolean; layout: ScrollCaptureLayout | null; automatic: boolean; target: SnapshotWindow | null; targetResolved: boolean; ignoring: boolean; previewHeight: number } | null = null;
   private scrollPointerTimer: ReturnType<typeof setInterval> | null = null;
   private revealTimer: ReturnType<typeof setTimeout> | null = null;
+  private revealed = false;
   private releaseEscapeShortcut: (() => void) | null = null;
   private readonly onDisplaysChanged = () => {
     log.info('displays changed during screenshot, cancelling');
@@ -223,6 +228,7 @@ export class RegionScreenshotSession {
     return {
       token: this.token,
       locale,
+      translationPreference: readScreenshotTranslationPreference(),
       viewport,
       scaleFactor: display.scaleFactor,
       frame: {
@@ -532,6 +538,12 @@ export class RegionScreenshotSession {
     this.close();
   }
 
+  async setTranslationLanguage(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, value: unknown): Promise<boolean> {
+    if (!this.member(sender, frame, token) || this.exporting) return false;
+    await writeScreenshotTranslationPreference(value);
+    return true;
+  }
+
   /** 校验页面导出的最终图, 结束会话后交给调用方执行动作。非法 payload 返回 false。 */
   export(
     sender: WebContents,
@@ -541,8 +553,9 @@ export class RegionScreenshotSession {
   ): boolean {
     const member = this.member(sender, frame, token);
     if (!member || this.exporting || !raw || typeof raw !== 'object') return false;
-    const { action, selection: rawSelection, image: rawImage } = raw as Record<string, unknown>;
+    const { action, selection: rawSelection, image: rawImage, translationLanguage } = raw as Record<string, unknown>;
     if (!isRegionScreenshotAction(action)) return false;
+    if (translationLanguage !== undefined && !isScreenshotTranslationLanguage(translationLanguage)) return false;
     const { display } = member.capture;
     const { width, height } = display.bounds;
     const selection = normalizeRegionSelection(
@@ -571,12 +584,13 @@ export class RegionScreenshotSession {
     this.exporting = true;
     log.info('screenshot exported', { action, width: bitmap.width, height: bitmap.height });
     this.close();
-    this.deps.onResult({ action, image, display, selection });
+    this.deps.onResult({ action, image, display, selection, ...(action === 'translate' && translationLanguage ? { translationLanguage } : {}) });
     return true;
   }
 
   private reveal(): void {
-    if (this.closed) return;
+    if (this.closed || this.revealed) return;
+    this.revealed = true;
     if (this.revealTimer) {
       clearTimeout(this.revealTimer);
       this.revealTimer = null;
@@ -619,6 +633,7 @@ export class RegionScreenshotSession {
     const window = (target ?? [...this.members.values()][0])?.overlay.window;
     if (!window || window.isDestroyed()) return;
     window.focus();
+    this.deps.onRevealed?.();
   }
 
   private releaseEscape(): void {
@@ -641,7 +656,7 @@ export class RegionScreenshotSession {
     for (const { overlay } of this.members.values()) {
       const { window } = overlay;
       if (!window.isDestroyed()) window.webContents.send(REGION_SCREENSHOT_CHANNEL.END);
-      this.deps.pool.retire(overlay);
+      this.deps.pool.release(overlay);
     }
     this.members.clear();
     this.deps.onClosed();
