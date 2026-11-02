@@ -3,13 +3,15 @@
 > 权威工程规则。用于依赖方向、进程职责、多端执行和布局结构的设计决策。
 > 约束新增和正在修改的代码，不要求为形式统一专项重构存量；布局树变换始终保持合法。
 
+> 源码注释按 §1 包解耦、§2 main 静态依赖、§3 布局树引用本文，这三个编号不要重排。
+
 ## 用工程投入换取用户效率
 
 技术方案以[产品原则](../product-rules/core-product-principles.md)的用户总成本为尺度：把重复操作、
 等待、纠错和不必要的模型消耗消化在产品内部，不因实现方便把成本交给用户。清楚的职责和可复用
 的机制让这份投入惠及每个入口。
 
-## 让能力独立于承载它的界面
+## 1. 让能力独立于承载它的界面（package 解耦）
 
 共享 package 独立提供能力，经初始化、配置或回调获得宿主能力，不 import Desktop Renderer
 或 Main；桌面、手机和远程入口因此能复用能力，而不连带引入某个界面的进程与生命周期。
@@ -19,20 +21,12 @@ Agent 编排集中在 maker-core，Main 承担宿主能力，Renderer 表达状�
 [Electron 进程职责](electron-security-and-process-boundaries.md)，Agent 与宿主的分工见
 [maker-core](maker-core-and-agent-behavior.md)。
 
+## 2. Main 只用静态依赖
+
 Main 只用顶层静态 import，禁止运行时动态 `import()`：依赖在打包时可见，加载时机和错误
 路径不留给运行期猜测。
 
-## 让不同入口共享事实
-
-同一任务的状态、权限和执行结果由共同的业务入口解释。控制端呈现执行端的事实，界面上的
-“已收到”不等于执行端的“已完成”。手机经 device-link 控制电脑，SSH 工作区的文件与进程在
-远程主机，路径和操作都按实际执行位置解析。
-
-重试和恢复的范围与故障范围相称：一个请求或一台控制端出故障，不拆掉其他设备正在用的共享
-连接。拓扑、通道准入与恢复约束见[远程与手机适配](remote-and-mobile-adaptation.md)，跨版本
-交互见[协议兼容](protocol-compatibility.md)。
-
-## 把用户的选择与系统演进分开
+## 3. 把用户的选择与系统演进分开（含主界面布局树）
 
 配置记录用户的明确选择，默认值随产品演进；恢复默认就是重新跟随当前默认。
 [配置契约](configuration-and-overrides.md)定义两者的合并与迁移语义。
@@ -66,3 +60,13 @@ kind 隐藏）；根横排里包着 `chat-main` 的那块是唯一的弹性区�
 `apps/desktop/src/main/layout/LayoutStore.ts`，注册在
 `apps/desktop/src/renderer/panels/registry.ts` 与 `builtinPanels.tsx`。
 修改布局树至少运行相关定向测试与 typecheck，命令见[桌面开发](desktop-development.md)。
+
+## 4. 让不同入口共享事实
+
+同一任务的状态、权限和执行结果由共同的业务入口解释。控制端呈现执行端的事实，界面上的
+“已收到”不等于执行端的“已完成”。手机经 device-link 控制电脑，SSH 工作区的文件与进程在
+远程主机，路径和操作都按实际执行位置解析。
+
+重试和恢复的范围与故障范围相称：一个请求或一台控制端出故障，不拆掉其他设备正在用的共享
+连接。拓扑、通道准入与恢复约束见[远程与手机适配](remote-and-mobile-adaptation.md)，跨版本
+交互见[协议兼容](protocol-compatibility.md)。
