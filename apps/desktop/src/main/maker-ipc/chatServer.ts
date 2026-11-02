@@ -1668,6 +1668,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!messages.length) return;
     const threadVersion = threads.version(roomId);
     const views = await messageViews(roomId, messages, snapshot.members);
+    // The check belongs to the message as it is pushed, not to a later full read of the room.
+    markReadByOthers(views, readPositions(roomId, snapshot, messages));
     await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false);
     if (!current() || cache?.generation(roomId) !== snapshot.cacheGeneration || threads.version(roomId) !== threadVersion) return;
     deps.onChanged?.({ groupId: roomId, change: 'messages', messages: views, historyRevision: snapshot.cacheGeneration }, scope);

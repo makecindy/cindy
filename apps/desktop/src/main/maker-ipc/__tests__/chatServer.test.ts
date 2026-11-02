@@ -801,6 +801,24 @@ describe('Chat Server result delivery and refresh', () => {
       if (!group.ok) throw new Error(group.errorCode);
       expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
     });
+    it('shows the check on a message of mine as soon as it is pushed, without a full read of the room', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      vi.mocked(deps.onChanged!).mockClear();
+      const mine = message('11'), theirs = message('12', peer);
+      for (const created of [mine, theirs])
+        socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: created.seq, changes: [{ type: 'message.created', entityId: created.id, data: { message: created } }] }));
+      await vi.advanceTimersByTimeAsync(300);
+      const pushed = vi.mocked(deps.onChanged!).mock.calls.flatMap(([event]) => (event as { messages?: Array<{ id: string; readByOthers?: boolean }> }).messages ?? []);
+      // Mine is pushed with a single check; someone else's has none. Neither waits for executions or plans.
+      expect(pushed.find(m => m.id === mine.id)?.readByOthers).toBe(false);
+      expect(pushed.find(m => m.id === theirs.id)).toBeDefined();
+      expect(pushed.find(m => m.id === theirs.id)?.readByOthers).toBeUndefined();
+    });
     it('lets a newer snapshot replace positions received before it', async () => {
       const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
       serve(value);
