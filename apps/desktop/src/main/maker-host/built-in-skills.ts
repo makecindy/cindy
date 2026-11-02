@@ -146,11 +146,12 @@ export async function builtInSkillDescriptorsAsync(
   try {
     const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
     if (!snapshot) return [];
+    const entries = new Map<string, fs.BigIntStats>();
     for (const descriptor of snapshot.descriptors) {
       // Pin reads to the version selected before yielding, not a moving .active link.
       const directory = path.join(snapshot.target, descriptor.name);
       if (!(await fsp.lstat(directory)).isDirectory()) return [];
-      if (await hashDirectory(directory) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (await hashDirectory(directory, entries) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
       if (!(await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile()) return [];
     }
     const current = readBuiltInSkillSnapshot(userDataDir, appDataDir);
@@ -158,6 +159,16 @@ export async function builtInSkillDescriptorsAsync(
       || current.realTarget !== snapshot.realTarget
       || current.targetStat.dev !== snapshot.targetStat.dev
       || current.targetStat.ino !== snapshot.targetStat.ino) return [];
+    // No further yields: reject edits to an early Skill while a later one was
+    // hashing. Recheck metadata, not file contents, to bound synchronous I/O.
+    // Directory stamps also detect added/deleted/replaced children; ctime catches
+    // same-size writes even when a writer restores the original mtime.
+    for (const [entry, before] of entries) {
+      const after = fs.lstatSync(entry, { bigint: true });
+      if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
+        || before.size !== after.size || before.mtimeNs !== after.mtimeNs
+        || before.ctimeNs !== after.ctimeNs) return [];
+    }
     return snapshot.descriptors;
   } catch {
     return [];
@@ -276,9 +287,14 @@ function hashDirectorySync(root: string): string {
   return hash.digest('hex');
 }
 
-async function hashDirectory(root: string): Promise<string> {
+async function hashDirectory(root: string, observed?: Map<string, fs.BigIntStats>): Promise<string> {
   const hash = createHash('sha256');
   const visit = async (directory: string): Promise<void> => {
+    if (observed) {
+      const stat = await fsp.lstat(directory, { bigint: true });
+      if (!stat.isDirectory()) throw new Error('bundled Skill directory changed');
+      observed.set(directory, stat);
+    }
     const entries = await fsp.readdir(directory, { withFileTypes: true });
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -286,7 +302,14 @@ async function hashDirectory(root: string): Promise<string> {
       const relative = path.relative(root, absolute).split(path.sep).join('/');
       hash.update(entry.isDirectory() ? `d\0${relative}\0` : `f\0${relative}\0`);
       if (entry.isDirectory()) await visit(absolute);
-      else if (entry.isFile()) hash.update(await fsp.readFile(absolute));
+      else if (entry.isFile()) {
+        if (observed) {
+          const stat = await fsp.lstat(absolute, { bigint: true });
+          if (!stat.isFile()) throw new Error('bundled Skill file changed');
+          observed.set(absolute, stat);
+        }
+        hash.update(await fsp.readFile(absolute));
+      }
       else throw new Error(`unsupported bundled Skill entry: ${relative}`);
     }
   };

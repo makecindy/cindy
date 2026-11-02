@@ -383,12 +383,14 @@ export async function bfsFindManyBySuffix(
 
   // Depth-tagged queue so we can cut off at maxDepth without recursion.
   // `crossed` lists the ignored directories entered on the way down.
-  const queue: Array<{ dir: string; depth: number; crossed: readonly string[] }> = [
+  const queue: Array<{ dir: string; depth: number; crossed: readonly string[] } | undefined> = [
     { dir: root, depth: 0, crossed: [] },
   ];
   let visited = 0;
   for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
     const { dir, depth, crossed } = queue[cursor]!;
+    // Release consumed paths without shifting the pending breadth-first queue.
+    queue[cursor] = undefined;
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });

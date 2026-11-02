@@ -37,6 +37,7 @@ import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolv
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { publishMicrophonePermissionSnapshot, registerMicrophonePermissionIpc } from './microphonePermissionIpc.js';
 import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
@@ -300,7 +301,6 @@ const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
 const destroyedWebContentsListeners = new Set<number>();
 let appRestoreRegistered = false;
 let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = null;
-const microphonePermissionReaders = new Set<WebContents>();
 let rendererVerifiedMicrophonePermission = false;
 let cachedVoiceInputReadiness: VoiceInputReadiness | null = null;
 let readinessRefreshPromise: Promise<VoiceInputReadiness> | null = null;
@@ -1489,10 +1489,7 @@ function readMicrophonePermissionSnapshot(): VoiceInputMicrophonePermissionCache
 
 function refreshMicrophonePermissionCache(): VoiceInputMicrophonePermissionCache {
   cachedMicrophonePermission = readMicrophonePermissionSnapshot();
-  for (const reader of microphonePermissionReaders) {
-    if (reader.isDestroyed()) microphonePermissionReaders.delete(reader);
-    else reader.send('voice-input:microphone-permission-changed', cachedMicrophonePermission);
-  }
+  publishMicrophonePermissionSnapshot(cachedMicrophonePermission);
   return cachedMicrophonePermission;
 }
 
@@ -1959,14 +1956,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.on('voice-input:get-microphone-permission-cached', (event) => {
-    assertTrustedAppRendererEvent(event);
-    if (!microphonePermissionReaders.has(event.sender)) {
-      microphonePermissionReaders.add(event.sender);
-      event.sender.once('destroyed', () => microphonePermissionReaders.delete(event.sender));
-    }
-    event.returnValue = getCachedMicrophonePermission();
-  });
+  registerMicrophonePermissionIpc(getCachedMicrophonePermission);
 
   ipcMain.handle('voice-input:set-renderer-microphone-permission-verified', async (_event, verified: boolean) => {
     rendererVerifiedMicrophonePermission = verified;

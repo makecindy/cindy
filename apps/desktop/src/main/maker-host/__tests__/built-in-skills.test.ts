@@ -645,6 +645,44 @@ describe('built-in Skills', () => {
     await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
   });
 
+  // Unit, PR #8493: changes to an already-hashed Skill must be rejected even
+  // when its manifest and active target stay unchanged. Mutate during a later
+  // Skill read, without sleeps; earlier corruption tests only changed pre-read data.
+  it.each(['rewrite', 'add-file', 'replace-directory'] as const)(
+    'rejects %s in an earlier Skill while a later Skill is being hashed', async damage => {
+      const input = fixture();
+      await prepareBuiltInSkills(input);
+      const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+      const first = fs.realpathSync(descriptors[0]!.absolutePath);
+      const later = fs.realpathSync(descriptors[1]!.absolutePath);
+      const readFile = fs.promises.readFile.bind(fs.promises);
+      let changed = false;
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args) => {
+        const result = await readFile(...args);
+        if (!changed && String(args[0]).startsWith(later + path.sep)) {
+          changed = true;
+          if (damage === 'rewrite') {
+            const file = path.join(first, 'SKILL.md');
+            const stat = fs.statSync(file);
+            const bytes = fs.readFileSync(file);
+            bytes[0] = bytes[0]! ^ 1;
+            fs.writeFileSync(file, bytes);
+            fs.utimesSync(file, stat.atime, stat.mtime);
+          } else if (damage === 'add-file') {
+            fs.writeFileSync(path.join(first, 'added.txt'), 'changed');
+          } else {
+            const backup = first + '-previous';
+            fs.renameSync(first, backup);
+            fs.cpSync(backup, first, { recursive: true });
+          }
+        }
+        return result;
+      });
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
+      expect(changed).toBe(true);
+    },
+  );
+
   it('does not overwrite a non-link active pointer placeholder', async () => {
     const input = fixture();
     await prepareBuiltInSkills(input);

@@ -1180,5 +1180,162 @@
         "Local-only diagnostic recording; no upload"
       ]
     }
+  },
+  "reviewFollowupComparison": {
+    "parentCommit": "81a7279f352bd391f96e5d5b76f1a5483b775fd7",
+    "optimizedRevision": "working tree with PR 8493 review fixes (metadata revalidation and consumed BFS entry release)",
+    "main": {
+      "baseline": "b8bc98fe727b4ce292a956b878a1bb3e79c2de85",
+      "platform": "win32",
+      "node": "v24.14.1",
+      "fixture": {
+        "rollouts": 6000,
+        "files": 10000,
+        "hrefs": 300,
+        "plugins": 30,
+        "notifications": 12,
+        "extraSkillFiles": 600
+      },
+      "rows": [
+        {
+          "label": "before",
+          "history": {
+            "durationMs": 63.155400000000554,
+            "maxGapMs": 63.115600000000086,
+            "unrelatedStats": 5999
+          },
+          "paths": {
+            "durationMs": 86.14019999999982,
+            "maxGapMs": 4.2280000000000655
+          },
+          "plugins": {
+            "durationMs": 603.3279000000002,
+            "maxGapMs": 603.3083999999999,
+            "scans": 12,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 223.07560000000012,
+            "maxGapMs": 223.04899999999998,
+            "verified": 3
+          }
+        },
+        {
+          "label": "after",
+          "history": {
+            "durationMs": 10.337699999999131,
+            "maxGapMs": 1.671200000000681,
+            "unrelatedStats": 0
+          },
+          "paths": {
+            "durationMs": 31.80280000000039,
+            "maxGapMs": 1.160399999999754
+          },
+          "plugins": {
+            "durationMs": 33.56370000000061,
+            "maxGapMs": 14.700599999999213,
+            "scans": 1,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 306.91899999999896,
+            "maxGapMs": 5.1921000000002095,
+            "verified": 3
+          }
+        },
+        {
+          "label": "after",
+          "history": {
+            "durationMs": 10.534100000000763,
+            "maxGapMs": 1.3325999999997293,
+            "unrelatedStats": 0
+          },
+          "paths": {
+            "durationMs": 37.76480000000083,
+            "maxGapMs": 2.0460999999995693
+          },
+          "plugins": {
+            "durationMs": 30.859599999999773,
+            "maxGapMs": 14.228100000000268,
+            "scans": 1,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 289.66220000000067,
+            "maxGapMs": 5.107700000000477,
+            "verified": 3
+          }
+        },
+        {
+          "label": "before",
+          "history": {
+            "durationMs": 54.535100000000966,
+            "maxGapMs": 54.52109999999993,
+            "unrelatedStats": 5999
+          },
+          "paths": {
+            "durationMs": 69.95989999999983,
+            "maxGapMs": 1.909300000001167
+          },
+          "plugins": {
+            "durationMs": 569.2145,
+            "maxGapMs": 569.2018000000007,
+            "scans": 12,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 216.19870000000083,
+            "maxGapMs": 216.1821,
+            "verified": 3
+          }
+        },
+        {
+          "label": "before",
+          "history": {
+            "durationMs": 53.97640000000138,
+            "maxGapMs": 53.96150000000125,
+            "unrelatedStats": 5999
+          },
+          "paths": {
+            "durationMs": 68.33350000000064,
+            "maxGapMs": 1.6189999999987776
+          },
+          "plugins": {
+            "durationMs": 569.6869999999999,
+            "maxGapMs": 569.6686000000009,
+            "scans": 12,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 209.75019999999859,
+            "maxGapMs": 209.72129999999925,
+            "verified": 3
+          }
+        },
+        {
+          "label": "after",
+          "history": {
+            "durationMs": 14.061499999999796,
+            "maxGapMs": 1.6540999999997439,
+            "unrelatedStats": 0
+          },
+          "paths": {
+            "durationMs": 29.968799999998737,
+            "maxGapMs": 1.2080000000005384
+          },
+          "plugins": {
+            "durationMs": 28.27179999999862,
+            "maxGapMs": 13.739199999999983,
+            "scans": 1,
+            "sent": 12
+          },
+          "skills": {
+            "durationMs": 299.3786,
+            "maxGapMs": 5.521699999999328,
+            "verified": 3
+          }
+        }
+      ]
+    }
   }
 }
