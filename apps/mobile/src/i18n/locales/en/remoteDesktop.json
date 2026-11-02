@@ -90,7 +90,7 @@
   "controlling": "Controlling",
   "viewOnly": "View only",
   "upgrade": "Update Cindy on the computer to use remote desktop.",
-  "disabled": "On the computer, enable remote desktop in Settings → Remote Connection.",
+  "disabled": "Remote desktop is turned off on this computer.\nOn that computer, open Cindy → Settings → Remote Connection and turn on “Allow remote desktop”. Then return here to check and reconnect.",
   "busy": "Another device or Agent is using the computer. Stop controlling it from the other device or wait for the Agent to finish.",
   "connectionBusy": "Another device is connected to this remote desktop. Exit remote desktop on that device, then try connecting again.",
   "connectionError": "Connection ended. Check that the computer is online, then reconnect.",

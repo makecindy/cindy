@@ -3,7 +3,7 @@
   "id": "interactive-loader",
   "name": "动态页面示例",
   "version": "1.0.0",
-  "minCindyVersion": "0.1.122-beta",
+  "minCindyVersion": "0.1.123-beta",
   "entry": "main.js",
   "command": "interactive-loader",
   "whenToUse": "需要查看和编辑记录、显示交互表单时使用",
@@ -123,7 +123,7 @@
     },
     {
       "name": "upload_files",
-      "description": "将本次选择的文件上传到暂存接口；离线示例不上传",
+      "description": "将本次选择的文件或对话交接的文件上传到暂存接口；离线示例不上传",
       "parameters": {
         "type": "object",
         "properties": {
@@ -172,10 +172,14 @@
     },
     {
       "name": "import_file",
-      "description": "接收 ghost_call.dir 交接的单文件，立即上传暂存并打开预览；离线示例不读取真实文件，预览会标明",
+      "description": "用户在对话里发的文件，用 ghost_call 的 attachments 交给本工具：打开文件页，只显示名称和大小，用户点按钮后才上传预览。没有交接时接收 ghost_call.dir 交接的单文件，立即暂存并打开预览。离线示例不读取真实文件，页面会标明",
       "parameters": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "cindy_handoff_files": {
+            "type": "array"
+          }
+        },
         "required": [],
         "additionalProperties": false
       }

@@ -15,7 +15,7 @@ import {
 const REFRESH_MS = 5 * 60_000;
 
 /**
- * Keeps the iOS home-screen widgets fed while the app is active (renders nothing). Widgets
+ * Keeps the iOS and Android home-screen widgets fed while the app is active (renders nothing). Widgets
  * cannot reach a computer themselves, so the app hands them each computer's latest overview.
  */
 export function UsageWidgetBridge() {
@@ -37,7 +37,7 @@ export function UsageWidgetBridge() {
   }, [initialized, isAuthenticated, userId]);
 
   useEffect(() => {
-    if (Platform.OS !== 'ios' || !usageWidgetsSupported || !isAuthenticated || status !== 'online') return;
+    if (Platform.OS === 'web' || !usageWidgetsSupported || !isAuthenticated || status !== 'online') return;
     const generation = accountGeneration;
     let pending = false;
     let timer: ReturnType<typeof setInterval> | undefined;

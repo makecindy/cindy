@@ -16,7 +16,22 @@
     "bcc": "密送",
     "subject": "主题",
     "choosePlugin": "选择用哪个插件打开这封邮件。",
-    "personalPlugin": "个人插件"
+    "personalPlugin": "个人插件",
+    "reply": "回复",
+    "replyAll": "全部回复",
+    "forward": "转发",
+    "quote": {
+      "reply": "回复这封邮件",
+      "replyAll": "回复全部收件人",
+      "forward": "转发这封邮件"
+    },
+    "messageCount_one": "共 {{count}} 封邮件",
+    "messageCount_other": "共 {{count}} 封邮件",
+    "showMessages_one": "展开 {{count}} 封邮件",
+    "showMessages_other": "展开 {{count}} 封邮件",
+    "conversationFailed": "暂时无法读取前后邮件。",
+    "expandMessage": "展开来自 {{from}} 的邮件",
+    "collapseMessage": "收起来自 {{from}} 的邮件"
   },
   "title": "插件",
   "all": "全部",
@@ -148,8 +163,6 @@
   "demo": {
     "hint": "演示数据 · 不会修改真实配置"
   },
-  "mailPreview": "邮件预览",
-  "mailEnlarge": "放大查看",
   "mailInsertImage": "插入正文",
   "mailAttach": "添加附件",
   "mailUpdated": "草稿已更新（只读）",

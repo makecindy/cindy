@@ -1,7 +1,7 @@
 *.sh text eol=lf
 # Raw-imported plugin authoring chapters retain FORGE_GUIDE's LF bytes on Windows.
 apps/desktop/resources/system-skills/cindy-plugin-creator/references/*.md text eol=lf
-# The page generation manual is published by content hash (plugin-pages/manual/<sha256>.md);
+# The page generation manual is published by version and content hash (mcp-apps/manual/<version>/<sha256>.md);
 # clients hash their bundled copy, so Windows checkouts must package the same LF bytes.
 apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md text eol=lf
 # The loader example ships the same manual as a manual.items unit; keep it byte-identical too.

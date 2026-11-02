@@ -2,7 +2,7 @@
 
 先读[编写指南 §4.23](../../plugin-interactive-pages.md)，需要字段或方法时查[参考](REFERENCE.md)。
 这些都是作者源码，不会自动安装或发布。使用标准 SDK 导入，不需要构建 SDK。
-示例最低 Cindy 版本为 **0.1.122-beta**，执行端和查看端都需要支持此版本能力。
+示例最低 Cindy 版本为 **0.1.122-beta**（loader 用到对话文件交接，为 **0.1.123-beta**），执行端和查看端都需要支持此版本能力。
 `ghost_forge_scaffold` 的 `withUi: true` 采用 static 示例；省略最低版本时默认为上述要求，
 声明更低版本会被拒绝，更高版本会保留。四种基础模板的原工具照常可用。
 
@@ -46,9 +46,9 @@ intent 是用户意图的简短自然语言描述。模拟后端只识别 items�
 | api_read | GET /api/items 或 /api/records，query 编码为查询串 | JSON，示例 `{items:[{id,name}]}` |
 | api_write | POST /api/records 或 /api/imports/confirm | JSON，示例 `{id,title}` 或 `{batchId,status}` |
 | pick_files | cindy.pick，into:library | `{files:[{name,ref,size}]}` |
-| upload_files | POST /api/imports/stage，upload.library；离线不上传 | `{batchId,total,rows,errors}` |
+| upload_files | POST /api/imports/stage；`handoff:` 引用走 upload.handoff，`library:` 引用走 upload.library；离线不上传 | `{batchId,total,rows,errors}` |
 | fetch_file | GET /api/files/...，as:library；离线把当前记录写成 CSV | resource_link |
-| import_file | POST /api/imports/stage，uploadDir；离线不读取文件 | 完整预览页（总行数、出错的行、确认 / 取消） |
+| import_file | 声明 `cindy_handoff_files`：收到交接引用时 POST /view，`{intent:'files',fields:{files:[{ref,name,mimeType,size}]}}`；否则 POST /api/imports/stage，uploadDir；离线不读取文件 | 交接：文件页（名称、大小、带 `data-file-ref` 的按钮）；dir：完整预览页（总行数、出错的行、确认 / 取消） |
 
 api_write 的 JSON 请求体是 `{body,idempotencyKey}`，后端应验证 body 的字段。按
 “当前用户 + 请求编号”建立唯一键，重复请求返回第一次的结果；同编号不同内容应拒绝。
@@ -63,9 +63,27 @@ path 不是任意网址：main.js 先限制相对路径格式，再按工具校�
 
 ## 文件导入
 
-### 从对话交接单文件
+### 从对话交接文件（cindy_handoff_files）
 
-AI 从用户附件取得执行电脑上的单文件路径，调用：
+import_file 在参数表里声明保留参数 `cindy_handoff_files`，工具说明写「用户在对话里发的
+文件，用 ghost_call 的 attachments 交给本工具」。AI 这样调用：
+
+```js
+ghost_call({ ghost_id: 'interactive-loader', tool: 'import_file', args: {},
+  attachments: ['<用户在对话里发的文件>'] });
+```
+
+Cindy 存一份副本，main.js 只在 `args.cindy_handoff_files` 收到
+`[{ref:'handoff:<uuid>',name,mimeType,size,…}]`，不读取文件内容，只把 ref、name、mimeType、
+size 交给后端生成文件页：首屏只显示名称和大小，按钮写 `data-file-ref`。用户点击后页面调用
+`upload_files({files:[ref], path:'/api/imports/stage'})`，main.js 用 `upload: { handoff: [ref] }`
+上传，页面在容器里显示返回的预览，再由 api_write 确认。文件失效（7 天未用或已删除）时上传返回
+HANDOFF_UNAVAILABLE，提示用户重新发送。限额和有效期见 [§4.10.3](../../plugin-files-and-library.md)。
+离线示例只显示名称和大小并标明「离线示例」，点击后返回标明离线的示例批次。
+
+### 没有交接时：dir 交接单文件
+
+插件没声明交接，或 Cindy 早于 0.1.123-beta 时，AI 从用户附件取得执行电脑上的单文件路径，调用：
 
 ```js
 ghost_call({

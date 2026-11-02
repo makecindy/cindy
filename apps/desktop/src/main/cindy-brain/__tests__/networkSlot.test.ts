@@ -5,9 +5,12 @@
  * 重定向逐跳守门、响应文本化与截断、错误折叠、在途并发闸、callId 归因。
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+
+import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -2383,6 +2386,74 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
   });
 });
 
+// Handoff copies leave only through upload.handoff, scoped to the receiving instance.
+// Rule: plugin-security-and-authoring.md §4 handoff. Gap: third upload source.
+// Tier: unit with the real store; minimum inputs are one copy and a foreign instance.
+describe('Handoff file upload', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { GhostHandoffStore } = await import('../handoffStore');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-handoff-upload-'));
+  const store = new GhostHandoffStore({ root: () => root });
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const readHandoffFile: NetworkSlotDeps['readHandoffFile'] = (id, ref) => store.read(id, ref);
+  const [copy] = await store.import('web-search', [{ name: '销售.csv', bytes: new TextEncoder().encode('a,b') }], () => {});
+  const upload = (value: Record<string, unknown>) => ({ url: 'https://api.search.brave.com/upload', method: 'POST', upload: value });
+
+  it('uploads the copy with its type and original name', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: true });
+    const body = new TextDecoder().decode((fetchImpl.mock.calls as unknown as [string, { body: Uint8Array }][])[0]![1].body);
+    expect(body).toContain(`filename="__.csv"; filename*=UTF-8''${encodeURIComponent('销售.csv')}`);
+    expect(body).toContain('Content-Type: text/csv; charset=utf-8\r\n\r\na,b\r\n');
+  });
+  it('treats another instance reference as unavailable without dispatching', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('other', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  // Codex 4431420859: the copy folder is user-visible, so its file can change after
+  // opening. Uploads read at most the stored size and refuse a grown or shortened copy.
+  it('refuses a copy that grows or shrinks after it was opened', async () => {
+    for (const change of ['grow', 'shrink'] as const) {
+      const [changed] = await store.import('web-search', [{ name: `${change}.csv`, bytes: new TextEncoder().encode('1,2') }], () => {});
+      const file = path.join(root, 'web-search', changed!.ref.slice('handoff:'.length), `${change}.csv`);
+      const editing = new (class extends GhostHandoffStore {
+        override async open(instance: string, ref: string) {
+          const opened = await super.open(instance, ref);
+          if (change === 'grow') fs.appendFileSync(file, 'x'.repeat(4096));
+          else fs.truncateSync(file, 1);
+          return opened;
+        }
+      })({ root: () => root });
+      const { slot, fetchImpl } = makeSlot({ readHandoffFile: (id, ref) => editing.read(id, ref) });
+      expect(await slot.handleFetchRequest('web-search', upload({ handoff: [changed!.ref] })))
+        .toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+  // Sliding expiry: a successful upload is a use and renews the copy for 7 days.
+  it('renews the copy after a successful upload', async () => {
+    const day = 24 * 60 * 60_000;
+    const clock = { now: 0 };
+    const timed = new GhostHandoffStore({ root: () => root, now: () => clock.now });
+    const [renewed] = await timed.import('web-search', [{ name: 'renew.csv', bytes: new TextEncoder().encode('1') }], () => {});
+    clock.now = 6 * day;
+    const { slot } = makeSlot({
+      readHandoffFile: (id, ref) => timed.read(id, ref),
+      touchHandoffFiles: (id, refs) => timed.touch(id, refs),
+    });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [renewed!.ref] }))).toMatchObject({ ok: true });
+    expect((await timed.list('web-search')).find((file) => file.ref === renewed!.ref)?.expiresAt).toBe(13 * day);
+  });
+  it('accepts exactly one upload source', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref], hashes: ['a'.repeat(64)] }))).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 // B4/B6 production slot: the missing cases are Library streams and transport reuse.
 // tier: unit; minimum failure inputs are a two-chunk response and an over-limit header.
 describe('Library file transfer', () => {
@@ -2468,5 +2539,116 @@ describe('private Node authenticated uploads', () => {
     const h = makeSlot();
     const result = await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => { throw Error('revoked'); }, new AbortController().signal);
     expect(result.ok).toBe(false); expect(h.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// 测试价值(MCP Apps 手册头)
+// - 生产入口与可观察结果：handleFetchRequest 实际发给 fetchImpl / fetchPublicImpl 的请求头；
+//   resolver 用 createMcpAppsManualResolver 的生产实现(版本号 + sha256 拼 CDN 地址)。
+// - 规则依据：plugin-network.md「MCP Apps 手册头」——按 mcpApps.ui 的模型可见工具默认带、
+//   mcpAppsManual 显式覆盖、插件自带同名头剥除、只发往 network 已声明主机(逐跳重判)、
+//   开发版 0.0.0 不带。
+// - 现有覆盖缺口：此前没有任何 Host 自动附加的非凭证请求头。
+// - 最小失败输入：app-only 工具调用、mcpAppsManual:false、插件伪造的小写同名头、
+//   302 跳到未声明主机、appVersion 0.0.0。
+// - tier：unit(纯 DI 假 fetch，无 Electron)。
+describe('networkSlot · MCP Apps 手册头', () => {
+  const MANUAL = new TextEncoder().encode('# manual\n');
+  const SHA = 'f'.repeat(64);
+  const resolver = (appVersion: string) => createMcpAppsManualResolver({
+    appVersion: () => appVersion,
+    readManual: () => MANUAL,
+    cdnBaseUrl: () => 'https://cdn.test/cindy/',
+  });
+  const pagesGhost = (): InstalledGhost => ({
+    manifest: {
+      schemaVersion: 3, id: 'pages', name: 'Pages', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      tools: [{ name: 'open_view', description: 'open' }, { name: 'load_view', description: 'load' }, { name: 'plain', description: 'plain' }],
+      network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: {
+        resources: [{ uri: 'ui://pages/view', file: 'ui/page.html' }],
+        tools: { open_view: { resourceUri: 'ui://pages/view', visibility: ['model'] }, load_view: { visibility: ['app'] } },
+      } },
+    },
+    dir: '/fake/brain/pages',
+    enabled: true,
+  }) as unknown as InstalledGhost;
+  const setup = (appVersion = '0.1.122-beta', overrides: Partial<NetworkSlotDeps> = {}) => makeSlot({
+    getGhost: () => pagesGhost(),
+    inFlightCallInfo: (callId) => ({ ghostId: 'pages', sessionId: 's1', remoteHostId: null, channel: 'session', tool: callId.replace('call-', '') }),
+    mcpAppsManual: resolver(appVersion),
+    ...overrides,
+  });
+  const sentHeaders = (fn: { mock: { calls: unknown[][] } }, index = 0) =>
+    (fn.mock.calls[index]![1] as { headers: Record<string, string> }).headers;
+  const manualSha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+  it('按工具声明默认带上，mcpAppsManual 显式覆盖', async () => {
+    const expected = {
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    };
+    for (const [name, payload, carries] of [
+      ['模型可见、会打开页面的工具', { callId: 'call-open_view' }, true],
+      ['只给页面调用的工具默认不带', { callId: 'call-load_view' }, false],
+      ['只给页面调用的工具传 true 时带上', { callId: 'call-load_view', mcpAppsManual: true }, true],
+      ['会打开页面的工具传 false 时不带', { callId: 'call-open_view', mcpAppsManual: false }, false],
+      ['未在 mcpApps.ui 声明的工具不带', { callId: 'call-plain' }, false],
+    ] as const) {
+      const { slot, fetchImpl } = setup();
+      expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', ...payload }), name).toMatchObject({ ok: true });
+      const headers = sentHeaders(fetchImpl);
+      if (carries) expect(headers, name).toMatchObject(expected);
+      else expect(Object.keys(headers).filter((key) => key.toLowerCase().startsWith('cindy-mcp-apps-manual')), name).toEqual([]);
+    }
+  });
+
+  it('剥除插件伪造的同名头(不区分大小写)，由 Host 的值替换', async () => {
+    const forged = { 'cindy-mcp-apps-manual': 'https://evil.example/m.md', 'CINDY-MCP-APPS-MANUAL-SHA256': SHA };
+    const off = setup();
+    await off.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-load_view', headers: forged });
+    expect(sentHeaders(off.fetchImpl)).toEqual({});
+    const on = setup();
+    await on.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', headers: forged });
+    expect(sentHeaders(on.fetchImpl)).toEqual({
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    });
+  });
+
+  it('开发版 0.0.0 不带手册头', async () => {
+    const { slot, fetchImpl } = setup('0.0.0');
+    await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', mcpAppsManual: true });
+    expect(sentHeaders(fetchImpl)).toEqual({});
+  });
+
+  it('读取手册的意外错误不缓存，下次请求重试；构建里没有手册则不带', () => {
+    let reads = 0;
+    const flaky = createMcpAppsManualResolver({
+      appVersion: () => '0.1.122-beta',
+      readManual: () => { reads += 1; if (reads === 1) throw new Error('EMFILE'); return MANUAL; },
+      cdnBaseUrl: () => 'https://cdn.test/cindy',
+    });
+    expect(flaky()).toBeNull();
+    expect(flaky()?.sha256).toBe(manualSha(MANUAL));
+    const missing = createMcpAppsManualResolver({ appVersion: () => '0.1.122-beta', readManual: () => null, cdnBaseUrl: () => 'https://cdn.test/cindy' });
+    expect(missing()).toBeNull();
+  });
+
+  it('跳转到未声明主机时不带手册头', async () => {
+    const fetchPublicImpl = vi.fn<NetworkSlotDeps['fetchPublicImpl']>(async () => ({ response: fakeResponse(), release: async () => undefined }));
+    const { slot, fetchImpl } = setup('0.1.122-beta', { fetchPublicImpl });
+    fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example.com/next' } }));
+    const result = await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view' });
+    expect(result).toMatchObject({ ok: true });
+    expect(sentHeaders(fetchImpl)).toHaveProperty('Cindy-MCP-Apps-Manual');
+    expect(fetchPublicImpl.mock.calls[0]![0]).toBe('https://other.example.com/next');
+    expect(sentHeaders(fetchPublicImpl)).toEqual({});
+  });
+
+  it('mcpAppsManual 不是布尔值时拒绝', async () => {
+    const { slot, fetchImpl } = setup();
+    expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', mcpAppsManual: 'yes' })).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

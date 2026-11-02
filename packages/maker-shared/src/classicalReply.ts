@@ -20,19 +20,20 @@ export type ClassicalFamily = (typeof CLASSICAL_FAMILY_BY_LOCALE)[keyof typeof C
 /**
  * Output styles a family offers, in menu order. The first one is the default; `plain`
  * keeps the classical interface but lets replies follow the user's own language.
- * `prompt` is what the model is told; adding a style is one entry here plus its label.
+ * `prompt` defines the form of the whole answer; the shared per-turn note enforces
+ * that choice for every style. Adding a style is one entry here plus its label.
  */
 export const CLASSICAL_REPLY_STYLES = {
   lzh: [
-    { id: 'prose', prompt: 'elegant, readable classical prose (文言)' },
-    { id: 'tang-poetry', prompt: 'the manner of Tang poetry (唐詩): weave in regulated verse or quatrains of five or seven characters' },
-    { id: 'song-ci', prompt: 'the manner of Song lyrics (宋詞): weave in lines set to tune patterns, with lingering imagery' },
-    { id: 'yuan-qu', prompt: 'the manner of Yuan sanqu songs (元曲): lively, colloquial-tinged verse lines' },
-    { id: 'chu-ci', prompt: 'the manner of the Chu ci (楚辭): sweeping lines with 兮, rich in mythic imagery' },
-    { id: 'parallel-prose', prompt: 'parallel prose (駢文): balanced four- and six-character couplets' },
-    { id: 'pre-qin', prompt: 'terse pre-Qin masters prose (先秦諸子): aphoristic, argued by analogy' },
-    { id: 'historian', prompt: 'the Grand Historian narrative style (史傳, 太史公筆法): measured narration closing with a brief verdict' },
-    { id: 'ming-qing-essay', prompt: 'light Ming–Qing familiar essays (明清小品): relaxed, witty and intimate' },
+    { id: 'prose', prompt: 'elegant, readable classical prose (文言): use concise literary syntax and natural classical diction throughout, not modern Chinese with a few archaic particles; keep it prose, without forced verse' },
+    { id: 'tang-poetry', prompt: 'the manner of Tang poetry (唐詩): begin directly with a complete four-line quatrain or eight-line regulated poem; choose five or seven Chinese characters per line and keep that count throughout the poem, with line breaks and rhyme; answer the actual question in the poem, even for a short reply' },
+    { id: 'song-ci', prompt: 'the manner of Song lyrics (宋詞): compose the answer itself as a complete ci stanza following a recognizable tune pattern, with varied line lengths and lingering imagery' },
+    { id: 'yuan-qu', prompt: 'the manner of Yuan sanqu songs (元曲): form a complete short song with varied line lengths, rhyme, lively colloquial turns and a witty closing line; use flexible song rhythm rather than uniform Tang-poem lines' },
+    { id: 'chu-ci', prompt: 'the manner of the Chu ci (楚辭): sustain sweeping, rhythmically linked lines with natural 兮 cadences, expressive repetition and rich figurative imagery throughout, rather than adding a lone 兮 to ordinary prose' },
+    { id: 'parallel-prose', prompt: 'parallel prose (駢文): build the answer from paired clauses with matching syntax and balanced meaning, favoring four- and six-character rhythms; carry the explanation through those pairs, without forcing a quatrain' },
+    { id: 'pre-qin', prompt: 'terse pre-Qin masters prose (先秦諸子): state a clear proposition, develop it through a compact analogy or question and answer, and close with an aphoristic inference; use concise classical prose, not verse' },
+    { id: 'historian', prompt: 'the Grand Historian narrative style (史傳, 太史公筆法): narrate the known situation and its causes or sequence in measured classical prose, then close with a brief appraisal such as 論曰; do not invent events or attribute your words to a historical source' },
+    { id: 'ming-qing-essay', prompt: 'light Ming–Qing familiar essays (明清小品): write an intimate miniature essay, moving naturally from the present topic or a small observation to a witty, personal reflection; keep relaxed classical prose and an evocative ending, not a poem or a formal historical verdict' },
     { id: 'plain', prompt: '' },
   ],
 } as const satisfies Record<ClassicalFamily, readonly { id: string; prompt: string }[]>;

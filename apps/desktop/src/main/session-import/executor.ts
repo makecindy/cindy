@@ -16,7 +16,6 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, ownerScopedUserDataPath } from '../appSessionState.js';
-import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import { resolveDefaultScheduleRoute, resolveNewTaskDefaultModelRoute } from '../maker-host/model-route-guard-live.js';
@@ -299,7 +298,6 @@ async function importOne(job: Job, key: string, source: SourceSession): Promise<
     item.messagesWritten = sink.written;
     // 一条都没读到：要么来源格式变了，要么原记录本来是空的。不留一个点开什么都没有的任务。
     if (sink.written === 0) throw new ImportEmptyError();
-    void recordPrRefsForImportedMessages(sessionId, sink.prCandidates).catch(() => undefined);
 
     item.step = 'verify';
     emit(job);

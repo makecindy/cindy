@@ -105,8 +105,6 @@ export interface MessageSink {
   push(message: NormalizedMessage): Promise<void>;
   flush(): Promise<void>;
   readonly written: number;
-  /** 含 PR 链接的消息（导入完成后交给 PR 关联提取）。 */
-  readonly prCandidates: Array<{ role: string; content: unknown; createdAt: number }>;
   /** 已写入（含待写）的第一条与最后一条消息时间；还没有消息时为 0。 */
   readonly firstCreatedAt: number;
   readonly lastCreatedAt: number;
@@ -169,7 +167,6 @@ export function createMessageSink(params: {
   let written = 0;
   let lastCreatedAt = 0;
   let firstCreatedAt = 0;
-  const prCandidates: Array<{ role: string; content: unknown; createdAt: number }> = [];
   const flush = async () => {
     if (batch.length === 0) return;
     params.beforeWrite?.();
@@ -188,10 +185,7 @@ export function createMessageSink(params: {
       if (firstCreatedAt === 0) firstCreatedAt = createdAt;
       params.beforeWrite?.();
       const row = await toRow({ ...message, createdAt }, params.sessionId, params.agentKind);
-      if ((message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string'
-        && message.content.includes('/pull/')) {
-        prCandidates.push({ role: message.role, content: message.content, createdAt });
-      }
+
       batch.push(row);
       batchBytes += row.content.length + (row.agentMeta?.length ?? 0);
       if (batch.length >= BATCH_ROWS || batchBytes >= BATCH_BYTES) await flush();
@@ -200,7 +194,6 @@ export function createMessageSink(params: {
     get written() {
       return written + batch.length;
     },
-    prCandidates,
     get firstCreatedAt() {
       return firstCreatedAt;
     },

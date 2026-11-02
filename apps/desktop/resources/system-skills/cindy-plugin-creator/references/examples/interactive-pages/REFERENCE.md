@@ -109,7 +109,10 @@ if (file?.url && file.mimeType?.startsWith('image/')) {
 
 对话交来的媒体附件（`ghost_call.attachments`）由宿主放进 hostContext，每项同样是
 resource_link，按上面的方式读 `_meta['cindy/file'].url`，换页重连后仍可读取。表格类
-附件由插件暂存，再把批次号和预览写进首屏 HTML。
+附件要由声明了 `cindy_handoff_files` 的工具接收（示例的 import_file，0.1.123-beta 起，见
+[§4.10.3](../../plugin-files-and-library.md)）：`uri` 以 `handoff:` 开头，首屏只显示名称和大小，
+点按钮再把引用交给 upload_files；没有 `url` 表示已失效。没声明时插件经 dir 暂存，再把批次号
+和预览写进首屏 HTML。
 
 ```js
 const attachments = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachments'] ?? [];
@@ -120,7 +123,7 @@ const attachments = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachm
 | pick into:media | 图片、音视频、glb；单件 50 MiB，插件寄存总额 1 GiB |
 | pick into:library | 通用文件；单件 8 GiB，仍受磁盘可用空间约束 |
 | pick 多选 | 最多 32 个；失败可能附上已成功文件，保留它们并提示未完成项 |
-| upload.library / upload.hashes | 二选一；最多 4 个，单件 64 MiB，总量 128 MiB |
+| upload.library / upload.hashes / upload.handoff | 三选一；最多 4 个，单件 64 MiB，总量 128 MiB |
 | uploadDir | 一次性交接，10 分钟；单件 50 MiB，总量 500 MiB，最多 500 文件 |
 | as:library | 边下载边写入；成功后才提供完整文件，单件 8 GiB |
 | 页面拖放或 file input | 按不超过 2 MiB 原始字节分片，main.js 用 Library 写入；大文件优先 pick |

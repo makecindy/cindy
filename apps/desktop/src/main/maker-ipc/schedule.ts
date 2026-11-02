@@ -73,6 +73,7 @@ import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { remoteCreateWorkingDirError } from './remoteScheduleWorkingDir.js';
 import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
@@ -374,6 +375,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_CREATE, async (_e, input: unknown) => {
     requireObject(input, 'input');
+    if (isDeviceLinkInvoke()) {
+      const workingDirError = await remoteCreateWorkingDirError((input as { workingDir?: unknown }).workingDir);
+      if (workingDirError) throwIpcError('INVALID_PARAMS', workingDirError);
+    }
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
         normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),

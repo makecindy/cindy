@@ -14,15 +14,17 @@ import { startMockAppServer, createMockAppServer } from './mcp-apps-mock.mjs';
 import { hostSdkFixture } from './mcp-apps-host-sdk-fixture.mjs';
 import { pluginUiFixture } from './plugin-ui-fixture.mjs';
 import { authorFixture } from './plugin-author-fixture.mjs';
+import { handoffFixture } from './plugin-handoff-fixture.mjs';
 import { createRawAppServer } from './mcp-apps-raw-fixture.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'cindy-mcp-app-sandbox-'));
 const independent = process.argv.includes('--raw');
 const authorMode = process.argv.find(arg => arg.startsWith('--author='))?.split('=')[1];
+const handoffMode = process.argv.includes('--handoff');
 const hostSdk = process.argv.includes('--host-sdk');
 const bom = process.argv.includes('--bom');
-const pluginView = process.argv.includes('--plugin') || !!authorMode || hostSdk || bom;
+const pluginView = process.argv.includes('--plugin') || !!authorMode || hostSdk || bom || handoffMode;
 const remoteView = process.argv.includes('--remote');
 const measureMetrics = process.argv.includes('--metrics');
 const assets = http.createServer((req, res) => {
@@ -56,7 +58,7 @@ const endpoint = await startMockAppServer({
 try {
   if (pluginView) await writeFile(path.join(temporary, 'fixture.txt'), 'host-only-file');
   if (pluginView) {
-    const fixture = hostSdk ? hostSdkFixture(allowed) : authorMode ? await authorFixture(authorMode, temporary) : await pluginUiFixture(independent, independent ? allowed : undefined, true);
+    const fixture = handoffMode ? await handoffFixture() : hostSdk ? hostSdkFixture(allowed) : authorMode ? await authorFixture(authorMode, temporary) : await pluginUiFixture(independent, independent ? allowed : undefined, true);
     if (bom) fixture.html = String.fromCharCode(0xfeff) + fixture.html;
     await writeFile(path.join(temporary, 'plugin.json'), JSON.stringify(fixture));
   }
@@ -134,6 +136,9 @@ try {
     import { buildRangedFileResponse } from '../src/main/cindy-media/rangeResponse.ts';
     import { runInNewContext } from 'node:vm';
     import { LibraryVault } from '../src/main/cindy-brain/libraryVault.ts';
+    import { GhostHandoffStore } from '../src/main/cindy-brain/handoffStore.ts';
+    import { GhostNetworkSlot } from '../src/main/cindy-brain/networkSlot.ts';
+    import { createPluginFileAccess } from '../src/main/mcp-apps/pluginFileAccess.ts';
     import { GhostPipeDispatcher } from '../src/main/cindy-brain/pipeDispatcher.ts';
     import { createPluginAppTransport } from '../src/main/mcp-apps/pluginServer.ts';
     import { pluginAppResult, pluginModelResult } from '../src/main/mcp-apps/pluginCards.ts';
@@ -167,14 +172,27 @@ try {
       let authorVault; const loaderCalls=[], sdkDispatched=[]; let loaderResultOverride;
       const loaderImageUri='cindy-media://blobs/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png', loaderImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==','base64');
       const authorLibraryRoot=process.env.CINDY_MCP_APP_TEST_DIR+'/author-library';
+      const handoffMode=process.env.CINDY_MCP_APP_TEST_HANDOFF==='1';
+      const handoffStore=handoffMode?new GhostHandoffStore({root:()=>process.env.CINDY_MCP_APP_TEST_DIR+'/handoff'}):undefined;
+      const uploads=[];let handoffFiles=[];
       if(pluginMode){
         const fixture=JSON.parse(readFileSync(process.env.CINDY_MCP_APP_TEST_DIR+'/plugin.json','utf8'));
         const ghost={manifest:fixture.manifest,dir:process.env.CINDY_MCP_APP_TEST_DIR,enabled:true,approval:{state:'approved',revision:'fixture'}};
         if(authorMode==='files'){authorVault=new LibraryVault({rootDir:()=>authorLibraryRoot,ghostId:ghost.manifest.id});await authorVault.open();}
+        // Handoff: the host already holds copies (ghost_call routing is unit-tested); one is deleted before the View opens.
+        if(handoffMode){
+          handoffFiles=await handoffStore.import(ghost.manifest.id,[{name:'订单.csv',bytes:new TextEncoder().encode('name,qty\\napple,3\\npear,5\\n')},{name:'gone.csv',bytes:new TextEncoder().encode('x')}],()=>{});
+          await handoffStore.delete(ghost.manifest.id,handoffFiles[1].ref);
+        }
+        const networkSlot=new GhostNetworkSlot({getGhost:()=>ghost,readSecret:()=>null,getLoginEmail:()=>null,
+          fetchImpl:async(url,init)=>{uploads.push({url,body:Buffer.from(init.body??'').toString('utf8')});return new Response('{"ok":true}',{status:200,headers:{'content-type':'application/json'}});},
+          fetchPublicImpl:async()=>{throw new Error('unused');},readGhostMedia:async()=>null,takeDirDeposit:()=>null,writeSaveDeposit:async()=>null,
+          saveGhostMedia:async()=>{throw new Error('unused');},isSupportedMediaMime:()=>false,
+          readHandoffFile:async(id,ref)=>{const opened=await handoffStore?.open(id,ref);if(!opened)return null;try{return {bytes:await opened.file.readFile(),name:opened.info.name,mimeType:opened.info.mimeType};}finally{await opened.file.close();}}});
         let handler;
         const dispatcher=new GhostPipeDispatcher({getGhost:()=>ghost,runtimeStateOf:()=>'running',spawn:async()=>({ok:true}),
           sendToGhost:(_id,payload)=>{if(payload.type==='tool-call')sdkDispatched.push(payload.args?.text);handler(payload);return true;}});
-        runInNewContext(fixture.main,{setTimeout,cindy:{library:request=>{assert.ok(authorVault);assert.ok(['writeBegin','writeChunk','writeCommit','writeAbort'].includes(request.op));return authorVault[request.op](request);},onHostMessage:fn=>{handler=fn;},send:payload=>payload.type==='tool-progress'?dispatcher.handleToolProgress(ghost.manifest.id,payload):dispatcher.handleToolResult(ghost.manifest.id,payload)}});
+        runInNewContext(fixture.main,{setTimeout,cindy:{fetch:request=>networkSlot.handleFetchRequest(ghost.manifest.id,request),library:request=>{assert.ok(authorVault);assert.ok(['writeBegin','writeChunk','writeCommit','writeAbort'].includes(request.op));return authorVault[request.op](request);},onHostMessage:fn=>{handler=fn;},send:payload=>payload.type==='tool-progress'?dispatcher.handleToolProgress(ghost.manifest.id,payload):dispatcher.handleToolResult(ghost.manifest.id,payload)}});
         executePlugin=async(name,args,onProgress)=>{const reply=await dispatcher.callGhostTool({ghostId:ghost.manifest.id,tool:name,args,onProgress});assert.equal(reply.ok,true);if(authorMode==='loader'){loaderCalls.push({name,args});return loaderResultOverride??reply.result;}return reply.result;};
         config={id:'example',url:'',transport:'in-process',plugin:{instance:ghost.manifest.id,revision:'fixture',packageSha256:'fixture',title:ghost.manifest.name,trust:'unverified',domains:independent||process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1'?[allowed]:[],assertCurrent(){},
           createTransport:()=>createPluginAppTransport({instance:ghost.manifest.id,revision:'fixture',tools:ghost.manifest.tools,ui:ghost.manifest.mcpApps?.ui,hosts:ghost.manifest.network?.hosts,assertCurrent(){},readHtml:()=>fixture.html,
@@ -186,16 +204,18 @@ try {
         const call=client.callTool.bind(client);
         client.callTool=(params,schema,options)=>{if(params.arguments?.text==='old-upstream')sdkUpstreamSignal=options.signal;return call(params,schema,options);};
       }
-      const tool=(await connection.tools()).find(tool=>tool.name===(authorMode==='loader'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_view':independent?'open_metrics':'draft_form'));
+      const tool=(await connection.tools()).find(tool=>tool.name===(handoffMode?'open_import':authorMode==='loader'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_view':independent?'open_metrics':'draft_form'));
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1' && process.env.CINDY_MCP_APP_TEST_REMOTE!=='1') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.txt',uri:'library:fixture.txt'}];
       // A conversation image handed over with ghost_call.attachments; the generated page reads it from hostContext.
       if(authorMode==='loader') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'}];
       const args=authorMode==='loader'?{intent:'请打开一个可以查看和编辑记录的页面'}:independent?{threshold:75}:{title:'AI draft',body:'Review before creating'};
       const result=pluginMode?await executePlugin(tool.name,args):await client.callTool({name:tool.name,arguments:args});
-      let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool,arguments:args,result:authorMode==='loader'?pluginAppResult(result):result};
+      const cardTool=handoffMode?{...tool,_meta:{...tool._meta,'cindy/attachments':handoffFiles.map(file=>({type:'resource_link',name:file.name,uri:file.ref,mimeType:file.mimeType,size:file.size}))}}:tool;
+      let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool:cardTool,arguments:args,result:authorMode==='loader'?pluginAppResult(result):result};
       if(authorMode==='loader'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
       let turns=0, receivedImages=[], pageApprovals=0, approvalGate, sdkApprovalSignal, sdkReleaseApproval;
-      host=new McpAppsHost({downloadFile:pluginMode?input=>saveAppDownload({...input,showSaveDialog:async name=>process.env.CINDY_MCP_APP_TEST_DIR+'/saved-'+name}):undefined,pluginFiles:pluginMode?{
+      host=new McpAppsHost({downloadFile:pluginMode?input=>saveAppDownload({...input,showSaveDialog:async name=>process.env.CINDY_MCP_APP_TEST_DIR+'/saved-'+name}):undefined,pluginFiles:handoffMode?createPluginFileAccess({libraryPath:async()=>null,libraryMime:()=>'application/octet-stream',
+        openHandoff:async(instance,ref)=>{const opened=await handoffStore.open(instance,ref);return opened&&{file:opened.file,size:opened.info.size,mimeType:opened.info.mimeType};}}):pluginMode?{
         describe:async(_instance,uri)=>{if(authorVault&&uri.startsWith('library:')){const file=await authorVault.stat({path:uri.slice('library:'.length)});return file.ok&&file.kind==='file'?{mimeType:'text/plain',size:file.bytes}:null;}if(uri===loaderImageUri)return {mimeType:'image/png',size:loaderImage.length};return uri==='library:fixture.txt'?{mimeType:'text/plain',size:14}:uri==='cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png'?{mimeType:'image/png',size:8}:null;},
         read:async(_instance,uri,request)=>{
           if(uri===loaderImageUri)return new Response(loaderImage,{headers:{'Content-Type':'image/png','Content-Length':String(loaderImage.length)}});
@@ -437,6 +457,26 @@ try {
         await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent.startsWith('已保存')"));
         const switchWrites=loaderCalls.filter(call=>call.name==='api_write');
         assert.equal(switchWrites.at(-1).args.idempotencyKey,switchWrites.at(-2).args.idempotencyKey,'same content after a switch reuses the write key');
+        // Regression (review): with several handed-off files, uploading one must keep the others
+        // reachable; the preview opens below the list and cancel only closes the preview.
+        stage='loader handoff list survives a preview';
+        const handoffRefs=['handoff:00000000-0000-4000-8000-000000000001','handoff:00000000-0000-4000-8000-000000000002'];
+        loaderResultOverride={content:[{type:'text',text:'页面已准备好。'}],_meta:{view:{html:'<h1>Files</h1><ul id="files">'+handoffRefs.map((ref,index)=>'<li>file-'+index+'.csv<button data-file-ref="'+ref+'">上传并预览</button></li>').join('')+'</ul><p id="result" role="status"></p>'}}};
+        await inner().executeJavaScript("document.querySelector('[data-view=form]').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length===2"));
+        loaderResultOverride=undefined;
+        const uploadsBefore=loaderCalls.filter(call=>call.name==='upload_files').length;
+        await inner().executeJavaScript("document.querySelector('[data-file-ref]').click()");
+        await wait(()=>inner().executeJavaScript("!!document.querySelector('#import-preview #confirm-import')"));
+        assert.equal(await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length"),2,'other handed-off files stay reachable');
+        await wait(()=>inner().executeJavaScript("!document.querySelectorAll('[data-file-ref]')[1].disabled"));
+        await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]')[1].click()");
+        await wait(async()=>loaderCalls.filter(call=>call.name==='upload_files').length===uploadsBefore+2);
+        assert.deepEqual(loaderCalls.filter(call=>call.name==='upload_files').slice(-2).map(call=>call.args.files),handoffRefs.map(ref=>[ref]));
+        await wait(()=>inner().executeJavaScript("!!document.querySelector('#import-preview #confirm-import')"));
+        await inner().executeJavaScript("document.querySelector('#import-preview #confirm-import').nextElementSibling.click()");
+        await wait(()=>inner().executeJavaScript("!document.querySelector('#import-preview')"));
+        assert.equal(await inner().executeJavaScript("document.querySelectorAll('[data-file-ref]').length"),2,'cancel keeps the file list');
         stage='loader themes and narrow screen';
         for(const theme of ['light','dark']){
           const variables=theme==='light'?{'--color-background-primary':'rgb(248,248,246)','--color-background-secondary':'rgb(238,238,235)','--color-text-primary':'rgb(38,38,38)','--color-border-primary':'rgb(160,160,158)'}:{'--color-background-primary':'rgb(31,31,30)','--color-background-secondary':'rgb(44,44,42)','--color-text-primary':'rgb(235,235,232)','--color-border-primary':'rgb(100,100,98)'};
@@ -515,6 +555,30 @@ try {
         }
         window.webContents.debugger.detach();
         console.log('AUTHOR_APP_VERDICT=passed (files; real pack, Electron, dispatcher, private result, visibility, Light/Dark)');
+        return;
+      }
+      if(handoffMode){
+        // Integration: chat file handoff end to end in real Electron. The page gets only
+        // references, reads the live copy through its signed URL, and the plugin uploads
+        // with upload.handoff only after the click. A deleted copy keeps the View open.
+        stage='handoff page';
+        await wait(()=>inner()?.executeJavaScript('window.handoffState?.ready===true'));
+        const state=await inner().executeJavaScript('window.handoffState');
+        assert.deepEqual(state.names,['订单.csv','gone.csv']);
+        assert.ok(state.urls[0].includes('/__cindy/files/'));
+        assert.equal(state.urls[1],null);
+        assert.equal(state.rows,2);
+        assert.equal(uploads.length,0,'opening the page must not transfer the file');
+        const pageText=await inner().executeJavaScript('document.documentElement.outerHTML+JSON.stringify(window.handoffState)');
+        assert.equal(pageText.includes(process.env.CINDY_MCP_APP_TEST_DIR),false,'the page must not see local paths');
+        stage='handoff confirm';
+        await inner().executeJavaScript("document.querySelector('#confirm').click()");
+        await wait(()=>inner().executeJavaScript("window.handoffState.result==='uploaded 200'"));
+        assert.equal(uploads.length,1);
+        assert.equal(uploads[0].url,'https://upload.example.com/import');
+        assert.ok(uploads[0].body.includes('apple,3'));
+        assert.ok(uploads[0].body.includes("filename*=UTF-8''"+encodeURIComponent('订单.csv')));
+        console.log('HANDOFF_VERDICT=passed (references only on open, local read via signed URL, deleted copy unsigned, upload.handoff after click)');
         return;
       }
       if(authorMode){
@@ -681,6 +745,7 @@ try {
     CINDY_MCP_APP_TEST_METRICS: measureMetrics ? '1' : '0',
     CINDY_MCP_APP_TEST_ALLOWED: allowed,
     CINDY_MCP_APP_TEST_AUTHOR: authorMode ?? "",
+    CINDY_MCP_APP_TEST_HANDOFF: handoffMode ? '1' : '0',
   };
   delete environment.ELECTRON_RUN_AS_NODE;
   const electron = createRequire(import.meta.url)('electron');

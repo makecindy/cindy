@@ -75,4 +75,5 @@ Plugins extend what the agents can do — they add tools the agent can call, pan
 
 **Notes:**
 
+- The former built-in **Smart Contacts** is now the **Contacts** plugin (`cindy-contacts`). Install it from **Recommended**; on first launch it copies your existing Smart Contacts data (the old data stays on disk, read-only), and it can sync between your own computers.
 - You can manage the plugins installed on your other computers from the same page by switching the computer at the top (the target computer must be online and on a recent Cindy version).

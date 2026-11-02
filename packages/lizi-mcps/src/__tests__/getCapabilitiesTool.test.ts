@@ -81,6 +81,17 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.app');
   });
 
+  // 2026-10-31 沙箱实测:Computer Use 关着时 cindy_computer 整个不注册,模型只会说"没有工具";
+  // 这条让它知道能力存在、去哪开、开完怎么接上,并且不许用 shell 模拟按键代替。
+  it('computer-use 说明未开启时的判断方法、设置入口深链与开启后的接续', () => {
+    const entry = findCapability('computer-use');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('cindy://settings/builtin-tools');
+    expect(entry!.detail).toContain('mcp__cindy_computer__');
+    expect(entry!.detail).toContain('osascript');
+    expect(entry!.detail).toContain('新建任务');
+  });
+
   it('issue-tracker 不套固定问卷,并说明自动附加环境含 Harness / 模型 ID', () => {
     const entry = findCapability('issue-tracker');
     expect(entry).toBeDefined();

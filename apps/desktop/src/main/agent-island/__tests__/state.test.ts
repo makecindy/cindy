@@ -16,6 +16,7 @@ import {
   AGENT_ISLAND_COMPLETION_DWELL_MS,
   AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
+  AGENT_ISLAND_COMPLETED_RETENTION_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
@@ -2983,14 +2984,14 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
   });
 });
 
-describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限期霸占展开列表)', () => {
+describe('Agent Island 终态驻留 TTL(完成最多保留一天,报错沿用短 TTL)', () => {
   it('preserves silent completion policy in the unread ledger after expiry and clears it on the next turn', () => {
     const state = createAgentIslandState();
     const meta = { sessionId: 'silent', title: 'Schedule' };
     applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
     applyAgentIslandUserPrompt(state, meta, 'Scheduled check', 3_000);
     applyAgentIslandEvent(state, meta, doneEvent(), 4_000, { suppressCompletionAttention: true, preserveCompletionAttention: true });
-    const afterExpiryAt = 4_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 4_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(state.sessions.has('silent')).toBe(false);
     expect(buildAllSessionActivitySnapshots(state)).toEqual([
@@ -3003,24 +3004,36 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     expect(buildAllSessionActivitySnapshots(state)[0].completionNotification).toBeUndefined();
   });
 
-  it('unread completed 条目在 TTL 内仍然可见', () => {
+  it('unread completed 条目在一天内仍然可见', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    // TTL 边界前 1 秒:仍然算未读驻留期,条目在列表里。
-    const beforeExpiry = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS - 1_000);
+    // 保留期边界前 1 秒:仍然算未读驻留期,条目在列表里。
+    const beforeExpiry = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS - 1_000);
     expect(beforeExpiry.totalCount).toBe(1);
     expect(beforeExpiry.sessions[0]).toMatchObject({ sessionId: 'done', phase: 'completed' });
-    // dwell / reveal 走完后,下一次 publish 必须排到岛面 TTL,否则 4h 到点不会自己隐藏。
+    // dwell / reveal 走完后,下一次 publish 必须排到完成保留期,否则一天到点不会自己隐藏。
     const afterDwell = 2_000 + AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS + 1;
-    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS);
+    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS);
   });
 
-  it('unread completed 超过 TTL 后离开岛面,独立账本仍在,远程快照继续带 attention', () => {
+  it('已读完成条目也会排到一天后的截止刷新,不会靠后续事件才消失', () => {
+    const state = createAgentIslandState();
+    setAgentIslandVisibleSession(state, 'done', 1_900);
+    setAgentIslandAppFocused(state, true, 1_950);
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
+
+    // 用户正看着该会话:完成不挂未读,只走短暂 dwell。dwell 结束后仍必须有一个
+    // 一天后的定时器,否则停在岛内的已读卡片可能一直留着。
+    const afterDwell = 2_000 + AGENT_ISLAND_COMPLETION_DWELL_MS + 1;
+    expect(getNextAgentIslandTimerAt(state, afterDwell)).toBe(2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS);
+  });
+
+  it('unread completed 超过一天后离开岛面,独立账本仍在,远程快照继续带 attention', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    const afterExpiryAt = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     const afterExpiry = buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(afterExpiry.totalCount).toBe(0);
     expect(state.sessions.has('done')).toBe(false);
@@ -3029,6 +3042,21 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     ]);
     expect(acknowledgeAgentIslandSessionRead(state, 'done', afterExpiryAt, { source: 'passive' })).toBe('cleared');
     expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+  });
+
+  it('完成后的迟到活动事件不会把保留期往后顺延', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 'done', title: 'Schedule' },
+      { type: 'text', source: 'codex', data: { text: 'late tail' } } as AgentEvent,
+      2_000 + 60 * 60 * 1_000,
+    );
+
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
+    expect(buildAgentIslandDisplayState(state, afterExpiryAt).totalCount).toBe(0);
+    expect(state.sessions.has('done')).toBe(false);
   });
 
   it('unread error 超过 TTL 后也离开岛面,账本仍在且 passive 仍免疫', () => {
@@ -3048,8 +3076,8 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
 
-    // 模拟 TTL 后用户悬停打开灵动岛展开列表
-    const afterExpiry = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 5_000;
+    // 模拟完成保留期后用户悬停打开灵动岛展开列表
+    const afterExpiry = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 5_000;
     setAgentIslandHovered(state, true, afterExpiry);
 
     // preserveExpiredTransient=true 时也不应把 TTL 过期的 unread 条目捞回岛面
@@ -3079,7 +3107,7 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
   it('TTL prune 后再 process-close 不得清掉独立未读账本', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'done', title: 'Schedule' }, doneEvent(), 2_000);
-    const afterExpiryAt = 2_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1_000;
+    const afterExpiryAt = 2_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1_000;
     buildAgentIslandDisplayState(state, afterExpiryAt);
     expect(state.sessions.has('done')).toBe(false);
 

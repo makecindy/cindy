@@ -125,13 +125,14 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const botId = request.ref.id.slice(6);
         const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const all = await (await todoAccess(botId)).list();
+        const access = await todoAccess(botId);
+        const all = await access.list();
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         const page = queryTodoItems(all.items, request.query ? JSON.parse(request.query) as TodoListQuery : {});
         page.items = page.items.map(botTodoRemoteProjection);
         // 近况「每天帮我查一次」的当前状态；旧客户端忽略，新客户端缺这个字段（旧宿主）时不显示开关。
-        // 例行任务读不到（引擎未就绪、伙伴暂停）时不带这个字段，待办照常返回。
-        const dailyCheck = await routineTools.todoCheckEnabled(botId).catch(() => undefined);
+        // 例行任务读不到（引擎未就绪、伙伴暂停）或主人关掉了系统技能「待办」时不带这个字段，待办照常返回。
+        const dailyCheck = access.todoOff ? undefined : await routineTools.todoCheckEnabled(botId).catch(() => undefined);
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         return {ref:request.ref,revision:createHash('sha256').update(JSON.stringify(all.items)).digest('hex'),display:{title:source.name},links:[],
           blocks:[{id:'todos',primitive:'teammate-todos',fallbackMarkdown:page.items.map(t=>t.title+' — '+t.progress).join('\n').slice(0,8000),data:{...page,...(dailyCheck === undefined ? {} : {dailyCheck})}}]};

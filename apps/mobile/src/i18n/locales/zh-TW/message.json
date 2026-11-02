@@ -162,6 +162,7 @@
     "mediaErrorLine": "錯誤：{{message}}",
     "mediaDeviceLinkHint": "開啟前，手機會先請遠端裝置上傳這個媒體。",
     "controlDelete": "刪除訊息",
+    "controlEdit": "編輯",
     "controlRewind": "回到此處",
     "controlFork": "從這裡開啟新任務",
     "markdownDocAriaLabel": "訊息正文",
@@ -261,6 +262,14 @@
     "waitingMessage": "等待傳送的訊息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為這個任務選了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用 {{model}}",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用 {{model}}",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文並繼續",
       "labelTimeout": "上一輪沒有回應，已整理後繼續",
@@ -441,5 +450,32 @@
       "provider": "API 供應商",
       "unknown": "未記錄渠道"
     }
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重試",
+    "image": "圖片",
+    "video": "影片",
+    "file": "檔案",
+    "close": "關閉",
+    "reset": "重設視角",
+    "open": "開啟預覽",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "fit": "符合視窗",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "儲存原件",
+    "share": "分享",
+    "previous": "上一個附件",
+    "next": "下一個附件",
+    "password": "輸入 PDF 密碼",
+    "find": "在文件中尋找",
+    "matches": "{{count}} 頁符合",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "redo": "重做",
+    "wrap": "自動換行",
+    "lineNumbers": "行號",
+    "rendered": "查看文件"
   }
 }

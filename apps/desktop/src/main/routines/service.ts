@@ -11,6 +11,7 @@ import {
   type RoutineInput,
   type RoutineModel,
   type RoutineDeliveryTarget,
+  type PreRunPluginConfig,
   type Schedule,
   type ScheduleStorage,
   type Scheduler,
@@ -28,10 +29,11 @@ import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 import { RoutineFileStore } from './store.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import type { GhostControlPointResult, GhostRoutineRunPointData } from '../../shared/ghost.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles } from '../localDb/schema.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
-import { currentFollowUpEvents } from '../bot-autonomy/hub.js';
+import { botSystemSkillsOff, currentFollowUpEvents } from '../bot-autonomy/hub.js';
 import {
   BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
@@ -64,6 +66,10 @@ export interface RoutineHostDeps {
   deleteRoutineSession?(sessionId: string): Promise<void>;
   getScheduler(): Pick<Scheduler, 'runNow' | 'pause' | 'delete'> | null;
   getScheduleStorage(): Pick<ScheduleStorage, 'get' | 'insert' | 'update' | 'listRuns'>;
+  /** 保存时把插件前置检查的插件解析为实例 id；不可选时抛错。 */
+  resolvePreRunPlugin?(point: 'will-routine-run', pluginId: string): string;
+  /** 插件控制节点 will-routine-run：例行任务选了插件前置检查时，在建任务、派发模型前询问它。 */
+  screenControlPoint?(point: 'will-routine-run', data: GhostRoutineRunPointData, target: PreRunPluginConfig): Promise<GhostControlPointResult>;
 }
 
 let hostDeps: RoutineHostDeps | undefined;
@@ -152,6 +158,11 @@ async function waitForStartupDependency<T>(
   }
 }
 
+function controlPointStopMessage(gate: Extract<GhostControlPointResult, { action: 'skip' | 'block' }>): string {
+  if (gate.failure) return `Plugin "${gate.ghostName}" was unavailable or did not answer; handled by this task's failure setting`;
+  return gate.reason ? `Stopped by plugin "${gate.ghostName}": ${gate.reason}` : `Stopped by plugin "${gate.ghostName}"`;
+}
+
 /** Each standing instruction owns one persistent companion lane. */
 async function execute(scope: string, routine: Routine, run: RoutineRun, signal: AbortSignal, canDispatch: () => boolean) {
   assertScope(scope);
@@ -171,6 +182,14 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     return { skipped: true };
   }
   shadowedRoutineBots.delete(routine.botId);
+  // 主人关掉了这项系统技能：它的后台工作随提示与工具一起停（cindy-bots-runtime.md §6「伙伴技能分层」），不调用模型。
+  // 夜间学习不属于任何系统技能，照常运行；主人自己建的例行任务也照常运行。
+  const skill = routine.builtin === 'follow-up' ? 'follow' : routine.id === todoCheckRoutineId(routine.botId) ? 'todo' : null;
+  if (skill) {
+    const off = await botSystemSkillsOff(routine.botId);
+    assertScope(scope);
+    if (off.includes(skill)) return { skipped: true };
+  }
   if (!canDispatch()) return { deferred: true };
   // 夜间学习在宿主里执行，不派到伙伴主对话；没有新对话时不调用模型，直接记一次跳过。
   if (routine.builtin === 'nightly-learning') {
@@ -189,6 +208,33 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     events = allowed.events;
     const engineCanDispatch = canDispatch;
     canDispatch = () => engineCanDispatch() && allowed.canDispatch();
+  }
+  // 插件前置检查：放在建任务之前，跳过时不留空壳任务、不调用模型。
+  const gate = routine.preRunPlugin ? await getRoutineHost().screenControlPoint?.('will-routine-run', {
+    routineId: routine.id,
+    runId: run.id,
+    botId: routine.botId,
+    name: routine.name,
+    prompt: routine.prompt,
+    builtin: routine.builtin ?? null,
+    triggerIds: run.triggerIds,
+    events: events.map(({ sourceId, event }) => ({
+      id: event.id,
+      type: event.type,
+      sourceId,
+      occurredAt: event.occurredAt,
+      ...(event.subject !== undefined ? { subject: event.subject } : {}),
+      data: event.data,
+    })),
+  }, routine.preRunPlugin) : undefined;
+  assertScope(scope);
+  if (signal.aborted) throw new Error('Routine cancelled');
+  if (gate && gate.action !== 'allow' && gate.action !== 'route') {
+    log.info('routine stopped by plugin control point', {
+      routineId: routine.id, ghostId: gate.ghostId, action: gate.action, failure: gate.failure,
+    });
+    if (gate.action === 'skip') return { skipped: true, resultText: controlPointStopMessage(gate) };
+    throw new Error(controlPointStopMessage(gate));
   }
   const root = ownerScopedUserDataPath();
   const imported = await getRoutineHost().prepareImportedAutomation?.(root, routine, run.id, signal, () => assertScope(scope));
@@ -601,6 +647,25 @@ async function assertRoutineHookSyntax(input: RoutineInput): Promise<void> {
   if (input.preRunHook?.command?.trim()) await assertPreRunHookCommandSyntax(input.preRunHook.command);
 }
 
+/**
+ * 换了插件时把插件 id 归一成实例 id；启用中的例行任务还要求插件可选，停用的先按原样保存，
+ * 启用时再校验。没换插件的保持原样：插件后来被停用时照常保存，运行时按任务的出错处理收口。
+ */
+function resolveRoutinePlugin(input: RoutineInput, previous?: Routine): RoutineInput {
+  const plugin = input.preRunPlugin;
+  if (!plugin) return input;
+  const changed = plugin.pluginId !== previous?.preRunPlugin?.pluginId;
+  if (!changed && !(input.enabled && !previous?.enabled)) return input;
+  const resolve = getRoutineHost().resolvePreRunPlugin;
+  try {
+    if (!resolve) throw new Error('Plugin pre-run checks are not available yet');
+    return { ...input, preRunPlugin: { ...plugin, pluginId: resolve('will-routine-run', plugin.pluginId) } };
+  } catch (error) {
+    if (input.enabled) throw error;
+    return input;
+  }
+}
+
 async function assertRoutineDelivery(botId: string, input: RoutineInput, previous?: Routine): Promise<void> {
   if (input.delivery?.kind !== 'im' || !input.enabled) return;
   if (previous?.delivery?.kind === 'im' && previous.delivery.targetId === input.delivery.targetId) return;
@@ -620,6 +685,7 @@ export const routineTools = {
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      input = resolveRoutinePlugin(input, engine.list(botId).find(routine => routine.id === creationId));
       await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === creationId));
       if (input.enabled) await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, creationId, () => assertScope(scope), { input });
       assertScope(scope);
@@ -628,6 +694,7 @@ export const routineTools = {
   save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      input = resolveRoutinePlugin(input, engine.list(botId).find(routine => routine.id === id));
       await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === id));
       if (id && input.enabled) {
         const recoveredRevision = await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, id, () => assertScope(scope), { input, expectedRevision });
@@ -659,7 +726,13 @@ export const routineTools = {
   /**
    * 没有这条时，打开按默认内容新建；已有时只切换 enabled，保留主人或伙伴改过的名称、指令与时间。
    */
-  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine) => {
+  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine, scope) => {
+    // 系统技能「待办」关着时不能打开（关掉照常可以）：开了也会在执行时被跳过。
+    if (enabled) {
+      const off = await botSystemSkillsOff(botId);
+      assertScope(scope);
+      if (off.includes('todo')) throw Object.assign(new Error('SYSTEM_SKILL_OFF: this teammate\'s Todos system Skill is turned off'), { code: 'SYSTEM_SKILL_OFF' });
+    }
     const id = todoCheckRoutineId(botId);
     const routine = engine.list(botId).find((row) => row.id === id) ?? null;
     if (!routine) {
@@ -755,6 +828,7 @@ export async function listCompanionRoutines(botId: string, selfDeviceId: string 
     input: { name: routine.name, prompt: routine.prompt, enabled: routine.enabled, triggers: routine.triggers,
       ...(routine.silentWhenIdle !== undefined ? { silentWhenIdle: routine.silentWhenIdle } : {}),
       ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}),
+      ...(routine.preRunPlugin !== undefined ? { preRunPlugin: routine.preRunPlugin } : {}),
       ...(routine.modelOverride !== undefined ? { modelOverride: routine.modelOverride } : {}),
       ...(routine.sessionMode !== undefined ? { sessionMode: routine.sessionMode } : {}) },
     originDeviceId: selfDeviceId,
@@ -764,7 +838,7 @@ export async function listCompanionRoutines(botId: string, selfDeviceId: string 
 /**
  * The companion moved here: its routines from the cloud are created or updated with their ids;
  * `remove` ids are deleted. Timers start from now (nothing missed is replayed). A routine whose
- * check command came from another computer, or whose one-time trigger has passed, arrives turned
+ * check command or check plugin came from another computer, or whose one-time trigger has passed, arrives turned
  * off so it never runs a command this computer may not have.
  */
 export async function importCompanionRoutines(botId: string, routines: CompanionRoutineValue[], remove: string[], selfDeviceId: string | null): Promise<void> {
@@ -776,7 +850,9 @@ export async function importCompanionRoutines(botId: string, routines: Companion
   for (const routine of routines) {
     if (builtinIds.has(routine.id) || routine.id.startsWith(BUILTIN_FOLLOW_UP_ROUTINE_PREFIX)
       || routine.id.startsWith(BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX)) continue;
-    const foreignHook = !!routine.input.preRunHook?.command?.trim() && routine.originDeviceId !== selfDeviceId;
+    // 插件前置检查同理：那台电脑上的插件这里不一定装了。
+    const foreignHook = (!!routine.input.preRunHook?.command?.trim() || !!routine.input.preRunPlugin)
+      && routine.originDeviceId !== selfDeviceId;
     const passed = routine.input.triggers.some((trigger) => trigger.kind === 'once' && trigger.at <= now);
     const input: RoutineInput = { ...routine.input, enabled: routine.input.enabled && !foreignHook && !passed };
     if (existing.has(routine.id)) await routineTools.save(botId, input, routine.id);

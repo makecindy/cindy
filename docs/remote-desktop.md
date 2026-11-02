@@ -1044,6 +1044,27 @@ Remaining platform adapters are explicitly separate:
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
 
+### macOS zero frames: check `replayd` before blaming Cindy
+
+Every macOS capture path runs through the system `replayd` service. When the host
+offer fails after about 4 seconds, the push-frame window reports
+`DESKTOP_VIDEO_UNAVAILABLE` (empty first frame) and an `SCStream` starts
+successfully but delivers 0 frames, suspect a wedged `replayd` first. On
+2026-10-15 a Mac Studio (macOS 27.0.1) had one that had been running for 7 days
+and was flooding the log with `SCRemoteQueue_EnqueueSampleBuffer: Cannot Enqueue
+on an invalid remoteQueue` / `Client terminated the queue`; every
+ScreenCaptureKit capture started and produced nothing. Check with a minimal SCK
+capture or `/usr/bin/log stream --predicate 'process == "replayd"'` (`log` is a
+zsh builtin, use the absolute path). `kill -9` the user-session `replayd` —
+SIGTERM is ignored and launchd restarts it — after which the first frame arrives
+in about 0.3 s. A healthy `replayd` also delivers frames in the locked session
+with window exclusion. An earlier revision of PR #6112 added a lock-screen
+fallback and an unlock-restart chain on measurements taken while `replayd` was
+wedged; both were dropped before merge, and the merged PR only fixes first-frame
+reliability and records the wedged `replayd` as the direct cause. Do not conclude
+"the system API does not work in state X" before confirming the matching system
+service is healthy.
+
 ### Windows system service
 
 Windows builds include a native SCM service, a Main-only Node-API pipe

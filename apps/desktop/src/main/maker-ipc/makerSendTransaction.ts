@@ -226,6 +226,8 @@ export function stampTrustedDeviceLinkQueuedOrigin(
   const stamped = { ...item };
   if (deviceLinkInvoke) stamped.fromDeviceLinkClient = true;
   else delete stamped.fromDeviceLinkClient;
+  // 跳过插件消息钩子只能由本机界面发起；手机/其它电脑的请求一律经执行电脑上的插件过一遍。
+  if (deviceLinkInvoke) delete stamped.bypassGhostHooks;
   delete stamped.sourceDevice;
   delete stamped.sourcePlugin;
   delete stamped.agentOmitsTriggerPrefix;

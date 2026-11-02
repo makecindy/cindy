@@ -23,7 +23,8 @@ function harness() {
   const reader = { input: { compact: vi.fn().mockResolvedValue({}) }, compactSession: vi.fn().mockResolvedValue({ tokensBefore: 120_000, estimatedTokensAfter: 30_000 }), getContextUsage: vi.fn() } as any;
   const refresh = vi.fn();
   const render = async (patch: { session?: Partial<RemoteSession>; capabilities?: MobileAgentCapabilities | null; running?: boolean; available?: boolean } = {}) => {
-    await act(async () => root.render(createElement(CompanionContextControl, { session: { ...base, ...patch.session }, capabilities: { manualCompactSupported: true } as MobileAgentCapabilities, available: true, running: false, reader, onRefresh: refresh, ...patch, ...(patch.session ? { session: { ...base, ...patch.session } } : {}) })));
+    const { session, ...props } = patch;
+    await act(async () => root.render(createElement(CompanionContextControl, { session: { ...base, ...session }, capabilities: { manualCompactSupported: true } as MobileAgentCapabilities, available: true, running: false, reader, onRefresh: refresh, ...props })));
   };
   const click = async (id: string) => { await act(async () => (host.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).click()); };
   const accept = async () => { await act(async () => h.alert.mock.calls.at(-1)![2][1].onPress()); };

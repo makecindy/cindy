@@ -436,9 +436,9 @@ it.each(['light', 'dark'])('keeps saved text readable after App failures and ret
   expect(container.querySelector('[data-testid="mcp-webview"], script')).toBeNull();
 });
 
-/* 依据：本期不转发执行电脑文件。缺口：已有 App 测试没有本插件文件引用。
+/* 依据：本期不转发执行电脑文件（含对话交接副本 handoff:）。缺口：已有 App 测试没有本插件文件引用。
  * 最小输入：Host 向 View 发送含一个 local resource_link 的工具结果；tier: unit，真实卡片/controller。 */
-it.each(['cindy-media://blobs/file.png', 'library:reports/one.pdf', 'https://example.org/image.png'])(
+it.each(['cindy-media://blobs/file.png', 'library:reports/one.pdf', 'handoff:00000000-0000-4000-8000-000000000000', 'https://example.org/image.png'])(
   'only downgrades execution-computer file references (%s)', async (uri) => {
     let delivered = false;
     state.invoke.mockImplementation(async (_device, _channel, [, input]) => {

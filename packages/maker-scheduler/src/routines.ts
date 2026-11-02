@@ -1,4 +1,5 @@
-import type { AgentKind, PreRunHookConfig, Schedule } from "./types.js";
+import type { AgentKind, PreRunHookConfig, PreRunPluginConfig, Schedule } from "./types.js";
+import { normalizePreRunPlugin } from "./types.js";
 import { nextRun } from "./engine/cron.js";
 
 /** Sources describe events, independently of the connector transporting them. */
@@ -89,6 +90,8 @@ export interface Routine {
   silentWhenIdle?: boolean;
   /** null explicitly removes the check; omission preserves it on older clients. */
   preRunHook?: PreRunHookConfig | null;
+  /** Plugin pre-run check; null removes it, omission preserves it on older clients. */
+  preRunPlugin?: PreRunPluginConfig | null;
   /** Omission preserves saved settings when an older client edits a rule. */
   modelOverride?: RoutineModel | null;
   /** Omission keeps the legacy persistent routine lane. */
@@ -113,7 +116,7 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "modelOverride"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "preRunPlugin" | "modelOverride"
   | "sessionMode" | "delivery"
 >;
 
@@ -211,6 +214,7 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     preRunHook = { command: string(hook.command, 32_000),
       ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
   }
+  const preRunPlugin = normalizePreRunPlugin(input.preRunPlugin);
   let modelOverride: RoutineModel | null | undefined;
   if (input.modelOverride === null) modelOverride = null;
   else if (input.modelOverride !== undefined) {
@@ -247,6 +251,7 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
     ...(preRunHook === undefined ? {} : { preRunHook }),
+    ...(preRunPlugin === undefined ? {} : { preRunPlugin }),
     ...(sessionMode === undefined ? {} : { sessionMode }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),

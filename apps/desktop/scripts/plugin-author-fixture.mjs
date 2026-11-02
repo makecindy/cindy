@@ -95,6 +95,19 @@ async function verifyLoaderMain(main) {
   assert.equal(staged.structuredContent.offline, true);
   assert.equal((await call('api_write', { path: '/api/imports/confirm', body: { batchId: staged.structuredContent.batchId }, idempotencyKey: 'three' })).structuredContent.status, 'confirmed');
   assert.ok(libraryWrites.at(-1).content.includes('"R-1","record"'));
+  // Chat handoff (cindy_handoff_files): the first screen lists name and size with the reference on the
+  // button and carries no file content or staged preview; clicking hands the reference to upload_files.
+  const handoffRef = 'handoff:0f8e2b4c-1d2a-4c3b-9e8f-7a6b5c4d3e2f';
+  const handoffFile = { ref: handoffRef, name: '订单<b>.csv', mimeType: 'text/csv', size: 1234, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 };
+  const handedOff = (await call('import_file', { cindy_handoff_files: [handoffFile] }))._meta.view.html;
+  assert.ok(handedOff.includes('data-file-ref="' + handoffRef + '"') && handedOff.includes('订单&lt;b&gt;.csv') && handedOff.includes('1234 字节'));
+  assert.ok(handedOff.includes('离线示例：只显示名称和大小'));
+  const firstScreen = handedOff.slice(handedOff.indexOf('<main id="content">'), handedOff.indexOf('</main>'));
+  assert.ok(firstScreen.includes(handoffRef) && !/confirm-import|demo-batch|Record A|出错/.test(firstScreen), 'no staged preview before the click');
+  assert.equal((await call('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).structuredContent.offline, true);
+  for (const files of [['handoff:not-a-uuid'], [handoffRef, 'library:imports/list.csv'], ['library:other.csv']]) {
+    assert.equal((await call('upload_files', { files, path: '/api/imports/stage' })).isError, true, files.join());
+  }
   const network = []; let response = { ok: true, status: 200, body: '{"items":[]}' };
   const live = runtime(main.replace('const USE_MOCK = true;', 'const USE_MOCK = false;'), {
     fetch: async request => { network.push(request); return response; },
@@ -119,9 +132,24 @@ async function verifyLoaderMain(main) {
   assert.equal(network.at(-1).uploadDir.fileField, 'file');
   assert.equal(network.at(-1).callId, 'fixture');
   assert.ok(preview._meta.view.html.includes('&lt;b&gt;data&lt;/b&gt;'));
-  assert.ok(!preview._meta.view.html.includes('离线示例'), 'a real staged batch is not labelled as sample data');
+  const previewScreen = preview._meta.view.html.slice(preview._meta.view.html.indexOf('<main id="content">'), preview._meta.view.html.indexOf('</main>'));
+  assert.ok(previewScreen.includes('确认导入') && !previewScreen.includes('离线示例'), 'a real staged batch is not labelled as sample data');
   assert.ok(!JSON.stringify(preview).includes('test-handoff'));
-  console.log('AUTHOR_MAIN_VERDICT=passed (loader routing, private HTML, HTTP errors, no retry, deduplication, handoff, offline preview/records/export)');
+  // Live handoff: import_file asks the backend for the page with only ref/name/mimeType/size and uploads
+  // nothing; upload_files sends handoff references through upload.handoff, never as library paths.
+  response = { ok: true, status: 200, body: JSON.stringify({ html: '<!doctype html><p>files</p>' }) };
+  const liveFiles = await live('import_file', { cindy_handoff_files: [handoffFile] });
+  assert.equal(liveFiles._meta.view.html, '<!doctype html><p>files</p>');
+  assert.equal(new URL(network.at(-1).url).pathname, '/view');
+  assert.equal(network.at(-1).upload, undefined);
+  assert.equal(network.at(-1).body, JSON.stringify({ intent: 'files', fields: { files: [{ ref: handoffRef, name: '订单<b>.csv', mimeType: 'text/csv', size: 1234 }] }, fragment: false }));
+  response = { ok: true, status: 201, body: '{"batchId":"B-2","total":2,"rows":[],"errors":[]}' };
+  assert.equal((await live('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).structuredContent.batchId, 'B-2');
+  assert.equal(JSON.stringify(network.at(-1).upload.handoff), JSON.stringify([handoffRef]));
+  assert.equal(network.at(-1).upload.library, undefined);
+  response = { ok: false, errorCode: 'HANDOFF_UNAVAILABLE' };
+  assert.match((await live('upload_files', { files: [handoffRef], path: '/api/imports/stage' })).content[0].text, /重新发送/);
+  console.log('AUTHOR_MAIN_VERDICT=passed (loader routing, private HTML, HTTP errors, no retry, deduplication, dir and chat-file handoff, offline preview/records/export)');
 }
 export async function packAuthorFixture({ manifest, main, html, assets = {} }, temporary) {
   const dir = path.join(temporary, manifest.id);

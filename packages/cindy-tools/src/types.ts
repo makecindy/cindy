@@ -365,13 +365,16 @@ export type CindyMediaToolRequest =
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
   | { action: 'poll'; invocationId: string };
 
+/** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */
+export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord';
+
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
   /** Cindy's own catalog, separate from installed plugins and provider app marketplaces. */
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: CindyHostConnectionId; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**

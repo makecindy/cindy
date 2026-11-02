@@ -11,7 +11,13 @@
  * 更新走 `automatic`（需要确认就跳过，不替用户点头），只有服务端默认安装走 `exempt`。
  */
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
-import type { GhostManifest, InstalledGhost } from '../../shared/ghost.js';
+import {
+  declaredGhostControlPoints,
+  GHOST_CONTROL_POINTS,
+  type GhostControlPointId,
+  type GhostManifest,
+  type InstalledGhost,
+} from '../../shared/ghost.js';
 import {
   evaluateGhostInstallConsent,
   ghostInstallConsentKey,
@@ -61,12 +67,29 @@ export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
-  capability: 'tasks' | 'targets' | 'delegation' = 'tasks',
+  capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks',
 ): true | undefined {
   if (decision.mode !== 'confirmed') return undefined;
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
+}
+
+/**
+ * 本次确认里用户看到过的控制节点。服务端默认安装(exempt)与随包种子一样由发行方
+ * 负责，视为已批准声明的全部节点；未确认/无需确认时返回空，已批准节点由 update 延续。
+ */
+export function confirmedControlPoints(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): GhostControlPointId[] {
+  const declared = declaredGhostControlPoints(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
+  return declared.filter(point => shown.has(GHOST_CONTROL_POINTS[point].permissionKey));
 }
 
 /**
