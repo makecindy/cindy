@@ -32,6 +32,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as pdfjs from 'pdfjs-dist';
+import 'pdfjs-dist/web/pdf_viewer.css';
+import { ChevronLeft, ChevronRight, Maximize, Minus, Plus, Search } from 'lucide-react';
+import { PreviewButton, PreviewFooter } from '@/components/chat/PreviewChrome';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 import { createLogger } from '@/lib/logger';
@@ -128,11 +131,13 @@ interface PdfPageProps {
   pdf: pdfjs.PDFDocumentProxy;
   pageNumber: number;
   isVisible: boolean;
+  scale: number;
   onError: (pageNumber: number, error: unknown) => void;
 }
 
-function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
+function PdfPage({ pdf, pageNumber, isVisible, scale, onError }: PdfPageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textRef = useRef<HTMLDivElement>(null);
   const renderTaskRef = useRef<ActiveRenderTask | null>(null);
   const [renderState, setRenderState] = useState<PageRenderState>('idle');
   const [pageSize, setPageSize] = useState({
@@ -149,6 +154,7 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
     cancelRenderTask(renderTaskRef.current);
     renderTaskRef.current = null;
     clearCanvas(canvasRef.current);
+    textRef.current?.replaceChildren();
     setRenderState((current) => (current === 'idle' ? current : 'idle'));
   }, [isVisible]);
 
@@ -156,6 +162,7 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
     if (!isVisible) return;
     let cancelled = false;
     let activeTask: ActiveRenderTask | null = null;
+    let textTask: pdfjs.TextLayer | null = null;
 
     setRenderState('rendering');
     void (async () => {
@@ -165,7 +172,7 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
         const page = await pdf.getPage(pageNumber);
         if (cancelled) return;
 
-        const viewport = page.getViewport({ scale: PDF_PREVIEW_SCALE });
+        const viewport = page.getViewport({ scale });
         setPageSize({ width: viewport.width, height: viewport.height });
 
         const canvas = canvasRef.current;
@@ -192,6 +199,16 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
         if (cancelled || renderTaskRef.current !== task) return;
         renderTaskRef.current = null;
         setRenderState('rendered');
+        const container = textRef.current;
+        if (container) {
+          container.replaceChildren();
+          container.style.setProperty('--scale-factor', String(viewport.scale));
+          container.style.setProperty('--total-scale-factor', String(viewport.scale));
+          const textContentSource = await page.getTextContent();
+          if (cancelled) return;
+          textTask = new pdfjs.TextLayer({ textContentSource, container, viewport });
+          await textTask.render();
+        }
       } catch (error) {
         // Leaving the viewport intentionally rejects RenderTask.promise with
         // RenderingCancelledException. It is not a failed PDF and must not
@@ -215,10 +232,12 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
 
     return () => {
       cancelled = true;
+      textTask?.cancel();
+      textRef.current?.replaceChildren();
       cancelRenderTask(activeTask ?? renderTaskRef.current);
       if (renderTaskRef.current === activeTask) renderTaskRef.current = null;
     };
-  }, [isVisible, onError, pageNumber, pdf]);
+  }, [isVisible, onError, pageNumber, pdf, scale]);
 
   return (
     <div
@@ -245,6 +264,7 @@ function PdfPage({ pdf, pageNumber, isVisible, onError }: PdfPageProps) {
           }}
         />
       )}
+      <div ref={textRef} className="textLayer" />
       {renderState !== 'rendered' && (
         <div
           className="absolute inset-0 border border-[var(--border-default)] bg-white"
@@ -261,6 +281,53 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
   const pagesHostRef = useRef<HTMLDivElement>(null);
   const [pdfDoc, setPdfDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
   const [pageCount, setPageCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [scale, setScale] = useState(PDF_PREVIEW_SCALE);
+  const [password, setPassword] = useState('');
+  const [passwordNeeded, setPasswordNeeded] = useState(false);
+  const passwordReply = useRef<((value: string) => void) | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [find, setFind] = useState(false);
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<number[] | null>(null);
+  const searchGeneration = useRef(0);
+  const go = (page: number) => {
+    const next = Math.max(1, Math.min(pageCount, page));
+    pagesHostRef.current
+      ?.querySelector<HTMLElement>(`[data-pdf-page="${next}"]`)
+      ?.scrollIntoView({ block: 'start' });
+    setCurrentPage(next);
+  };
+  const fit = async () => {
+    if (!pdfDoc) return;
+    const page = await pdfDoc.getPage(currentPage);
+    const width = scrollContainerRef.current?.clientWidth || 640;
+    const height = scrollContainerRef.current?.clientHeight || 800;
+    const viewport = page.getViewport({ scale: 1 });
+    setScale(
+      Math.max(0.1, Math.min((width - 48) / viewport.width, (height - 48) / viewport.height)),
+    );
+  };
+  const search = async () => {
+    if (!pdfDoc) return;
+    const generation = ++searchGeneration.current;
+    const found: number[] = [];
+    const needle = query.toLocaleLowerCase();
+    for (let page = 1; needle && page <= pdfDoc.numPages; page++) {
+      const content = await (await pdfDoc.getPage(page)).getTextContent();
+      if (generation !== searchGeneration.current) return;
+      if (
+        content.items
+          .map((item) => ('str' in item ? item.str : ''))
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(needle)
+      )
+        found.push(page);
+    }
+    setMatches(found);
+    if (found[0]) go(found[0]);
+  };
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set());
   const documentVersionRef = useRef(0);
   const [documentVersion, setDocumentVersion] = useState(0);
@@ -288,6 +355,11 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     setPageCount(0);
     setVisiblePages(new Set());
     setState({ kind: 'loading' });
+    setPasswordNeeded(false);
+    setPassword('');
+    setCurrentPage(1);
+    setMatches(null);
+    searchGeneration.current++;
 
     const absPath = joinPath(workdir, relPath);
 
@@ -306,12 +378,26 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
           cMapPacked: true,
           standardFontDataUrl: '/pdfjs/standard_fonts/',
         });
+        loadingTask.onPassword = (update: (password: string) => void) => {
+          if (!cancelled) {
+            passwordReply.current = update;
+            setPasswordNeeded(true);
+          }
+        };
         const pdf = await loadingTask.promise;
         loadedPdf = pdf;
         if (cancelled) {
           await pdf.destroy();
           return;
         }
+        const first = await pdf.getPage(1);
+        if (cancelled) return;
+        const width = scrollContainerRef.current?.clientWidth || 640;
+        const height = scrollContainerRef.current?.clientHeight || 800;
+        const viewport = first.getViewport({ scale: 1 });
+        setScale(
+          Math.max(0.1, Math.min((width - 48) / viewport.width, (height - 48) / viewport.height)),
+        );
         setPdfDoc(pdf);
         setPageCount(pdf.numPages);
         setState({ kind: 'rendered', pageCount: pdf.numPages });
@@ -326,6 +412,8 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
     return () => {
       cancelled = true;
+      searchGeneration.current++;
+      passwordReply.current = null;
       // destroy 两者:loadingTask 中止未完成的加载;pdfDoc 释放已解析文档的
       // worker / 渲染资源(promise resolve 后仅 destroy loadingTask 不够,
       // 中途导航离开会泄漏文档)。destroy 幂等,两者都调是安全的。
@@ -335,7 +423,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     // size/mtimeMs 进依赖:同一路径的文件被就地改写(agent 重生成 PDF 等)时
     // relPath 不变但 mtimeMs/size 变,需要重新读字节 + 重渲染,否则预览会停在
     // 旧内容直到用户切走再切回。FileBodyView 正是为此把 size/mtimeMs 传进来。
-  }, [workdir, relPath, size, mtimeMs]);
+  }, [workdir, relPath, size, mtimeMs, retry]);
 
   useEffect(() => {
     const host = pagesHostRef.current;
@@ -410,15 +498,31 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
   if (state.kind === 'error') {
     return (
-      <UnrenderablePlaceholder workdir={workdir} relPath={relPath} size={size} mtimeMs={mtimeMs} />
+      <div className="flex h-full flex-col items-center justify-center gap-3">
+        <PreviewFooter collectionOnly />
+        <UnrenderablePlaceholder workdir={workdir} relPath={relPath} size={size} mtimeMs={mtimeMs} />
+        <button type="button" onClick={() => setRetry((value) => value + 1)}>
+          {t('attachmentPreview.retry')}
+        </button>
+      </div>
     );
   }
 
   return (
-    <div
+    <div className="relative h-full w-full bg-[var(--surface)] pb-16">
+      <div
       ref={scrollContainerRef}
-      className="relative h-full w-full overflow-y-auto bg-[var(--surface)]"
-    >
+        onScroll={() => {
+          const root = scrollContainerRef.current;
+          if (!root) return;
+          const edge = root.getBoundingClientRect().top;
+          const page = Array.from(
+            pagesHostRef.current?.querySelectorAll<HTMLElement>('[data-pdf-page]') ?? [],
+          ).find((element) => element.getBoundingClientRect().bottom > edge + 24);
+          if (page) setCurrentPage(Number(page.dataset.pdfPage));
+        }}
+        className="relative h-full w-full overflow-auto bg-[var(--surface)]"
+      >
       {/* Align pages to a shared left edge: a wide page must not push narrower
           placeholders outside the observer's horizontal viewport. */}
       <div ref={pagesHostRef} className="mx-auto flex w-fit flex-col items-start gap-2 px-4 py-6">
@@ -430,7 +534,8 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
               pageNumber={index + 1}
               isVisible={visiblePages.has(index + 1)}
               onError={handlePageError}
-            />
+                scale={scale}
+              />
           ))}
         {state.kind === 'loading' && (
           <div className="py-3 text-xs text-[var(--cmd-palette-item-meta)]">
@@ -440,6 +545,101 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
           </div>
         )}
       </div>
+    </div>
+      {passwordNeeded ? (
+        <form
+          className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[var(--surface)]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            passwordReply.current?.(password);
+            setPassword('');
+            setPasswordNeeded(false);
+          }}
+        >
+          <label htmlFor="preview-pdf-password">{t('attachmentPreview.password')}</label>
+          <input
+            id="preview-pdf-password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-3"
+          />
+          <button type="submit">{t('attachmentPreview.open')}</button>
+        </form>
+      ) : null}
+      {find ? (
+        <form
+          className="absolute inset-x-0 top-0 flex items-center gap-3 border-b border-[var(--border-default)] bg-[var(--surface)] px-4 py-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void search();
+          }}
+        >
+          <input
+            aria-label={t('attachmentPreview.find')}
+            placeholder={t('attachmentPreview.find')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="min-w-0 flex-1 bg-transparent"
+          />
+          <button type="submit">
+            <Search size={16} />
+          </button>
+          {matches ? (
+            <span className="text-xs">
+              {t('attachmentPreview.matches', { count: matches.length })}
+            </span>
+          ) : null}
+        </form>
+      ) : null}
+      {pageCount ? (
+        <PreviewFooter>
+          <PreviewButton
+            label={t('attachmentPreview.previousPage')}
+            disabled={currentPage <= 1}
+            onClick={() => go(currentPage - 1)}
+          >
+            <ChevronLeft size={16} />
+          </PreviewButton>
+          <span className="px-2 text-xs">
+            {currentPage} / {pageCount}
+          </span>
+          <PreviewButton
+            label={t('attachmentPreview.nextPage')}
+            disabled={currentPage >= pageCount}
+            onClick={() => go(currentPage + 1)}
+          >
+            <ChevronRight size={16} />
+          </PreviewButton>
+          <PreviewButton
+            label={t('attachmentPreview.zoomOut')}
+            onClick={() => setScale((value) => Math.max(0.1, value / 1.25))}
+          >
+            <Minus size={16} />
+          </PreviewButton>
+          <span className="w-12 text-center text-xs">{Math.round(scale * 100)}%</span>
+          <PreviewButton
+            label={t('attachmentPreview.zoomIn')}
+            onClick={() => setScale((value) => Math.min(8, value * 1.25))}
+          >
+            <Plus size={16} />
+          </PreviewButton>
+          <PreviewButton
+            label={t('attachmentPreview.fit')}
+            onClick={() => {
+              void fit();
+            }}
+          >
+            <Maximize size={16} />
+          </PreviewButton>
+          <PreviewButton
+            label={t('attachmentPreview.find')}
+            onClick={() => setFind((value) => !value)}
+          >
+            <Search size={16} />
+          </PreviewButton>
+        </PreviewFooter>
+      ) : null}
     </div>
   );
 }

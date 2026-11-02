@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "Gerenciar links de PRs",
+    "hint": "Até 3 no cabeçalho; PRs fixados aparecem primeiro",
+    "empty": "Cole um link de PR do GitHub para adicioná-lo",
+    "removed": "Removidos: {{count}}",
+    "legacy": "Referências não confirmadas: {{count}}",
+    "addLabel": "Adicionar link de PR",
+    "add": "Adicionar PR",
+    "loading": "Carregando…",
+    "restore": "Restaurar PR",
+    "pin": "Fixar no cabeçalho",
+    "unpin": "Desafixar PR",
+    "pinLimit": "Fixar até 3 PRs",
+    "reorderHint": "Use Alt+↑/↓ para reordenar dentro do grupo de fixados ou não fixados.",
+    "dragHandle": "Arraste para reordenar {{repo}} #{{number}}",
+    "remove": "Remover PR",
+    "errors": {
+      "duplicate": "Este PR já está vinculado; restaure os links removidos pela lista",
+      "notFound": "PR não encontrado ou acesso negado",
+      "invalidUrl": "Insira um link válido de PR do GitHub",
+      "reorderFailed": "A ordem não foi salva. Tente novamente.",
+      "verifyFailed": "Não foi possível verificar o PR; confira o login e o acesso ao GitHub",
+      "unsupported": "A versão deste computador não permite gerenciar links de PRs",
+      "failed": "Não foi possível atualizar os links de PRs"
+    },
+    "moveUp": "Mover para cima"
+  },
   "paneResize": {
     "label": "Largura da coluna",
     "hint": "Arraste para a esquerda ou direita para ajustar a largura das colunas"
@@ -197,7 +224,7 @@
       },
       "actionCopy": {
         "pending": "Resolva a solicitação pendente primeiro; a área de entrada será restaurada depois.",
-        "archived": "Esta sessão está arquivada. Restaure-a antes de enviar mais mensagens.",
+        "archived": "Esta sessão está arquivada. Enviar uma mensagem a desarquiva automaticamente.",
         "deleted": "Esta sessão foi excluída e não pode ser alterada.",
         "queuePaused": "A fila está pausada. Retome-a pelo painel da fila."
       }
@@ -441,7 +468,7 @@
     "copyLinkAction": "Copiar link da sessão",
     "unpin": "Desafixar",
     "pin": "Fixar",
-    "restore": "Restaurar",
+    "restore": "Desarquivar",
     "archive": "Arquivar",
     "deleteAction": "Excluir sessão",
     "deleteConversation": "Excluir sessão",

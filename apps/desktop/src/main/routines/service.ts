@@ -33,7 +33,7 @@ import type { GhostControlPointResult, GhostRoutineRunPointData } from '../../sh
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles } from '../localDb/schema.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
-import { currentFollowUpEvents } from '../bot-autonomy/hub.js';
+import { botSystemSkillsOff, currentFollowUpEvents } from '../bot-autonomy/hub.js';
 import {
   BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
@@ -182,6 +182,14 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     return { skipped: true };
   }
   shadowedRoutineBots.delete(routine.botId);
+  // 主人关掉了这项系统技能：它的后台工作随提示与工具一起停（cindy-bots-runtime.md §6「伙伴技能分层」），不调用模型。
+  // 夜间学习不属于任何系统技能，照常运行；主人自己建的例行任务也照常运行。
+  const skill = routine.builtin === 'follow-up' ? 'follow' : routine.id === todoCheckRoutineId(routine.botId) ? 'todo' : null;
+  if (skill) {
+    const off = await botSystemSkillsOff(routine.botId);
+    assertScope(scope);
+    if (off.includes(skill)) return { skipped: true };
+  }
   if (!canDispatch()) return { deferred: true };
   // 夜间学习在宿主里执行，不派到伙伴主对话；没有新对话时不调用模型，直接记一次跳过。
   if (routine.builtin === 'nightly-learning') {
@@ -718,7 +726,13 @@ export const routineTools = {
   /**
    * 没有这条时，打开按默认内容新建；已有时只切换 enabled，保留主人或伙伴改过的名称、指令与时间。
    */
-  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine) => {
+  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine, scope) => {
+    // 系统技能「待办」关着时不能打开（关掉照常可以）：开了也会在执行时被跳过。
+    if (enabled) {
+      const off = await botSystemSkillsOff(botId);
+      assertScope(scope);
+      if (off.includes('todo')) throw Object.assign(new Error('SYSTEM_SKILL_OFF: this teammate\'s Todos system Skill is turned off'), { code: 'SYSTEM_SKILL_OFF' });
+    }
     const id = todoCheckRoutineId(botId);
     const routine = engine.list(botId).find((row) => row.id === id) ?? null;
     if (!routine) {

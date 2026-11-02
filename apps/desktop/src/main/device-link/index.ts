@@ -44,7 +44,7 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
-  DL_CONTACTS_SYNC_CHANNEL,
+  RETIRED_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
@@ -175,16 +175,6 @@ import { getNotificationImageLabel, getSessionNotificationBody } from '../sessio
 import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
-import {
-  handleContactsDeviceLinkStatusChanged,
-  handleContactsPeerPresenceChanged,
-  handleIncomingContactsRelayFrame,
-  initContactsDeviceSync,
-  pollContactsDeviceSyncCrossProcessState,
-  pollContactsDeviceSyncDataChange,
-  pollContactsDeviceSyncSettingChange,
-  setContactsDeviceLinkOwnerActive,
-} from '../contacts-sync/driver';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
 import { invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import {
@@ -946,7 +936,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       presenceNameByDevice.clear();
     }
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
-    handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') {
       // 本地 last-known 先同步种入，覆盖 REST 返回前的 link-open 竞态；随后用
       // 当前设备目录刷新，补齐本连接代没有历史 presence 的已在线设备。
@@ -1042,7 +1031,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
-    handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
     // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
     // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
@@ -1180,18 +1168,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       void pluginDeviceSync.receive(env.src, p.payload);
       return;
     }
-    if (p?.channel === DL_CONTACTS_SYNC_CHANNEL) {
-      if (
-        shouldExchangeDictionaryWith({
-          online: true,
-          platform: getControllerPlatform(env.src),
-          revoked: isDeviceRevoked(env.src),
-        })
-      ) {
-        handleIncomingContactsRelayFrame(env.src, p.payload);
-      }
-      return;
-    }
+    // 旧版 Cindy 的智能通讯录同步帧：功能已下线，丢弃，不转发给 renderer。
+    if (p?.channel === RETIRED_CONTACTS_SYNC_CHANNEL) return;
     // 微批拆包放在 main:renderer 侧有多个按 channel 过滤的 onRemotePush 订阅者
     // (会话视图 / 草稿路由 / learn / 文件浏览),在这里展开成原样的 maker:event
     // 事件流,它们全都零改动。批内条目的 sessionId 与顶层不一致即跳过(topic 隔离
@@ -1256,34 +1234,6 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     allowed: deviceId => pluginSyncAccess.allowed(deviceId),
     send: (deviceId, frame) => { if (!client) throw new Error('device link unavailable'); client.sendPush(deviceId, PLUGIN_SYNC_CHANNEL, frame); },
   });
-  initContactsDeviceSync({
-    getSelfDeviceId: () => client?.getSelfDeviceId() ?? null,
-    listOnlineDesktopDevices: () =>
-      [...presenceOnlineByDevice.entries()]
-        .filter(
-          ([deviceId, online]) =>
-            deviceId !== client?.getSelfDeviceId() &&
-            shouldExchangeDictionaryWith({
-              online,
-              platform: getControllerPlatform(deviceId),
-              revoked: isDeviceRevoked(deviceId),
-            }),
-        )
-        .map(([deviceId]) => ({
-          deviceId,
-          deviceName: presenceNameByDevice.get(deviceId) ?? deviceId.slice(0, 8),
-        })),
-    isPeerAllowed: (deviceId) =>
-      deviceId !== client?.getSelfDeviceId() &&
-      shouldExchangeDictionaryWith({
-        online: presenceOnlineByDevice.get(deviceId) === true,
-        platform: getControllerPlatform(deviceId),
-        revoked: isDeviceRevoked(deviceId),
-      }),
-    sendRelayFrame: (deviceId, frame) => {
-      client?.sendPush(deviceId, DL_CONTACTS_SYNC_CHANNEL, frame);
-    },
-  });
   if (unsubscribeDictionaryChanged) unsubscribeDictionaryChanged();
   unsubscribeDictionaryChanged = onVoiceInputDictionaryChanged((options) => {
     if (options?.immediate) broadcastDictionaryNow();
@@ -1326,14 +1276,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 半开链路,不必等对端下一帧。
       setTimeout(retriggerReopenForControlledDevices, 250);
       pluginDeviceSync.setActive(true);
-      setContactsDeviceLinkOwnerActive(true);
       refreshAppliedSettingsSnapshot();
-      pollContactsDeviceSyncSettingChange();
-      pollContactsDeviceSyncDataChange();
-      pollContactsDeviceSyncCrossProcessState();
     },
     onDemote: () => {
-      setContactsDeviceLinkOwnerActive(false);
       appliedSettingsSnapshot = null;
       teardownActiveLink();
     },
@@ -1765,9 +1710,6 @@ function refreshAppliedSettingsSnapshot(): void {
  */
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
-  pollContactsDeviceSyncSettingChange();
-  pollContactsDeviceSyncDataChange();
-  pollContactsDeviceSyncCrossProcessState();
   const prev = appliedSettingsSnapshot;
   const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
   appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };

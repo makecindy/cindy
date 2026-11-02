@@ -25,7 +25,7 @@ import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPor
 import { CompanionProfileNativeView } from './CompanionProfileNativeView';
 import { CompanionChannelTasks } from './CompanionChannelTasks';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
-import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -407,10 +407,17 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const editorView = panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
-  </> : editor ? <View style={styles.group}>{editor.panels.flatMap(item => item.entries?.length
-    ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} />)
-    : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
-      : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View> : null;
+  </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
+    // Same sections as iOS: a host block title heads its own group, subtitles sit under the row title.
+    const group = <View key={section.key} style={styles.group}>{section.panels.flatMap(item => item.entries?.length
+      ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)}
+        detail={entry.subtitle ? label(entry.subtitle) : undefined} detailLines={2} onPress={() => void openEditor(entry.resourceId)} />)
+      : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
+        : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View>;
+    return section.title ? <View key={section.key} style={styles.field}>
+      <Text accessibilityRole="header" style={styles.groupLabel}>{label(section.title)}</Text>{group}
+    </View> : group;
+  })}</> : null;
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
       preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}

@@ -96,7 +96,8 @@ function sameOwnership(a: OwnershipSnapshot, b: OwnershipSnapshot): boolean {
   for (const [id, bot] of a.bots) {
     const other = b.bots.get(id);
     if (!other || bot.status !== other.status || bot.allowSchedulerFollow !== other.allowSchedulerFollow
-      || !!bot.shadowed !== !!other.shadowed || (bot.canonicalSessionId ?? null) !== (other.canonicalSessionId ?? null)) return false;
+      || !!bot.shadowed !== !!other.shadowed || !!bot.followOff !== !!other.followOff
+      || (bot.canonicalSessionId ?? null) !== (other.canonicalSessionId ?? null)) return false;
   }
   for (const [id, creator] of a.creatorBySession) if (b.creatorBySession.get(id) !== creator) return false;
   for (const [id, sessions] of a.responsibleByBot) {

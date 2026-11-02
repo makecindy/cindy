@@ -119,6 +119,9 @@
     "unavailable": "Ainda não é possível receber partilhas",
     "noCompanions": "Ainda não há companheiros",
     "noTasks": "Ainda não há tarefas",
-    "retry": "Não foi possível carregar tudo. Toque para tentar novamente."
+    "retry": "Não foi possível carregar tudo. Toque para tentar novamente.",
+    "noMatches": "Nenhum destino correspondente",
+    "clearSearch": "Limpar pesquisa",
+    "loadingDevices": "A carregar computadores…"
   }
 }

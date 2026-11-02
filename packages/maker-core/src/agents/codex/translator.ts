@@ -592,8 +592,12 @@ export function classifyCodexError(error: {
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
-  const isCapacityError =
-    parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
+  const isCapacityError = overload?.kind === 'capacity';
+  // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
+  // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
+  // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
+  const usageLimit = signals.usageLimit && overload === null;
   const additionalDetails =
     typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
   const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
@@ -608,13 +612,13 @@ export function classifyCodexError(error: {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
-    usageLimit: signals.usageLimit,
+    usageLimit,
     isCapacityError,
     ...(reason ? { reason } : {}),
     data: {
       message,
       ...(errorStatus !== undefined ? { errorStatus } : {}),
-      ...(signals.usageLimit ? { usageLimit: true } : {}),
+      ...(usageLimit ? { usageLimit: true } : {}),
       ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       ...(reason ? { reason } : {}),
     },
