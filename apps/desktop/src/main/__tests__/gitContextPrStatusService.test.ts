@@ -31,6 +31,27 @@ describe('PR summary', () => {
     expect(summarizeChecks({ totalCount: 1, checkRunCountsByState: [{ state: 'FUTURE_STATE', count: 1 }], statusContextCountsByState: [] })).toBeNull();
   });
 
+  // Bug: #8476's head reported failed=1 because a concurrency-cancelled duplicate of a job that
+  // later passed stayed in GitHub's rollup counts; AI tools and automation read it as a CI failure.
+  // Minimal input: the same workflow job cancelled, then rerun successfully (unit).
+  it('counts only the newest run of the same workflow job, and keeps counts when nodes are incomplete', () => {
+    const run = (databaseId: number, conclusion: string) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
+      status: 'COMPLETED', conclusion, checkSuite: { app: { slug: 'github-actions' }, workflowRun: { workflow: { name: 'basis' } } } });
+    const rollup = (nodes: ReturnType<typeof run>[], hasNextPage = false) => ({
+      totalCount: nodes.length + 1,
+      checkRunCountsByState: ['SUCCESS', 'CANCELLED', 'FAILURE'].map(state => ({ state, count: nodes.filter(n => n.conclusion === state).length })),
+      statusContextCountsByState: [{ state: 'SUCCESS', count: 1 }],
+      nodes: [...nodes, { __typename: 'StatusContext' }],
+      pageInfo: { hasNextPage },
+    });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(2, 'FAILURE'), run(1, 'SUCCESS')])))
+      .toEqual({ total: 2, passed: 1, failed: 1, pending: 0, skipped: 0 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')], true)))
+      .toMatchObject({ total: 3, failed: 1 });
+  });
+
   it('keeps one GraphQL request and reports truncated reviews as unknown', async () => {
     const pr = { headRefOid: 'head', commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
       reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: true } } };

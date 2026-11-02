@@ -2,18 +2,74 @@ import type { GithubClient } from '@cindy/github-client';
 import type { PrChecksSummary } from '@cindy/maker-shared';
 import type { PrStatusQuery } from './prStatusService';
 
-/** GitHub's rollup already selects current checks/status contexts, including reruns. */
 interface StateCount {
   state: string;
   count: number;
+}
+interface RollupNode {
+  __typename?: string;
+  databaseId?: number | null;
+  name?: string | null;
+  status?: string | null;
+  conclusion?: string | null;
+  checkSuite?: {
+    app?: { slug?: string | null } | null;
+    workflowRun?: { workflow?: { name?: string | null } | null } | null;
+  } | null;
 }
 interface RollupCounts {
   totalCount: number;
   checkRunCountsByState: StateCount[] | null;
   statusContextCountsByState: StateCount[] | null;
+  nodes?: RollupNode[] | null;
+  pageInfo?: { hasNextPage: boolean } | null;
 }
 
-export function summarizeChecks(counts: RollupCounts): PrChecksSummary | null {
+/**
+ * GitHub's rollup counts every check run on the head, including runs superseded by a newer
+ * run of the same job (e.g. a concurrency-cancelled duplicate workflow run). Like required-check
+ * evaluation, only the newest run per app/workflow/name counts. Without the complete node list
+ * the GitHub counts are kept as-is, so a real failure is never hidden.
+ */
+function withoutSupersededRuns(counts: RollupCounts): RollupCounts {
+  const { nodes, checkRunCountsByState } = counts;
+  if (!nodes || !checkRunCountsByState) return counts;
+  if (counts.pageInfo?.hasNextPage !== false || nodes.length !== counts.totalCount) return counts;
+  const latest = new Map<string, RollupNode & { databaseId: number }>();
+  const superseded: RollupNode[] = [];
+  for (const node of nodes) {
+    if (node.__typename !== 'CheckRun' || !node.name) continue;
+    const id = node.databaseId;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id)) continue;
+    const key = [
+      node.checkSuite?.app?.slug ?? '',
+      node.checkSuite?.workflowRun?.workflow?.name ?? '',
+      node.name,
+    ].join('\u0000');
+    const kept = latest.get(key);
+    if (kept && kept.databaseId > id) superseded.push(node);
+    else {
+      if (kept) superseded.push(kept);
+      latest.set(key, { ...node, databaseId: id });
+    }
+  }
+  if (!superseded.length) return counts;
+  const runCounts = checkRunCountsByState.map((entry) => ({ ...entry }));
+  for (const run of superseded) {
+    const state = run.status === 'COMPLETED' ? run.conclusion : run.status;
+    const entry = runCounts.find((candidate) => candidate.state === state);
+    if (!entry || entry.count < 1) return counts;
+    entry.count -= 1;
+  }
+  return {
+    ...counts,
+    totalCount: counts.totalCount - superseded.length,
+    checkRunCountsByState: runCounts,
+  };
+}
+
+export function summarizeChecks(rollup: RollupCounts): PrChecksSummary | null {
+  const counts = withoutSupersededRuns(rollup);
   if (!counts.checkRunCountsByState || !counts.statusContextCountsByState) return null;
   const result: PrChecksSummary = {
     total: counts.totalCount,
@@ -57,7 +113,12 @@ const SUMMARY_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       reviewDecision
       reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage } }
       commits(last: 1) { nodes { commit { oid statusCheckRollup {
-        contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } }
+        contexts(first: 100) {
+          totalCount checkRunCountsByState { state count } statusContextCountsByState { state count }
+          nodes { __typename ... on CheckRun { databaseId name status conclusion
+            checkSuite { app { slug } workflowRun { workflow { name } } } } }
+          pageInfo { hasNextPage }
+        }
       } } } }
     }
   }
