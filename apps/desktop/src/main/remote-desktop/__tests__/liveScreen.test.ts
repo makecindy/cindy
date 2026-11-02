@@ -246,6 +246,36 @@ describe('live screen session', () => {
     await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
   });
 
+  it('when the plugin ends the stream, ends with a stopped device and reopens a running one', async () => {
+    let response: http.ServerResponse | null = null;
+    const url = await serve((res) => {
+      response = res;
+    });
+    const plugin = source(url);
+    const ended = vi.fn();
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      ended,
+    );
+    await session.connect();
+    await vi.waitFor(() => expect(response).not.toBeNull());
+    // Still running (the plugin restarted): opened again, and the next offer uses it.
+    response!.end();
+    await vi.waitFor(() => expect(plugin.open).toHaveBeenCalledOnce());
+    await session.connect();
+    expect(plugin.open).toHaveBeenCalledOnce();
+    expect(ended).not.toHaveBeenCalled();
+    // Shut down: the session ends without waiting for the viewer's next offer.
+    vi.mocked(plugin.open).mockRejectedValueOnce(new Error('DESKTOP_SCREEN_NOT_RUNNING'));
+    response!.end();
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledOnce());
+  });
+
   it('keeps only the latest position of a moving finger while a send is in flight', async () => {
     const url = await serve(() => {});
     const plugin = source(url);

@@ -109,6 +109,7 @@ export class LiveScreenInputMapper {
 
 export class LiveScreenSession {
   private opened: LiveScreenOpened | null;
+  private reopening: Promise<void> | null = null;
   private request: http.ClientRequest | null = null;
   private queue: Uint8Array[] = [];
   private queuedBytes = 0;
@@ -158,6 +159,10 @@ export class LiveScreenSession {
     if (this.closed) throw new Error('DESKTOP_SCREEN_ENDED');
     this.disconnect();
     const generation = ++this.connectGeneration;
+    // One open at a time: a reopen after the plugin ended the stream is used here.
+    await this.reopening;
+    if (this.closed || generation !== this.connectGeneration)
+      throw new Error('DESKTOP_SCREEN_ENDED');
     let opened: LiveScreenOpened;
     try {
       opened = this.opened ?? (await this.source.open(this.plugin, this.id));
@@ -259,6 +264,26 @@ export class LiveScreenSession {
     this.request = null;
     this.streamEnded = true;
     this.flush();
+    this.reopening ??= this.reopen().finally(() => {
+      this.reopening = null;
+    });
+  }
+
+  /**
+   * The plugin ended the stream: the device stopped, or the plugin restarted.
+   * Open it again now (kept for the viewer's next offer) instead of waiting
+   * for the viewer to notice the still picture, so a stopped device ends the
+   * session at once.
+   */
+  private async reopen(): Promise<void> {
+    if (this.closed || this.opened) return;
+    try {
+      const opened = await this.source.open(this.plugin, this.id);
+      if (!this.closed) this.opened ??= opened;
+    } catch (error) {
+      if (error instanceof Error && /DESKTOP_SCREEN_NOT_(RUNNING|FOUND)/.test(error.message))
+        this.end();
+    }
   }
 
   private requestKeyframe(): void {
