@@ -10,6 +10,16 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.7a `live-proven`: Hermes led an Orca team (owner)
+
+- Setup: PR #7 branch, dev app restarted, Collab Mode plugin on (default), Claude Code signed in. New Hermes task, model `hermes-default`, **Full access**.
+- Sent: "Start a team, then create a Claude Code worker whose job is to reply with today's date and one sentence about what it is. When it answers, tell me what it said."
+- Observed: split view with a Team pane; worker **tester** (label `date-reporter`, Claude Code harness on `chatgpt/gpt-6-luna`, the teammates default) received "Message from Lead: Reply with today's date and one sentence about what you are…" and answered "2026-11-02 / I'm an Orca worker agent, ready to help with assigned tasks." The lead received "[Auto-bridged: worker 已完成，系统自动回传结果] 2026-11-02 …" and replied (in Chinese) that the team is ready and summarised the workspace (1 worker, idle). Lead turn cost $0.0114, 57.0k tokens.
+- Verdict: the 3.7 "done when" holds (create → dispatch → reply read back), so 3.7a is `live-proven`. Quality notes, not defects of 3.7a: the lead answered in Chinese (the upstream bridge prefix is Chinese) and undersold the worker's reply.
+- Found (logged as 3.7b): lead pane labelled "Lead (Claude)" for a Hermes lead (`orcaAgentDisplay.ts` fallback); context banner "174% full" for `hermes-default` while the footer showed 28% (banner falls back to the `chat.default` route's limit for the Hermes home model).
+
+---
+
 ## 2026-11-02 — ROADMAP 3.7a: Hermes can lead an Orca team (`unit-tested`); ADR 0006
 
 **Owner decisions:** expose Orca tools to full-access Hermes sessions (ADR 0006); strong paid routes are fine for the live test ("just ask for a strong model").
