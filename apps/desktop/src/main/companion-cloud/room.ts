@@ -120,10 +120,10 @@ export async function searchCompanionRooms(api: CompanionApi, companions: Array<
   await Promise.all(companions.map(async companion => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let done = false;
-    // The server cannot filter by role or time, so read on until enough match. Its order is arrival, not message time.
+    // The server cannot filter by role or time, and its order is arrival, not message time: history
+    // uploaded later comes first. So "the newest matches" takes reading on, not just enough rows.
     const search = async () => {
       const roomId = await companion.room();
-      let found = 0;
       let before: string | undefined;
       for (let pages = 0; !done; pages += 1) {
         if (pages === ROOM_SEARCH_PAGES) { result.incomplete = true; return; }
@@ -135,10 +135,8 @@ export async function searchCompanionRooms(api: CompanionApi, companions: Array<
           const view = roomMessageView(message, companion.id);
           if (!view || !keeps(view)) continue;
           result.hits.push({ teammateId: companion.externalId, teammateName: companion.name, messageId: view.id, role: view.role, text: view.text, createdAt: view.createdAt });
-          found += 1;
         }
         if (rows.length < ROOM_SEARCH_PAGE) return;
-        if (found >= limit) { result.incomplete = true; return; }
         before = rows.at(-1)!.seq;
       }
     };

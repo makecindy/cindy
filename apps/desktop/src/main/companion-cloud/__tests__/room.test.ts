@@ -89,6 +89,14 @@ describe('searching companion rooms', () => {
     expect(result.failed).toEqual([{ teammateId: 'bot_b', teammateName: 'b', code: 'TIMEOUT' }]);
   });
 
+  it('finds the newest match even when older history, uploaded later, arrives first', async () => {
+    const backfilled = Array.from({ length: 50 }, (_, index) => roomRow(String(100 - index), 1_000 + index));
+    const { api } = fakeApi((route) => (route.includes('before=') ? [roomRow('newest', 9_000_000)] : backfilled));
+    const found = await searchCompanionRooms(api, [companion('a')], 'q', 1);
+    expect(found.hits.map(hit => hit.messageId)).toEqual(['newest']);
+    expect(found.incomplete).toBe(true);
+  });
+
   it('reads past newer matches to find older ones that pass the filter, and says when it stopped early', async () => {
     const page = (start: number, authorId: string) => Array.from({ length: 50 }, (_, index) =>
       roomRow(String(start - index), 1_000_000 + start - index, { authorId }));
