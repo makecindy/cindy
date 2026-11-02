@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { createLogger } from '../logger';
 import { getResolvedMainLocale } from '../i18n';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
-import { isScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
+import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';
 import { throwIpcError } from '../utils/ipcValidate';
 import { recordingControlsBounds, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes, type ScrollCaptureLayout, type RegionCaptureBegin, type RegionCaptureFrame, type RegionCaptureMode } from '../../shared/regionCapture';
@@ -590,10 +590,13 @@ export class RegionScreenshotSession {
       { width: bitmap.width, height: bitmap.height, scaleFactor: 1 },
     );
     if (image.isEmpty()) return false;
+    // Resolve once at export; subsequent preference/locale changes cannot rewrite this handoff.
+    const target = action === 'translate'
+      ? resolveScreenshotTranslationLanguage(readScreenshotTranslationPreference(), getResolvedMainLocale()) : undefined;
     this.exporting = true;
     log.info('screenshot exported', { action, width: bitmap.width, height: bitmap.height });
     this.close();
-    this.deps.onResult({ action, image, display, selection, ...(action === 'translate' && translationLanguage ? { translationLanguage } : {}) });
+    this.deps.onResult({ action, image, display, selection, ...(target ? { translationLanguage: target } : {}) });
     return true;
   }
 

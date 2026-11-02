@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
 import { getResolvedMainLocale, t } from '../i18n';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
-import { isScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
+import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { createScreenshotPageWindow } from './pageWindow';
 import { REGION_SCREENSHOT_EDITOR_CHANNEL as C, isRegionScreenshotAction, validateRegionBitmap, type RegionRect, type RegionScreenshotBitmap, type RegionScreenshotBegin } from '../../shared/regionScreenshot';
 import type { RegionScreenshotResult } from './session';
@@ -135,8 +135,11 @@ export class ScreenshotEditor {
       if (!bitmap || bitmap.width !== doc.payload.frame.width || bitmap.height !== doc.payload.frame.height) return false;
       const image = nativeImage.createFromBitmap(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), { width: bitmap.width, height: bitmap.height, scaleFactor: 1 });
       if (image.isEmpty()) return false;
+      // A retained editor may still have the locale from its original BEGIN payload.
+      const target = action === 'translate'
+        ? resolveScreenshotTranslationLanguage(readScreenshotTranslationPreference(), getResolvedMainLocale()) : undefined;
       this.close();
-      this.onResult({ action, image, display: doc.display, selection: doc.selection, ownerScope: doc.ownerScope, ...(action === 'translate' && translationLanguage ? { translationLanguage } : {}) });
+      this.onResult({ action, image, display: doc.display, selection: doc.selection, ownerScope: doc.ownerScope, ...(target ? { translationLanguage: target } : {}) });
       return true;
     });
   }

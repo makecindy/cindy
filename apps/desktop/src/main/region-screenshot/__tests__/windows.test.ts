@@ -6,6 +6,8 @@ import type { ScreenshotTranslationPreference } from '../../../shared/screenshot
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  locale: 'en',
+  translationPreference: 'ui' as ScreenshotTranslationPreference,
   ownerScope: 'owner-a:1',
   boundary: false,
   invalidations: new Set<() => void>(),
@@ -71,12 +73,13 @@ vi.mock('../../appSessionState', () => ({
 vi.mock('../pageWindow', () => ({ createScreenshotPageWindow: mocks.create }));
 vi.mock('../compose', () => ({ handOffScreenshotToTask: vi.fn() }));
 vi.mock('../translationPreferences', () => ({
-  readScreenshotTranslationPreference: () => 'ui',
+  readScreenshotTranslationPreference: () => mocks.translationPreference,
   onScreenshotTranslationPreferenceChanged: (listener: (value: ScreenshotTranslationPreference) => void) => {
     mocks.translationListeners.add(listener);
     return () => { mocks.translationListeners.delete(listener); };
   },
   writeScreenshotTranslationPreference: vi.fn(async (value: ScreenshotTranslationPreference) => {
+    mocks.translationPreference = value;
     for (const listener of mocks.translationListeners) listener(value);
     return value;
   }),
@@ -84,7 +87,7 @@ vi.mock('../translationPreferences', () => ({
 vi.mock('../save', () => ({ saveScreenshotImage: vi.fn(), saveRegionRecording: mocks.saveRecording }));
 vi.mock('../recordingClipboard', () => ({ copyRegionRecording: mocks.copyRecording }));
 vi.mock('../liveCapture', () => ({ captureLiveRegion: mocks.liveCapture, RegionVideoCapture: class { frame = mocks.liveCapture; stop() {} } }));
-vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => 'en', t: (key: string) => key }));
+vi.mock('../../i18n', () => ({ getResolvedMainLocale: () => mocks.locale, t: (key: string) => key }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }) }));
 import { OverlayPool, hideScreenshotOverlay, showScreenshotOverlay } from '../overlays';
 import { RegionScreenshotSession } from '../session';
@@ -156,6 +159,8 @@ describe('screenshot window lifecycle', () => {
   let pool: OverlayPool;
   let windows: ReturnType<typeof fakeWindow>[];
   beforeEach(() => {
+    mocks.locale = 'en';
+    mocks.translationPreference = 'ui';
     vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.switches.clear();
@@ -881,6 +886,42 @@ describe('screenshot window lifecycle', () => {
     expect(session.export(contents, contents.mainFrame, session.token, { ...payload, translationLanguage: 'invalid' })).toBe(false);
     expect(session.export(contents, contents.mainFrame, session.token, payload)).toBe(true);
     expect(result).toHaveBeenCalledWith(expect.objectContaining({ action: 'translate', translationLanguage: 'fr' }));
+  });
+
+  // PR #8410: an open editor retained its initial UI locale after Main changed it.
+  // Unit: export through both production entrances after en -> ja; existing tests
+  // never changed locale between open and export. Explicit targets must stay fixed.
+  it.each(['ui', 'fr'] as const)('resolves %s against the current Main locale at export', async (preference) => {
+    mocks.translationPreference = preference;
+    const editorResult = vi.fn();
+    const editor = new ScreenshotEditor(editorResult);
+    editor.registerIpc();
+    const bitmap = { width: 4, height: 4, data: new Uint8Array(64) };
+    const selection = { x: 0, y: 0, width: 2, height: 2 };
+    const captureResult = vi.fn();
+    const session = new RegionScreenshotSession({ pool, captures: [{ display, image }], helper: {} as SnapshotHelper,
+      windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: captureResult });
+    try {
+      expect(editor.open(bitmap, display, selection)).toBe(true);
+      const win = windows[0];
+      const event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
+      mocks.handlers.get(E.READY)!(event);
+      const begin = win.webContents.send.mock.calls.find(([name]) => name === E.BEGIN)![1];
+      expect(begin.locale).toBe('en');
+      const overlay = pool.ensure(display)!;
+      const contents = overlay.window.webContents;
+      pool.markShellReady(contents, contents.mainFrame);
+      await session.open();
+      mocks.locale = 'ja';
+      // The renderer still sends the language resolved before Main's locale change.
+      const payload = { action: 'translate', image: bitmap, selection, translationLanguage: preference === 'ui' ? 'en' : 'fr' };
+      expect(mocks.handlers.get(E.EXPORT)!(event, begin.token, payload)).toBe(true);
+      expect(session.export(contents, contents.mainFrame, session.token, payload)).toBe(true);
+      mocks.locale = 'ko';
+      for (const result of [editorResult, captureResult]) {
+        expect(result).toHaveBeenCalledWith(expect.objectContaining({ translationLanguage: preference === 'ui' ? 'ja' : 'fr' }));
+      }
+    } finally { session.close(); editor.dispose(); }
   });
 
   // PR #8410: changing the target on one display left the other renderer stale.
