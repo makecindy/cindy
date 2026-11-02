@@ -92,6 +92,7 @@ function mkClient(
     getConnectionEpoch: ReturnType<typeof vi.fn>;
     getPeerLinkGeneration: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
+    hasOfflineDirectPath: ReturnType<typeof vi.fn>;
     sendInvokeResult: ReturnType<typeof vi.fn>;
     sendLinkAccept: ReturnType<typeof vi.fn>;
   }> = {},
@@ -100,6 +101,7 @@ function mkClient(
     getConnectionEpoch: over.getConnectionEpoch ?? vi.fn(() => 1),
     getPeerLinkGeneration: over.getPeerLinkGeneration ?? vi.fn(() => 1),
     getStatus: over.getStatus ?? vi.fn(() => 'online'),
+    hasOfflineDirectPath: over.hasOfflineDirectPath ?? vi.fn(() => false),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
     closeLink: vi.fn(),
@@ -489,6 +491,24 @@ describe('[4] 多控制端隔离:两个控制端共享同一被控端,一个静�
 });
 
 describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
+  // Unit: a group executor must return completed RPC results over the retained
+  // authenticated path; the relay-only case below must still avoid blind sends.
+  it('flushes the retained group path while another offline controller stays queued', () => {
+    const sendInvokeResult = vi.fn().mockImplementation(() => { throw notConnected(); });
+    const client = mkClient({ getStatus: vi.fn(() => 'connecting'), sendInvokeResult,
+      hasOfflineDirectPath: vi.fn((id: string) => id === 'group-owner') });
+    __testing.setActiveClient(client as never);
+    for (const src of ['group-owner', 'offline-controller']) {
+      __testing.sendInvokeResultSafe(client as never, src, 'req-' + src,
+        { ok: true, result: 'group result' }, 'maker:remote-agent:v1');
+    }
+    sendInvokeResult.mockImplementation(() => {});
+    sendInvokeResult.mockClear();
+    flushRemoteInvokeResultOutboxOnReconnect();
+    expect(sendInvokeResult.mock.calls.map(call => call[0])).toEqual(['group-owner']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+  });
+
   it('relay 离线期间 flush 不 trySend;ws-online 触发立即投递', () => {
     let status = 'connecting';
     const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
@@ -938,6 +958,31 @@ describe('[6] active controller 生命周期与故障半径', () => {
     target.stop();
     controllerA.stop();
     controllerB.stop();
+  });
+
+  // Unit: only already-authenticated direct peers survive the host relay loss.
+  // Their catalog invalidations continue; no offline link-open is admitted.
+  it('retains the group subscription and background catalog pushes without retaining unrelated controllers', () => {
+    let status = 'online';
+    const keep = (id: string) => id === 'group-owner';
+    const client = mkClient({ getStatus: vi.fn(() => status), hasOfflineDirectPath: vi.fn(keep) });
+    __testing.setActiveClient(client as never);
+    const payload = { controllerName: 'group', protocolVersion: PROTOCOL_VERSION, appVersion: '1',
+      capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] };
+    __testing.handleLinkOpen(client as never, 'group-owner', 'group-open', payload);
+    __testing.handleLinkOpen(client as never, 'other', 'other-open', payload);
+    subscriptions.subscribe('group-owner', ['session:a'], 'Group', ['cap-a', DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1]);
+    subscriptions.subscribe('other', ['session:b'], 'Other', ['cap-b', DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1]);
+    status = 'connecting';
+    deactivateAllControllers('relay-disconnected', 'same-account', keep);
+    expect(__testing.getActiveControllers().map(c => c.deviceId)).toEqual(['group-owner']);
+    expect(subscriptions.getControllersForTopic('session:a')).toEqual(['group-owner']);
+    expect(subscriptions.getControllersForTopic('session:b')).toEqual([]);
+    tapWindowBroadcast('maker:provider:changed', {});
+    expect(client.sendPush).toHaveBeenCalledWith('group-owner', 'maker:provider:changed', {});
+    expect(client.sendPush.mock.calls.some(call => call[0] === 'other')).toBe(false);
+    handleControllerOffline('group-owner');
+    expect(__testing.getActiveControllers()).toEqual([]);
   });
 
   it('relay 断开清空所有 active projection，但保留 remembered topics/capabilities', () => {

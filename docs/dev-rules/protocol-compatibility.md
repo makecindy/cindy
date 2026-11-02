@@ -2640,6 +2640,13 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 
 ## 供应商组：同账号直连(P2a)
 
+中继断线连续性：Desktop 只对已经认证、可靠握手完成且健康的同账号直连数据通道启用
+最长 30 分钟的信令失联保留，组内请求、结果与订阅推送继续使用原可靠 stream / seq。
+不新增 wire 字段、能力位、离线握手或服务端授权；逐请求权限与显式断开、撤权、停止和
+到期清理不变。重复离线通知或流量不续期；两端都需更新，旧端与 Mobile 仍可能关闭通道。
+供应商分享既有短期许可不因此延长。故障半径和验证入口见
+[`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md)「直连优先、中继兜底」。
+
 跨区组员恢复（2026-10-26）：控制端 Main 仅在同账号 `provider-group:remote` 的有效 `view` / `pick`
 回包或 `manage-group` 组视图引用分享时，恢复本机缺失的区域标记并通过既有 `/provider-shares/x/session` 核验成员关系。
 不新增 wire 字段、channel 或权限，兼容旧组所在电脑；手机仍由任务所在电脑执行。旧控制端保留原行为。

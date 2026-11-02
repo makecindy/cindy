@@ -4,6 +4,7 @@ import {
   applyControllerPresenceDirectorySnapshot,
   createControllerPresenceFreshnessTracker,
   markControllerPresenceFresh,
+  resolveControllerPresence,
   resetControllerPresenceFreshness,
 } from '../device-link/controllerPresenceDirectory';
 
@@ -53,6 +54,24 @@ function createHarness() {
 }
 
 describe('controller presence directory snapshot', () => {
+  // Unit: group RPC availability outlives transient relay loss only on a
+  // bounded, already-authenticated path. Fresh control-off and unknown prior
+  // availability must still stay unavailable; old tests only covered REST order.
+  it.each([
+    ['keeps a known usable group path', { online: false, remoteControlEnabled: true }, true, true,
+      { directOnline: true, online: true, available: true }],
+    ['does not revive a relay-only peer', { online: false, remoteControlEnabled: true }, false, true,
+      { directOnline: false, online: false, available: false }],
+    ['honors an explicit online control-off report', { online: true, remoteControlEnabled: false }, true, true,
+      { directOnline: false, online: true, available: false }],
+    ['does not invent unknown control availability', { online: false, remoteControlEnabled: true }, true, undefined,
+      { directOnline: true, online: true, available: false }],
+    ['allows a freshly controllable peer to recover', { online: true, remoteControlEnabled: true }, false, false,
+      { directOnline: false, online: true, available: true }],
+  ] as const)('%s', (_name, snapshot, retained, previous, expected) => {
+    expect(resolveControllerPresence(snapshot, retained, previous)).toEqual(expected);
+  });
+
   it('冷启动时从目录初始化已在线桌面并触发一次词典握手', () => {
     const h = createHarness();
 
