@@ -233,7 +233,7 @@ meta 和绑定观察器，发送完成即释放锁。跟随切换与手动选择
 Hook 落库优先取 `source.userText`（包括空串），旧服务端缺字段才回退 `prompt`；
 完整提示词仍发送给模型，上下文继续走既有来源快照。
 
-展示规则遵循 [核心产品原则 §4.1](core-product-principles.md#41-优秀的-ui-与交互设计)，
+展示规则遵循 [IM 消息呈现](im-message-presentation.md)，
 不按平台分别实现。Desktop Hook 卡已支持统一折叠与分组；`source.im` 是开放集合，
 新渠道携带同样的来源与快照即可复用。引用组包含被回复的消息及渠道附带的话题历史。
 群聊背景从已保存的完整 `group_chat_context` 中投影，排除块外技术指引。
