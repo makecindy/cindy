@@ -1007,8 +1007,14 @@
     },
     "saveFileName": "Screenshot",
     "saveFailed": "Couldn't save the screenshot",
+    "translation": {
+      "action": "Translate to {{language}}",
+      "targetLanguage": "Translation language",
+      "followUi": "Follow interface language",
+      "saveFailed": "Could not save the language. Select it again to retry."
+    },
     "prompt": {
-      "translate": "Recognize the text in this screenshot and translate it into English. Keep the original paragraphs and lists, and output only the translation. If the text is already in English, translate it into Simplified Chinese.",
+      "translate": "Detect the languages in this screenshot and translate the text into {{language}}. Preserve the original paragraphs, lists and tables. Leave text already in the target language unchanged; for mixed-language content, translate only the other languages. If all text is already in the target language, briefly say so without switching to another language. Otherwise output only the translation.",
       "explain": "Explain what this screenshot shows. If it's an error, explain the cause and how to fix it. If it's a chart, code, or an interface, explain what it shows and the key points.",
       "extract": "Extract the text from this screenshot exactly as written, keeping the original line breaks, paragraphs, and lists. Output tables as Markdown tables. Output only the extracted text."
     },
