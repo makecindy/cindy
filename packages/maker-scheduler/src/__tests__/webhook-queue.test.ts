@@ -103,17 +103,22 @@ describe('ScheduleWebhookQueue', () => {
   });
 
   it('treats a redelivery as a duplicate, and evicts rather than rejects when receipts are full', async () => {
-    const h = setup();
+    const oldest = `old-${LIMITS.receiptsPerSchedule - 1}`;
+    const receipts = Object.fromEntries(
+      Array.from({ length: LIMITS.receiptsPerSchedule }, (_, i) => [`old-${i}`, Date.now() - i - 1]),
+    );
+    const pending = Array.from({ length: LIMITS.batchEvents }, (_, i) => event(`old-${i}`));
+    const h = setup({ endpoints: { s1: { pending, omitted: 0, received: 0, ignored: 0, receipts } } });
     await h.queue.start();
     expect(await h.queue.accept('s1', event('a'))).toBe('queued');
     expect(await h.queue.accept('s1', event('a'))).toBe('duplicate');
-    for (let i = 0; i <= LIMITS.receiptsPerSchedule; i += 1) {
-      vi.setSystemTime(1_000_000 + i + 1);
-      expect(await h.queue.accept('s1', event(`d${i}`))).toBe('queued');
-    }
-    expect(Object.keys(h.saved().endpoints.s1!.receipts)).toHaveLength(LIMITS.receiptsPerSchedule);
-    expect(h.saved().endpoints.s1!.pending.length).toBe(LIMITS.batchEvents);
-    expect(h.saved().endpoints.s1!.omitted).toBeGreaterThan(0);
+    const saved = h.saved().endpoints.s1!;
+    expect(Object.keys(saved.receipts)).toHaveLength(LIMITS.receiptsPerSchedule);
+    expect(saved.receipts.a).toBeDefined();
+    expect(saved.receipts[oldest]).toBeUndefined();
+    expect(saved.pending.length).toBe(LIMITS.batchEvents);
+    expect(saved.pending.at(-1)?.deliveryId).toBe('a');
+    expect(saved.omitted).toBe(1);
   });
 
   it('allows a redelivery after a failed save, because the first delivery was not acknowledged', async () => {
