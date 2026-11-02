@@ -82,7 +82,7 @@ function setup() {
 // no shell parsing or program match is granted by forwarding its original text.
 it.each(['pi', 'codex'] as const)('reviewer receives complex command residual through Main for %s', async harness => {
   const h = setup(); h.session.agentKind = harness; h.session.autoReviewOwner = 'cindy';
-  const directory = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+  const directory = fs.realpathSync.native(h.deps.captureOwner()!.ownerDataDir);
   h.session.workDir = directory; h.setRow({ agentKind: harness, workingDir: directory });
   const scope = { ...h.scope, harnesses: [harness] };
   const group = normalizeRuleGroup(requirementsOrigin('compound'), scope, [{ id: 'requirement',
@@ -111,7 +111,7 @@ it.each(['pi', 'codex'] as const)('reviewer receives complex command residual th
 // Host precheck + real store, including revision changes visible to its final fence.
 it.each(['pi', 'codex'] as const)('consumes only the current exact cwd project delta for %s Auto', async harness => {
   const h = setup(); h.session.agentKind = harness; h.session.autoReviewOwner = 'cindy';
-  h.session.workDir = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+  h.session.workDir = fs.realpathSync.native(h.deps.captureOwner()!.ownerDataDir);
   const projectId = h.session.workDir;
   h.setRow({ agentKind: harness, workingDir: projectId }); await h.publish('deny', harness);
   const request: AutoReviewRequest = { sessionId: 'task', agentKind: harness, model: 'm', userIntent: '',
@@ -289,7 +289,7 @@ describe('published Pi managed deny at the Host review boundary', () => {
   function setupPi() {
     const h = setup();
     h.session.agentKind = 'pi'; h.session.autoReviewOwner = 'cindy';
-    h.session.workDir = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+    h.session.workDir = fs.realpathSync.native(h.deps.captureOwner()!.ownerDataDir);
     h.setRow({ agentKind: 'pi', workingDir: h.session.workDir });
     const request: AutoReviewRequest = { sessionId: 'task', agentKind: 'pi', model: 'm',
       userIntent: '', workspaceRoots: [h.session.workDir], platform: 'linux',
@@ -459,7 +459,7 @@ describe('Codex managed command Host qualification', () => {
     'Codex requirements C1: initial %s preserves missing storage evidence', async scenario => {
       const h = setup(); h.session.agentKind = 'codex'; h.session.autoReviewOwner = 'cindy';
       const owner = h.deps.captureOwner()!;
-      h.session.workDir = fs.realpathSync(owner.ownerDataDir);
+      h.session.workDir = fs.realpathSync.native(owner.ownerDataDir);
       h.setRow({ agentKind: 'codex', workingDir: h.session.workDir });
       const scope = { ...h.scope, harnesses: ['codex'] as ['codex'], projectId: h.session.workDir };
       const request: AutoReviewRequest = { sessionId: 'task', agentKind: 'codex', model: 'm', userIntent: 'Show current directory',
@@ -526,7 +526,7 @@ describe('Codex managed command Host qualification', () => {
   it.each(['deny', 'ask', 'allow'] as const)('consumes the exact native wrapped command for %s', async decision => {
     const h = setup(); h.session.agentKind = 'codex'; h.session.autoReviewOwner = 'cindy';
     // Real dev/ino qualification requires an actual isolated cwd, not /project.
-    h.session.workDir = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+    h.session.workDir = fs.realpathSync.native(h.deps.captureOwner()!.ownerDataDir);
     h.setRow({ agentKind: 'codex', workingDir: h.session.workDir });
     const command = "/bin/bash -lc 'touch /home/xd.guest/approval-test-work/CINDY_REMEMBER_TARGET_c20261026a'";
     await h.publish(decision, 'codex', command);
@@ -549,7 +549,7 @@ describe('Codex managed command Host qualification', () => {
     'owner', 'row', 'cwd', 'approval', 'missing-envelope', 'lease-full', 'lease-owner-full'] as const)('reads real scoped effective bytes for %s', async scenario => {
     const h = setup(); h.session.agentKind = 'codex'; h.session.autoReviewOwner = 'cindy';
     // Real dev/ino qualification requires an actual isolated cwd, not /project.
-    h.session.workDir = fs.realpathSync(h.deps.captureOwner()!.ownerDataDir);
+    h.session.workDir = fs.realpathSync.native(h.deps.captureOwner()!.ownerDataDir);
     h.setRow({ agentKind: 'codex', workingDir: h.session.workDir });
     await h.publish(scenario === 'allow' ? 'allow' : scenario === 'ask' ? 'ask' : 'deny',
       scenario === 'cc-only' ? 'claude-code' : scenario === 'pi-only' ? 'pi' : 'codex');

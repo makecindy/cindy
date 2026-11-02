@@ -168,10 +168,10 @@ export function createPersonalRuleChat(deps: PersonalRuleChatDeps) {
           const identity = (value: Awaited<ReturnType<PersonalRuleChatDeps['readSession']>>) => value && [value.status, value.source, value.agentKind, value.workingDir,
             value.remoteHostId, value.agentDeviceId, value.orcaRole, value.orcaRemoteLead, value.workspaceKind, value.clearedAt];
           const rowIdentity = identity(row);
-          const directory = fs.realpathSync(cwd), stat = fs.statSync(directory);
+          const directory = fs.realpathSync.native(cwd), stat = fs.statSync(directory);
           if (!stat.isDirectory()) return reject('cwd-unverified');
-          const directoryCurrent = () => { const latest = fs.statSync(fs.realpathSync(cwd));
-            return fs.realpathSync(cwd) === directory && latest.isDirectory() && latest.dev === stat.dev && latest.ino === stat.ino; };
+          const directoryCurrent = () => { const latest = fs.statSync(fs.realpathSync.native(cwd));
+            return fs.realpathSync.native(cwd) === directory && latest.isDirectory() && latest.dev === stat.dev && latest.ino === stat.ino; };
           const verify = async () => {
             assert(); if (!directoryCurrent()) throw new Error('personal-rule-directory-changed');
             const latest = await deps.readSession(input.sessionId); assert();

@@ -110,8 +110,8 @@ describe('owner approval rule store', () => {
     const fault = vi.spyOn(syncFs, 'renameSync').mockImplementation((from, to) => {
       const target = String(to);
       if ((failure === 'marker' && target === marker)
-        || (failure === 'draft' && target.endsWith('/command-approval-rules.json'))
-        || (failure === 'artifact' && target.endsWith('/snapshot.json')))
+        || (failure === 'draft' && path.basename(target) === 'command-approval-rules.json')
+        || (failure === 'artifact' && path.basename(target) === 'snapshot.json'))
         throw Object.assign(new Error('batch fixture write failure'), { code: 'EIO' });
       return rename(from, to);
     });
@@ -241,9 +241,9 @@ describe('owner approval rule store', () => {
     const rename = syncFs.renameSync;
     const spy = vi.spyOn(syncFs, 'renameSync').mockImplementation((from, to) => {
       const target = String(to);
-      if ((failure === 'marker' && target.endsWith('/publish-state.json'))
-        || (failure === 'draft' && target.endsWith('/command-approval-rules.json'))
-        || (failure === 'artifact' && target.endsWith('/snapshot.json')))
+      if ((failure === 'marker' && path.basename(target) === 'publish-state.json')
+        || (failure === 'draft' && path.basename(target) === 'command-approval-rules.json')
+        || (failure === 'artifact' && path.basename(target) === 'snapshot.json'))
         throw Object.assign(new Error('fixture write failure'), { code: 'EIO' });
       return rename(from, to);
     });
@@ -269,7 +269,7 @@ describe('owner approval rule store', () => {
     const firstBytes = await fs.readFile(artifact(1));
     const rename = syncFs.renameSync;
     const spy = vi.spyOn(syncFs, 'renameSync').mockImplementation((from, to) => {
-      if (String(to).endsWith('/publish-state.json'))
+      if (path.basename(String(to)) === 'publish-state.json')
         throw Object.assign(new Error('marker failure'), { code: 'EIO' });
       return rename(from, to);
     });
@@ -314,7 +314,7 @@ describe('owner approval rule store', () => {
     await store.applyManagedEdit(0, rule.scope, [rule], [], undefined, true);
     const rename = syncFs.renameSync;
     const spy = vi.spyOn(syncFs, 'renameSync').mockImplementation((from, to) => {
-      if (String(to).endsWith('/publish-state.json')) throw Object.assign(new Error('marker failure'), { code: 'EIO' });
+      if (path.basename(String(to)) === 'publish-state.json') throw Object.assign(new Error('marker failure'), { code: 'EIO' });
       return rename(from, to);
     });
     try { await expect(store.applyManagedEdit(1, rule.scope, [], [rule.id], undefined, true)).rejects.toThrow('marker failure'); }

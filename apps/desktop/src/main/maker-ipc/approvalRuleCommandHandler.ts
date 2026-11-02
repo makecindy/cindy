@@ -148,7 +148,7 @@ export function registerApprovalRuleCommandHandler(registry: IpcHandlerRegistry,
         if (parsed.scope === 'project') projectId = cwd;
         if (!current() || !stat.isDirectory()) return { kind: 'unsupported', reason: 'context' };
         directoryCurrent = () => {
-          try { const now = statSync(cwd); return realpathSync(row.workingDir!) === cwd
+          try { const now = statSync(cwd); return realpathSync.native(row.workingDir!) === cwd
             && now.isDirectory() && now.dev === stat.dev && now.ino === stat.ino; } catch { return false; }
         };
       }
@@ -229,7 +229,7 @@ export async function captureRememberedAutoCommand(deps: ApprovalRuleCommandDeps
   directoryCurrent = () => {
     try {
       const now = statSync(cwd);
-      return realpathSync(evidence.cwd) === cwd && now.isDirectory() && now.dev === stat.dev && now.ino === stat.ino;
+      return realpathSync.native(evidence.cwd) === cwd && now.isDirectory() && now.dev === stat.dev && now.ino === stat.ino;
     } catch { return false; }
   };
   let scope: RuleScope = { ownerId: owner.ownerId, executionHostId: owner.executionHostId,

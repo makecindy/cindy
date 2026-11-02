@@ -481,7 +481,7 @@ describe('remembered local Auto command confirmation', () => {
         locator: 'claude-code-live://userSettings/test', dialectVersion: 'live-user-v1', decisionDomain: 'personal-approval' },
         { ...scope, harnesses: ['claude-code'] }, [{ id: 'ask', original: 'Bash(git push origin draft)', decision: 'ask',
           matcher: { kind: 'cc-command', mode: 'exact', pattern: command.command } }]);
-      const live = { scope: { ...scope, projectId: fs.realpathSync(dir) }, fingerprint: 'live', groups: [nativeAsk] };
+      const live = { scope: { ...scope, projectId: fs.realpathSync.native(dir) }, fingerprint: 'live', groups: [nativeAsk] };
       const evidence = { ...command, ...(target === 'claude-code'
         ? { autoAskExceptions: matchedPersonalAutoAsks(live, command.command) } : {}) };
       const store = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: dir, assertCurrent: () => {} });
@@ -490,7 +490,7 @@ describe('remembered local Auto command confirmation', () => {
         await seed!.save();
         const previous = await store.readSnapshot(scope);
         const user = previous.groups[0]!;
-        const project = normalizeRuleGroup(user.origin, { ...scope, projectId: fs.realpathSync(dir) },
+        const project = normalizeRuleGroup(user.origin, { ...scope, projectId: fs.realpathSync.native(dir) },
           user.clauses.map(clause => ({ ...clause, decision: 'ask' as const })));
         await store.applyManagedEdit(previous.revision, project.scope, [project], [], undefined, true);
       }
@@ -500,7 +500,7 @@ describe('remembered local Auto command confirmation', () => {
       expect(h.broadcast.mock.calls.at(-1)?.[1].request.autoCommand).toBeUndefined();
       expect(h.broadcast.mock.calls.at(-1)?.[1].request.metadata.rememberAutoCommand.command).toBe(command.command);
       expect(h.broadcast.mock.calls.at(-1)?.[1].request.metadata.rememberAutoCommand.projectId)
-        .toBe(scenario === 'claude-code-project' ? fs.realpathSync(dir) : undefined);
+        .toBe(scenario === 'claude-code-project' ? fs.realpathSync.native(dir) : undefined);
       await h.resolveFromIpc({}, 'once', { kind: 'permission', behavior: 'allow' });
       await once.promise;
       expect((await store.readSnapshot(scope)).groups).toEqual(originalGroups);
@@ -523,12 +523,12 @@ describe('remembered local Auto command confirmation', () => {
         .toMatchObject({ accepted: true, remembered: true });
       expect(await remembered.promise).toMatchObject({ kind: 'permission', behavior: 'allow' });
       const fresh = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: dir, assertCurrent: () => {},
-        resolveManagedConsumer: () => ({ scope: { ...scope, projectId: fs.realpathSync(dir) }, sessionId: 'task', sessionInstanceId: 'instance' }) });
+        resolveManagedConsumer: () => ({ scope: { ...scope, projectId: fs.realpathSync.native(dir) }, sessionId: 'task', sessionInstanceId: 'instance' }) });
       const active = await fresh.readPublishedManagedSnapshot();
       expect(active.kind === 'published-managed' && active.groups[0]?.clauses[0]).toMatchObject({ decision: 'allow', matcher: { pattern: command.command, mode: 'exact' } });
       if (scenario === 'claude-code-project' && active.kind === 'published-managed') {
         expect(active.groups).toHaveLength(1);
-        expect(active.groups[0]!.scope.projectId).toBe(fs.realpathSync(dir));
+        expect(active.groups[0]!.scope.projectId).toBe(fs.realpathSync.native(dir));
         expect((await fresh.readSnapshot(scope)).groups.find(group => !group.scope.projectId)?.clauses[0]?.decision).toBe('allow');
       }
       if (target === 'claude-code' && active.kind === 'published-managed') {

@@ -727,7 +727,7 @@ describe('Codex user source content observation', () => {
       await handle.send({ type: 'user', content: 'ordinary input' });
       expect(results).toEqual([
         { kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested', sources: [{ file: '/fixture/profile/config.toml', profile: null, version: 'user-v1' }] },
-        { kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested', sources: [{ dotCodexFolder: '/repo/.codex', version: 'project-v1' }], unavailableSources: [] },
+        { kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested', sources: [{ dotCodexFolder: path.normalize('/repo/.codex'), version: 'project-v1' }], unavailableSources: [] },
       ]);
       expect(host.request.mock.calls.filter(([method, params]) => method === Method.ConfigRead
         && (params as { includeLayers?: boolean })?.includeLayers)).toHaveLength(1);
@@ -762,9 +762,9 @@ describe('Codex user source content observation', () => {
         await handle.send({ type: 'user', content: 'ordinary input' });
         expect(user).toEqual({ kind: 'unavailable', reason: 'source-disabled' });
         expect(result).toEqual({ kind: 'available', requestedCwd: '/repo', nativeEffect: 'not-attested',
-          sources: [...(scenario === 'enabled-duplicate' ? [{ dotCodexFolder: folder, version: 'v1' }] : []),
-            { dotCodexFolder: '/parent/.codex', version: 'good' }],
-          unavailableSources: scenario === 'enabled-duplicate' ? [] : [{ dotCodexFolder: folder, reason: scenario === 'disabled' ? 'source-disabled'
+          sources: [...(scenario === 'enabled-duplicate' ? [{ dotCodexFolder: path.normalize(folder), version: 'v1' }] : []),
+            { dotCodexFolder: path.normalize('/parent/.codex'), version: 'good' }],
+          unavailableSources: scenario === 'enabled-duplicate' ? [] : [{ dotCodexFolder: path.normalize(folder), reason: scenario === 'disabled' ? 'source-disabled'
             : scenario === 'invalid-version' ? 'layer-invalid' : 'source-conflict' }] });
         expect(host.request.mock.calls.filter(([method, params]) => method === Method.ConfigRead
           && (params as { includeLayers?: boolean })?.includeLayers)).toHaveLength(1);

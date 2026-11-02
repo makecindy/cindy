@@ -1,3 +1,4 @@
+import { syncBuiltinESMExports } from 'node:module';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createXdtHelperMcpServer, type PersonalRuleEdit } from '@cindy/mcps';
@@ -145,7 +146,7 @@ function setup() {
 // All HOME/data/cwd files are synthetic mkdtemp; no native Pi/model/network runs.
 async function setupPiIntegration(nativePackage = false) {
   const h = setup();
-  const workDir = fs.realpathSync(h.dir);
+  const workDir = fs.realpathSync.native(h.dir);
   h.setRow({ agentKind: 'pi', workingDir: workDir });
   const home = path.join(h.dir, 'pi-home'); fs.mkdirSync(home);
   const rg = path.join(home, 'rg'); fs.writeFileSync(rg, 'test ripgrep');
@@ -159,7 +160,7 @@ async function setupPiIntegration(nativePackage = false) {
   const review: AutoReviewDelegate = vi.fn(async request => { requests.push(request); return { verdict }; });
   review.precheckManagedAction = createManagedAutoReviewPrecheck({ captureOwner: () => ({ ...h.deps.captureOwner()!, ownerDataDir: h.dir }),
     ownerCurrent: h.deps.ownerCurrent, listSessions: () => [session],
-    readSessionRow: async () => h.deps.readSession('task'), canonicalWorkDir: async dir => fs.realpathSync(dir) });
+    readSessionRow: async () => h.deps.readSession('task'), canonicalWorkDir: async dir => fs.realpathSync.native(dir) });
   const deps: AgentDeps = {
     auth: { getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' }),
       triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
@@ -200,7 +201,7 @@ async function setupPiIntegration(nativePackage = false) {
 // Agent registration. Only the transport Host is a narrow request/subscription
 // stub (no approval merger, no native CLI). No core -> Desktop dependency.
 async function setupCodexIntegration() {
-  const h = setup(); const workDir = fs.realpathSync(h.dir);
+  const h = setup(); const workDir = fs.realpathSync.native(h.dir);
   h.setRow({ agentKind: 'codex', workingDir: workDir });
   const session = { id: 'task', instanceId: 'root', requestSessionId: 'root-thread', agentKind: 'codex', workDir,
     remoteHostId: null, agentDeviceId: null, autoReviewOwner: 'cindy' as const,
@@ -210,7 +211,7 @@ async function setupCodexIntegration() {
   const review: AutoReviewDelegate = vi.fn(async request => { requests.push(request); return { verdict }; });
   const main = createManagedAutoReviewPrecheck({ captureOwner: () => ({ ...h.deps.captureOwner()!, ownerDataDir: h.dir }),
     ownerCurrent: h.deps.ownerCurrent, listSessions: () => [session], readSessionRow: async () => h.deps.readSession('task'),
-    canonicalWorkDir: async dir => fs.realpathSync(dir) });
+    canonicalWorkDir: async dir => fs.realpathSync.native(dir) });
   review.precheckManagedAction = async request => { const value = await main(request); prechecks.push(value); return value; };
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   const agent = new CodexAgent({ auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
@@ -443,7 +444,7 @@ describe('local approval command IPC', () => {
   });
 
   it('uses the latest same-layer target edit without losing shared restoration or project precedence', async () => {
-    const h = setup(); const project = fs.realpathSync(h.dir); h.setRow({ workingDir: project });
+    const h = setup(); const project = fs.realpathSync.native(h.dir); h.setRow({ workingDir: project });
     const set = (text: string, targets?: string[], scope: 'user' | 'project' = 'user') =>
       h.command(requirementsCommand(scope, { id: 'overlap', text, ...(targets ? { targets } : {}) }));
     const read = async (target: 'claude-code' | 'codex' | 'pi') =>
@@ -531,6 +532,24 @@ describe('local approval command IPC', () => {
   // 2026-11-01 contract, unit: actual IPC and coordinator/Host -> reopened
   // effective store, not a copied parser. Previous tests required a single
   // explicit target and could not protect the new shared default.
+  // Unit / PR #8385 Windows CI: fs.promises.realpath uses native canonical
+  // names, while legacy realpathSync can retain a short-path alias. Existing
+  // IPC fixtures used identical spellings and missed a false identity failure.
+  // Simulate only that spelling difference; all persistence/identity IO is real.
+  it('saves through IPC when legacy and native canonical path spellings differ', async () => {
+    const h = setup(); h.setRow({ workingDir: h.dir });
+    const native = fs.realpathSync.native;
+    const legacy = vi.spyOn(fs, 'realpathSync').mockReturnValue(path.join(h.dir, 'legacy-alias'));
+    Object.assign(fs.realpathSync, { native });
+    syncBuiltinESMExports();
+    try {
+      expect(await h.command(requirementsCommand('user', { id: 'canonical-path', text: '不要执行危险命令' })))
+        .toMatchObject({ kind: 'saved' });
+      const saved = await h.store.readSnapshot({ ...h.scope, harnesses: [...h.scope.harnesses] });
+      expect(saved.groups[0]!.clauses[0]!.original).toBe('不要执行危险命令');
+    } finally { legacy.mockRestore(); syncBuiltinESMExports(); }
+  });
+
   it('defaults a requirements composer save to one shared whole-text group', async () => {
     const h = setup();
     const work = fs.mkdtempSync(path.join(h.dir, 'shared-work-')); h.setRow({ workingDir: work });
@@ -1355,7 +1374,7 @@ describe('local approval command IPC', () => {
     expect.soft(result).toMatchObject({ kind: 'saved' });
     const reopened = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir,
       assertCurrent: () => {}, localManagedCommandHostId: 'host',
-      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['codex'], projectId: fs.realpathSync(h.dir) },
+      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['codex'], projectId: fs.realpathSync.native(h.dir) },
         sessionId: 'task', sessionInstanceId: 'instance' }) });
     expect.soft((await reopened.readSnapshot({ ...h.scope, harnesses: ['codex'] })).groups).toMatchObject([
       { origin: requirementsOrigin('codex-first'), scope: { harnesses: ['codex'] },
@@ -1375,7 +1394,7 @@ describe('local approval command IPC', () => {
     expect.soft(result).toMatchObject({ kind: 'saved' });
     const reopened = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir,
       assertCurrent: () => {}, localManagedCommandHostId: 'host',
-      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['pi'], projectId: fs.realpathSync(h.dir) },
+      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['pi'], projectId: fs.realpathSync.native(h.dir) },
         sessionId: 'task', sessionInstanceId: 'instance' }) });
     expect.soft((await reopened.readSnapshot({ ...h.scope, harnesses: ['pi'] })).groups).toMatchObject([
       { origin: requirementsOrigin('pi-first'), scope: { harnesses: ['pi'] },
@@ -1437,7 +1456,7 @@ describe('local approval command IPC', () => {
     expect.soft(result).toMatchObject({ kind: 'saved' });
     const reopened = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir,
       assertCurrent: () => {}, localManagedCommandHostId: 'host',
-      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['claude-code'], projectId: fs.realpathSync(h.dir) },
+      resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: ['claude-code'], projectId: fs.realpathSync.native(h.dir) },
         sessionId: 'task', sessionInstanceId: 'instance' }) });
     const draft = await reopened.readSnapshot({ ...h.scope, harnesses: ['claude-code'] });
     expect.soft(draft.groups).toMatchObject([{ origin: { harness: 'cindy' },
@@ -1483,17 +1502,17 @@ describe('local approval command IPC', () => {
     const project = await set('release', 'project v1', 'project');
     expect(project.kind === 'saved' && project.ruleId).not.toBe(first.kind === 'saved' && first.ruleId);
     await set('release', 'user v3');
-    expect(await texts(fs.realpathSync(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key', 'project v1']);
+    expect(await texts(fs.realpathSync.native(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key', 'project v1']);
     expect(await texts(path.join(h.dir, 'unrelated'))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key', 'user v3']);
     await remove('release', 'project');
-    expect(await texts(fs.realpathSync(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key', 'user v3']);
+    expect(await texts(fs.realpathSync.native(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key', 'user v3']);
     await set('release', 'independent project', 'project');
     await remove('release', 'user');
-    expect(await texts(fs.realpathSync(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'independent project', 'other key']);
-    const reopened = await h.store.readSnapshot({ ...h.scope, harnesses: [harness], projectId: fs.realpathSync(h.dir) });
+    expect(await texts(fs.realpathSync.native(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'independent project', 'other key']);
+    const reopened = await h.store.readSnapshot({ ...h.scope, harnesses: [harness], projectId: fs.realpathSync.native(h.dir) });
     expect(reopened.managedOverrides?.some(entry => entry.replacesSourceId)).toBe(false);
     await remove('release', 'project');
-    expect(await texts(fs.realpathSync(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key']);
+    expect(await texts(fs.realpathSync.native(h.dir))).toEqual([(harness === 'codex' ? 'exec' : 'Bash') + '(git push)', 'other key']);
   });
 
   it('rejects unsupported requirement targets, keys and forged clauses with zero persisted writes', async () => {
@@ -1677,7 +1696,7 @@ describe('local approval command IPC', () => {
   it.each(['user', 'project'] as const)('atomically activates explicit target commands in %s scope with legacy IDs', async kind => {
     const h = setup(); h.setRow({ workingDir: h.dir });
     await h.command('/approval-rule deny ' + kind + ' --harness claude-code -- git push');
-    const projectId = kind === 'project' ? fs.realpathSync(h.dir) : undefined;
+    const projectId = kind === 'project' ? fs.realpathSync.native(h.dir) : undefined;
     const initial = await h.store.readSnapshot({ ...h.scope, harnesses: [...h.scope.harnesses], projectId });
     const originalId = initial.groups[0]!.id;
     const draft = normalizeRuleGroup({ ...initial.groups[0]!.origin, sourceId: 'unrelated-draft', locator: 'cindy://unrelated-draft' },
@@ -1694,7 +1713,7 @@ describe('local approval command IPC', () => {
       expect(h.store.getAppliedState().generatedRevision).toBe(result.revision);
       for (const harness of ['claude-code', 'pi', 'codex'] as const) {
         const active = await createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir, assertCurrent: () => {},
-          resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: [harness], projectId: fs.realpathSync(h.dir) },
+          resolveManagedConsumer: () => ({ scope: { ...h.scope, harnesses: [harness], projectId: fs.realpathSync.native(h.dir) },
             sessionId: 'task', sessionInstanceId: 'instance' }) }).readPublishedManagedSnapshot();
         expect(active.kind).toBe('published-managed');
         if (active.kind === 'published-managed') {
@@ -1714,7 +1733,7 @@ describe('local approval command IPC', () => {
     const target = agentKind === 'cc' ? 'claude-code' : agentKind;
     const scope: RuleScope = { ...h.scope, harnesses: [target] };
     const read = async (cwd: string) => createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: h.dir, assertCurrent: () => {},
-      resolveManagedConsumer: () => ({ scope: { ...scope, projectId: fs.realpathSync(cwd) }, sessionId: 'task', sessionInstanceId: 'instance' }) }).readPublishedManagedSnapshot();
+      resolveManagedConsumer: () => ({ scope: { ...scope, projectId: fs.realpathSync.native(cwd) }, sessionId: 'task', sessionInstanceId: 'instance' }) }).readPublishedManagedSnapshot();
     const decisions = async (cwd: string) => { const result = await read(cwd);
       return result.kind === 'published-managed' ? result.groups.map(group => group.clauses[0]?.decision) : []; };
     expect(await h.command('/approval-rule deny user -- git push')).toMatchObject({ kind: 'saved' });
@@ -1753,10 +1772,10 @@ describe('local approval command IPC', () => {
     await h.command('/approval-rule ask project -- git push');
     const card = await captureRememberedAutoCommand(h.deps, 'task', { sessionInstanceId: 'instance',
       harness: 'claude-code', command: 'git push', cwd: h.dir, isCurrent: () => true }, () => true, 'instance');
-    expect(card?.projectId).toBe(fs.realpathSync(h.dir));
+    expect(card?.projectId).toBe(fs.realpathSync.native(h.dir));
     await h.command('/approval-rule deny project -- git push');
     await expect(card!.save()).rejects.toThrow();
-    const snapshot = await h.store.readSnapshot({ ...h.scope, harnesses: [...h.scope.harnesses], projectId: fs.realpathSync(h.dir) });
+    const snapshot = await h.store.readSnapshot({ ...h.scope, harnesses: [...h.scope.harnesses], projectId: fs.realpathSync.native(h.dir) });
     expect(snapshot.groups[0]?.clauses[0]?.decision).toBe('deny');
   });
   // Native wrapper support is Codex-only and never accepts more shell syntax than the exact observed form.
@@ -1796,7 +1815,7 @@ describe('local approval command IPC', () => {
         getStatus: () => 'active' };
       const check = createManagedAutoReviewPrecheck({
         captureOwner: () => ({ ...h.deps.captureOwner()!, ownerDataDir: h.dir }), ownerCurrent: h.deps.ownerCurrent,
-        listSessions: () => [session], readSessionRow: h.deps.readSession, canonicalWorkDir: async dir => fs.realpathSync(dir),
+        listSessions: () => [session], readSessionRow: h.deps.readSession, canonicalWorkDir: async dir => fs.realpathSync.native(dir),
       });
       const request = { sessionId: 'task', agentKind: 'codex' as const, model: 'm', userIntent: '', workspaceRoots: [h.dir],
         platform: 'linux' as const, action: { kind: 'exec' as const, command: evidence.command },
@@ -1905,7 +1924,7 @@ describe('local approval command IPC', () => {
   // must share the isolated Main device ID without starting Electron or a CLI.
   it.each(['native', 'cindy', 'pi'] as const)('saves offline through the production owner boundary and denies for %s after relay reconnects', async target => {
     const h = setup(); h.useMainOwner();
-    const workDir = target === 'pi' ? fs.realpathSync(h.dir) : '/project';
+    const workDir = target === 'pi' ? fs.realpathSync.native(h.dir) : '/project';
     expect(await h.command(target === 'pi' ? '/approval-rule deny user --harness pi -- git push'
       : '/approval-rule deny user -- git push')).toMatchObject({ kind: 'saved' });
     const owner = captureManagedApprovalOwner()!;
@@ -1997,7 +2016,7 @@ describe('local approval command IPC', () => {
     const before = h.store.getAppliedState();
     const rename = fs.renameSync;
     const spy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (String(to).endsWith('/publish-state.json')) throw Object.assign(new Error('activation failure'), { code: 'EIO' });
+      if (path.basename(String(to)) === 'publish-state.json') throw Object.assign(new Error('activation failure'), { code: 'EIO' });
       return rename(from, to);
     });
     try { await expect(h.command('/approval-rule allow user -- git push')).rejects.toThrow(); }

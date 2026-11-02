@@ -1,4 +1,6 @@
 import { promises as fs, realpathSync, statSync, readFileSync } from 'node:fs';
+// Match promises.realpath's native names during synchronous lease checks;
+// Windows legacy realpathSync may retain an 8.3 alias for the same directory.
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { requirementsKey } from '../../../../../packages/maker-core/src/agents/shared/approval-rules/requirements.js';
@@ -68,8 +70,8 @@ async function checkPi(request: AutoReviewRequest, deps: ManagedBashDenyDeps): P
     if (!identity() || !stat.isDirectory() || projectId !== await fs.realpath(workDir)) return unverified();
     const executionCurrent = () => {
       try { const now = statSync(projectId); return identity() && now.isDirectory()
-        && now.dev === stat.dev && now.ino === stat.ino && realpathSync(workDir) === projectId
-        && realpathSync(row.workingDir!) === projectId; } catch { return false; }
+        && now.dev === stat.dev && now.ino === stat.ino && realpathSync.native(workDir) === projectId
+        && realpathSync.native(row.workingDir!) === projectId; } catch { return false; }
     };
     if (!executionCurrent()) return unverified();
     // Mode/publication are personal-policy contributions, not execution identity.
@@ -172,8 +174,8 @@ async function checkCodex(request: AutoReviewRequest, deps: ManagedBashDenyDeps)
       || projectId !== await fs.realpath(actualInput.cwd as string)) return unverified();
     const executionCurrent = () => {
       try { const now = statSync(projectId); return identity() && now.isDirectory()
-        && now.dev === stat.dev && now.ino === stat.ino && realpathSync(workDir) === projectId
-        && realpathSync(row.workingDir!) === projectId && realpathSync(actualInput.cwd as string) === projectId; } catch { return false; }
+        && now.dev === stat.dev && now.ino === stat.ino && realpathSync.native(workDir) === projectId
+        && realpathSync.native(row.workingDir!) === projectId && realpathSync.native(actualInput.cwd as string) === projectId; } catch { return false; }
     };
     if (!executionCurrent()) return unverified();
     const contextKey = JSON.stringify([owner.ownerId, owner.generation, owner.executionHostId,

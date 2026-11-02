@@ -16,7 +16,7 @@ const moduleUrl = (name) => JSON.stringify(pathToFileURL(require.resolve(name)).
 // Minimum failure: no parent binding retained across a real memory-only worker.
 // This asserts the preventive lifetime invariant, not deterministic SIGSEGV.
 it('retains the real SQLite image in the configured runner across worker teardown', () => {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'cindy-sqlite-lifecycle-')));
+  const dir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'cindy-sqlite-lifecycle-')));
   try {
     const fixture = path.join(dir, 'memory.test.mjs');
     writeFileSync(fixture, [
