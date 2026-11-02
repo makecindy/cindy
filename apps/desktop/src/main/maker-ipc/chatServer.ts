@@ -1391,7 +1391,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const value = await readSnapshot(roomId);
     if (!isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
     verifiedGroups.add(roomId);
-    fenceReceipts(value);
     subscribe(roomId, value.cursor);
     return value;
   }
@@ -1814,6 +1813,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
+    // The snapshot this read adopts (not a side read such as the readers list), so a receipt that arrives while the rest is awaited lands on its layer.
+    fenceReceipts(s);
     const page = (await messagesRead) ?? s.messages;
     const ownerMembers = direct ? [] : s.members;
     const executions = await executionsRead;

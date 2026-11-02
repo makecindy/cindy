@@ -781,6 +781,26 @@ describe('Chat Server result delivery and refresh', () => {
       if (!group.ok) throw new Error(group.errorCode);
       expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
     });
+    it('keeps a received receipt when the readers list is opened, which reads a snapshot the history cache does not adopt', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { body: { messageId: target, eligibleCount: 1, readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }] } }
+        : original(route, method, body));
+      const { socket } = await open();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      // Opening the list reads a fresh snapshot on the side; the cache keeps the one it has.
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
+    });
     it('lets a newer snapshot replace positions received before it', async () => {
       const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
       serve(value);
