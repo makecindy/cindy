@@ -16,7 +16,7 @@ Read `AGENTS.md` first (hard rules), then `ROADMAP.md` Phase 3 and the top `STAT
 |---|---|
 | 3.8a code + tests | `unit-tested` (STATUS 2026-11-02). Owner's Mac: desktop 8 shards green, maker-core, lizi-mcps and orca-workflow green, all on the first PR #8 head |
 | Approve path | `live-proven` (owner, 2026-11-02): brief → card → Approve → "UK FM Cold Email Writer" saved, shown in the picker, answered in role |
-| Shared-config fix + one-line YAML | `unit-tested` in this session's last commit. Full gates were NOT run here: the session ran out of budget, and the owner said "just push it, I'll run the shards" |
+| Shared-config fix + one-line YAML | `unit-tested` (commit `ebd8ea0a`). All gates green on the owner's Mac: fast gates, desktop 8/8 shards, maker-core, lizi-mcps, orca-workflow |
 | Reject path | **not yet live-tested** |
 
 ### How it works
@@ -42,7 +42,7 @@ Key files:
 
 ## Next steps, in order
 
-1. **Gates on the last commit** (Node 22 first in PATH):
+1. ~~**Gates on the last commit**~~ DONE (all green on the owner's Mac). For reference: (Node 22 first in PATH):
    - `pnpm typecheck`
    - `pnpm test:runner`
    - `pnpm check:test-hygiene`
