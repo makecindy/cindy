@@ -41,6 +41,7 @@ import {
   FlatList,
   Image,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -117,6 +118,7 @@ import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo
 import type { FileBrowserSearchMatch, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
 import { CindyMakeSessionGate } from '@/session/CindyMakeSessionGate';
+import { lacksInlinePreview } from '@/session/pdfSystemOpen';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -1537,7 +1539,10 @@ function ContextMenu({
   const isFile = item.kind === 'file';
 
   const actions = [
-    ...(isFile ? [{ key: 'preview', label: t('files.browser.preview'), Icon: Eye, onPress: () => onPreview(item) }] : []),
+    // 安卓 WebView 不渲染 PDF,「快速预览」只会进占位页:直接隐藏,用下方「导出 / 分享」。
+    ...(isFile && !lacksInlinePreview(item.name, Platform.OS)
+      ? [{ key: 'preview', label: t('files.browser.preview'), Icon: Eye, onPress: () => onPreview(item) }]
+      : []),
     { key: 'send', label: t('files.browser.sendToSession'), Icon: MessageSquarePlus, onPress: () => onSend(item) },
     { key: 'copy', label: t('files.browser.copyPath'), Icon: Copy, onPress: () => onCopyPath(item) },
     ...(isFile ? [{ key: 'share', label: t('files.browser.exportShare'), Icon: ShareIcon, onPress: () => onShare(item) }] : []),

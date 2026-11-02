@@ -69,6 +69,7 @@
     "titleHost": "改歸「{{host}}」行 Agent 乎？",
     "titleHostUnnamed": "改歸差事所在之機行 Agent 乎？",
     "message": "原機之言談錄不可攜來，將整為交接摘要以續，所思之類不保盡承。次訊遣出時生效。",
+    "messageNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改整為交接摘要以續，所思之類不保盡承。次訊遣出時生效。",
     "confirm": "易機行之",
     "cancel": "仍舊"
   },

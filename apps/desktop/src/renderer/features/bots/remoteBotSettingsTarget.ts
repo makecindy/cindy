@@ -311,6 +311,14 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
         await invokeBotSettings(deviceId, 'memory.delete', id, rest);
       },
     },
+    // Older computers lack these operations: learned Skills stay listed but cannot be opened or changed.
+    skills: input.ops.has('skills.read') ? {
+      core: () => invokeBotSettings(deviceId, 'skills.core', botId),
+      read: (id, slug) => invokeBotSettings(deviceId, 'skills.read', id, { slug }),
+      save: async (id, skill) => { await invokeBotSettings(deviceId, 'skills.save', id, { ...skill }); },
+      setEnabled: async (id, slug, enabled) => { await invokeBotSettings(deviceId, 'skills.setEnabled', id, { slug, enabled }); },
+      delete: async (id, slug) => { await invokeBotSettings(deviceId, 'skills.delete', id, { slug }); },
+    } : null,
     history: { search: ({ botId: id, query, limit }) => invokeBotSettings<ConversationSearchResponse>(deviceId, 'history.search', id, { query, limit }) },
     capabilities: {
       async load(bot) {
@@ -322,7 +330,7 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
           (result.entries[kind] ?? []).map(({ id, name, description, available }) => ({ id, name, description, available }));
         return {
           skill: [
-            ...result.personal.map((item) => ({ id: `personal:${item.slug}`, name: item.name, available: item.enabled !== false, personal: true })),
+            ...result.personal.map((item) => ({ id: `personal:${item.slug}`, name: item.name, description: item.description || undefined, available: item.enabled !== false, personal: true })),
             ...entries('skill'),
           ],
           mcp: entries('mcp'),

@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "PR リンクを管理",
+    "hint": "上部に最大 3 件表示。固定した PR を優先します",
+    "empty": "GitHub PR のリンクを貼り付けて追加",
+    "removed": "削除済み：{{count}} 件",
+    "legacy": "未確認の参照：{{count}}",
+    "addLabel": "PR リンクを追加",
+    "add": "PR を追加",
+    "loading": "読み込み中…",
+    "restore": "PR を復元",
+    "pin": "上部に固定",
+    "unpin": "固定を解除",
+    "pinLimit": "固定できる PR は最大 3 件です",
+    "reorderHint": "Alt+↑/↓ で固定済みまたは未固定のグループ内の順序を変更します。",
+    "dragHandle": "{{repo}} #{{number}} をドラッグして並べ替え",
+    "remove": "PR を削除",
+    "errors": {
+      "duplicate": "この PR は関連付け済みです。削除したリンクは一覧から復元できます",
+      "notFound": "PR が見つからないか、アクセス権がありません",
+      "invalidUrl": "有効な GitHub PR リンクを入力してください",
+      "reorderFailed": "順序を保存できませんでした。もう一度お試しください。",
+      "verifyFailed": "PR を確認できません。GitHub のログイン状態とアクセス権を確認してください",
+      "unsupported": "このコンピューターのバージョンは PR リンクの管理に対応していません",
+      "failed": "PR リンクを更新できません"
+    },
+    "moveUp": "上へ移動"
+  },
   "paneResize": {
     "label": "列の幅",
     "hint": "左右にドラッグして列の幅を調整します"
@@ -185,7 +212,7 @@
       },
       "actionCopy": {
         "pending": "先に保留中のリクエストを処理してください。完了すると入力欄が使えるようになります。",
-        "archived": "このタスクはアーカイブされています。復元してからメッセージを送信してください。",
+        "archived": "このタスクはアーカイブされています。メッセージを送信すると自動でアーカイブ解除されます。",
         "deleted": "このタスクは削除されているため、操作できません。",
         "queuePaused": "キューは一時停止中です。キューパネルから再開できます。"
       }
@@ -428,7 +455,7 @@
     "copyLinkAction": "セッションリンクをコピー",
     "unpin": "ピン留めを解除",
     "pin": "ピン留め",
-    "restore": "復元",
+    "restore": "アーカイブ解除",
     "archive": "アーカイブ",
     "deleteAction": "セッションを削除",
     "deleteConversation": "セッションを削除",

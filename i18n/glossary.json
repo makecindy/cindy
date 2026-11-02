@@ -5,7 +5,6 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
-    {"id": "smart-contacts", "status": "proposed", "en": "Smart Contacts", "translations": {"zh-CN": "智能通讯录", "zh-TW": "智慧通訊錄", "ja": "スマート連絡先", "ko": "스마트 연락처", "fr": "Contacts intelligents", "es": "Smart Contacts", "de": "Intelligente Kontakte", "pt-PT": "Smart Contacts", "pt-BR": "Contatos inteligentes"}, "checkCase": false, "note": "原生权限说明沿用现有设置页的十语功能名称。西语和葡萄牙葡语保留 Smart Contacts；本条仅登记现有用词，等待术语裁决，不更改通讯录行为或权限。"},
     {"id": "additional-fees", "status": "proposed", "en": "Additional fees", "translations": {"zh-CN": "附加费用", "zh-TW": "附加費用", "ja": "追加費用", "ko": "추가 비용"}, "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。"},
     {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
     {"id": "cindy-ai-xd", "status": "proposed", "en": "Cindy AI · XD", "translations": {"zh-CN": "Cindy AI · 心动", "zh-TW": "Cindy AI · 心動", "ja": "Cindy AI · XD", "ko": "Cindy AI · XD"}, "note": "心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。"},
@@ -2798,6 +2797,32 @@
       },
       "checkCase": false,
       "note": "伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
+    },
+    {
+      "id": "teammate-core-skill",
+      "status": "proposed",
+      "en": "Core skill",
+      "translations": {
+        "zh-CN": "核心技能",
+        "zh-TW": "核心技能",
+        "ja": "コアスキル",
+        "ko": "핵심 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。"
+    },
+    {
+      "id": "teammate-system-skills",
+      "status": "proposed",
+      "en": "System skills",
+      "translations": {
+        "zh-CN": "系统技能",
+        "zh-TW": "系統技能",
+        "ja": "システムスキル",
+        "ko": "시스템 스킬"
+      },
+      "checkCase": false,
+      "note": "伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。"
     },
     {
       "id": "group-chat",

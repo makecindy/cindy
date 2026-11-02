@@ -40,6 +40,7 @@ import {
   type LinkClosePayload,
 } from './protocol.js';
 import {
+  DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
@@ -110,7 +111,7 @@ const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
  *   约束下同键驱逐在多会话混流时够不着队头,机制无效),这类通道整体回到
  *   原背压语义,由各自上游的整流/重试契约保证送达。
  * - 不可合并事件/流控数据(local-db:messages:created、确认卡、fs-watch、
- *   contacts-sync 分片等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
+ *   插件同步帧等):静默驱逐 = UI 永久漏事件或传输永久拼不出。
  *
  * 新增 push 通道默认**不可驱逐**(fail-closed);要进本表必须论证「流内自
  * 相似、无键控终态、丢帧可由受保护通道自愈」三点。
@@ -329,8 +330,10 @@ export interface DeviceLinkClientOptions {
   /** Optional local counters; no content/identities, never part of delivery decisions. */
   invokeMetrics?: {
     enabled(): boolean;
-    record(event: { channel: string; phase: 'sent' | 'result'; payloadBytes?: number;
-      notModified?: boolean; gzip?: boolean }): void;
+    record(event: { channel: string; phase: 'sent' | 'result' | 'decoded'; payloadBytes?: number;
+      notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void;
+    /** Coarser or finer metric row than the channel. Must return fixed names only, never ids or content. */
+    label?(channel: string, args: unknown[] | undefined): string;
   };
   /**
    * 只服务跨账号 peer(共享任务 / 供应商分享)的专用连接:同账号 peer 的路由帧在入站边界丢弃。
@@ -705,6 +708,7 @@ interface PeerTransportState {
    * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
    */
   linkAcceptedInbound: boolean;
+  supportsGithubRead?: boolean;
   /**
    * 本机是否已显式结束**出站**控制方向(closeLink direction='outbound')。
    * 迟到 transport-timeout 的拦截依据:只有本机不再主动控制对方时才吞帧;
@@ -1726,6 +1730,9 @@ export class DeviceLinkClient {
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
+      if (payload.channel === 'git-context:github-read' && !this.getPeerTransport(dst).supportsGithubRead) {
+        return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
+      }
       if (resolveInvokePriority(payload.channel, options?.background) === 'background'
         && (this.networkProbeTimer || this.networkChangeTimer)) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
@@ -1740,9 +1747,9 @@ export class DeviceLinkClient {
         'invoke-result',
         timeoutMs,
       );
-      this.reportInvokeMetric(payload.channel, env.payload as InvokeResultPayload);
+      this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
       const result = transfer
-        ? transfer.decode(env.payload as InvokeResultPayload)
+        ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
         : env.payload as InvokeResultPayload;
       return result.ok
         ? {
@@ -1929,14 +1936,26 @@ export class DeviceLinkClient {
 
   // ─── 内部:请求配对 ─────────────────────────────────────────────────────────
 
-  private reportInvokeMetric(channel: string, result?: InvokeResultPayload): void {
+  private invokeMetricChannel(payload: InvokePayload): string {
+    return this.opts.invokeMetrics?.label?.(payload.channel, payload.args) ?? payload.channel;
+  }
+
+  private reportInvokeMetric(payload: InvokePayload, result?: InvokeResultPayload): void {
     try {
       if (!this.opts.invokeMetrics?.enabled()) return;
+      const channel = this.invokeMetricChannel(payload);
       this.opts.invokeMetrics.record(result === undefined ? { channel, phase: 'sent' } : {
         channel, phase: 'result', payloadBytes: byteLength(JSON.stringify(result)),
         notModified: result.ok && result.transfer?.notModified === true,
         gzip: result.ok && typeof result.transfer?.gzipBase64 === 'string',
       });
+    } catch { /* Diagnostics must never affect delivery or response decoding. */ }
+  }
+
+  private reportInvokeDecode(payload: InvokePayload, timing: { inflateMs: number; parseMs: number }): void {
+    try {
+      if (!this.opts.invokeMetrics?.enabled()) return;
+      this.opts.invokeMetrics.record({ channel: this.invokeMetricChannel(payload), phase: 'decoded', ...timing });
     } catch { /* Diagnostics must never affect delivery or response decoding. */ }
   }
 
@@ -2013,7 +2032,7 @@ export class DeviceLinkClient {
         noteFirstWrite: () => {
           if (firstWriteAt !== undefined) return;
           firstWriteAt = this.monotonicNow();
-          if (env.kind === 'invoke') this.reportInvokeMetric((env.payload as InvokePayload).channel);
+          if (env.kind === 'invoke') this.reportInvokeMetric(env.payload as InvokePayload);
           // Only the first write can move the deadline. Replays and partial writes
           // cannot extend it; total transport lifetime is at most sendWaitMs + timeout.
           deadlineMonotonicAt = Math.min(firstWriteAt + timeout, startedMonotonicAt + sendWaitMs + timeout);
@@ -4581,6 +4600,7 @@ export class DeviceLinkClient {
     source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
   ): void {
     const peer = this.getPeerTransport(dst);
+    if (source === 'outbound-accept') peer.supportsGithubRead = capabilities?.includes(DEVICE_LINK_CAPABILITY_GITHUB_READ_V1) === true;
     if (this.directNegotiator && capabilities?.includes(DIRECT_LINK_CAPABILITY)
       && (!isScopedPeer(dst) || (isProviderSharePeer(dst)
         && capabilities.includes(PROVIDER_SHARE_DIRECT_CAPABILITY)))) {

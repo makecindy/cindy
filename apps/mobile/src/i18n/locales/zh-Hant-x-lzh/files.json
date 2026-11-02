@@ -102,6 +102,7 @@
     "fetchAvFailed": "取回未成：{{detail}}",
     "fetchPdfFailed": "取回 PDF 未成：{{detail}}",
     "fetchingPdf": "方自機取回 PDF…",
+    "androidPdfHint": "安卓暫不能於 Cindy 內先覽 PDF。請點下方「輸出 / 分享」，擇 PDF 閱讀器開之。",
     "unsupportedType": "此類暫不能於手機上先覽",
     "oversize": "卷逾先覽之上限（{{size}}），可取下原卷觀之",
     "oversizeUnknown": "太巨",

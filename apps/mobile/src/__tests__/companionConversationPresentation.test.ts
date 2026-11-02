@@ -11,6 +11,23 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+// B2B host metadata must survive native history projection without exposing internal prose.
+it.each([true, false])('keeps internal B2B prose hidden in streaming and reloaded companion history (%s)', running => {
+  const internal = row('a1', 'assistant', 'Internal reply', { botPrivateReply: true, turnCompleted: true });
+  const trace = row('a2', 'assistant', '', { botDirectMessage: {
+    v: 1, threadId: 'thread', viewerBotId: 'cindy-default', peerBotId: 'peer', peerBotName: 'Peer',
+    direction: 'received', sequence: 1, preview: 'Internal message',
+  } });
+  const source = [internal, trace, ...base.slice(2), row('a4', 'assistant', 'Owner reply', { turnCompleted: true }),
+    row('e5', 'error', 'Action required')];
+  const result = bodies(source, running);
+  expect(JSON.stringify(result)).not.toContain('Internal reply');
+  expect(JSON.stringify(result)).toContain('Owner reply');
+  expect(JSON.stringify(result)).toContain('Action required');
+  expect(JSON.stringify(result)).toContain('technical details');
+  expect(result.some(item => item.type === 'message' && item.message.companion)).toBe(true);
+  expect(internal.content).toBe('Internal reply');
+});
 // Unit regression: the real normalize → group → companion projection used to
 // hide prose as soon as commentary metadata or a later tool arrived.
 it('keeps working prose through streaming metadata and tools, folding only after the answer', () => {

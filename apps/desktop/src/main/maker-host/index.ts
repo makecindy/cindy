@@ -291,17 +291,7 @@ import {
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
-import { readContactsSettings } from './contacts-settings-store.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
-
-/**
- * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
- * spawn 过)。codex 的 MCP flags 冻结在 cached spawn 配置且 app-server 跨会话
- * 长活 —— 开关切换后若失效失败(busy), running 实例仍是旧工具面; codex 的
- * getContactsPromptState 用这份快照识别该 stale 窗口, 避免 prompt 指挥模型调
- * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
- */
-let codexAppliedContactsEnabled: boolean | null = null;
 import {
   getBuiltinMcpServerNames,
   registerCustomMcpArrays,
@@ -1221,7 +1211,7 @@ export function getMaker(): Maker {
       logger: desktopMakerLogger,
     });
     // bridge shutdown 后的远端失效统一折进 shutdownCodexEnvironment 内部
-    // (codex-connector R22 P1):插件开关 / custom MCP CRUD / contacts /
+    // (codex-connector R22 P1):插件开关 / custom MCP CRUD /
     // Slack provider / 账号切换等所有 shutdown 路径自动覆盖, 不靠逐点调用。
     setCodexEnvironmentShutdownHook(handleCodexEnvironmentShutdownForRemote);
     // bridge token 轮换 (账号切换 secrets 清空) 时同步失效远端 CC query —
@@ -1447,13 +1437,6 @@ export function getMaker(): Maker {
           throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
         }
         return createRemotePiFileOps(remoteHost);
-      },
-      // 智能通讯录 prompt 段的「本会话有效状态」: 与 mcp-providers.ts 的 provider
-      // 包装同一判定链(PluginRegistry 工作区/用户覆盖 → 全局开关), 保证工具面与
-      // prompt 不分叉; agent 侧对 enabled 还会与实际注册的 server 集合取交。
-      getContactsPromptState: ({ workingDir }) => {
-        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
-        return readContactsSettings().enabled ? 'enabled' : 'disabled';
       },
       getGhostRosterPrompt,
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
@@ -1808,17 +1791,6 @@ export function getMaker(): Maker {
         });
       },
       makerMemory: makerMemoryManager,
-      // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
-      // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
-      // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
-      // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
-      getContactsPromptState: ({ workingDir }) => {
-        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
-        const live = readContactsSettings().enabled;
-        if (!live) return 'disabled';
-        const applied = codexAppliedContactsEnabled ?? live;
-        return applied ? 'enabled' : 'unavailable';
-      },
       getGhostRosterPrompt,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
@@ -1987,17 +1959,10 @@ export function getMaker(): Maker {
             mcpExtraArgs = [...cfg.extraArgs];
             mcpExtraEnv = cfg.extraEnv;
             buildSessionMcpConfig = cfg.buildSessionMcpConfig;
-            // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
-            // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
-            // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
-            // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
-            codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
           } catch (err) {
             desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
               message: err instanceof Error ? err.message : String(err),
             });
-            // bridge 整体缺席 = cindy_contacts 必然不可达
-            codexAppliedContactsEnabled = false;
           }
         }
         const browserCompanion = isControlPlane || isReview
@@ -2356,10 +2321,8 @@ export function getMaker(): Maker {
       // (见上方 claudeAgent 构造)，两端对同一个 MCP 工具必须给出同一个答案。
       // 例外:`cindy_ssh` 显式排除——它的 ssh_exec 在远端机器上执行任意命令,
       // 属于跨机器写操作,必须保留 Codex MCP elicitation 审批(PR #874 review)。
-      // cindy_contacts 是渐进式 list_tools/call_tool server：不能按 serverName
-      // 粗粒度信任，否则 delete/merge/系统回写/文件覆盖都会被 outer call_tool
-      // 一并放行。Codex metadata 带 outer tool params，可在执行前解析 inner tool；
-      // 未知或高风险 action 逐次弹卡且禁止“本会话允许”。
+      // 插件宿主 `cindy` 的 ghost_call 是聚合入口，按内层 ghost_id/tool 判定，
+      // 只有已 review 的第一方只读/媒体工具静默。
       // 详见 AgentDeps.getMcpToolApprovalPolicy。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       // 远端 Codex (P2): 给 session 标 remoteHostId 的, CodexAgent 通过这个钩子拿
@@ -2444,7 +2407,7 @@ export function getMaker(): Maker {
       await broadcastCodexRuntimeRoute();
       // 轮 27 HIGH-1:认证边界变更必须失效 PI MCP bridge —— 否则其 server
       // factories 冻结的 provider 仍带旧账号 token, 新 pi 会话直到下一次
-      // contacts/plugin/memory 变更才重建(generation-lease 模型下活动会话
+      // plugin/memory 变更才重建(generation-lease 模型下活动会话
       // 继续用旧桥是安全的, 这里只影响新会话)。
       invalidatePiEnvironment();
     });
@@ -2953,6 +2916,8 @@ export function getMaker(): Maker {
         mcpProviders: () => _mcpProviders.pi ?? _mcpProviders.codex ?? [],
         prepareMcpBridge: getPiExtraSpawnConfig,
         makerMemory: () => makerMemoryManager,
+        // 插件工具经隧道回到本机：对方 Agent 的插件花名册也按本机真实工作目录给。
+        ghostRosterPrompt: (workingDir) => getGhostRosterPrompt({ workingDir }),
         captureKnownFileBefore,
         noteOpaqueTurnChange,
         // 与审查读 PDF 交付物同一个一次性抽取进程。

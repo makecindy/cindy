@@ -1,23 +1,24 @@
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
-import { MessageSquareText, Mic, MicOff, PhoneOff, Send, Settings2, VolumeX } from 'lucide-react';
+import { ArrowUpRight, MessageSquareText, Mic, MicOff, PhoneOff, Send, Settings2, VolumeX } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { BotAvatar } from '../BotAvatar';
-import type { BotChatIdentity } from '../BotSessionContentHeader';
+import type { VoiceCallBot } from '@/../shared/voiceConversation';
 import type { VoiceSnapshot } from './VoiceConversationController';
 import './voiceConversation.css';
 import { VoiceCallDuration, VoiceCallTranscript } from './VoiceCallTranscript';
 
 type Props = {
   callOpen?: boolean;
-  bot: BotChatIdentity;
+  bot: VoiceCallBot;
   state: VoiceSnapshot;
   loading: boolean;
   blocked: boolean;
   questionPending?: boolean;
+  questionElsewhere?: boolean;
   configurationError: boolean;
   titleRef: RefObject<HTMLHeadingElement | null>;
   onResume(): void;
@@ -28,6 +29,7 @@ type Props = {
   onClose(): void;
   onConfigure(): void;
   onOpenTask?(clientId: string): void;
+  onOpenConversation?(): void;
 };
 
 /** Presentation only: expanding details must never recreate capture, playback or exit timers. */
@@ -61,9 +63,15 @@ export function CompanionVoiceToolbar(props: Props) {
         ? 'muted'
         : props.questionPending && state.phase === 'listening'
           ? 'question'
+        : props.questionElsewhere && state.phase === 'listening'
+          ? 'questionElsewhere'
           : state.phase;
   const waiting = ['loading', 'connecting', 'microphone', 'thinking', 'preparing'].includes(status);
-  const wave = status === 'listening' || status === 'speaking' || status === 'question';
+  const wave =
+    status === 'listening' ||
+    status === 'speaking' ||
+    status === 'question' ||
+    status === 'questionElsewhere';
   // A late send failure can coexist with new input. Keep both visible; the
   // controller still owns their ordering and the existing retry/send action.
   const text = [state.unsent, state.questionDraft, state.transcript].filter(Boolean).join('\n');
@@ -268,6 +276,20 @@ export function CompanionVoiceToolbar(props: Props) {
                   )}
                 </div>
               )}
+              {props.onOpenConversation ? (
+                <Tip text={t('bots.voiceMode.openConversation')}>
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="md"
+                    className="w-8 px-0"
+                    aria-label={t('bots.voiceMode.openConversation')}
+                    onClick={props.onOpenConversation}
+                  >
+                    <ArrowUpRight size={16} aria-hidden="true" />
+                  </Button>
+                </Tip>
+              ) : null}
               <Tip text={detailsLabel}>
                 <PopoverTrigger asChild>
                   <Button

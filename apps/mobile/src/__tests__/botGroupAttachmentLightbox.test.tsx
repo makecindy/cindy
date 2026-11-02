@@ -23,9 +23,18 @@ const runtime = vi.hoisted(() => ({
   imageEvents: new Map<string, { onLoad?: (event: unknown) => void; onError?: () => void }>(),
 }));
 const openBrowserAsync = vi.hoisted(() => vi.fn(async (_url: string) => ({})));
+vi.mock("expo-sharing", () => ({ shareAsync: vi.fn() }));
+vi.mock("expo-file-system", () => ({
+  File: class {
+    exists = false;
+  },
+}));
+vi.mock("@/session/SheetModal", () => ({
+  SheetModal: ({ visible, children }: any) => (visible ? children : null),
+}));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync }));
 vi.mock('react-i18next', async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('react-native', async () => {
@@ -56,8 +65,19 @@ vi.mock('lucide-react-native', () => Object.fromEntries([
   'ArrowLeftRight', 'ArrowUp', 'Bot', 'Check', 'ChevronDown', 'ChevronRight', 'ChevronUp', 'Circle', 'CircleAlert', 'CircleCheck',
   'CircleDashed', 'CircleStop', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
   'MessageSquarePlus', 'Pen', 'PencilLine', 'RefreshCw', 'Send', 'Share', 'Sparkles', 'Split', 'Timer', 'Trash2', 'TriangleAlert',
-  'Undo2', 'X',
-].map(name => [name, () => null])));
+  'Undo2',
+      "Redo2",
+      "X",
+      "Minus",
+      "Plus",
+      "Scan",
+      "Maximize",
+      "ChevronLeft",
+      "Search",
+      "WrapText",
+      "ListOrdered",
+      "Code",
+].map((name) => [name, () => null])));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null, Path: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', async () => {
@@ -75,7 +95,9 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
   useDeviceLink: () => ({ status: 'offline', connectionEpoch: 0, getPresenceAvailability: () => false, invoke: vi.fn(), openLink: vi.fn() }),
   subscribeRemoteBotChanges: () => () => {},
 }));
-vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+vi.mock('react-native-safe-area-context', () => ({
+  SafeAreaProvider: ({ children }: any) => children,
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   const colors = new Proxy({}, { get: () => '#777777' });
@@ -99,10 +121,10 @@ vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard:
 vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
-vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
+vi.mock('@/session/messageActions', async (original) => ({ ...(await original<object>()), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 vi.mock('@/platform/gestureHandler', async () => {
   const { View } = await import('react-native');
-  const make = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => make() });
+  const make = (): any => new Proxy({}, { get: (_target, key) => (key === 'then' ? undefined : () => make()) });
   return {
     GestureHandlerRootView: View,
     GestureDetector: ({ children }: { children: unknown }) => children,
@@ -174,9 +196,9 @@ describe('Chat Server group image attachments (#5875)', () => {
     const resolveServerMedia = vi.fn(async (id: string) => ({ ...serverAttachment, id, category: 'image' as const, url: `${signedImageUrl}#${id}` }));
     const container = await render({}, visibility);
     await act(async () => root!.render(createElement(MessageListVisibilityContext.Provider, { value: visibility },
-      ...['history', 'latest'].map(messageId => createElement(BotGroupMessageAttachments, {
+      ...['history', 'latest'].map((messageId) => createElement(BotGroupMessageAttachments, {
         key: messageId, messageId, align: 'right', resolveServerMedia, onResolveRemoteMedia: vi.fn(),
-        attachments: (messageId === 'history' ? ['old-1', 'old-2'] : ['latest']).map(id => ({ ...serverAttachment, id })),
+        attachments: (messageId === 'history' ? ['old-1', 'old-2'] : ['latest']).map((id) => ({ ...serverAttachment, id })),
       })),
     )));
     expect(resolveServerMedia).not.toHaveBeenCalled();
@@ -202,7 +224,9 @@ describe('Chat Server group image attachments (#5875)', () => {
     expect(resolveServerMedia).toHaveBeenCalledTimes(1);
 
     await click(container.querySelector('[data-testid="message.mediaPreviewButton"]'));
-    expect(resolveServerMedia).toHaveBeenCalledWith('media-1');
+    expect(resolveServerMedia).toHaveBeenCalledWith('media-1',
+      expect.any(AbortSignal),
+    );
     const viewer = container.querySelector('[data-testid="message.imageLightbox"]');
     expect(viewer?.querySelector('img')?.getAttribute('src')).toBe(signedImageUrl);
     expect(container.textContent).not.toContain(loadFailedKey);
@@ -259,7 +283,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     let finishRefresh!: (value: BotGroupAttachment) => void;
     const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: signedImageUrl })
-      .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
     const container = await render({ resolveServerMedia }, visibility);
     await act(async () => visibility.update([]));
     await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
@@ -273,7 +297,7 @@ describe('Chat Server group image attachments (#5875)', () => {
 
   // PR #7145 r4371557412: the first automatic request has no cached preview.
   // A successful tap must populate the group list even if that request fails or hangs.
-  it.each(['late-success', 'late-failure', 'already-failed'])('keeps the tapped preview before initial authorization completes (%s)', async outcome => {
+  it.each(['late-success', 'late-failure', 'already-failed'])('keeps the tapped preview before initial authorization completes (%s)', async (outcome) => {
     let finishInitial!: (value: BotGroupAttachment) => void;
     let failInitial!: (error: Error) => void;
     const tappedUrl = `${signedImageUrl}&tap=initial`;
@@ -303,13 +327,13 @@ describe('Chat Server group image attachments (#5875)', () => {
     const refreshedUrl = `${signedImageUrl}&retry=initial`;
     let targetCalls = 0;
     const resolveServerMedia = vi.fn((id: string): Promise<BotGroupAttachment> => {
-      if (id !== serverAttachment.id) return new Promise(resolve => finishNeighbours.push(resolve));
+      if (id !== serverAttachment.id) return new Promise((resolve) => finishNeighbours.push(resolve));
       targetCalls++;
       if (targetCalls === 1) return new Promise((_resolve, reject) => { failInitial = reject; });
       return Promise.resolve({ ...serverAttachment, category: 'image', url: targetCalls === 2 ? tappedUrl : refreshedUrl });
     });
     const container = await render({ resolveServerMedia,
-      attachments: [serverAttachment, ...['neighbour-1', 'neighbour-2'].map(id => ({ ...serverAttachment, id }))] });
+      attachments: [serverAttachment, ...['neighbour-1', 'neighbour-2'].map((id) => ({ ...serverAttachment, id }))] });
     try {
       await click(container.querySelector('[data-testid="message.filePreviewButton"]'));
       await click(container.querySelector('[data-testid="message.imageLightboxCloseButton"]'));
@@ -329,7 +353,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     const tappedUrl = `${signedImageUrl}&tap=1`;
     const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: signedImageUrl })
-      .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }))
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: tappedUrl });
     const container = await render({ resolveServerMedia });
     await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
@@ -361,7 +385,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     const resolveServerMedia = vi.fn(async (id: string, signal?: AbortSignal) => {
       if (id === 'neighbour') {
         neighbourSignal = signal;
-        return new Promise<BotGroupAttachment>(resolve => { finishNeighbour = resolve; });
+        return new Promise<BotGroupAttachment>((resolve) => { finishNeighbour = resolve; });
       }
       return { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
     });
@@ -391,14 +415,18 @@ describe('Chat Server group image attachments (#5875)', () => {
     expect(resolveServerMedia).toHaveBeenCalledTimes(2);
   });
 
-  it('opens a non-image server file through its short-lived download address, not the viewer', async () => {
+  it("opens an authorized PDF in the common viewer without sending its URL to another browser", async () => {
     const fileUrl = 'https://chat.example.invalid/media/report.pdf?signature=placeholder';
     const resolveServerMedia = vi.fn(async (id: string): Promise<BotGroupAttachment> => ({
       id, name: 'report.pdf', category: 'file', mimeType: 'application/pdf', size: 10, url: fileUrl, path: null,
     }));
     const container = await render({ resolveServerMedia, attachments: [{ ...serverAttachment, name: 'report.pdf' }] });
     await click(container.querySelector('[data-testid^="message.filePreviewButton"]'));
-    expect(openBrowserAsync).toHaveBeenCalledWith(fileUrl);
+    expect(openBrowserAsync).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="preview.header"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("report.pdf");
     expect(container.querySelector('[data-testid="message.imageLightbox"]')).toBeNull();
   });
 
@@ -417,23 +445,23 @@ describe('Chat Server group image attachments (#5875)', () => {
     const visibility = new MessageListVisibility();
     visibility.update([{ key: 'message-1', isViewable: true }]);
     const pending: Array<(value: BotGroupAttachment) => void> = [];
-    const resolveServerMedia = vi.fn(() => new Promise<BotGroupAttachment>(resolve => pending.push(resolve)));
+    const resolveServerMedia = vi.fn(() => new Promise<BotGroupAttachment>((resolve) => pending.push(resolve)));
     const attachments = Array.from({ length: 4 }, (_, index) => ({ ...serverAttachment, id: `media-${index}` }));
     const container = await render({ resolveServerMedia, attachments }, visibility);
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     await act(async () => visibility.update([]));
-    await act(async () => pending.forEach(resolve => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+    await act(async () => pending.forEach((resolve) => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')).toBeNull();
   });
 
   // PR #7145 r4371434693: three stalled requests must not block another page
   // until their 20s timeout. Unit through the real strip; old tests settled them first.
-  it.each(['message', 'account'])('aborts old preview jobs and frees slots before stale requests settle (%s)', async change => {
+  it.each(['message', 'account'])('aborts old preview jobs and frees slots before stale requests settle (%s)', async (change) => {
     const signals: Array<AbortSignal | undefined> = [];
     const finishes: Array<(value: BotGroupAttachment) => void> = [];
     const oldResolver = vi.fn((_id: string, signal?: AbortSignal) => {
-      signals.push(signal); return new Promise<BotGroupAttachment>(resolve => finishes.push(resolve));
+      signals.push(signal); return new Promise<BotGroupAttachment>((resolve) => finishes.push(resolve));
     });
     const container = await render({ resolveServerMedia: oldResolver,
       attachments: Array.from({ length: 4 }, (_, n) => ({ ...serverAttachment, id: `old-${n}` })) });
@@ -446,11 +474,11 @@ describe('Chat Server group image attachments (#5875)', () => {
       attachments: [serverAttachment], onResolveRemoteMedia: vi.fn(), resolveServerMedia: nextResolver,
     })));
     try {
-      expect(signals.every(signal => signal?.aborted)).toBe(true);
+      expect(signals.every((signal) => signal?.aborted)).toBe(true);
       expect(nextResolver).toHaveBeenCalledTimes(1);
       expect(container.querySelector('img')?.getAttribute('src')).toBe(nextUrl);
     } finally {
-      await act(async () => finishes.forEach(finish => finish({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+      await act(async () => finishes.forEach((finish) => finish({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     }
     expect(oldResolver).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')?.getAttribute('src')).toBe(nextUrl);
@@ -458,8 +486,8 @@ describe('Chat Server group image attachments (#5875)', () => {
 
   it('bounds preview authorization and ignores late results when the message changes', async () => {
     const pending: Array<(value: BotGroupAttachment) => void> = [];
-    const resolveServerMedia = vi.fn((id: string) => new Promise<BotGroupAttachment>(resolve => {
-      pending.push(value => resolve({ ...value, id }));
+    const resolveServerMedia = vi.fn((id: string) => new Promise<BotGroupAttachment>((resolve) => {
+      pending.push((value) => resolve({ ...value, id }));
     }));
     const attachments = Array.from({ length: 8 }, (_, index) => ({ ...serverAttachment, id: `media-${index}` }));
     const container = await render({ resolveServerMedia, attachments });
@@ -467,7 +495,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
       messageId: 'replacement', align: 'right', attachments: [], onResolveRemoteMedia: vi.fn(), resolveServerMedia,
     })));
-    await act(async () => pending.forEach(resolve => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+    await act(async () => pending.forEach((resolve) => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')).toBeNull();
   });
