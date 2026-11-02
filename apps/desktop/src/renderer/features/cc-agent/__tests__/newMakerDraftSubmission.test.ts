@@ -534,7 +534,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
         catalogHostDeviceId: taskDeviceId, authCatalogKey: catalogKey,
         ...(verdict === 'absent' ? {} : { pluginRoute: async (): Promise<GhostStartTaskRouteResult> => verdict === 'kept'
           ? { outcome: 'kept', pluginName: 'Router', modelName: modelId, why: 'no-opinion' }
-          : { outcome: 'routed', pluginName: 'Router', modelName: modelId,
+          : { outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
               route: { agentKind: 'pi', model: modelId, providerId, ...(agentDeviceId ? { agentDeviceId } : {}) } } }),
       });
       expect(result.errors).toEqual([]);
