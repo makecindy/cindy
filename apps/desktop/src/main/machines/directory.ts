@@ -122,7 +122,7 @@ async function probe(device: DeviceLinkDeviceView, deps: MachineDirectoryDeps): 
     const status = parseMachineStatus(value);
     return status ? { availability: 'available', status } : { availability: 'update_required', status: null };
   } catch (error) {
-    return { availability: message(error).includes('CHANNEL_NOT_ALLOWED') ? 'update_required' : 'unreachable', status: null };
+    return { availability: /CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY/.test(message(error)) ? 'update_required' : 'unreachable', status: null };
   }
 }
 
@@ -151,7 +151,7 @@ export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineD
     Promise.all(devices.map(async (device): Promise<ComputerMachine> => ({
       kind: 'computer',
       deviceId: device.deviceId,
-      name: device.selfName || device.name,
+      name: device.name,
       isSelf: device.isSelf,
       platform: device.platform,
       appVersion: device.appVersion,

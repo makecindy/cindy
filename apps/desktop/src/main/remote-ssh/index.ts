@@ -360,7 +360,10 @@ export async function getRemoteSshPoolHydrated(): Promise<ConnectionPool> {
 
 /** 这台主机的密钥是否已经被信任过。只读，不连接，也不会把新密钥记为可信。 */
 export async function isRemoteHostKeyKnown(hostname: string, port: number): Promise<boolean> {
-  return (await getSharedHostKeyStore().get(hostKeyId(hostname, port))) !== null;
+  // From disk, as the connection will read it: a record removed since the last read must not count.
+  const store = getSharedHostKeyStore();
+  store.reload();
+  return (await store.get(hostKeyId(hostname, port))) !== null;
 }
 
 /**

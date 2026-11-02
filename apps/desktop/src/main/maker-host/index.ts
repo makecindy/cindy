@@ -1093,7 +1093,8 @@ export function getMaker(): Maker {
       invokeRemote: remoteInvoke,
       machineDirectory: {
         listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
-        invokeStatus: (deviceId: string) => invokeDeviceValue(remoteInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
+        // Reading a status must not put the other computer under control, old versions included.
+        invokeStatus: (deviceId: string) => invokeDeviceValue(remoteBackgroundInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
       },
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),

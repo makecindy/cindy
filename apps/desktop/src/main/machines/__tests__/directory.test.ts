@@ -53,9 +53,10 @@ describe('list_machines directory', () => {
   it('reads the live status of this computer and of reachable ones, and leaves phones out', async () => {
     const { computers } = await listMachines(deps([
       device({ deviceId: 'self', isSelf: true }),
-      device({ deviceId: 'mini' }),
+      device({ deviceId: 'mini', name: 'Production builder', selfName: 'Mac mini' }),
       device({ deviceId: 'phone', platform: 'ios' }),
     ], async () => status));
+    expect(computers[1]?.name).toBe('Production builder');
     expect(computers.map(item => [item.deviceId, item.availability, item.status?.memory.availableBytes]))
       .toEqual([['self', 'available', 40], ['mini', 'available', 40]]);
   });
@@ -67,9 +68,10 @@ describe('list_machines directory', () => {
       device({ deviceId: 'closed', remoteControlEnabled: false }),
       device({ deviceId: 'mine-off', controlEnabled: false }),
       device({ deviceId: 'old' }),
+      device({ deviceId: 'older' }),
       device({ deviceId: 'broken' }),
-    ], async (id) => { throw new Error(id === 'old' ? '[CHANNEL_NOT_ALLOWED] x' : '[DEVICE_OFFLINE] x'); }))).toEqual({
-      self: 'available', off: 'offline', closed: 'remote_control_off', 'mine-off': 'control_off', old: 'update_required', broken: 'unreachable',
+    ], async (id) => { throw new Error(id === 'old' ? '[CHANNEL_NOT_ALLOWED] x' : id === 'older' ? '[UNSUPPORTED_CAPABILITY] x' : '[DEVICE_OFFLINE] x'); }))).toEqual({
+      self: 'available', off: 'offline', closed: 'remote_control_off', 'mine-off': 'control_off', old: 'update_required', older: 'update_required', broken: 'unreachable',
     });
   });
 

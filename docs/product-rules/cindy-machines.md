@@ -33,7 +33,7 @@
   多机器相关的基础能力放一级）。Pi 由 bridge 注册同名原生工具，不经 `cindy_mcp_list_tools`。与「用户能在设备列表看到」同权；共享任务里拒绝（`PERMISSION_DENIED`），
   访客不能经 Agent 看到账号下的机器。
 - 调用时向在线电脑问一次 `maker:machine:status`，不定时上报，不花模型额度。这是普通只读 invoke，不新增协议帧，
-  中转（含自建）只转发，不需要适配。旧版本返回 `CHANNEL_NOT_ALLOWED`，显示 `update_required`。
+  中转（含自建）只转发，不需要适配。读取走后台链路，不让对方进入受控状态。旧版本返回 `CHANNEL_NOT_ALLOWED` 或不支持后台链路（`UNSUPPORTED_CAPABILITY`），都显示 `update_required`。
 - 读不到的电脑不从结果消失，写明原因：`offline`、`remote_control_off`、`control_off`、`update_required`、`unreachable`。
   一台卡住按传输超时算 `unreachable`，不拖住其他机器。手机不在其中。
 - 每项独立失败，读不到是 `null`，不用近似值冒充。macOS 的可用内存取 `vm_stat` 的空闲、非活跃与预读页之和，
