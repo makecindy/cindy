@@ -159,7 +159,8 @@ import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
 // TODO(后续): 若 model-access-server 在下发凭据时附带看板地址(按个人 / 企业租户区分的
 // usageDashboardUrl / consoleUrl),据此恢复网关账号的跳转 + tooltip 链接行
 // (i18n 文案 todaySpend.openProxyUsage 已保留待复用,勿当死 key 删)。
-const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/codex/settings/usage';
+// /codex/settings/usage 已随 ChatGPT 前端改版失效(登录后落回首页),与 Codex CLI 一致改用 /settings/usage。
+const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/settings/usage';
 const XAI_USAGE_DASHBOARD_URL = 'https://grok.com';
 const CLAUDE_USAGE_DASHBOARD_URL = 'https://claude.ai/settings/usage';
 

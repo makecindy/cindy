@@ -3675,6 +3675,8 @@
         "simpleSubtitle": "Múltiples modelos, facturados a través de una sola cuenta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este proveedor ya no está disponible. Continúa con un endpoint personalizado o vuelve a buscar.",
+        "nameSearchHint": "Puedes conservar este nombre y continuar con un endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar configuración de conexión",
         "deleteAria": "Eliminar",
@@ -10979,7 +10981,18 @@
           "accessToolsTitle": "Herramientas e información",
           "accessToolsHint": "Puede usar las herramientas existentes de {{name}} y tu información privada. Los resultados son visibles para todos. Se siguen aplicando las reglas de aprobación; revocar el acceso no deshace las acciones ya completadas.",
           "capabilitiesRow": "Herramientas y acceso de {{name}}",
-          "accessMenu": "Permisos aquí"
+          "accessMenu": "Permisos aquí",
+          "notifications": {
+            "title": "Notificaciones de mensajes",
+            "all": "Todos los mensajes",
+            "mentions": "Solo menciones",
+            "none": "Desactivadas",
+            "allHint": "Recibe avisos de los mensajes del grupo y las nuevas respuestas en los hilos que sigues.",
+            "mentionsHint": "Recibe avisos cuando te mencionen, también con @todos. Las actualizaciones de los repartos de trabajo seguirán generando avisos.",
+            "noneHint": "Desactiva todos los avisos del sistema de este grupo. Los mensajes no leídos se conservan.",
+            "saving": "Guardando…",
+            "saveFailed": "No se pudieron guardar las notificaciones. Inténtalo de nuevo."
+          }
         },
         "replyCount_many": "{{count}} responde",
         "reactorsUnavailable_many": "Nombres no disponibles para {{count}} miembros más"

@@ -3629,6 +3629,8 @@
         "simpleSubtitle": "Multiple models, billed through one account."
       },
       "custom": {
+        "nameSearchUnavailable": "This provider is no longer available. Continue with a custom endpoint or search again.",
+        "nameSearchHint": "You can keep this name and continue with a custom endpoint.",
         "tag": "Custom",
         "editAria": "Edit connection settings",
         "deleteAria": "Delete",
@@ -10781,6 +10783,17 @@
         "copyFailed": "Could not copy. Select the link and copy it manually.",
         "createDescription": "Choose companions, or create the group first and invite people to join.",
         "settings": {
+          "notifications": {
+            "title": "Message notifications",
+            "all": "All messages",
+            "mentions": "Mentions only",
+            "none": "Off",
+            "allHint": "Get notified about group messages and new replies in followed threads.",
+            "mentionsHint": "Get notified when you are mentioned, including @everyone. Work split updates still notify you.",
+            "noneHint": "Turn off all system alerts for this group. Unread messages are kept.",
+            "saving": "Saving…",
+            "saveFailed": "Could not save notification settings. Try again."
+          },
           "name": "Group name",
           "topic": "Topic",
           "description": "Description",

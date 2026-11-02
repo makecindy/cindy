@@ -3824,7 +3824,9 @@
           "modelsBusy": "請先畢方行之模型清單擷取或選擇，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支援今 Runtime 中可復用之欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自獨立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，續設自定端點。",
+        "nameSearchUnavailable": "此供方今不可用，可續設自定端點，或重尋之。"
       },
       "models": {
         "search": "尋模型",
@@ -10844,7 +10846,18 @@
           "accessToolsTitle": "可用工具與資料",
           "accessToolsHint": "可用 {{name}} 已有之工具與君之私人資料，結果全群可見。原有操作審批照常；撤回之後，已成之操作不可撤銷。",
           "capabilitiesRow": "{{name}} 之工具與授權",
-          "accessMenu": "於本群之權柄"
+          "accessMenu": "於本群之權柄",
+          "notifications": {
+            "title": "訊息告知",
+            "all": "凡訊皆告",
+            "mentions": "惟提及吾",
+            "none": "不告",
+            "allHint": "群訊及所關注話題之新答，皆告之。",
+            "mentionsHint": "提及吾或 @全體時告之，分職之進展仍告。",
+            "noneHint": "止本群一切系統告知，未讀之訊仍存。",
+            "saving": "正存之…",
+            "saveFailed": "告知之設未能存，請再試。"
+          }
         }
       },
       "lifecycle": {

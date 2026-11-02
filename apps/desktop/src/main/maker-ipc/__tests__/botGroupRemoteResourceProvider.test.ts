@@ -360,6 +360,11 @@ describe('bot group remote resources', () => {
     expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'read', messageId: 'm2' } });
     expect(read.effects).toEqual([]);
 
+    service.getGroup.mockResolvedValueOnce({ ok: true, group: detail({ serverBacked: true, supportsNotificationSettings: true, notificationMode: 'all' }) });
+    await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'notifications', resourceRef: ref('g1'), input: { mode: 'mentions' } });
+    expect(service.chatServer.manage).toHaveBeenCalledWith({ groupId: 'g1', action: { type: 'notifications', mode: 'mentions' } });
+
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-continue', resourceRef: ref('g1'),
       input: { planId: 'p1' },

@@ -3675,6 +3675,8 @@
         "simpleSubtitle": "Plusieurs modèles, facturés via un seul compte."
       },
       "custom": {
+        "nameSearchUnavailable": "Ce fournisseur n’est plus disponible. Continuez avec un endpoint personnalisé ou relancez la recherche.",
+        "nameSearchHint": "Vous pouvez conserver ce nom et continuer avec un endpoint personnalisé.",
         "tag": "Personnalisé",
         "editAria": "Modifier les paramètres de connexion",
         "deleteAria": "Supprimer",
@@ -10979,7 +10981,18 @@
           "accessToolsTitle": "Outils et informations",
           "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les règles d’approbation restent applicables ; révoquer l’accès n’annule pas les actions déjà effectuées.",
           "capabilitiesRow": "Outils et accès de {{name}}",
-          "accessMenu": "Autorisations ici"
+          "accessMenu": "Autorisations ici",
+          "notifications": {
+            "title": "Notifications de messages",
+            "all": "Tous les messages",
+            "mentions": "Mentions uniquement",
+            "none": "Désactivées",
+            "allHint": "Recevez des notifications pour les messages du groupe et les nouvelles réponses dans les fils suivis.",
+            "mentionsHint": "Recevez une notification lorsque vous êtes mentionné, y compris avec @tout le monde. Les mises à jour des répartitions du travail restent signalées.",
+            "noneHint": "Désactivez toutes les alertes système de ce groupe. Les messages non lus sont conservés.",
+            "saving": "Enregistrement…",
+            "saveFailed": "Impossible d’enregistrer les notifications. Réessayez."
+          }
         },
         "replyCount_many": "{{count}} réponses",
         "reactorsUnavailable_many": "Noms indisponibles pour {{count}} autres membres"
