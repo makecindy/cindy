@@ -3817,8 +3817,11 @@ export function NewMakerDraftRoute() {
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
           // Agent 在另一台电脑运行时同样查那台的 Agent 登录(订阅 / 供应商都用那台的)。
+          // 目录键也可能包含任务电脑的中继；插件未改选时原样保留，改选后仍经同一目录宿主。
           const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: routeAgentDeviceId ?? catalogDeviceId,
+            deviceId: routedTo
+              ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+              : catalogDeviceId,
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
@@ -5078,7 +5081,9 @@ export function NewMakerDraftRoute() {
         const chatInitialProviderId = routedTo ? routedTo.providerId : goalBaseRoute.providerId;
         const effectiveFastMode = routedTo ? false : goalBaseRoute.effectiveFastMode;
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          deviceId: routeAgentDeviceId ?? catalogDeviceId,
+          deviceId: routedTo
+            ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+            : catalogDeviceId,
         });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
