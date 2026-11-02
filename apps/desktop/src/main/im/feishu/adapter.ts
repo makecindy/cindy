@@ -395,6 +395,8 @@ export function buildFeishuAdapter(
     },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
+    // /project: 把当前 lane 的会话切到 desktop 项目目录(lane 级独立, 话题互不影响)。
+    projectSwitching: true,
     // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
     // 后的外部用户私聊(transport guests)按用户一条专线。
     companionLane: (userId) => {
