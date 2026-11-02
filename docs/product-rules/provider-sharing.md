@@ -199,6 +199,28 @@ Desktop 与 Mobile 使用同一写法。
 查询失败或旧主机不支持时不新增分享候选，当前 / 待切换位置仍保留。模型选择和执行仍由任务所在电脑校验；
 手机沿用被控电脑代读目录。暂停或已移除的分享只为当前 / 待切换位置保留，供用户查看状态并换走。
 
+分享来的[供应商组](provider-groups.md)不按组所在电脑本机这一份是否登录决定能否选用（2026-11-02 用户裁决）：
+组所在电脑本机没登录时组不会选它，任务照样分给组里其他电脑，所以受邀者直接选用这条分享时，模型列表、
+定时任务发送前的核对、协同 Worker 与插件的模型来源都照常列出；组里一台都不能用时，发送时由分享者电脑
+提示没有电脑能运行。
+分享者的启动入口在组分配前照常核对成员、供应商与模型授权，但不以本机登录状态拒绝整组；
+选中本机、续接本机或启动失败换回本机时，在实际启动前重新核对本机连接状态。组所在电脑转发已在组员
+运行的任务换模型、或按已保存的执行电脑转发分支时，同样只看分享来源与模型授权；实际执行电脑的登录检查
+不变，本机分支仍看本机登录。执行电脑收到的已分配、已中转与受托执行不进入组预检。
+分享者与受邀者均更新才完整生效；只更新受邀者仍可能被旧分享者的启动检查拒绝。
+受邀者自己的组是例外：把这条分享当组内电脑时仍看组所在电脑本机那一份，本机没登录就不能用，因为组分过去的
+任务在那台直接运行，不再分给它自己组里的电脑。
+受邀者读到带组规模（`groupSize`）的分享目录时由 `scrubSharedProvider` 统一处理，桌面 Renderer 直读、
+被控电脑代读、主进程读目录与手机共用；列出的模型仍是组所在电脑本机那一份
+（[供应商组](provider-groups.md) §6 已知差异）。
+实现见 `packages/device-link/src/providerShareCatalog.ts`、
+`apps/desktop/src/main/remote-agent/controller/deviceCatalog.ts`（`readDeviceProviderViews`，组内电脑传
+`groupMember`）与 `apps/desktop/src/main/maker-ipc/controlledModelCatalog.ts`；回归见同名测试与
+`packages/device-link/src/__tests__/providerShare.test.ts`、
+`apps/desktop/src/main/provider-group/__tests__/runtime.test.ts`。
+分享者启动预检见 `apps/desktop/src/main/remote-agent/host/{providerAccess,runHost,service}.ts`；
+`remote-agent/__tests__/groupRelay.test.ts` 经真实启动与发送入口覆盖本机断连、组分配及本机执行拒绝。
+
 Desktop 模型列表底部的「配置模型」在看分享来的供应商时同样显示，点开直接进入设置里这条分享的详情
 （§5.2；2026-10-15 用户确认）。同账号其他电脑上的远程供应商与远程控制的电脑上的任务不显示，它们的设置
 要到那台电脑上改。
