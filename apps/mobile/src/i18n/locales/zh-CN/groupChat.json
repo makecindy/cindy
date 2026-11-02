@@ -62,7 +62,6 @@
     "send": "发送"
   },
   "timeline": {
-    "endTalk": "结束",
     "newMessages_one": "{{count}} 条新消息",
     "newMessages_other": "{{count}} 条新消息",
     "emptyTitle": "群里还没有消息",
@@ -159,12 +158,6 @@
     "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
   },
   "plan": {
-    "talkTurn": "说说看法",
-    "stepSpeaking": "正在说",
-    "stepSpoken": "说完了",
-    "allTurns_one": "共 {{count}} 位",
-    "allTurns_other": "共 {{count}} 位",
-    "foldTurns": "收起",
     "intro_one": "这件事分 {{count}} 步，我这样分工：",
     "intro_other": "这件事分 {{count}} 步，我这样分工：",
     "missing": "这个安排已经读不到了",

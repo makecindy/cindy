@@ -1,7 +1,7 @@
-/** Work plans and discussion queues follow docs/product-rules/bot-group-chat.md §7. */
+/** Group plan cards and handoffs follow docs/product-rules/bot-group-chat.md §7. */
 import type { ReactNode } from 'react';
 import { Alert, Animated as RNAnimated, Easing, Pressable, StyleSheet, View } from 'react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { CircleAlert, CircleCheck, CircleDashed, FileText, ListChecks } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { botGroupPathBasename, isActiveBotGroupMember, type BotGroupPlanFollowUp } from '@cindy/maker-shared/botGroupPresentation';
@@ -81,16 +81,8 @@ const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> 
 
 function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
   // A server stop ends the plan before the executor necessarily updates its step.
-  if (plan.status === 'stopped' && step.status === 'running') return 'groupChat.plan.stopped';
-  if (plan.kind === 'talk') {
-    if (step.status === 'done') return 'groupChat.plan.stepSpoken';
-    if (step.status === 'running') return 'groupChat.plan.stepSpeaking';
-  }
-  return STEP_STATUS_KEYS[step.status];
-}
-
-function stepTask(step: BotGroupPlanStepView, talk: boolean, t: (key: string) => string): string {
-  return step.task || (talk ? t('groupChat.plan.talkTurn') : '');
+  return plan.status === 'stopped' && step.status === 'running'
+    ? 'groupChat.plan.stopped' : STEP_STATUS_KEYS[step.status];
 }
 
 function StepRowContent({ plan, step, index, identity, deviceId, online, muted }: {
@@ -107,7 +99,7 @@ function StepRowContent({ plan, step, index, identity, deviceId, online, muted }
     </View>
     <Text numberOfLines={1} style={[styles.stepText, muted && styles.stepTextMuted]}>
       <Text style={[styles.stepName, muted && styles.stepTextMuted]}>{identity.name}</Text>
-      {' '}{stepTask(step, plan.kind === 'talk', t)}
+      {' '}{step.task}
     </Text>
     {statusKey ? <Text numberOfLines={1} style={styles.stepStatus}>{t(statusKey)}</Text> : null}
   </>;
@@ -118,7 +110,7 @@ function stepAccessibility(t: (key: string, options?: Record<string, unknown>) =
   const status = started(plan)
     ? t(stepStatusKey(plan, step) ?? 'groupChat.plan.stepPending')
     : `${index + 1}`;
-  return [status, name, stepTask(step, plan.kind === 'talk', t)].filter(Boolean).join(', ');
+  return [status, name, step.task].filter(Boolean).join(', ');
 }
 
 export function BotGroupPlanCard({
@@ -140,7 +132,6 @@ export function BotGroupPlanCard({
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const [expanded, setExpanded] = useState(false);
   if (!plan) return <View style={styles.card}>
     {fallback ? <Text selectable style={styles.stepText}>{fallback}</Text> : null}
     <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>
@@ -152,11 +143,6 @@ export function BotGroupPlanCard({
   const busy = pending !== null;
   const candidates = members.filter(member => isActiveBotGroupMember(member) && (!member.actorKind || member.actorKind === 'bot'));
   const steps = plan.steps.length;
-  const talk = plan.kind === 'talk';
-  const foldable = talk && steps > 4;
-  const active = plan.steps.findIndex(step => step.status !== 'done');
-  const start = foldable && !expanded ? Math.min(Math.max((active < 0 ? steps - 1 : active) - 1, 0), steps - 3) : 0;
-  const shown = foldable && !expanded ? plan.steps.slice(start, start + 3) : plan.steps;
   const done = plan.steps.filter((step) => step.status === 'done').length;
   const progress = plan.status === 'proposed' ? t('groupChat.plan.awaitingStart')
     : plan.status === 'running' ? t('groupChat.plan.progressRunning', { current: Math.min(done + 1, steps), total: steps })
@@ -164,19 +150,16 @@ export function BotGroupPlanCard({
     : plan.status === 'done' ? t('groupChat.plan.allDone')
     : finalNote ? t(finalNote) : '';
   return <View testID="botGroup.plan" style={[styles.card, muted && styles.cardMuted]}>
-    {!talk ? <>
-      <View style={styles.eyebrow}>
-        <ListChecks size={iconSize.sm} color={colors.textSecondary} />
-        <Text style={styles.eyebrowText}>{t('groupChat.plan.eyebrow', { count: steps })}</Text>
-        {progress ? <Text style={styles.eyebrowStatus} testID={finalNote ? 'botGroup.plan.finalNote' : `botGroup.plan.${plan.status}`}>{progress}</Text> : null}
-      </View>
-      <Text selectable style={styles.planTitle}>{t('groupChat.plan.intro', { count: steps })}</Text>
-    </> : null}
+    <View style={styles.eyebrow}>
+      <ListChecks size={iconSize.sm} color={colors.textSecondary} />
+      <Text style={styles.eyebrowText}>{t('groupChat.plan.eyebrow', { count: steps })}</Text>
+      {progress ? <Text style={styles.eyebrowStatus} testID={finalNote ? 'botGroup.plan.finalNote' : `botGroup.plan.${plan.status}`}>{progress}</Text> : null}
+    </View>
+    <Text selectable style={styles.planTitle}>{t('groupChat.plan.intro', { count: steps })}</Text>
     <View style={styles.steps}>
-      {shown.map((step, shownIndex) => {
-        const index = start + shownIndex;
+      {plan.steps.map((step, index) => {
         const identity = identityFor(step.botId, step.botName);
-        const editable = !talk && online && (actionable || (reassignable && (step.status === 'pending' || step.status === 'failed')));
+        const editable = online && (actionable || (reassignable && (step.status === 'pending' || step.status === 'failed')));
         const label = stepAccessibility(t, plan, step, index, identity.name);
         if (!editable) {
           return <View key={step.position} accessible accessibilityLabel={label} style={styles.stepRow} testID="botGroup.plan.step">
@@ -220,10 +203,7 @@ export function BotGroupPlanCard({
         </BotGroupMenu>;
       })}
     </View>
-    {foldable ? <CompanionCardButton label={t(expanded ? 'groupChat.plan.foldTurns' : 'groupChat.plan.allTurns', { count: steps })}
-      onPress={() => setExpanded(value => !value)} testID="botGroup.plan.toggleTurns" /> : null}
-    {talk && finalNote ? <Text style={styles.note} testID="botGroup.plan.finalNote">{t(finalNote)}</Text> : null}
-    {!talk && actionable ? <>
+    {actionable ? <>
       {/* Two sentences: Chinese and Japanese run them together, other languages need a space. */}
       <Text style={styles.note}>{[t(plan.autoContinue ? 'groupChat.plan.autoNote' : 'groupChat.plan.pauseNote'), t('groupChat.plan.editHint')].join(/^(zh|ja)/.test(i18n.language) ? '' : ' ')}</Text>
       <CompanionCardActions>
@@ -276,9 +256,8 @@ export function BotGroupPlanEndDivider({ stepCount }: { stepCount: number | null
   </BotGroupDivider>;
 }
 
-export function BotGroupPlanFollowUpRow({ followUp, talk = false, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
+export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
   followUp: BotGroupPlanFollowUp;
-  talk?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
   online: boolean;
@@ -298,24 +277,21 @@ export function BotGroupPlanFollowUpRow({ followUp, talk = false, identityFor, d
   const busy = pending !== null;
   const primary = followUp.kind === 'continue' ? 'continue' : 'retry';
   const failed = followUp.kind === 'retry';
-  const task = stepTask(step, talk, t);
   const label = failed
     ? t('groupChat.timeline.stepFailed', { name: identity.name })
-    : `${t('groupChat.timeline.nextStep')}${identity.name} ${task}`;
+    : `${t('groupChat.timeline.nextStep')}${identity.name} ${step.task}`;
   return <View style={styles.card} testID={`botGroup.followUpRow.${followUp.kind}`}>
     <View style={styles.eyebrow} accessible accessibilityLabel={label}>
       {failed ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : <ListChecks size={iconSize.sm} color={colors.textSecondary} />}
-      <Text style={styles.eyebrowText}>{talk
-        ? t(failed ? 'groupChat.timeline.stepFailed' : 'groupChat.timeline.nextStep', { name: identity.name })
-        : failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
+      <Text style={styles.eyebrowText}>{failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
       <Text style={styles.eyebrowStatus}>{`${stepNumber} / ${stepTotal}`}</Text>
     </View>
     <View style={styles.who}>
       <View style={styles.whoAvatar}><BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /></View>
-      <Text numberOfLines={2} style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${task}`}</Text>
+      <Text numberOfLines={2} style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${step.task}`}</Text>
     </View>
     <CompanionCardActions>
-      <CompanionCardButton label={t(talk ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
+      <CompanionCardButton label={t('groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
         onPress={onEnd} testID="botGroup.followUp.end" />
       <CompanionCardButton primary label={t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan')}
         busy={pending === primary} disabled={busy || !online}

@@ -62,7 +62,6 @@
     "send": "送信"
   },
   "timeline": {
-    "endTalk": "終了",
     "newMessages_one": "新着メッセージ {{count}} 件",
     "newMessages_other": "新着メッセージ {{count}} 件",
     "emptyTitle": "このグループにはまだメッセージがありません",
@@ -159,12 +158,6 @@
     "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
   },
   "plan": {
-    "talkTurn": "意見を述べる",
-    "stepSpeaking": "発言中",
-    "stepSpoken": "発言済み",
-    "allTurns_one": "全 {{count}} 人",
-    "allTurns_other": "全 {{count}} 人",
-    "foldTurns": "折りたたむ",
     "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
     "intro_other": "この件は {{count}} ステップに分けて、次のように分担します:",
     "missing": "この計画は読み込めなくなりました",
