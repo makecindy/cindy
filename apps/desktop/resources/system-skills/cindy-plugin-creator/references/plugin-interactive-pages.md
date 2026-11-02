@@ -254,7 +254,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 明确结果归属 | content/structuredContent 给 AI；页面专用内容放根 _meta |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
-`app.getHostContext()` 取主题和 styles.variables。表单应能适应窄屏。
+`app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。
 全屏、下载等能力先探测，不能把桌面成功当成所有查看端都支持，详见参考页。
 
 打包后实际打开页面：检查首屏只请求一次；查询不清掉表单输入；按 Enter 和点击
