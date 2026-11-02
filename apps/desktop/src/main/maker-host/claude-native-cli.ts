@@ -15,6 +15,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 
 import { cleanProcessEnv } from '@cindy/maker-core';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
@@ -139,16 +140,55 @@ export function parseClaudeCliLoginStatus(stdout: string): ClaudeCliLoginStatus 
   };
 }
 
+/**
+ * Windows 登录走可见的官方 CLI 控制台(#5769)。隐藏子进程的 stdout 只在主进程里累积,
+ * 浏览器没打开(如 Chrome 停在资料选择窗口)时,CLI 打印的备用链接和
+ * `Paste code here if prompted >` 用户看不到,也没有地方粘贴授权码。经 `start` 给 CLI
+ * 一个独立的控制台窗口:提示与输入都在官方 CLI 里完成,Cindy 不读取、不中转授权码;
+ * `/wait` 让 cmd 等 CLI 退出,结论照旧以随后的 `auth status --json` 为准。
+ *
+ * cmd 取 `%SystemRoot%\System32` 下的固定路径,不信 PATH / ComSpec。CLI 路径来自 userData,
+ * 可能含 `%NAME%` 或 `!`:双引号挡不住 cmd 的变量展开,所以路径只经专用环境变量传入,
+ * 命令文本里只有字面量与 `%VAR%` 引用(展开结果不会再被展开),并以 `/v:off` 关闭延迟展开;
+ * 与 scripts/shared/pnpm-invocation.mjs 的 cmd 转发同一做法。
+ */
+export const CLAUDE_LOGIN_CLI_ENV = 'CINDY_CLAUDE_LOGIN_CLI';
+
+export function buildWindowsVisibleConsoleSpawn(
+  binary: string,
+  args: string[],
+  systemRoot: string = process.env.SystemRoot ?? 'C:\\Windows',
+): { file: string; args: string[]; env: Record<string, string> } {
+  const command = ['start', '"Claude Code"', '/wait', `"%${CLAUDE_LOGIN_CLI_ENV}%"`, ...args].join(' ');
+  return {
+    file: path.win32.join(systemRoot, 'System32', 'cmd.exe'),
+    args: ['/d', '/s', '/v:off', '/c', `"${command}"`],
+    env: { [CLAUDE_LOGIN_CLI_ENV]: binary },
+  };
+}
+
 function runCli(
   args: string[],
-  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
+  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; visibleConsole?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string; reason?: 'timeout' | 'cancelled' }> {
   const binary = cliBinaryPath();
   if (!binary) return Promise.reject(new Error('claude cli unavailable'));
+  const visibleConsole = options.visibleConsole === true && process.platform === 'win32';
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      if (visibleConsole) {
+        const launch = buildWindowsVisibleConsoleSpawn(binary, args);
+        // cmd 本身隐藏;`start` 为 CLI 新建的控制台窗口可见。CLI 的输入输出都在那个窗口里。
+        child = spawn(launch.file, launch.args, {
+          env: { ...options.env, ...launch.env },
+          stdio: 'ignore',
+          windowsHide: true,
+          windowsVerbatimArguments: true,
+        });
+      } else {
+        child = spawn(binary, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      }
     } catch (err) {
       reject(err);
       return;
@@ -159,6 +199,9 @@ function runCli(
     const stop = (why: 'timeout' | 'cancelled') => {
       if (reason) return;
       reason = why;
+      // 可见控制台登录只结束根 cmd(经进程句柄,身份确定),不按 PID 结束进程树:taskkill /T
+      // 只能按可复用的 PID 定位,且会连带结束 CLI 拉起的浏览器等子进程。官方 CLI 的登录窗口
+      // 留给用户关闭;之后即使在窗口里完成授权,登录态仍以 `auth status --json` 为准。
       child.kill();
     };
     const timer = setTimeout(() => stop('timeout'), options.timeoutMs);
@@ -420,6 +463,7 @@ export async function runClaudeCliLogin(signal: AbortSignal): Promise<ClaudeCliL
       env: await cliEnv({ network: true }),
       timeoutMs: LOGIN_TIMEOUT_MS,
       signal,
+      visibleConsole: true,
     });
     if (result.reason === 'cancelled') return { ok: false, reason: 'login_cancelled' };
     if (result.reason === 'timeout') return { ok: false, reason: 'timeout' };
