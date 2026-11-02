@@ -30,6 +30,7 @@ void mountPage({
             : 'https://open.feishu.cn/page/cli?user_code=CINDY-TEST',
         userCode: 'CINDY-TEST',
         expiresIn: 300,
+        runId: 1,
       }),
       registrationCancel: async () => ({ ok: true }),
     },

@@ -4509,7 +4509,9 @@
         "cancel": "取消授權",
         "begin": "開始授權",
         "retry": "重新授權",
-        "connecting": "正連接機器人…"
+        "connecting": "正連接機器人…",
+        "cardActionHint": "掃碼所建之機器人預設只訂閱訊息事件，卡片按鈕須另於開放平台加事件訂閱",
+        "cardActionHintAction": "開啟開放平台 ↗"
       }
     },
     "wechatBot": {

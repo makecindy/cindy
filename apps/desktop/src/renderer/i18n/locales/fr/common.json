@@ -4605,7 +4605,9 @@
         "cancel": "Annuler l’autorisation",
         "begin": "Autoriser le bot",
         "retry": "Autoriser à nouveau",
-        "connecting": "Connexion du bot…"
+        "connecting": "Connexion du bot…",
+        "cardActionHint": "Un bot créé par scan-code ne s'abonne qu'aux événements de message. Ajoute l'événement d'action de carte dans la plateforme ouverte pour utiliser les boutons.",
+        "cardActionHintAction": "Ouvrir la plateforme ouverte ↗"
       }
     },
     "wechatBot": {

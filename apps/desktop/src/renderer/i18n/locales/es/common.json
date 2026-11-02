@@ -4605,7 +4605,9 @@
         "cancel": "Cancelar autorización",
         "begin": "Autorizar bot",
         "retry": "Autorizar de nuevo",
-        "connecting": "Conectando el bot…"
+        "connecting": "Conectando el bot…",
+        "cardActionHint": "Un bot creado con un código QR solo se suscribe a eventos de mensaje. Añade el evento de acción de tarjeta en la plataforma abierta para usar los botones.",
+        "cardActionHintAction": "Abrir la plataforma abierta ↗"
       }
     },
     "wechatBot": {

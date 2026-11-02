@@ -4552,7 +4552,9 @@
         "cancel": "Autorisierung abbrechen",
         "begin": "Bot autorisieren",
         "retry": "Erneut autorisieren",
-        "connecting": "Bot wird verbunden…"
+        "connecting": "Bot wird verbunden…",
+        "cardActionHint": "Ein per QR-Code erstellter Bot abonniert nur Nachrichtenereignisse. Für Kartenbuttons musst du das Kartenaktion-Ereignis in der Open Platform ergänzen.",
+        "cardActionHintAction": "Open Platform öffnen ↗"
       }
     },
     "wechatBot": {

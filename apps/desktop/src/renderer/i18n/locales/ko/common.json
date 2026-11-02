@@ -4509,7 +4509,9 @@
         "cancel": "인증 취소",
         "begin": "인증 시작",
         "retry": "다시 인증",
-        "connecting": "봇에 연결 중…"
+        "connecting": "봇에 연결 중…",
+        "cardActionHint": "QR 코드로 만든 봇은 메시지 이벤트만 구독합니다. 카드 버튼을 쓰려면 오픈 플랫폼에서 카드 액션 이벤트를 추가하세요.",
+        "cardActionHintAction": "오픈 플랫폼 열기 ↗"
       }
     },
     "wechatBot": {

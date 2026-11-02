@@ -4509,7 +4509,9 @@
         "cancel": "取消授权",
         "begin": "开始授权",
         "retry": "重新授权",
-        "connecting": "正在连接机器人…"
+        "connecting": "正在连接机器人…",
+        "cardActionHint": "扫码创建的机器人默认只订阅消息事件，卡片按钮需要另外在开放平台添加事件订阅",
+        "cardActionHintAction": "打开开放平台 ↗"
       }
     },
     "wechatBot": {

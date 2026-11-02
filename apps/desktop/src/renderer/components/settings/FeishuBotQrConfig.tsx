@@ -9,6 +9,12 @@ import { useFeishuBotRegistration } from '@/hooks/useFeishuBotRegistration';
 
 const SERVICES = ['feishu', 'lark'] as const;
 
+/** 开放平台控制台入口: 扫码建出来的应用得用户自己去后台补事件订阅。 */
+const OPEN_PLATFORM_URL: Record<FeishuBotService, string> = {
+  feishu: 'https://open.feishu.cn/app?lang=zh-CN',
+  lark: 'https://open.larksuite.com/app',
+};
+
 export function FeishuBotQrConfig({
   service,
   setService,
@@ -45,6 +51,16 @@ export function FeishuBotQrConfig({
       </fieldset>
       <p className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
         {t('settings.feishuBot.qr.description')}
+      </p>
+      <p className="text-12 leading-relaxed text-[var(--settings-section-desc)]">
+        {t('settings.feishuBot.qr.cardActionHint')}{' '}
+        <button
+          type="button"
+          onClick={() => void window.electronAPI.openExternal(OPEN_PLATFORM_URL[service])}
+          className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline underline-offset-2"
+        >
+          {t('settings.feishuBot.qr.cardActionHintAction')}
+        </button>
       </p>
       {isAuthorizing && qrDataUrl && (
         <div className="flex flex-col items-center gap-3 py-2">

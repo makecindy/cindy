@@ -64,9 +64,13 @@ export function useFeishuBotRegistration(
   const [now, setNow] = useState(Date.now());
   const generationRef = useRef(0);
   const activeRunRef = useRef<number | null>(null);
+  // main 侧授权轮次代号。renderer 自己的代次管"我发起了几次",main 的 runId
+  // 管"这一轮是第几次"——两轮并发时只有两者同时对得上,结果才属于当前界面。
+  const mainRunIdRef = useRef<number | null>(null);
 
   const invalidateRegistration = useCallback(() => {
     generationRef.current += 1;
+    mainRunIdRef.current = null;
     if (activeRunRef.current === null) return;
     activeRunRef.current = null;
     void window.electronAPI.feishuBot.registrationCancel().catch((err: unknown) => {
@@ -97,14 +101,20 @@ export function useFeishuBotRegistration(
 
   useEffect(() => {
     if (phase === 'qr' && secondsLeft === 0) {
-      invalidateRegistration();
+      // 倒计时只负责收起二维码,不取消在途轮询: 用户可能刚好在最后一刻
+      // 完成授权,再发一次 registrationCancel 会作废 main 侧那一轮,
+      // 导致已批准的凭证被丢弃、用户被迫重新授权。
+      // 真正的过期由 main 侧轮询结束后广播 expired 收口。
       setPhase('expired');
     }
-  }, [phase, secondsLeft, invalidateRegistration]);
+  }, [phase, secondsLeft]);
 
   useEffect(() => {
     const off = window.electronAPI.feishuBot.onRegistrationStatus((payload) => {
       if (payload.status === 'pending') return;
+      // 旧轮次的结果一律不认: main 侧 runId 与当前轮次对不上,说明这是
+      // 用户切换服务或重新发起之前那一轮的收尾,写回界面会打断当前授权。
+      if (payload.runId === undefined || payload.runId !== mainRunIdRef.current) return;
       if (activeRunRef.current === null || payload.status === 'cancelled') return;
       activeRunRef.current = null;
       generationRef.current += 1;
@@ -136,6 +146,7 @@ export function useFeishuBotRegistration(
     if (activeRunRef.current !== null) return;
     const runId = ++generationRef.current;
     activeRunRef.current = runId;
+    mainRunIdRef.current = null;
     setPhase('starting');
     setErrorMessage(null);
     setQrDataUrl(null);
@@ -151,6 +162,7 @@ export function useFeishuBotRegistration(
       }
 
       const deadline = Date.now() + result.expiresIn * 1000;
+      if (result.runId !== undefined) mainRunIdRef.current = result.runId;
       const dataUrl = await QRCode.toDataURL(result.verificationUrl, {
         margin: 1,
         width: 180,

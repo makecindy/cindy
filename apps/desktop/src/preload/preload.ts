@@ -2517,6 +2517,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       verificationUrl?: string;
       expiresIn?: number;
       interval?: number;
+      runId?: number;
       error?: string;
     }> => ipcRenderer.invoke('feishuBot:registration-begin', { service }),
     registrationCancel: (): Promise<{ ok: true }> =>

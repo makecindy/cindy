@@ -46,6 +46,7 @@ function installApi() {
       verificationUrl: 'https://open.feishu.cn/page/cli?user_code=TEST-ONLY',
       userCode: 'TEST-ONLY',
       expiresIn: 30,
+      runId: 7,
     })),
     registrationCancel: vi.fn(async () => ({ ok: true })),
   };
@@ -103,6 +104,7 @@ describe('Feishu bot authorization', () => {
     await act(async () => {
       emit({
         status: 'success',
+        runId: 7,
         appId: 'cli_test_authorized',
         ownerOpenId: 'ou_test_owner',
         verdict: 'connected',
@@ -154,6 +156,7 @@ describe('Feishu bot authorization', () => {
         verificationUrl: 'https://open.feishu.cn/old',
         userCode: 'OLD',
         expiresIn: 1,
+        runId: 7,
       });
       await firstAttempt;
     });
@@ -181,7 +184,7 @@ describe('Feishu bot authorization', () => {
     await act(async () => {
       resolveQr('data:image/png;base64,old');
       await pending;
-      emit({ status: 'error', error: 'old authorization' });
+      emit({ status: 'error', runId: 7, error: 'old authorization' });
     });
     expect(hook.result.current.phase).toBe('idle');
     expect(hook.result.current.qrDataUrl).toBeNull();
@@ -203,7 +206,7 @@ describe('Feishu bot authorization', () => {
       pending = hook.result.current.beginRegistration();
     });
     await act(async () => {
-      emit({ status: 'success', verdict: 'connected' });
+      emit({ status: 'success', runId: 7, verdict: 'connected' });
       resolveQr('data:image/png;base64,old');
       await pending;
     });
@@ -211,7 +214,23 @@ describe('Feishu bot authorization', () => {
     expect(hook.result.current.qrDataUrl).toBeNull();
   });
 
-  it('expires locally, cancels polling, and rejects later success', async () => {
+  it('hides the QR when the countdown ends without cancelling the in-flight poll', async () => {
+    vi.useFakeTimers();
+    const { api } = installApi();
+    const hook = renderHook(() => useFeishuBotRegistration());
+    await act(async () => {
+      await hook.result.current.beginRegistration();
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(hook.result.current.phase).toBe('expired');
+    // 倒计时只收起二维码：用户可能刚好在最后一刻完成授权，发一次
+    // registrationCancel 会作废 main 侧那一轮，把已批准的凭证丢掉。
+    expect(api.registrationCancel).not.toHaveBeenCalled();
+  });
+
+  it('accepts a late success after the countdown ended because the poll was not cancelled', async () => {
     vi.useFakeTimers();
     const { api, emit } = installApi();
     const hook = renderHook(() => useFeishuBotRegistration());
@@ -221,11 +240,57 @@ describe('Feishu bot authorization', () => {
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
-    act(() => {
-      emit({ status: 'success', verdict: 'connected' });
-    });
     expect(hook.result.current.phase).toBe('expired');
-    expect(api.registrationCancel).toHaveBeenCalledOnce();
+    act(() => {
+      emit({ status: 'success', runId: 7, verdict: 'connected' });
+    });
+    expect(hook.result.current.phase).toBe('success');
+    expect(api.registrationCancel).not.toHaveBeenCalled();
+  });
+
+  it('ignores a result from an earlier round so it cannot interrupt the current one', async () => {
+    const { api, emit } = installApi();
+    let resolveFirst: (value: Awaited<ReturnType<typeof api.registrationBegin>>) => void = () => {};
+    api.registrationBegin.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const hook = renderHook(() => useFeishuBotRegistration());
+    let firstAttempt: Promise<void>;
+    act(() => {
+      firstAttempt = hook.result.current.beginRegistration();
+    });
+    await act(async () => {
+      await hook.result.current.cancelRegistration();
+    });
+    api.registrationBegin.mockResolvedValueOnce({
+      ok: true,
+      verificationUrl: 'https://open.feishu.cn/page/cli?user_code=NEW',
+      userCode: 'NEW',
+      expiresIn: 30,
+      runId: 8,
+    });
+    await act(async () => {
+      await hook.result.current.beginRegistration();
+    });
+    expect(hook.result.current.phase).toBe('qr');
+    expect(hook.result.current.userCode).toBe('NEW');
+    await act(async () => {
+      // 第一轮的收尾结果: 轮次已过期，不能当成当前轮的结果。
+      emit({ status: 'success', runId: 7, verdict: 'connected' });
+      resolveFirst({
+        ok: true,
+        verificationUrl: 'https://open.feishu.cn/page/cli?user_code=OLD',
+        userCode: 'OLD',
+        expiresIn: 30,
+        runId: 7,
+      });
+      await firstAttempt;
+    });
+    expect(hook.result.current.phase).toBe('qr');
+    expect(hook.result.current.userCode).toBe('NEW');
   });
 
   it('shows authorization failures and offers a new authorization', async () => {
@@ -237,7 +302,7 @@ describe('Feishu bot authorization', () => {
       fireEvent.click(screen.getByRole('button', { name: 'settings.feishuBot.qr.begin' }));
     });
     act(() => {
-      emit({ status: 'error', error: 'Authorization denied' });
+      emit({ status: 'error', runId: 7, error: 'Authorization denied' });
     });
     expect(screen.getByRole('alert').textContent).toBe('Authorization denied');
     expect(screen.getByRole('button', { name: 'settings.feishuBot.qr.retry' })).toBeTruthy();

@@ -41,6 +41,9 @@ export default {
     if (ui.data.denied) {
       await ui.emit('feishu-registration', {
         status: 'error',
+        // runId 必须与 registrationBegin 返回的一致: renderer 据此判定结果
+        // 属于当前这一轮，带不上就会被当作旧轮次收尾而忽略。
+        runId: 1,
         error: 'Authorization denied (fixture)',
       });
       await page.getByRole('alert').waitFor();

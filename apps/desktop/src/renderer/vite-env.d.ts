@@ -547,11 +547,15 @@ interface FeishuBotRegistrationBeginResult {
   verificationUrl?: string;
   expiresIn?: number;
   interval?: number;
+  /** main 侧本轮授权的代号; renderer 据此丢弃旧轮次的结果。 */
+  runId?: number;
   error?: string;
 }
 
 interface FeishuBotRegistrationStatusPayload {
   status: 'pending' | 'success' | 'expired' | 'cancelled' | 'error';
+  /** 产生该结果的授权轮次代号; 缺失时按"无法判定归属"处理。 */
+  runId?: number;
   appId?: string;
   ownerOpenId?: string | null;
   verdict?: 'connected' | 'conflict' | 'error' | 'pending';

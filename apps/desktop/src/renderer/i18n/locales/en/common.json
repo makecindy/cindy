@@ -4552,7 +4552,9 @@
         "cancel": "Cancel authorization",
         "begin": "Authorize bot",
         "retry": "Authorize again",
-        "connecting": "Connecting your bot…"
+        "connecting": "Connecting your bot…",
+        "cardActionHint": "A bot created by scanning only subscribes to message events. Add the card action event in the open platform to use card buttons.",
+        "cardActionHintAction": "Open the open platform ↗"
       }
     },
     "wechatBot": {
