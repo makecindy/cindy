@@ -266,9 +266,13 @@ export interface XdtHelperHistoryDeps {
     teammateId?: string;
     limit: number;
     callerSessionId: string;
+    roles: Array<'user' | 'assistant'>;
+    fromMs: number | null;
+    toMs: number | null;
   }) => Promise<{
     hits: Array<{ teammateId: string; teammateName: string; messageId: string; role: 'user' | 'assistant'; text: string; createdAt: number }>;
     failed: Array<{ teammateId: string; teammateName: string; code: string }>;
+    incomplete: boolean;
   } | null>;
   /** get_task_digest:一件任务的短摘要(本机 id 或 deviceId::sessionId)。不注入则不注册该工具。 */
   taskDigest?: (args: {

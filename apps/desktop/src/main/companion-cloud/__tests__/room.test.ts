@@ -76,7 +76,7 @@ describe('searching companion rooms', () => {
       throw new Error('FORBIDDEN');
     });
     const result = await searchCompanionRooms(api, [companion('a'), companion('b'), companion('c')], 'x'.repeat(300), 10);
-    expect(calls[0]?.route).toContain(`q=${'x'.repeat(200)}&limit=10`);
+    expect(calls[0]?.route).toContain(`q=${'x'.repeat(200)}&limit=50`);
     expect(result.hits.map(hit => [hit.messageId, hit.teammateId, hit.role])).toEqual([['new', 'bot_b', 'user'], ['old', 'bot_a', 'assistant']]);
     expect(result.failed).toEqual([{ teammateId: 'bot_c', teammateName: 'c', code: 'FORBIDDEN' }]);
   });
@@ -84,8 +84,27 @@ describe('searching companion rooms', () => {
   it('does not let a stuck room hold the others up', async () => {
     const { api } = fakeApi((route) => (route.includes('room-a') ? [roomRow('m', 1_000)] : []));
     const stuck = companion('b', () => new Promise<string>(() => {}));
-    const result = await searchCompanionRooms(api, [companion('a'), stuck], 'q', 10, 5);
+    const result = await searchCompanionRooms(api, [companion('a'), stuck], 'q', 10, {}, 5);
     expect(result.hits).toHaveLength(1);
     expect(result.failed).toEqual([{ teammateId: 'bot_b', teammateName: 'b', code: 'TIMEOUT' }]);
+  });
+
+  it('reads past newer matches to find older ones that pass the filter, and says when it stopped early', async () => {
+    const page = (start: number, authorId: string) => Array.from({ length: 50 }, (_, index) =>
+      roomRow(String(start - index), 1_000_000 + start - index, { authorId }));
+    const routes: string[] = [];
+    const { api } = fakeApi((route) => {
+      routes.push(route);
+      return route.includes('before=') ? [roomRow('1', 1_000, { authorId: 'human' })] : page(100, 'actor-a');
+    });
+    const found = await searchCompanionRooms(api, [companion('a')], 'q', 10, { roles: ['user'] });
+    expect(routes[1]).toContain('before=51');
+    expect(found.hits.map(hit => hit.messageId)).toEqual(['1']);
+    expect(found.incomplete).toBe(false);
+
+    const endless = fakeApi(() => page(100, 'actor-a'));
+    const stopped = await searchCompanionRooms(endless.api, [companion('a')], 'q', 10, { roles: ['user'] });
+    expect(stopped).toMatchObject({ hits: [], failed: [], incomplete: true });
+    expect(endless.calls).toHaveLength(10);
   });
 });

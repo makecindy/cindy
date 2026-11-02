@@ -245,7 +245,7 @@ describe('search_chat_history tool', () => {
 describe('search_chat_history cloud companion rooms', () => {
   const room = { teammateId: 'bot_a', teammateName: 'Cindy', messageId: 'm1', role: 'assistant' as const, text: 'brew', createdAt: 2_000 };
   const call = async (input: Record<string, unknown>, opts: { session?: string; scoped?: boolean } = {}) => {
-    const searchCompanionRooms = vi.fn(async () => ({ hits: [room, { ...room, messageId: 'm2', role: 'user' as const, createdAt: 500 }], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }] }));
+    const searchCompanionRooms = vi.fn(async () => ({ hits: [room], failed: [{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }], incomplete: true }));
     const registry = new XdtHelperToolRegistry();
     registerSearchChatHistoryTool(registry, {
       history: {
@@ -261,7 +261,9 @@ describe('search_chat_history cloud companion rooms', () => {
 
   it('adds what companions on other computers said, and says which rooms it could not read', async () => {
     const { payload, searchCompanionRooms } = await call({ teammate_id: 'bot_a', from: '1970-01-01T00:00:01.000Z' }, { session: 's1' });
-    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', limit: 10, callerSessionId: 's1', teammateId: 'bot_a' });
+    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', limit: 10, callerSessionId: 's1', teammateId: 'bot_a',
+      roles: ['user', 'assistant'], fromMs: 1_000, toMs: null });
+    expect(payload.cloud_incomplete).toBe(true);
     expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
     expect(payload.cloud_hits[0].createdAt).toBe('1970-01-01T00:00:02.000Z');
     expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);

@@ -101,31 +101,56 @@ export interface CompanionRoomSearchResult {
   hits: CompanionRoomSearchHit[];
   /** Rooms that could not be searched: the result does not cover them. */
   failed: Array<{ teammateId: string; teammateName: string; code: string }>;
+  /** More may match than `hits` holds: narrow the search instead of reading this as everything. */
+  incomplete: boolean;
 }
+export interface CompanionRoomSearchFilter { roles?: ReadonlyArray<'user' | 'assistant'>; fromMs?: number | null; toMs?: number | null }
 const ROOM_SEARCH_QUERY_MAX = 200;
+const ROOM_SEARCH_PAGE = 50;
+/** What one search reads of a room; reaching it is reported as `incomplete`, never as "no more". */
+const ROOM_SEARCH_PAGES = 10;
 const ROOM_SEARCH_TIMEOUT_MS = 8_000;
 
 /** Keyword search of companions' rooms (the server matches substrings); newest first. One slow room only costs itself. */
 export async function searchCompanionRooms(api: CompanionApi, companions: Array<{ id: string; externalId: string; name: string; room: () => Promise<string> }>,
-  query: string, limit: number, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
-  const params = new URLSearchParams({ q: query.slice(0, ROOM_SEARCH_QUERY_MAX), limit: String(limit) });
-  const result: CompanionRoomSearchResult = { hits: [], failed: [] };
+  query: string, limit: number, filter: CompanionRoomSearchFilter = {}, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
+  const result: CompanionRoomSearchResult = { hits: [], failed: [], incomplete: false };
+  const keeps = (view: CompanionTranscriptMessage) => !!view.text && (!filter.roles || filter.roles.includes(view.role))
+    && (filter.fromMs == null || view.createdAt >= filter.fromMs) && (filter.toMs == null || view.createdAt < filter.toMs);
   await Promise.all(companions.map(async companion => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    // The server cannot filter by role or time, so read on until enough match. Its order is arrival, not message time.
+    const search = async () => {
+      const roomId = await companion.room();
+      let found = 0;
+      let before: string | undefined;
+      for (let pages = 0; !done; pages += 1) {
+        if (pages === ROOM_SEARCH_PAGES) { result.incomplete = true; return; }
+        const params = new URLSearchParams({ q: query.slice(0, ROOM_SEARCH_QUERY_MAX), limit: String(ROOM_SEARCH_PAGE) });
+        if (before) params.set('before', before);
+        const page = await api<CompanionRoomMessage[]>(`/conversations/${roomId}/search?${params}`);
+        const rows = Array.isArray(page) ? page : [];
+        for (const message of rows) {
+          const view = roomMessageView(message, companion.id);
+          if (!view || !keeps(view)) continue;
+          result.hits.push({ teammateId: companion.externalId, teammateName: companion.name, messageId: view.id, role: view.role, text: view.text, createdAt: view.createdAt });
+          found += 1;
+        }
+        if (rows.length < ROOM_SEARCH_PAGE) return;
+        if (found >= limit) { result.incomplete = true; return; }
+        before = rows.at(-1)!.seq;
+      }
+    };
     try {
-      const search = async () => api<CompanionRoomMessage[]>(`/conversations/${await companion.room()}/search?${params}`);
-      const page = await Promise.race([search(), new Promise<never>((_, reject) => {
+      await Promise.race([search(), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('TIMEOUT')), timeoutMs);
       })]);
-      for (const message of Array.isArray(page) ? page : []) {
-        const view = roomMessageView(message, companion.id);
-        if (view?.text) result.hits.push({ teammateId: companion.externalId, teammateName: companion.name, messageId: view.id, role: view.role, text: view.text, createdAt: view.createdAt });
-      }
     } catch (error) {
       result.failed.push({ teammateId: companion.externalId, teammateName: companion.name, code: errorCode(error) });
-    } finally { clearTimeout(timer); }
+    } finally { done = true; clearTimeout(timer); }
   }));
   result.hits.sort((a, b) => b.createdAt - a.createdAt);
-  result.hits.length = Math.min(result.hits.length, limit);
+  if (result.hits.length > limit) { result.hits.length = limit; result.incomplete = true; }
   return result;
 }
