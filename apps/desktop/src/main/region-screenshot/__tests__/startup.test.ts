@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   dispose: vi.fn(),
   windows: vi.fn(async () => []),
   frontmostPid: vi.fn(async () => null),
+  screenInsets: vi.fn(async () => new Map()),
   activeSession: null as null | { close: () => void },
 }));
 vi.mock('electron', () => ({
@@ -58,7 +59,6 @@ vi.mock('../overlays', () => ({
     isDisabled = false;
     setGoneHandler() {}
     reset() {}
-    prewarm() {}
     destroyAll() {}
   },
 }));
@@ -86,6 +86,7 @@ describe('screenshot startup cleanup', () => {
     dispose: mocks.dispose,
     windows: mocks.windows,
     frontmostPid: mocks.frontmostPid,
+    screenInsets: mocks.screenInsets,
   };
   beforeEach(() => {
     vi.useFakeTimers();
@@ -98,13 +99,21 @@ describe('screenshot startup cleanup', () => {
     stopRegionScreenshot();
     vi.useRealTimers();
   });
+  // User-selected lazy lifecycle: registration must not schedule shell creation,
+  // capture, or native compilation. Earlier tests only invoked the shortcut.
+  it('does not prepare or capture anything before the first shortcut', async () => {
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.capture).not.toHaveBeenCalled();
+  });
   it('releases the helper when capturing fails', async () => {
     mocks.capture.mockRejectedValueOnce(new Error('capture failed'));
     mocks.shortcut!();
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
   });
-  it('releases a helper arriving after capture has already failed', async () => {
+  it('waits for the optional helper before capture and releases it if capture fails', async () => {
     let resolve!: (value: typeof helper) => void;
     mocks.start.mockReturnValueOnce(
       new Promise((done) => {
@@ -114,6 +123,7 @@ describe('screenshot startup cleanup', () => {
     mocks.capture.mockRejectedValueOnce(new Error('capture failed'));
     mocks.shortcut!();
     await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.capture).not.toHaveBeenCalled();
     resolve(helper);
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
@@ -132,5 +142,6 @@ describe('screenshot startup cleanup', () => {
     mocks.activeSession!.close();
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

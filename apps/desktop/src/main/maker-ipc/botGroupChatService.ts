@@ -145,6 +145,8 @@ export interface BotGroupChatServiceDeps {
     targetSessionId: string;
     message: string;
     persistedContent: string;
+    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
+    autoReviewUserText?: string;
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
