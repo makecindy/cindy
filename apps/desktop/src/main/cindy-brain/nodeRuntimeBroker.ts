@@ -467,6 +467,14 @@ function sanitizePathsInHint(hint: string): string {
 
 type UtilityFork = typeof utilityProcess.fork;
 
+/** 插件 Node 进程透传的出站代理变量名（大写；匹配时不区分大小写）。 */
+const inheritedProxyKeys: ReadonlySet<string> = new Set([
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+]);
+
 /**
  * 用 Electron 官方 utilityProcess 承载第三方 Node 代码。
  *
@@ -516,6 +524,13 @@ export function createUtilityNodeWorkerProcess(
   };
   for (const key of inheritedKeys) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  // 出站代理变量原样透传，与 Agent 侧子进程一致。插件自带的 CLI（如 Go 编写的
+  // gog）只认环境变量代理、不读系统代理；缺了它们，代理网络下直连境外服务只会
+  // 等到超时。按大小写不敏感匹配并保留原写法：Windows 的环境变量名不分大小写，
+  // 固定列出大小写两套名字会把同一个变量重复写进子进程环境。
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && inheritedProxyKeys.has(key.toUpperCase())) env[key] = value;
   }
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.js');
   const forkArgs = isChild

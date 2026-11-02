@@ -542,6 +542,45 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
+  // #8441：Go 编写的 CLI（gog）只认环境变量代理；白名单漏掉代理变量时，代理网络下
+  // 插件里的调用会直连并等到超时。
+  it('透传出站代理变量并保留原写法，其余宿主秘密仍被过滤', () => {
+    for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY']) {
+      vi.stubEnv(name, undefined);
+      vi.stubEnv(name.toLowerCase(), undefined);
+    }
+    vi.stubEnv('HTTPS_PROXY', 'http://user:pass@127.0.0.1:7890');
+    vi.stubEnv('http_proxy', 'http://127.0.0.1:7891');
+    vi.stubEnv('all_proxy', 'socks5://127.0.0.1:7892');
+    vi.stubEnv('NO_PROXY', 'localhost,127.0.0.1');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'secret');
+    const child = new FakeUtilityProcess();
+    const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
+      void modulePath;
+      void entryArgs;
+      void options;
+      return child;
+    });
+    createUtilityNodeWorkerProcess(
+      '/plugins/demo/node/worker.cjs',
+      '/plugins/demo',
+      'demo',
+      fork as never,
+    );
+
+    const { env } = fork.mock.calls[0][2] as { env: Record<string, string> };
+    // Windows 上变量名不分大小写，枚举到的写法以进程里实际存在的为准，所以按
+    // 大写名比较取值。
+    const byUpperName = Object.entries(env).map(([key, value]) => [key.toUpperCase(), value]);
+    expect(Object.fromEntries(byUpperName)).toMatchObject({
+      HTTPS_PROXY: 'http://user:pass@127.0.0.1:7890',
+      HTTP_PROXY: 'http://127.0.0.1:7891',
+      ALL_PROXY: 'socks5://127.0.0.1:7892',
+      NO_PROXY: 'localhost,127.0.0.1',
+    });
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
   it('native observation 只在正整数 PID 回放或真实 spawn 时发布一次', () => {
     const child = new FakeUtilityProcess();
     child.pid = undefined;
