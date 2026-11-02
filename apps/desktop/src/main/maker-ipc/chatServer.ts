@@ -138,6 +138,8 @@ export class ChatResponseError extends Error {
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
 /** A read list is served from memory this long; a receipt for the group ends it sooner. */
+/** How long the positions of a snapshot are trusted while my messages in it are unread; a lost receipt is healed by reading it again. */
+const OTHERS_READ_RECHECK_MS = 30_000;
 const MESSAGE_READERS_TTL_MS = 60_000;
 const MESSAGE_READERS_CACHE_LIMIT = 200;
 const ATTACHMENT_REFRESH_COALESCE_MS = 200;
@@ -1784,6 +1786,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // A followed room reports every later change, so its snapshot may run alongside. A new
     // room first takes the snapshot cursor it will follow from, before the rest is read.
     const direct = o.conversationKind === 'direct';
+    // A lost receipt is made up for by the snapshot's read positions, but the history cache reuses its snapshot until metadata
+    // changes: while my messages are still unread in an old one, read it again (at most once per interval).
+    if (!direct && othersRead.stale(roomId, OTHERS_READ_RECHECK_MS)) history()?.invalidate(roomId, true);
     let cacheGeneration: string | undefined;
     const snapshotRead = deps.chatHistoryStore ? (async () => {
       await ensureRegistered();

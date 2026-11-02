@@ -63,12 +63,12 @@ export function parseReadReceiptFrame(frame: unknown, selfActorId: string): Read
  * the layer, and the layer only ever holds what arrived since.
  */
 export function createOthersReadOverlay() {
-  interface Layer { base: OthersReadEntries | undefined; added: Map<string, bigint>; unread: Map<string, { key: string; seq: bigint }> }
+  interface Layer { base: OthersReadEntries | undefined; added: Map<string, bigint>; unread: Map<string, { key: string; seq: bigint }>; at: number }
   const layers = new Map<string, Layer>();
   const layer = (room: string, base: OthersReadEntries | undefined): Layer => {
     const known = layers.get(room);
     if (known && known.base === base) return known;
-    const fresh: Layer = { base, added: new Map(), unread: new Map() };
+    const fresh: Layer = { base, added: new Map(), unread: new Map(), at: Date.now() };
     layers.set(room, fresh);
     return fresh;
   };
@@ -105,6 +105,15 @@ export function createOthersReadOverlay() {
       let read = false;
       for (const [id, message] of current.unread) if (reached(message)) { current.unread.delete(id); read = true; }
       return read;
+    },
+    /**
+     * Whether the snapshot behind this room's positions is old while some of my messages in it are
+     * still unread. A receipt can be lost, and the snapshot is what makes up for it, so a reader of
+     * such a room should read it again.
+     */
+    stale(room: string, olderThanMs: number): boolean {
+      const current = layers.get(room);
+      return !!current && current.unread.size > 0 && Date.now() - current.at >= olderThanMs;
     },
     forget(room: string) { layers.delete(room); },
     clear() { layers.clear(); },

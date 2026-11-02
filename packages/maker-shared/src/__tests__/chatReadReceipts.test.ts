@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createOthersReadOverlay, isReadByOthers, othersReadMap, parseReadReceiptFrame } from '../chatReadReceipts';
 
 const frame = (data: unknown, extra: Record<string, unknown> = {}) => ({
@@ -42,6 +42,25 @@ describe('read receipts', () => {
     // A server without receipts has no positions, and an unknown room has nothing to advance.
     expect(overlay.positions('r', undefined, own)).toBeNull();
     expect(overlay.advance('r', [{ key: 'main', seq: 99n }])).toBe(false);
+  });
+
+  it('calls a room stale only while my messages are unread in a snapshot that has grown old', () => {
+    vi.useFakeTimers();
+    try {
+      const overlay = createOthersReadOverlay();
+      const snapshot = [{ thread_key: 'main', read_seq: '5' }];
+      expect(overlay.stale('r', 30_000)).toBe(false);
+      overlay.positions('r', snapshot, [{ seq: '7' }]);
+      vi.advanceTimersByTime(29_000);
+      expect(overlay.stale('r', 30_000)).toBe(false);
+      vi.advanceTimersByTime(2_000);
+      expect(overlay.stale('r', 30_000)).toBe(true);
+      // Everything read, or a newer snapshot, ends it.
+      overlay.advance('r', [{ key: 'main', seq: 7n }]);
+      expect(overlay.stale('r', 30_000)).toBe(false);
+      overlay.positions('r', [{ thread_key: 'main', read_seq: '5' }], [{ seq: '7' }]);
+      expect(overlay.stale('r', 30_000)).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 
   it('keeps what an earlier read of the room loaded when another read of it comes after', () => {

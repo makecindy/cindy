@@ -725,6 +725,36 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(300);
       expect(deps.onChanged).toHaveBeenCalledTimes(1);
     });
+    it('reads the snapshot again after a while when my messages are still unread, so a lost receipt is made up for', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      await open();
+      const reads = snapshotReads();
+      // Soon after, the cached snapshot is trusted.
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads);
+      // Later, with message 7 of mine still unread, it is read once more; the next read within the interval is not.
+      await vi.advanceTimersByTimeAsync(31_000);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads + 1);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads + 1);
+    });
+    it('does not read the snapshot again when everything of mine is already read', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '9' }]));
+      await open();
+      const reads = snapshotReads();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await service.getGroup(roomId);
+      expect(snapshotReads()).toBe(reads);
+    });
     it('lets a newer snapshot replace positions received before it', async () => {
       const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
       serve(value);
