@@ -1,4 +1,5 @@
 import type { CompanionCloudActor, CompanionCloudSnapshot } from '../../../shared/companionCloud';
+import { getRetiredCompanionBotIds } from './companionCloudStore';
 import type { RemoteBot } from './remoteBotRoster';
 
 /**
@@ -70,9 +71,11 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
  * dropped, and companions homed on a computer never listed here get an offline row.
  */
 export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
-  if (!cloud.enabled) return [...remoteBots];
+  const retired = getRetiredCompanionBotIds();
+  const current = remoteBots.filter((bot) => !retired.has(bot.id));
+  if (!cloud.enabled) return current;
   const homes = new Map(cloud.actors.flatMap((actor) => actor.homeDeviceId ? [[actor.externalId, actor.homeDeviceId] as const] : []));
-  const listed = remoteBots.filter((bot) => { const home = homes.get(bot.id); return !home || home === bot.deviceId; });
+  const listed = current.filter((bot) => { const home = homes.get(bot.id); return !home || home === bot.deviceId; });
   return [...listed, ...cloudOnlyRemoteBots(cloud, listed)];
 }
 

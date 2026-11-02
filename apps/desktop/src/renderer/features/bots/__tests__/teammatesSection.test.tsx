@@ -46,7 +46,7 @@ const mocks = vi.hoisted(() => ({
   islandActivity: new Map<string, { sessionId: string; phase: string; compactDetail?: string }>(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
 }));
-vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
+vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud, getRetiredCompanionBotIds: () => new Set<string>() }));
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
