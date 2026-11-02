@@ -142,6 +142,12 @@ export function projectRichCardParts(html: string): RichCardParts {
     live ??= readAttr(el.attrs, 'data-ghost-live-label')?.slice(0, 64);
     cuts.push([el.innerStart, el.innerEnd]);
   }
+  // A labelled button is drawn as its own control from that label; what is inside it (a model
+  // chip, segment text) is only the desktop's picture of the same control.
+  for (const el of markedElements(source, /(?:^|\s)data-ghost-action="[^"]+"/)) {
+    if (/^<button\b/i.test(source.slice(el.start)) && readAttr(el.attrs, 'aria-label') && readAttr(el.attrs, 'data-ghost-toggle') === undefined)
+      cuts.push([el.innerStart, el.innerEnd]);
+  }
   const prStatus: Array<{ key: string; fallback: string[] }> = [];
   for (const el of markedElements(source, /(?:^|\s)data-ghost-pr-status="[^"]+"/)) {
     const value = readAttr(el.attrs, 'data-ghost-pr-status') ?? '';

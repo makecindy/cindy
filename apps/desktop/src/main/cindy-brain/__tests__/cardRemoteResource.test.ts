@@ -252,7 +252,9 @@ describe('plugin-card-rich projection', () => {
     + '<div data-ghost-pr-status="O/R#9"><div>CI 运行中</div><div>等待合并</div></div>'
     + '<div data-ghost-live-label="跟进中"><span data-ghost-live=""></span>跟进中</div>'
     + '<button data-ghost-action="pr:ready" aria-label="转为正式 PR" data-ghost-primary=""></button>'
-    + '<button data-ghost-action="prset:rename" data-ghost-toggle="on" aria-label="关闭「自动改名」"><div>自动改名</div><div>改成 PR 号</div></button></div>';
+    + '<button data-ghost-action="prset:rename" data-ghost-toggle="on" aria-label="关闭「自动改名」"><div>自动改名</div><div>改成 PR 号</div></button>'
+    + '<button data-ghost-action="prset:model" aria-label="指定模型（当前）">指定模型</button>'
+    + '<button data-ghost-action="prset:modelPick" aria-label="更换模型（当前：Opus）"><span>Opus</span><span>高</span></button></div>';
   const provider = (prStatus = vi.fn(async () => undefined as never)) => createGhostCardRemoteProvider({
     readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html, v: 2, height: 100 }),
     authorize: async () => {}, captureScope: () => () => true, prStatus,
@@ -266,15 +268,19 @@ describe('plugin-card-rich projection', () => {
 
   it('keeps older phones on the plain projection without the raw link address', async () => {
     const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms']);
-    expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号');
+    expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号\n指定模型Opus高');
     expect(data.items).toEqual([
       { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
       { id: 'pr:ready', label: '转为正式 PR', disabled: false },
       { id: 'prset:rename', label: '关闭「自动改名」', disabled: false },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
     ]);
     expect(data).not.toHaveProperty('live');
   });
 
+  // Unit: with PR settings open the phone showed 「跟随当前任务指定模型」「Sonnet 5.5 · Anthropic高」 as card
+  // text — the inside of buttons it already draws from their labels.
   it('gives newer phones switches, the primary action, the live label and the title bar PR status', async () => {
     const status = { ok: true as const, owner: 'o', repo: 'r', prNumber: 9, status: 'open' as const, title: '', htmlUrl: '', branch: '', unresolvedCount: 0 };
     const lookup = vi.fn(async () => status as never);
@@ -285,6 +291,8 @@ describe('plugin-card-rich projection', () => {
     expect((data.items as Array<Record<string, unknown>>).slice(1)).toEqual([
       { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
       { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      { id: 'prset:model', label: '指定模型（当前）', disabled: false },
+      { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
     ]);
   });
 });
