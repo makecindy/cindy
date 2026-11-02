@@ -214,13 +214,23 @@ describe('PdfPreview lazy page rendering', () => {
       '300px',
     );
     expect(pdf.getPage).toHaveBeenCalledTimes(1);
+    const first = view.container.querySelector<HTMLElement>('[data-pdf-page="1"]')!;
+    const observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(first))!;
+    await act(async () => observer.emit(first, true));
+    expect(page.render).toHaveBeenCalledTimes(1);
+    height = 748;
+    await act(async () => resize());
+    expect(page.render).toHaveBeenCalledTimes(1);
     fireEvent.click(view.getByRole('button', { name: 'attachmentPreview.zoomIn' }));
+    await waitFor(() => expect(first.dataset.pdfPagePlaceholder).toBeUndefined());
+    const renderCount = page.render.mock.calls.length;
     expect(view.getByText('63%')).toBeTruthy();
     width = 632;
-    act(() => resize());
+    await act(async () => resize());
     expect(view.getByText('63%')).toBeTruthy();
     height = 448;
-    act(() => resize());
+    await act(async () => resize());
+    expect(page.render).toHaveBeenCalledTimes(renderCount);
     fireEvent.click(view.getByRole('button', { name: 'attachmentPreview.fitPage' }));
     expect(view.getByText('50%')).toBeTruthy();
     height = 248;
@@ -232,6 +242,89 @@ describe('PdfPreview lazy page rendering', () => {
     await waitFor(() => expect(view.getByText('100%')).toBeTruthy());
     widthSpy.mockRestore();
     heightSpy.mockRestore();
+  });
+
+  // PR #8448, unit: a deferred landscape neighbor above the reading page
+  // replaces a portrait placeholder. Its height change must not move the text.
+  it('preserves the reading position when a prefetched page reveals a different paper size', async () => {
+    const makePage = (width: number) => ({
+      getTextContent: vi.fn(async () => ({ items: [] })),
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: width * scale,
+        height: 800 * scale,
+        scale,
+      }),
+      render: vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() })),
+    });
+    const portrait = makePage(608);
+    const landscape = makePage(1216);
+    const pending = makeDeferred<typeof landscape>();
+    const pdf = {
+      numPages: 3,
+      getPage: vi.fn((number: number) =>
+        number === 2 ? pending.promise : Promise.resolve(portrait),
+      ),
+      destroy: vi.fn(async () => undefined),
+    };
+    vi.mocked(pdfjs.getDocument).mockReturnValue({
+      promise: Promise.resolve(pdf),
+      destroy: vi.fn(),
+    } as never);
+    const view = render(
+      <PdfPreview workdir="C:/zoom" relPath="mixed.pdf" size={100} mtimeMs={1} />,
+    );
+    await waitFor(() => expect(view.container.querySelectorAll('[data-pdf-page]')).toHaveLength(3));
+    const nodes = [...view.container.querySelectorAll<HTMLElement>('[data-pdf-page]')];
+    const root = nodes[0].parentElement!.parentElement!;
+    // jsdom lacks layout: use the rendered paper heights to model the vertical stack.
+    nodes.forEach((node, index) =>
+      Object.defineProperties(node, {
+        offsetHeight: { configurable: true, get: () => Number.parseFloat(node.style.height) },
+        offsetTop: {
+          configurable: true,
+          get: () =>
+            24 +
+            nodes.slice(0, index).reduce((sum, previous) => sum + previous.offsetHeight + 16, 0),
+        },
+      }),
+    );
+    root.scrollTop = nodes[2].offsetTop + 120;
+    const observer = FakeIntersectionObserver.instances.find((item) => item.targets.has(nodes[1]))!;
+    await act(async () => observer.emit(nodes[1], true));
+    const before = root.scrollTop;
+    await act(async () => pending.resolve(landscape));
+    expect(nodes[1].style.height).toBe('400px');
+    expect(root.scrollTop).toBe(before - 400);
+    expect(root.scrollTop - nodes[2].offsetTop).toBe(120);
+    expect(landscape.render).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #8448, unit: fit width can start outside the manual 10–800% range.
+  // A wheel operation must never zoom in the opposite direction at either edge.
+  it.each([15000, 50])('keeps wheel zoom monotonic for a %spt-wide page', async (width) => {
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: width * scale,
+        height: 800 * scale,
+        scale,
+      }),
+    };
+    vi.mocked(pdfjs.getDocument).mockReturnValue({
+      promise: Promise.resolve({ numPages: 1, getPage: async () => page, destroy: vi.fn() }),
+      destroy: vi.fn(),
+    } as never);
+    const view = render(
+      <PdfPreview workdir="C:/zoom" relPath="extreme.pdf" size={100} mtimeMs={1} />,
+    );
+    await waitFor(() => expect(view.container.querySelector('[data-pdf-page]')).not.toBeNull());
+    const node = view.container.querySelector<HTMLElement>('[data-pdf-page]')!;
+    const root = node.parentElement!.parentElement!;
+    const fittedWidth = Number.parseFloat(node.style.width);
+    fireEvent.wheel(root, { ctrlKey: true, deltaY: 100 });
+    expect(Number.parseFloat(node.style.width)).toBeLessThanOrEqual(fittedWidth);
+    fireEvent.click(view.getByRole('button', { name: 'attachmentPreview.fitWidth' }));
+    fireEvent.wheel(root, { metaKey: true, deltaY: -100 });
+    expect(Number.parseFloat(node.style.width)).toBeGreaterThanOrEqual(fittedWidth);
   });
 
   // Issue #8425, unit: the old toolbar had no page input or wheel shortcut.

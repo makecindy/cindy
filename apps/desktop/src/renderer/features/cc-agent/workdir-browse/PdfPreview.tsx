@@ -30,6 +30,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import * as pdfjs from 'pdfjs-dist';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -140,7 +141,7 @@ interface PdfPageProps {
   isVisible: boolean;
   zoom: PdfZoom;
   containerSize: PdfDimensions;
-  initialSize: PdfDimensions;
+  naturalSize: PdfDimensions;
   onSize: (pageNumber: number, size: PdfDimensions) => void;
   onError: (pageNumber: number, error: unknown) => void;
 }
@@ -151,7 +152,7 @@ function PdfPage({
   isVisible,
   zoom,
   containerSize,
-  initialSize,
+  naturalSize,
   onSize,
   onError,
 }: PdfPageProps) {
@@ -159,7 +160,7 @@ function PdfPage({
   const textRef = useRef<HTMLDivElement>(null);
   const renderTaskRef = useRef<ActiveRenderTask | null>(null);
   const [renderState, setRenderState] = useState<PageRenderState>('idle');
-  const [naturalSize, setNaturalSize] = useState(initialSize);
+  const [page, setPage] = useState<pdfjs.PDFPageProxy | null>(null);
   const scale = getPdfScale(zoom, containerSize, naturalSize);
   const pageSize = { width: naturalSize.width * scale, height: naturalSize.height * scale };
 
@@ -179,24 +180,34 @@ function PdfPage({
   useEffect(() => {
     if (!isVisible) return;
     let cancelled = false;
+    // Metadata is loaded only for nearby pages, independently of raster scale.
+    void pdf
+      .getPage(pageNumber)
+      .then((loaded) => {
+        if (cancelled) return;
+        const natural = loaded.getViewport({ scale: 1 });
+        // The parent captures the old layout before committing paper dimensions.
+        onSize(pageNumber, { width: natural.width, height: natural.height });
+        setPage(loaded);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) onError(pageNumber, error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible, onError, onSize, pageNumber, pdf]);
+
+  useEffect(() => {
+    if (!isVisible || !page) return;
+    let cancelled = false;
     let activeTask: ActiveRenderTask | null = null;
     let textTask: pdfjs.TextLayer | null = null;
 
     setRenderState('rendering');
     void (async () => {
       try {
-        // getPage is deliberately inside the visibility gate. A PDF with many
-        // pages only asks pdf.js for page resources as the user approaches them.
-        const page = await pdf.getPage(pageNumber);
-        if (cancelled) return;
-
-        const natural = page.getViewport({ scale: 1 });
-        const size = { width: natural.width, height: natural.height };
-        setNaturalSize((previous) =>
-          previous.width === size.width && previous.height === size.height ? previous : size,
-        );
-        onSize(pageNumber, size);
-        const viewport = page.getViewport({ scale: getPdfScale(zoom, containerSize, size) });
+        const viewport = page.getViewport({ scale });
 
         const canvas = canvasRef.current;
         if (!canvas || cancelled) return;
@@ -260,7 +271,7 @@ function PdfPage({
       cancelRenderTask(activeTask ?? renderTaskRef.current);
       if (renderTaskRef.current === activeTask) renderTaskRef.current = null;
     };
-  }, [isVisible, onError, onSize, pageNumber, pdf, zoom, containerSize]);
+  }, [isVisible, onError, pageNumber, page, scale]);
 
   return (
     <div
@@ -307,12 +318,18 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
   const [currentPage, setCurrentPage] = useState(1);
   const [zoom, setZoom] = useState<PdfZoom>({ mode: 'width' });
   const [containerSize, setContainerSize] = useState({ width: 640, height: 800 });
+  const containerSizeRef = useRef(containerSize);
+  containerSizeRef.current = containerSize;
   const [pageSizes, setPageSizes] = useState<Record<number, PdfDimensions>>({});
+  const pageSizesRef = useRef(pageSizes);
+  pageSizesRef.current = pageSizes;
   const firstPageSize = pageSizes[1] ?? PDF_PAGE_PLACEHOLDER_SIZE;
   const scale = getPdfScale(zoom, containerSize, pageSizes[currentPage] ?? firstPageSize);
   const [pageInput, setPageInput] = useState<string | null>(null);
   const anchor = useRef<{ page: number; fraction: number; left: number } | null>(null);
   const captureAnchor = useCallback(() => {
+    // Several metadata results can be batched into the same layout commit.
+    if (anchor.current) return;
     const root = scrollContainerRef.current;
     if (!root) return;
     const page = Array.from(
@@ -328,23 +345,33 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
   const changeZoom = useCallback(
     (next: PdfZoom) => {
       captureAnchor();
-      setZoom(next);
+      flushSync(() => setZoom(next));
     },
     [captureAnchor],
   );
   const zoomBy = useCallback(
     (factor: number) => {
-      changeZoom({ mode: 'custom', scale: Math.max(0.1, Math.min(8, scale * factor)) });
+      // Fit modes may lie outside the manual range. Clamp in the requested
+      // direction only, so zooming out can never enlarge a very large sheet.
+      const next =
+        factor < 1
+          ? Math.min(scale, Math.max(0.1, scale * factor))
+          : Math.max(scale, Math.min(8, scale * factor));
+      if (next !== scale) changeZoom({ mode: 'custom', scale: next });
     },
     [changeZoom, scale],
   );
-  const handlePageSize = useCallback((page: number, size: PdfDimensions) => {
-    setPageSizes((previous) =>
-      previous[page]?.width === size.width && previous[page]?.height === size.height
-        ? previous
-        : { ...previous, [page]: size },
-    );
-  }, []);
+  const handlePageSize = useCallback(
+    (page: number, size: PdfDimensions) => {
+      const previous = pageSizesRef.current[page];
+      if (previous?.width === size.width && previous?.height === size.height) return;
+      captureAnchor();
+      // Commit dimensions and restore the anchor together. An unrelated render
+      // must not consume a snapshot while a resize update is still pending.
+      flushSync(() => setPageSizes((sizes) => ({ ...sizes, [page]: size })));
+    },
+    [captureAnchor],
+  );
   const [password, setPassword] = useState('');
   const [passwordNeeded, setPasswordNeeded] = useState(false);
   const passwordReply = useRef<((value: string) => void) | null>(null);
@@ -394,6 +421,11 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     if (!root) return;
     const measure = () => {
       if (!root.clientWidth || !root.clientHeight) return;
+      if (
+        root.clientWidth === containerSizeRef.current.width &&
+        root.clientHeight === containerSizeRef.current.height
+      )
+        return;
       captureAnchor();
       setContainerSize((previous) =>
         previous.width === root.clientWidth && previous.height === root.clientHeight
@@ -402,7 +434,8 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
       );
     };
     measure();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => flushSync(measure));
     observer?.observe(root);
     return () => observer?.disconnect();
   }, [captureAnchor, state.kind]);
@@ -417,7 +450,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
       root.scrollLeft = zoom.mode === 'custom' ? saved.left * root.scrollWidth : 0;
     }
     anchor.current = null;
-  }, [zoom, containerSize]);
+  }, [zoom, containerSize, pageSizes]);
 
   useEffect(() => {
     const root = scrollContainerRef.current;
@@ -651,7 +684,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
                 onError={handlePageError}
                 zoom={zoom}
                 containerSize={containerSize}
-                initialSize={firstPageSize}
+                naturalSize={pageSizes[index + 1] ?? firstPageSize}
                 onSize={handlePageSize}
               />
             ))}
