@@ -352,6 +352,37 @@ describe('readModelFileBytes', () => {
 describe('readModelFileResourceBytes', () => {
   const modelPath = '/home/user/models/ship.gltf';
 
+  // PR #7703: a tiny glTF must not cause an oversized companion to be read
+  // before the thumbnail budget is checked. Existing tests covered paths only.
+  it.each([
+    [3, 4],
+    [0, 1],
+    [READ_MODEL_BYTES_CAP + 1, READ_MODEL_BYTES_CAP + 1],
+  ])('rejects companion size %s/%s before reading, without raising the hard cap', async (maxBytes, size) => {
+    const readSpy = vi.fn();
+    const handle = fakeHandle({ statSize: size, data: Buffer.alloc(0), readSpy });
+    expect(await codeOf(readModelFileResourceBytes(
+      { modelPath, relativePath: 'ship.bin', maxBytes },
+      deps({ open: async () => handle }),
+    ))).toBe('PRECONDITION_FAILED');
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([-1, NaN, Infinity, 1.5, '4', null])('rejects invalid byte budgets: %s', async (maxBytes) => {
+    const open = vi.fn();
+    expect(await codeOf(readModelFileResourceBytes(
+      { modelPath, relativePath: 'ship.bin', maxBytes }, deps({ open }),
+    ))).toBe('INVALID_PARAMS');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('accepts a companion exactly at the remaining budget', async () => {
+    const result = await readModelFileResourceBytes(
+      { modelPath, relativePath: 'ship.bin', maxBytes: 4 }, deps(),
+    );
+    expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4]);
+  });
+
   it('reads a relative companion resource below the model directory', async () => {
     const open = vi.fn(async () => fakeHandle({ statSize: 4, data: Buffer.from([1, 2, 3, 4]) }));
     const result = await readModelFileResourceBytes(

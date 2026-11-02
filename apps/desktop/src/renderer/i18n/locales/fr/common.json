@@ -13189,6 +13189,7 @@
       "openModelFailed": "Impossible d'ouvrir le modèle",
       "modelLoading": "Chargement du modèle 3D…",
       "modelLoadFailed": "Échec du chargement du modèle 3D",
+      "modelTooLarge": "Ce modèle 3D est trop volumineux pour être prévisualisé",
       "videoCopied": "Vidéo copiée",
       "copyVideo": "Copier la vidéo",
       "revealVideo": "Afficher la vidéo dans le dossier",

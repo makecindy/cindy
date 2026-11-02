@@ -153,10 +153,19 @@ async function inlineLocalGltfResources(
       signal?.throwIfAborted?.();
       let objectUrl = resources.get(uri);
       if (!objectUrl) {
-        const resource = await window.electronAPI.readModelFileResourceBytes({
-          modelPath: source.absPath,
-          relativePath: uri,
-        });
+        let resource: { bytes: Uint8Array; size: number };
+        try {
+          resource = await window.electronAPI.readModelFileResourceBytes({
+            modelPath: source.absPath,
+            relativePath: uri,
+            maxBytes: Math.max(0, maxBytes - totalBytes),
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message.includes(MAIN_SIZE_LIMIT_MESSAGE)) {
+            throw new Model3DTooLargeError(null, maxBytes);
+          }
+          throw error;
+        }
         signal?.throwIfAborted?.();
         totalBytes += resource.size;
         if (totalBytes > maxBytes) throw new Model3DTooLargeError(totalBytes, maxBytes);

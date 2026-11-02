@@ -154,10 +154,12 @@ describe('readModel3DBlob — local source', () => {
     expect(readModelFileResourceBytes).toHaveBeenNthCalledWith(1, {
       modelPath: '/work/ship.gltf',
       relativePath: 'meshes/ship.bin',
+      maxBytes: MODEL3D_VIEW_MAX_BYTES - gltf.byteLength,
     });
     expect(readModelFileResourceBytes).toHaveBeenNthCalledWith(2, {
       modelPath: '/work/ship.gltf',
       relativePath: 'textures/albedo.png',
+      maxBytes: MODEL3D_VIEW_MAX_BYTES - gltf.byteLength - 3,
     });
     model.dispose();
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
@@ -185,6 +187,24 @@ describe('readModel3DBlob — local source', () => {
     resolveResource({ bytes: new Uint8Array([1, 2, 3]), size: 3 });
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(readModelFileResourceBytes).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #7703, unit: a main-process budget rejection must retain the "too large"
+  // error semantics and stop before the next texture; prior tests only capped
+  // the top-level file or rejected after companion bytes arrived.
+  it('passes the thumbnail remainder and converts companion size rejection', async () => {
+    const gltf = new TextEncoder().encode(JSON.stringify({
+      buffers: [{ uri: 'huge.bin' }], images: [{ uri: 'unused.png' }],
+    }));
+    readModelFileBytes.mockResolvedValue({ bytes: gltf, size: gltf.byteLength });
+    readModelFileResourceBytes.mockRejectedValue(new Error('[PRECONDITION_FAILED] file exceeds the preview size limit'));
+    await expect(readModel3DBlob(
+      { kind: 'local', absPath: '/work/ship.gltf' }, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES },
+    )).rejects.toBeInstanceOf(Model3DTooLargeError);
+    expect(readModelFileResourceBytes).toHaveBeenCalledExactlyOnceWith({
+      modelPath: '/work/ship.gltf', relativePath: 'huge.bin',
+      maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES - gltf.byteLength,
+    });
   });
 
   it('rejects results above the requested limit', async () => {

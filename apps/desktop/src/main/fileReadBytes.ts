@@ -240,7 +240,19 @@ export async function readModelFileResourceBytes(
   if (typeof params !== 'object' || params === null) {
     throwIpcError('INVALID_PARAMS', 'params must be an object');
   }
-  const { modelPath, relativePath } = params as { modelPath?: unknown; relativePath?: unknown };
+  const { modelPath, relativePath, maxBytes } = params as {
+    modelPath?: unknown;
+    relativePath?: unknown;
+    maxBytes?: unknown;
+  };
+  if (
+    maxBytes !== undefined &&
+    (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 0)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'maxBytes must be a non-negative integer');
+  }
+  const resourceCap =
+    typeof maxBytes === 'number' ? Math.min(maxBytes, READ_MODEL_BYTES_CAP) : READ_MODEL_BYTES_CAP;
   if (
     typeof modelPath !== 'string' ||
     !nodePath.isAbsolute(modelPath) ||
@@ -289,6 +301,6 @@ export async function readModelFileResourceBytes(
       ...deps,
       isPathAllowed: (candidate) => isWithinRoot(candidate) && deps.isPathAllowed(candidate),
     },
-    { hardCap: READ_MODEL_BYTES_CAP },
+    { hardCap: resourceCap },
   );
 }

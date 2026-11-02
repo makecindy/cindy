@@ -4658,6 +4658,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readModelFileResourceBytes: (params: {
     modelPath: string;
     relativePath: string;
+    /** Remaining budget; can only lower the main-process hard cap. */
+    maxBytes?: number;
   }): Promise<{ bytes: Uint8Array; size: number }> =>
     ipcRenderer.invoke('read-model-file-resource-bytes', params),
 

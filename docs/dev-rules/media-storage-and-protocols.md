@@ -212,6 +212,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   - `read-model-file-bytes` 与 `read-file-bytes` 分开：上限 128 MB（后者硬上限 30 MB），且请求路径与
     符号链接解析后的真实路径都必须是 3D 模型扩展名；渲染进程自报的 `maxSize` 不被采用。实现与测试见
     `main/fileReadBytes.ts` 的 `readModelFileBytes`。
+  - 本地 glTF 的配套资源读取使用可选 `maxBytes` 剩余额度，只能降低 128 MB 硬上限；
+    主进程在同一文件句柄的大小检查后才分配缓冲区。缩略图将模型 JSON 与已读资源一起
+    计入 32 MB 额度，拒绝超限配套文件时仍显示“模型过大”。旧调用省略额度时保留硬上限。
   - **缩略图**在 Renderer 用 SDK 的 `createThumbnailRenderer` 生成（共用一个 WebGL 上下文、任务串行、
     空闲 30 秒释放），结果只缓存在内存里（data URL，LRU 48 张；本地文件的缓存键含修改时间与大小；
     失败短暂缓存），**不写入媒体总仓**，应用重启后重新生成。缩略图只对 ≤32 MB 的模型生成——Three

@@ -7527,7 +7527,7 @@ const registerIpcHandlers = () => {
     'read-model-file-resource-bytes',
     async (
       event: Electron.IpcMainInvokeEvent,
-      params: { modelPath: string; relativePath: string },
+      params: { modelPath: string; relativePath: string; maxBytes?: number },
     ): Promise<{ bytes: Uint8Array; size: number }> => {
       assertTrustedAppRendererEvent(event);
       return readModelFileResourceBytes(params, buildLocalFileReadDeps());

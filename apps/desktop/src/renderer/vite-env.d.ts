@@ -3460,6 +3460,8 @@ interface ElectronAPI {
   readModelFileResourceBytes: (params: {
     modelPath: string;
     relativePath: string;
+    /** Remaining budget; can only lower the main-process hard cap. */
+    maxBytes?: number;
   }) => Promise<{ bytes: Uint8Array; size: number }>;
 
   // ── File header peek IPC (F-FI-8 fallback inference) ──
