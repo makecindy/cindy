@@ -73,6 +73,8 @@ export interface MachineDirectoryDeps {
   /** 读不到设备列表时，这台电脑叫什么。 */
   selfName(): string;
   listSsh(): Promise<Array<Pick<SshMachine, 'kind' | 'id' | 'hostname' | 'port' | 'user' | 'connection'>>>;
+  /** The SSH config could not be read: listSsh then holds the last good hosts, or none. */
+  sshConfigProblem?(): string | null;
   /** 在那台主机上跑只读状态命令，返回输出；连不上时抛错。 */
   readSsh(id: string): Promise<string>;
   /** 这台的密钥是否已被信任过；不连接。 */
@@ -151,10 +153,12 @@ export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineD
       return others.length ? { ...host, sameAddressAs: others } : host;
     }) }), (error: unknown) => ({ error: message(error) })),
   ]);
+  // Read after listSsh, which loads the config: an empty list must not read as "no SSH hosts".
+  const sshProblem = deps.sshConfigProblem?.() ?? null;
   return {
     computers,
     ssh: 'hosts' in ssh ? ssh.hosts : [],
-    ...('error' in ssh ? { sshError: ssh.error } : {}),
+    ...('error' in ssh ? { sshError: ssh.error } : sshProblem ? { sshError: sshProblem } : {}),
     ...('error' in listed ? { computersError: listed.error } : {}),
   };
 }

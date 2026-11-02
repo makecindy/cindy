@@ -46,6 +46,8 @@ describe('list_machines directory', () => {
     const stuck = await listMachines({ ...deps([], async () => status), listDevices: () => new Promise(() => {}) });
     expect(stuck.computersError).toBe('[INVOKE_TIMEOUT]');
     expect(stuck.computers.map(item => item.availability)).toEqual(['available']);
+    const badConfig = await listMachines({ ...deps([], async () => status), sshConfigProblem: () => 'SSH_CONFIG_UNREADABLE:parse' });
+    expect(badConfig).toMatchObject({ ssh: [], sshError: 'SSH_CONFIG_UNREADABLE:parse' });
   });
 
   it('reads the live status of this computer and of reachable ones, and leaves phones out', async () => {

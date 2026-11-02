@@ -2418,6 +2418,9 @@ it('registers list_machines directly so Pi does not have to find it through the 
   const tool = tools.find((item) => item.name === 'list_machines');
   await tool.execute('call-1', {}, new AbortController().signal);
   expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name: 'list_machines', arguments: {} } });
+  // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
+  expect(direct.resolveHookedCall('list_machines', {}).qualifiedName).toBe('mcp__cindy_helper__list_machines');
+  expect(direct.resolveHookedCall('read', {})).toBeNull();
 });
 
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {

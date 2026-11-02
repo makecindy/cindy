@@ -909,6 +909,11 @@ function currentRemoteSshListResult(): {
   };
 }
 
+/** Why the SSH config could not be read last time; null when it could. */
+export function remoteSshConfigProblem(): string | null {
+  return sshConfigDiagnostic ? `SSH_CONFIG_UNREADABLE:${sshConfigDiagnostic.kind}` : null;
+}
+
 function broadcastStatus(snapshot: HostSnapshot): void {
   const payload = withPrefs(snapshot);
   for (const win of BrowserWindow.getAllWindows()) {

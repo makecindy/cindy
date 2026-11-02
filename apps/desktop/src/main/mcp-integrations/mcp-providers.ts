@@ -1254,13 +1254,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (isSessionSharedTaskActive(callerSessionId)) {
             return { ok: false as const, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
           }
+          let sshConfigProblem: string | null = null;
           const machines = await listMachines({
             ...deps.machineDirectory!,
             readLocal: readLocalMachineStatus,
             selfName: () => hostname(),
-            listSsh: async () => (await (await loadRemoteSsh()).getRemoteSshPoolHydrated()).list().map(({ config, status }) => ({
-              kind: 'ssh' as const, id: config.id, hostname: config.hostname, port: config.port, user: config.user, connection: status,
-            })),
+            listSsh: async () => {
+              const remoteSsh = await loadRemoteSsh();
+              const pool = await remoteSsh.getRemoteSshPoolHydrated();
+              sshConfigProblem = remoteSsh.remoteSshConfigProblem();
+              return pool.list().map(({ config, status }) => ({
+                kind: 'ssh' as const, id: config.id, hostname: config.hostname, port: config.port, user: config.user, connection: status,
+              }));
+            },
+            sshConfigProblem: () => sshConfigProblem,
             isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
             readSsh: async (id) => {
               const remoteSsh = await loadRemoteSsh();

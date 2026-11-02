@@ -3379,6 +3379,13 @@ class CindyMcpGateway {
     };
   }
 
+  /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
+  resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
+    if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
+  }
+
   resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
     return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
   }
@@ -5242,13 +5249,7 @@ export default async function cindyBridge(piApi: any) {
     // Pi sees one stable gateway schema, while Host policy and approval UI must
     // continue seeing the real MCP identity and real arguments. That preserves
     // every existing per-server policy without loading each schema at startup.
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5258,6 +5259,7 @@ export default async function cindyBridge(piApi: any) {
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        || event.toolName === CINDY_LIST_MACHINES_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -5342,13 +5344,7 @@ export default async function cindyBridge(piApi: any) {
   });
 
   pi.on('tool_result', async (event: any, ctx: any) => {
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：自愈放行的首次调用发生在记账之前，若在这里按披露状态
     // 判定，它会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
