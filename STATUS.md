@@ -10,6 +10,14 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.7b `live-proven` (owner)
+
+- Gate: `apps/desktop unit` 8/8 shards PASS on the owner's Mac (PR #7 head `dda2a8e4`).
+- Live: new Hermes task, `hermes-default`, Full access, same prompt as 3.7a. Lead pane "Lead (Hermes)". No context banner; footer 28% (56.9k tokens, $0.0111). The lead sent the worker "Reply with exactly two lines… obtained by running `date` in the terminal (do not guess it)"; worker **assistant** (`datenow`, Claude Code harness) used the terminal and answered "2026-11-02 / This is the current date reported by the terminal." The lead reported it in English, quoted the worker, and confirmed it with its own terminal call ("Mon 2 Nov 2026, 08:02:42 UTC").
+- Rows: 3.7a ✅ and 3.7b ✅ `live-proven`. Still open for 3.7: Hermes as a worker (3.9), team mode in the draft page for Hermes.
+
+---
+
 ## 2026-11-02 — ROADMAP 3.7b: three fixes from the first Hermes-lead run (`unit-tested`)
 
 **Changes:**
