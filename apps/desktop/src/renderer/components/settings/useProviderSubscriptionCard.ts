@@ -22,6 +22,7 @@ import {
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import {
+  buildOpenCodeGoUsageCard,
   buildKimiUsageCard,
   buildClaudeUsageCard,
   buildCodexUsageCard,
@@ -82,6 +83,7 @@ export function useProviderSubscriptionCard(provider?: ProviderView): UsageCardA
   );
   const claude = useClaudeSubscriptionUsage(source === 'claude', providerId);
   const xai = useXaiSubscriptionUsage(source === 'xai', providerId);
+  const opencodeGo = useProviderAccountUsage(source === 'opencode-go' ? provider : undefined);
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     if (!source) return;
@@ -101,6 +103,12 @@ export function useProviderSubscriptionCard(provider?: ProviderView): UsageCardA
     );
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
+  if (source === 'opencode-go' && opencodeGo.result?.status === 'ready'
+    && opencodeGo.result.snapshot.kind === 'opencode-go-quota') {
+    const card = buildOpenCodeGoUsageCard(opencodeGo.result.snapshot, t);
+    if (opencodeGo.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    return card;
+  }
   return null;
 }
 
@@ -118,6 +126,7 @@ function useRemoteProviderSubscriptionCard(
   const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: true });
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId);
+  const opencodeGo = useProviderAccountUsage(source === 'opencode-go' ? provider : undefined, undefined, deviceId);
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     if (!source) return;
@@ -132,6 +141,12 @@ function useRemoteProviderSubscriptionCard(
   }
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
+  if (source === 'opencode-go' && opencodeGo.result?.status === 'ready'
+    && opencodeGo.result.snapshot.kind === 'opencode-go-quota') {
+    const card = buildOpenCodeGoUsageCard(opencodeGo.result.snapshot, t);
+    if (opencodeGo.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    return card;
+  }
   return null;
 }
 
