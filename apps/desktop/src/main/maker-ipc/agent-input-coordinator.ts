@@ -367,6 +367,8 @@ export interface AgentInputCoordinatorDeps {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: AgentInputToolLoopDetails;
+    /** Codex app-server 的结构化错误 tag（如 `responseTooManyFailedAttempts`）。 */
+    codexErrorInfo?: string;
   } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
@@ -395,7 +397,7 @@ export interface AgentInputCoordinatorDeps {
    */
   createUserMessage?: typeof createDbMessage;
   /** Hide a user row that was written after `/clear` won the persistence race. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string, options?: { discard?: boolean }) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -4248,6 +4250,9 @@ export class AgentInputCoordinator {
                 ? { errorStatus: observed.errorStatus }
                 : {}),
               ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+              // 结构化 Codex tag 随终端快照一起补收：丢掉它，
+              // `isInterruptedTurnError` 的「采样重试预算已耗尽」排除条件就失效。
+              ...(observed.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
             };
             // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
             // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
@@ -4763,6 +4768,10 @@ export class AgentInputCoordinator {
       ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
       ...(typeof observed.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
       ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+      // 结构化 Codex tag 必须随终端快照一起补收：丢掉它，
+      // `isInterruptedTurnError` 的「采样重试预算已耗尽」排除条件就失效，
+      // 503/529 之类的过载状态反而会命中自动续跑白名单再跑一整轮。
+      ...(observed.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
     };
     return {
       message: redactSensitiveText(observed.message ?? 'Turn ended with an error'),
@@ -4882,6 +4891,7 @@ export class AgentInputCoordinator {
         ...(observed?.reason ? { reason: observed.reason } : {}),
         ...(observed?.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
         ...(typeof observed?.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
+        ...(observed?.codexErrorInfo ? { codexErrorInfo: observed.codexErrorInfo } : {}),
       };
       // Apply recovery before fencing. A same-generation meta would make
       // onTurnEvent treat this synthesized error as the leftover we just fenced.
@@ -5471,6 +5481,7 @@ export class AgentInputCoordinator {
   /** Only proven preparation rejection can erase a scheduled continuation row.
    * The coordinator owns its clientId even when dispatch beats enqueue's return.
    * Unknown vendor outcomes and interactive messages keep their existing history.
+   * The row is deleted, not tombstoned: a deferring routine would otherwise leave one hidden copy per attempt.
    */
   private async rewindSchedulerPreparationFailure(
     sessionId: string,
@@ -5491,7 +5502,7 @@ export class AgentInputCoordinator {
         && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
     if (!preparationRejected) return false;
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId, { discard: true });
       return true;
     } catch (err) {
       log.warn('scheduled preparation rollback failed; retaining failure presentation', {

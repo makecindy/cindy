@@ -259,10 +259,6 @@ import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './syst
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
 import { sendCodexApprovalFeedback } from './approval-feedback.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
-import {
-  CONTACTS_RULES_DISABLED,
-  CONTACTS_RULES_ENABLED,
-} from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
@@ -456,7 +452,6 @@ function isRemoteLikePath(p: string): boolean {
 
 function buildCodexDeveloperInstructions(parts: {
   makerMemoryRules?: string;
-  contactsRules?: string;
   ghostRosterPrompt?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
@@ -471,7 +466,6 @@ function buildCodexDeveloperInstructions(parts: {
     parts.answerDeliveryPrompt,
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
-    parts.contactsRules,
     parts.ghostRosterPrompt,
     parts.botProfileContextPrompt,
     parts.runtimeSystemPrompt,
@@ -6913,21 +6907,7 @@ assertRouteCurrent();
         resumeSessionId: opts.resumeSessionId,
       });
     }
-    // 智能通讯录两态段: session 启动求值一次, host 未注入 getContactsPromptState
-    // 则缺省。remote 会话不注入(远端 spawn 无本地 MCP flags, cindy_contacts 不可达)。
-    // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
-    // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
-    // 静默, 不指挥模型调 stale 桥里没有的工具)。
-    // 受邀者(另一个账号)的托管会话不带本机的通讯录说明与插件清单(本机用户的配置)。
-    const contactsState = opts.remoteHostId || reviewMode || opts.botRuntimeProfile || hostedGuest
-      ? undefined
-      : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
-    const contactsRules =
-      contactsState === 'enabled'
-        ? CONTACTS_RULES_ENABLED
-        : contactsState === 'disabled'
-          ? CONTACTS_RULES_DISABLED
-          : '';
+    // 受邀者(另一个账号)的托管会话不带本机的插件清单(本机用户的配置)。
     // 远端 Codex 的 workingDir 属于 SSH 主机，本地插件目录停用偏好无法可靠匹配；
     // 远端 SSH remote-forward 只下发白名单 MCP，固定 cindy ghost server 不在其中，
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
@@ -6941,7 +6921,6 @@ assertRouteCurrent();
     const developerInstructions = buildCodexDeveloperInstructions({
       answerDeliveryPrompt: reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt,
       makerMemoryRules,
-      contactsRules,
       ghostRosterPrompt,
       // 本机任务逐字保持原值；设备托管时在末尾加上「项目在哪台电脑」的说明。
       runtimeSystemPrompt: hosted
@@ -7303,18 +7282,16 @@ assertRouteCurrent();
         }
       }
     } else {
-      // developerInstructions 六段拼接 (协议见 thread/start.developerInstructions):
+      // developerInstructions 五段拼接 (协议见 thread/start.developerInstructions):
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
-      //   [4] contactsRules                    — 智能通讯录两态段 (条件式: host 注入
-      //                                          getContactsPromptState 才有)
-      //   [5] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
-      //   [6] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
+      //   [4] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
+      //   [5] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
       //                                          紧邻 userPrompt 高优先级, 启动时快照)
-      //   [7] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
+      //   [6] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
       //                                          每次 startSession 透传, 优先级最高)
       // 段序语义与 claude-code 对齐(claude 的 [1] 是 SDK 内嵌 preset, 此处无对应段,
-      // 故编号从 [2] 起、共六段)。空段被 .filter 跳过,
+      // 故编号从 [2] 起、共五段)。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
       try {
         await startFreshThread();

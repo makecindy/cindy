@@ -7,7 +7,7 @@ import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
-import { contactsSyncKeyStore } from '../contacts-sync/keyStore.js';
+import { deviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
 import { RemotePluginPreferences } from './remotePluginPreferences.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.js';
 import { isSharedTaskPeer, isProviderSharePeer } from '@cindy/device-link';
@@ -2223,7 +2223,7 @@ export function getGhostRuntime(): GhostRuntime {
 
 export const pluginDeviceSync = new PluginDeviceSync({
   scope: activeOwnerScopeKey,
-  keys: contactsSyncKeyStore,
+  keys: deviceSyncKeyStore,
   getGhost: findGhostForInstanceId,
   listGhosts: () => getGhostManager().list(),
   deliver: async (ghost, message, isCurrent) => {

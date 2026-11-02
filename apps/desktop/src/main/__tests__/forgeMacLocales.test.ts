@@ -47,6 +47,6 @@ it('stages ten native locales for the app and helpers without losing existing st
     expect(fs.readdirSync(dir).filter(name => name.endsWith('.lproj') && name !== 'es_419.lproj').sort()).toEqual([
       'de.lproj', 'en.lproj', 'es.lproj', 'fr.lproj', 'ja.lproj', 'ko.lproj', 'pt-BR.lproj', 'pt-PT.lproj', 'zh-Hans.lproj', 'zh-Hant.lproj',
     ]);
-    expect(fs.readFileSync(path.join(dir, 'pt-BR.lproj', 'InfoPlist.strings'), 'utf8')).toContain('criptografia de ponta a ponta');
+    expect(fs.readFileSync(path.join(dir, 'pt-BR.lproj', 'InfoPlist.strings'), 'utf8')).toContain('se conectar diretamente, com criptografia');
   }
 });

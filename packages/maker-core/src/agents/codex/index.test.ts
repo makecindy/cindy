@@ -7019,10 +7019,9 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('keeps global Cindy prompts and discovery context out of a Bot thread', async () => {
     const getGhostRosterPrompt = vi.fn(() => 'GLOBAL GHOST ROSTER');
-    const getContactsPromptState = vi.fn(() => 'enabled' as const);
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'GLOBAL CINDY HOST PROMPT' },
-      { getGhostRosterPrompt, getContactsPromptState },
+      { getGhostRosterPrompt },
     ));
     const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
 
@@ -7059,7 +7058,6 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(params.developerInstructions).not.toContain('GLOBAL GHOST ROSTER');
     expect(params.developerInstructions).not.toContain('GLOBAL USER PROMPT');
     expect(getGhostRosterPrompt).not.toHaveBeenCalled();
-    expect(getContactsPromptState).not.toHaveBeenCalled();
     await handle.close();
   });
 

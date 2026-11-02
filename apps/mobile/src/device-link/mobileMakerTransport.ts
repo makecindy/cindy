@@ -1194,7 +1194,7 @@ export function createMobileMakerTransport({
           prepare: () =>
             stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
-            metadata.size <= FILE_PEER_MAX_BYTES
+            !isSharedTaskPeer(deviceId) && metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
                   () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
@@ -1204,7 +1204,9 @@ export function createMobileMakerTransport({
               : Promise.resolve(null),
           fallback: () => {
             try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
-            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+            // Workdir export jobs are same-account only. Shared media fetch
+            // rechecks task access and stages bytes in the shared-task scope.
+            return stage("upload", !isSharedTaskPeer(deviceId) && fallback ? fallback : () => fetch(false), describeResult);
           },
         }),
       (result) => ({
@@ -1626,7 +1628,7 @@ export function createMobileMakerTransport({
           workdir,
         });
         assertFileReadActive(signal);
-        if (!caps.fileRead) {
+        if (!caps.fileRead && !isSharedTaskPeer(deviceId)) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
           });

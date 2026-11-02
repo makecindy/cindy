@@ -16,7 +16,7 @@ import {
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import type { BotLifecycleActionRequest } from '../../../shared/botLifecycle.js';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory.js';
-import type { BotSkillSummary } from '../../../shared/botSkill.js';
+import type { BotCoreSkill, BotSkillDetail, BotSkillSaveInput, BotSkillSummary } from '../../../shared/botSkill.js';
 import { parseRoutineInput, type Routine, type RoutineRun, type RoutineSource, type RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { BotSettingsCall, BotSettingsOpHandler } from './botRemoteSettingsHost.js';
@@ -48,6 +48,14 @@ export interface BotSettingsOpsDeps {
   canonicalSessionId(botId: string): Promise<string | null>;
   capabilities(callerSessionId: string, kind: Kind): Promise<BotCapabilityCatalogEntry[]>;
   personalSkills(botId: string): Promise<BotSkillSummary[]>;
+  /** Core text and learned Skill actions (shared with the local capability page). */
+  skills: {
+    core(): BotCoreSkill;
+    read(botId: string, slug: string): Promise<BotSkillDetail | null>;
+    save(botId: string, input: BotSkillSaveInput): Promise<void>;
+    setEnabled(botId: string, slug: string, enabled: boolean): Promise<void>;
+    delete(botId: string, slug: string): Promise<void>;
+  };
   autonomy: {
     get(): Promise<BotAutonomySettingsView>;
     set(schedulerBotId: string | null): Promise<BotAutonomySettingsView>;
@@ -220,6 +228,30 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const personal = await deps.personalSkills(botId);
       const entries = await Promise.all(KINDS.map(async kind => [kind, await deps.capabilities(callerSessionId, kind)] as const));
       return { personal, entries: Object.fromEntries(entries) };
+    },
+    'skills.core': async call => {
+      botOf(call);
+      return deps.skills.core();
+    },
+    'skills.read': async call => deps.skills.read(botOf(call), text(call.args.slug, 'slug', 128)),
+    'skills.save': async call => {
+      await deps.skills.save(botOf(call), {
+        slug: text(call.args.slug, 'slug', 128),
+        name: text(call.args.name, 'name', 64),
+        description: text(call.args.description, 'description', 280),
+        body: text(call.args.body, 'body', 64 * 1024),
+        ...(call.args.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: text(call.args.expectedUpdatedAt, 'expectedUpdatedAt', 64, true) }),
+      });
+      return null;
+    },
+    'skills.setEnabled': async call => {
+      if (typeof call.args.enabled !== 'boolean') fail('enabled must be a boolean');
+      await deps.skills.setEnabled(botOf(call), text(call.args.slug, 'slug', 128), call.args.enabled as boolean);
+      return null;
+    },
+    'skills.delete': async call => {
+      await deps.skills.delete(botOf(call), text(call.args.slug, 'slug', 128));
+      return null;
     },
     'autonomy.get': async () => deps.autonomy.get(),
     'autonomy.set': async call => {

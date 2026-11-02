@@ -22,15 +22,15 @@ vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'Fil
   .map(name => [name, Object.assign(() => null, { displayName: name })])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
-vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
+vi.mock('@/device-link/remoteResources', async original => ({ ...await original<object>(), invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => <span>{children}</span>,
   TextInput: (p: any) => <input aria-label={p.accessibilityLabel} value={p.value} maxLength={p.maxLength} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />,
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => <button disabled={!!action.disabled || !!action.busy} data-tone={action.tone} onClick={action.onPress}>{action.label}</button> }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: (p: any) => <span data-testid="avatar" data-size={p.size} /> }));
-vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, icon, onPress, disabled, busy, destructive, testID }: any) =>
-  <button data-testid={testID} data-icon={icon?.type?.displayName ?? ''} data-destructive={destructive ? 'true' : 'false'} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, icon, onPress, disabled, busy, destructive, testID, detail }: any) =>
+  <button data-testid={testID} data-icon={icon?.type?.displayName ?? ''} data-destructive={destructive ? 'true' : 'false'} data-detail={detail} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
 vi.mock('@/session/CompanionChoice', () => ({ CompanionChoice: (p: any) => { h.choices.push(p); return <span data-choice={p.label} />; } }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => { h.sheet = p; return p.visible ? <div data-testid="sheet">{p.trailingAction ? <header><button data-testid={p.trailingAction.testID} disabled={p.trailingAction.disabled || p.trailingAction.busy} onClick={p.trailingAction.onPress}>{p.trailingAction.label}</button></header> : null}<div data-testid="sheet-body">{p.children}</div></div> : null; } }));
 vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifacts: () => null }));
@@ -43,6 +43,7 @@ vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: s
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 import { CompanionCreateSheet, CompanionProfileSheet } from '@/session/CompanionProfileSheet';
+import { parseCompanionProfileData } from '@/session/companionProfileData';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const ref = { collectionId: 'teammates', kind: 'bot', id: 'bot' };
@@ -148,6 +149,28 @@ it('edits a skill with the host body limit and removes it through a destructive 
   const row = byTest('companionProfile.action.remove')!;
   expect(row.dataset.destructive).toBe('true');
   await press(row); expect(h.sheet.title).toBe('Remove?');
+});
+
+// Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): the host titles the system and learned lists and marks a
+// turned-off Skill with a subtitle. Before, every entry fell into one untitled group without state.
+// Minimal input: the host's skills page (an untitled core list, two titled lists); unit, parsed by the real reader.
+it('groups a host editor list under its block titles and shows entry subtitles, as iOS does', async () => {
+  const id = 'settings:bot/skills';
+  const raw = { ref: { ...ref, id }, revision: 'r1', display: { title: 'Skills' }, links: [], blocks: [
+    { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'core', title: 'Core Skill', subtitle: 'Shared by every teammate', resourceId: `${id}/_core` }] } },
+    { id: 'system', title: 'System Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [
+      { id: 'todo', title: 'Todos', resourceId: `${id}/_todo` }, { id: 'routine', title: 'Routines', subtitle: 'Off', resourceId: `${id}/_routine` }] } },
+    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', resourceId: `${id}/learned` }] } },
+  ] };
+  const root = () => ({ ...home(), panels: home().panels.map(item => item.id === 'skills' ? { id: 'skills', values: {}, entries: [{ id: 'skills', title: 'Skills', resourceId: id }] } : item) });
+  h.read.mockImplementation(async (_invoke: unknown, _device: string, target: { id: string }) => target.id === id ? parseCompanionProfileData(raw, { ...ref, id }) : root());
+  await render(); await press(byTest('companionProfile.skills')); await press(byTest('companionProfile.personalSkills'));
+  const headers = [...container.querySelectorAll('span')].map(node => node.textContent).filter(text => text?.endsWith('Skills'));
+  expect(headers).toEqual(['System Skills', 'Personal Skills']);
+  expect(buttons().filter(node => node.dataset.detail !== undefined).map(node => [node.textContent, node.dataset.detail]))
+    .toEqual([['Core Skill', 'Shared by every teammate'], ['Routines', 'Off']]);
+  await press(byText('Routines'));
+  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { ...ref, id: `${id}/_routine` }, 'en');
 });
 
 it('shows a spinner, not loading text, while an editor loads', async () => {

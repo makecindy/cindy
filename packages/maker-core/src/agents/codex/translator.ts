@@ -589,6 +589,8 @@ export function classifyCodexError(error: {
     );
   const message = redactSensitiveText(rawMessage);
   const signals = extractNonSecretErrorSignals(rawMessage);
+  // Codex nests the upstream HTTP status inside `codexErrorInfo` (first entry);
+  // a 503/529 that never reaches the message text must still classify as overload.
   const codexInfoDetails =
     error?.codexErrorInfo && typeof error.codexErrorInfo === 'object' && !Array.isArray(error.codexErrorInfo)
       ? Object.values(error.codexErrorInfo)[0]
@@ -616,6 +618,10 @@ export function classifyCodexError(error: {
   const samplingRetriesExhausted = errorInfoTag === 'responseTooManyFailedAttempts';
   const isCapacityError = !samplingRetriesExhausted && (overload?.kind === 'capacity' || nestedCapacityMarker);
   const isUpstreamOverload = overload !== null || nestedOverloadMarker;
+  // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
+  // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
+  // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
+  const usageLimit = signals.usageLimit && !isUpstreamOverload;
   const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
   const reason = isUpstreamOverload
     ? UPSTREAM_OVERLOAD_REASON
@@ -628,13 +634,13 @@ export function classifyCodexError(error: {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
-    usageLimit: signals.usageLimit,
+    usageLimit,
     isCapacityError,
     ...(reason ? { reason } : {}),
     data: {
       message,
       ...(errorStatus !== undefined ? { errorStatus } : {}),
-      ...(signals.usageLimit ? { usageLimit: true } : {}),
+      ...(usageLimit ? { usageLimit: true } : {}),
       ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
       ...(reason ? { reason } : {}),
     },
