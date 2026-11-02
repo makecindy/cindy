@@ -84,6 +84,8 @@
   "reconnecting": "Reconnecting…",
   "connectionTimeout": "Connection timed out. Check your network and that the computer is online, then reconnect.",
   "screenNotRunning": "The device is off. Start it on the computer, then reconnect.",
+  "liveScreenBackground": "Show in background",
+  "liveScreenBackgroundHint": "When you go back or leave the app, keep showing the device in a small window.",
   "lockingOnExit": "Locking computer…",
   "disconnected": "Disconnected",
   "compatibility": "Compatibility mode · lower frame rate",

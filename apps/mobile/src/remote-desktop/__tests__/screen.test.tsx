@@ -98,7 +98,8 @@ vi.mock("../useLockOnExitPreference", async (importOriginal) => {
   };
 });
 vi.mock("../usePictureInPicturePreference", () => ({
-  usePictureInPicturePreference: () => {
+  usePictureInPicturePreference: (scope = "desktop") => {
+    fixture.pipScope = scope;
     const [enabled, setEnabled] = useState(fixture.pipEnabled);
     return [
       enabled,
@@ -114,6 +115,7 @@ const fixture = vi.hoisted(() => ({
   nativeMedia: false,
   iosVersion: 26,
   pipEnabled: false,
+  pipScope: "desktop" as string,
   nativeReceive: vi.fn(async (_message: object) => {}),
   nativeInput: vi.fn(async (_message: object) => true),
   nativeRequest: vi.fn(async (_message: object) => true),
@@ -6447,6 +6449,27 @@ describe("live screen controls", () => {
       { type: "deviceTouch", enabled: true, maxTouches: 2 },
       { type: "mode", mode: "touch" },
     ]);
+  });
+
+  it("keeps its own settings, apart from the computer's", async () => {
+    await open();
+    openPanel();
+    act(() => control("liveScreen.settings")!.click());
+    expect(control("liveScreen.background")).not.toBeNull();
+    expect(control("liveScreen.viewOnly")).not.toBeNull();
+    // Nothing of the computer's: small window, sound, display, disconnect.
+    expect(control("remoteDesktop.smallWindow")).toBeNull();
+    expect(control("remoteDesktop.sound")).toBeNull();
+    expect(control("remoteDesktop.displaySettings")).toBeNull();
+    expect(control("remoteDesktop.disconnect")).toBeNull();
+    expect(host.textContent).not.toContain("remoteDesktop.resolution");
+    expect(host.textContent).toContain("remoteDesktop.frameRate");
+  });
+
+  it("shows a device in the background by its own choice, not the computer's", async () => {
+    expect(fixture.pipScope).toBe("desktop");
+    await open();
+    expect(fixture.pipScope).toBe("liveScreen");
   });
 
   it("turns the device by hand, then follows the phone again", async () => {

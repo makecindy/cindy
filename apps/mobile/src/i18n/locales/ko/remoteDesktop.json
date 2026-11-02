@@ -84,6 +84,8 @@
   "reconnecting": "다시 연결 중…",
   "connectionTimeout": "연결 시간이 초과되었습니다. 네트워크와 컴퓨터의 온라인 상태를 확인한 후 다시 연결하세요.",
   "screenNotRunning": "기기가 꺼져 있습니다. 컴퓨터에서 기기를 시작한 후 다시 연결하세요.",
+  "liveScreenBackground": "백그라운드에서 표시",
+  "liveScreenBackgroundHint": "뒤로 가거나 백그라운드로 전환해도 기기 화면을 작은 창으로 계속 표시합니다.",
   "lockingOnExit": "컴퓨터를 잠그는 중…",
   "disconnected": "연결 끊김",
   "compatibility": "호환 모드 · 낮은 프레임 속도",

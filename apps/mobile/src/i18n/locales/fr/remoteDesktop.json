@@ -84,6 +84,8 @@
   "reconnecting": "Reconnexion…",
   "connectionTimeout": "Délai de connexion dépassé. Vérifiez votre réseau et que l'ordinateur est en ligne, puis reconnectez-vous.",
   "screenNotRunning": "L'appareil est éteint. Démarrez-le sur l'ordinateur, puis reconnectez-vous.",
+  "liveScreenBackground": "Afficher en arrière-plan",
+  "liveScreenBackgroundHint": "En revenant en arrière ou en passant en arrière-plan, l'appareil reste affiché dans une petite fenêtre.",
   "lockingOnExit": "Verrouillage de l'ordinateur…",
   "disconnected": "Déconnecté",
   "compatibility": "Mode compatibilité · fréquence d'images réduite",

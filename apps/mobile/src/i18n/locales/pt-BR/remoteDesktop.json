@@ -84,6 +84,8 @@
   "reconnecting": "Reconectando…",
   "connectionTimeout": "O tempo de conexão esgotou. Verifique sua rede e se o computador está online e reconecte.",
   "screenNotRunning": "O dispositivo está desligado. Inicie-o no computador e reconecte.",
+  "liveScreenBackground": "Mostrar em segundo plano",
+  "liveScreenBackgroundHint": "Ao voltar ou ir para o segundo plano, o dispositivo continua sendo exibido em uma janela pequena.",
   "lockingOnExit": "Bloqueando computador…",
   "disconnected": "Desconectado",
   "compatibility": "Modo de compatibilidade · menor taxa de quadros",

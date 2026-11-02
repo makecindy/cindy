@@ -131,6 +131,7 @@ import {
 import { useRemoteDesktopSafety } from "./useRemoteDesktopSafety";
 import { useVideoSettingsPreference } from "./useVideoSettingsPreference";
 import { usePictureInPicturePreference } from "./usePictureInPicturePreference";
+import { LiveScreenSettings } from "./LiveScreenSettings";
 import { PermissionGuide } from "./PermissionGuide";
 import { navigationChrome } from "@/theme/tokens";
 import { RemoteDesktopBackButton } from "./RemoteDesktopBackButton";
@@ -552,7 +553,9 @@ export function RemoteDesktopSession({
   const [canPip, setCanPip] = useState(false);
   const presentation = useRef(false);
   const actualPresentation = useRef(false);
-  const [pipEnabled, setPipEnabled] = usePictureInPicturePreference();
+  const [pipEnabled, setPipEnabled] = usePictureInPicturePreference(
+    screenPlugin ? "liveScreen" : "desktop",
+  );
   const pipEnabledRef = useRef(pipEnabled);
   pipEnabledRef.current = pipEnabled;
   const pipPrepared = useRef(false);
@@ -3580,6 +3583,18 @@ export function RemoteDesktopSession({
   };
   const rotateLeft = rotation("left");
   const rotateRight = rotation("right");
+  const controlDisabled =
+    !lease ||
+    busy ||
+    settingInFlight.current ||
+    Boolean(presentationTimer.current) ||
+    connecting.current ||
+    !caps?.canControl;
+  const pipAvailable = Boolean(
+    remotePresentation &&
+    caps?.backgroundViewing &&
+    (NativeRemoteDesktopView || canPip),
+  );
   const latency = network?.latencyMs;
   return (
     <KeyboardAvoidingView
@@ -3929,7 +3944,9 @@ export function RemoteDesktopSession({
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
                 title={t(
-                  `remoteDesktop.${controlPage === "controls" ? "operations" : controlPage === "display" ? "displaySettings" : "security"}`,
+                  liveScreen
+                    ? "remoteDesktop.settings"
+                    : `remoteDesktop.${controlPage === "controls" ? "operations" : controlPage === "display" ? "displaySettings" : "security"}`,
                 )}
                 page={controlPage}
                 onBack={
@@ -3940,106 +3957,124 @@ export function RemoteDesktopSession({
                 caption={`${lease?.window ? t("remoteDesktop.handoffWindow", { app: lease.window.app }) : liveScreen ? liveScreen.name : deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
                 onClose={() => setOperations(false)}
                 footer={
-                  <RemoteDesktopDisconnect onPress={() => void leave()} />
+                  // A device screen leaves with Back in its own panel.
+                  liveScreen ? undefined : (
+                    <RemoteDesktopDisconnect onPress={() => void leave()} />
+                  )
                 }
               >
-                <RemoteDesktopControls
-                  page={controlPage}
-                  onPage={setControlPage}
-                  device={
-                    // The device's buttons are all in the floating menu.
-                    liveScreen ? { buttons: [] } : undefined
-                  }
-                  security={
-                    liveScreen
-                      ? undefined
-                      : {
-                          ...security,
-                          ...safety,
-                          hostPlatform: caps?.platform,
-                          lockOnExit,
-                          lockOnExitAvailable:
-                            lockOnExitLoaded && caps?.lockOnExit === true,
-                          onLockOnExit: updateLockOnExit,
-                          idleTimeoutMinutes,
-                          idleTimeoutAvailable:
-                            idleTimeoutLoaded && caps?.idleLock === true,
-                          onIdleTimeout: updateIdleTimeout,
-                        }
-                  }
-                  connected={Boolean(lease) && !connectionPending}
-                  controlling={Boolean(lease?.controlling)}
-                  viewOnly={viewOnlySelected}
-                  controlDisabled={
-                    !lease ||
-                    busy ||
-                    settingInFlight.current ||
-                    Boolean(presentationTimer.current) ||
-                    connecting.current ||
-                    !caps?.canControl
-                  }
-                  presentation={{
-                    enabled: pipEnabled,
-                    canRotate:
-                      typeof remotePresentation?.rotate === "function" &&
-                      !(
-                        geometry.reservedRegionsSupported &&
-                        Platform.OS === "ios" &&
-                        !Platform.isPad &&
-                        geometry.regularWidth &&
-                        geometry.regularHeight
-                      ),
-                    canPip: Boolean(
-                      remotePresentation &&
-                      caps?.backgroundViewing &&
-                      (NativeRemoteDesktopView || canPip),
-                    ),
-                    canAudio: Boolean(caps?.systemAudio),
-                    onRotate: () => {
-                      void remotePresentation
-                        ?.rotate?.(!landscape)
-                        .then(() => setOperations(false))
-                        .catch(() =>
-                          setSettingNotice(t("remoteDesktop.settingFailed")),
-                        );
-                    },
-                    onPip: togglePictureInPicture,
-                  }}
-                  video={{
-                    supported: Boolean(caps?.videoSettings),
-                    settings: videoSettings,
-                    busy: settingBusy,
-                    modesSupported: Boolean(caps?.displayModes),
-                    displayGeometry: lease
-                      ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
-                      : undefined,
-                    viewerDisplaySupported: caps?.viewerDisplay === true,
-                    viewerDisplayMatched,
-                    onFitDisplay: () => send({ type: "measureViewport" }),
-                    notice: audioUnavailable.current
-                      ? t("remoteDesktop.audioUnavailable")
-                      : settingNotice,
-                    onChange: (settings) => {
-                      void changeVideoSettings(settings);
-                    },
-                    readModes: readResolutionModes,
-                    onResolution: changeResolution,
-                  }}
-                  inputMode={inputMode}
-                  displays={windowView ? [] : (caps?.displays ?? [])}
-                  displayId={recovery.current.displayId ?? lease?.display.id}
-                  onViewOnly={() => void toggleControl()}
-                  onInputMode={(value) => {
-                    setInputMode(value);
-                    send({ type: "mode", mode: value });
-                  }}
-                  showMouseButtons={showMouseButtons}
-                  onShowMouseButtons={setShowMouseButtons}
-                  onDisplay={(id) => {
-                    setOperations(false);
-                    void connect(id);
-                  }}
-                />
+                {liveScreen ? (
+                  <LiveScreenSettings
+                    background={{
+                      enabled: pipEnabled,
+                      available: pipAvailable,
+                      onChange: togglePictureInPicture,
+                    }}
+                    viewOnly={{
+                      enabled: viewOnlySelected,
+                      disabled: controlDisabled,
+                      onChange: () => void toggleControl(),
+                    }}
+                    video={{
+                      supported: Boolean(caps?.videoSettings),
+                      settings: videoSettings,
+                      busy: settingBusy,
+                      notice: settingNotice,
+                      onChange: (settings) => {
+                        void changeVideoSettings(settings);
+                      },
+                    }}
+                    connected={Boolean(lease) && !connectionPending}
+                    controlling={Boolean(lease?.controlling)}
+                  />
+                ) : (
+                  <RemoteDesktopControls
+                    page={controlPage}
+                    onPage={setControlPage}
+                    device={
+                      // The device's buttons are all in the floating menu.
+                      liveScreen ? { buttons: [] } : undefined
+                    }
+                    security={
+                      liveScreen
+                        ? undefined
+                        : {
+                            ...security,
+                            ...safety,
+                            hostPlatform: caps?.platform,
+                            lockOnExit,
+                            lockOnExitAvailable:
+                              lockOnExitLoaded && caps?.lockOnExit === true,
+                            onLockOnExit: updateLockOnExit,
+                            idleTimeoutMinutes,
+                            idleTimeoutAvailable:
+                              idleTimeoutLoaded && caps?.idleLock === true,
+                            onIdleTimeout: updateIdleTimeout,
+                          }
+                    }
+                    connected={Boolean(lease) && !connectionPending}
+                    controlling={Boolean(lease?.controlling)}
+                    viewOnly={viewOnlySelected}
+                    controlDisabled={controlDisabled}
+                    presentation={{
+                      enabled: pipEnabled,
+                      canRotate:
+                        typeof remotePresentation?.rotate === "function" &&
+                        !(
+                          geometry.reservedRegionsSupported &&
+                          Platform.OS === "ios" &&
+                          !Platform.isPad &&
+                          geometry.regularWidth &&
+                          geometry.regularHeight
+                        ),
+                      canPip: pipAvailable,
+                      canAudio: Boolean(caps?.systemAudio),
+                      onRotate: () => {
+                        void remotePresentation
+                          ?.rotate?.(!landscape)
+                          .then(() => setOperations(false))
+                          .catch(() =>
+                            setSettingNotice(t("remoteDesktop.settingFailed")),
+                          );
+                      },
+                      onPip: togglePictureInPicture,
+                    }}
+                    video={{
+                      supported: Boolean(caps?.videoSettings),
+                      settings: videoSettings,
+                      busy: settingBusy,
+                      modesSupported: Boolean(caps?.displayModes),
+                      displayGeometry: lease
+                        ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
+                        : undefined,
+                      viewerDisplaySupported: caps?.viewerDisplay === true,
+                      viewerDisplayMatched,
+                      onFitDisplay: () => send({ type: "measureViewport" }),
+                      notice: audioUnavailable.current
+                        ? t("remoteDesktop.audioUnavailable")
+                        : settingNotice,
+                      onChange: (settings) => {
+                        void changeVideoSettings(settings);
+                      },
+                      readModes: readResolutionModes,
+                      onResolution: changeResolution,
+                    }}
+                    inputMode={inputMode}
+                    displays={windowView ? [] : (caps?.displays ?? [])}
+                    displayId={recovery.current.displayId ?? lease?.display.id}
+                    onViewOnly={() => void toggleControl()}
+                    onInputMode={(value) => {
+                      setInputMode(value);
+                      send({ type: "mode", mode: value });
+                    }}
+                    showMouseButtons={showMouseButtons}
+                    onShowMouseButtons={setShowMouseButtons}
+                    onDisplay={(id) => {
+                      setOperations(false);
+                      void connect(id);
+                    }}
+                  />
+                )}
               </RemoteDesktopPanel>
             </View>
           )}

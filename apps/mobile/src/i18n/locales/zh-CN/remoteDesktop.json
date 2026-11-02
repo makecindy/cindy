@@ -84,6 +84,8 @@
   "reconnecting": "正在重新连接…",
   "connectionTimeout": "连接超时。请检查网络和电脑是否在线，然后重新连接。",
   "screenNotRunning": "设备已关闭。请在电脑上启动它，然后重新连接。",
+  "liveScreenBackground": "后台显示",
+  "liveScreenBackgroundHint": "返回或切到后台时，以小窗继续显示设备画面。",
   "lockingOnExit": "正在锁定电脑…",
   "disconnected": "已断开",
   "compatibility": "兼容模式 · 帧率较低",

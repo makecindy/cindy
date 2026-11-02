@@ -84,6 +84,8 @@
   "reconnecting": "Verbindung wird wiederhergestellt…",
   "connectionTimeout": "Zeitüberschreitung bei der Verbindung. Prüfe dein Netzwerk und ob der Computer online ist, und verbinde dich erneut.",
   "screenNotRunning": "Das Gerät ist ausgeschaltet. Starte es auf dem Computer und verbinde dich dann erneut.",
+  "liveScreenBackground": "Im Hintergrund anzeigen",
+  "liveScreenBackgroundHint": "Beim Zurückgehen oder Wechseln in den Hintergrund wird das Gerät in einem kleinen Fenster weiter angezeigt.",
   "lockingOnExit": "Computer wird gesperrt…",
   "disconnected": "Getrennt",
   "compatibility": "Kompatibilitätsmodus · niedrigere Bildrate",

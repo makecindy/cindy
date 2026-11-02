@@ -84,6 +84,8 @@
   "reconnecting": "正在重新連線…",
   "connectionTimeout": "連線逾時。請檢查網路及電腦是否在線，然後重新連線。",
   "screenNotRunning": "裝置已關閉。請在電腦上啟動它，然後重新連線。",
+  "liveScreenBackground": "背景顯示",
+  "liveScreenBackgroundHint": "返回或切換到背景時，以小視窗繼續顯示裝置畫面。",
   "lockingOnExit": "正在鎖定電腦…",
   "disconnected": "已中斷",
   "compatibility": "相容模式 · 畫格率較低",

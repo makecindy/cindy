@@ -84,6 +84,8 @@
   "reconnecting": "方重連…",
   "connectionTimeout": "連線逾時。請察網路及機是否在線，然後重連。",
   "screenNotRunning": "裝置已閉。請於機上啟之，然後重連。",
+  "liveScreenBackground": "後臺顯示",
+  "liveScreenBackgroundHint": "返或轉後臺時，以小窗續顯裝置畫面。",
   "lockingOnExit": "方鎖機…",
   "disconnected": "已斷",
   "compatibility": "相容之式 · 幀率較低",

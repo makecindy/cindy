@@ -84,6 +84,8 @@
   "reconnecting": "再接続中…",
   "connectionTimeout": "接続がタイムアウトしました。ネットワークとコンピューターがオンラインであることを確認してから、再接続してください。",
   "screenNotRunning": "デバイスがオフになっています。コンピューターで起動してから、再接続してください。",
+  "liveScreenBackground": "バックグラウンドで表示",
+  "liveScreenBackgroundHint": "戻るときやバックグラウンドに切り替えたときも、デバイスの画面を小さなウィンドウで表示し続けます。",
   "lockingOnExit": "コンピューターをロック中…",
   "disconnected": "切断済み",
   "compatibility": "互換モード · 低フレームレート",
