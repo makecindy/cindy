@@ -444,6 +444,7 @@ export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPrici
    * 一律用它,不要用行的归一化 `modelId`。
    */
   wireModelId: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   /** 该 (provider, agent) 条目声明的思考档;空数组 = 不可调。 */
   efforts: readonly Effort[];
   /**
@@ -506,6 +507,7 @@ function capabilityOf(
   return {
     agent,
     wireModelId: model.id,
+    ...(model.discoveredSource ? { discoveredSource: model.discoveredSource } : {}),
     ...(model.displayPricing && model.currency ? {
       displayPricing: model.displayPricing, currency: model.currency, costDiscount: model.costDiscount,
     } : {}),
@@ -543,6 +545,9 @@ export function resolveAgentCapability(
 
 /** 联合列表的一行:一个逻辑模型 (provider, 归一化 modelId),横跨它能用的所有引擎。 */
 export interface UnifiedModelEntry {
+  /** Scoped preference key keeps ambiguous legacy bridge preferences off another route. */
+  enginePreferenceId?: string;
+  legacyEnginePreferenceId?: string;
   providerId: string;
   /** ★**归一化 id**(行的稳定身份 / override / 收藏 key)。发请求请用 `capabilities[agent].wireModelId`。 */
   modelId: string;
@@ -682,6 +687,21 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
      */
     kept: boolean;
   }
+  const magpieProviders = new Set<string>();
+  const legacyMagpieIds = new Map<string, Map<string, Set<string>>>();
+  for (const provider of providers) {
+    const models = Object.values(provider.models).flatMap(models => models ?? []);
+    if (!models.some(model => model.opaqueModelId || model.discoveredSource?.kind === 'magpie')) continue;
+    magpieProviders.add(provider.id);
+    const aliases = new Map<string, Set<string>>();
+    for (const model of models) {
+      const legacyId = unifiedModelKeyId(model.id);
+      const ids = aliases.get(legacyId) ?? new Set<string>();
+      ids.add(model.id);
+      aliases.set(legacyId, ids);
+    }
+    legacyMagpieIds.set(provider.id, aliases);
+  }
   const drafts = new Map<string, Draft>();
   const order: string[] = [];
 
@@ -760,7 +780,8 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       includePaymentRequired,
     });
     for (const row of rows) {
-      const keyModelId = unifiedModelKeyId(row.id);
+      // Gateway prefixes identify distinct routes, not Cindy bridge wrappers.
+      const keyModelId = magpieProviders.has(row.sourceProviderId) ? row.id : unifiedModelKeyId(row.id);
       const key = entryKey(row.sourceProviderId, keyModelId);
       const kept = isKeptRow(agent, row.sourceProviderId, row.id);
       const hit = drafts.get(key);
@@ -830,6 +851,11 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     out.push({
       providerId: draft.providerId,
       modelId: draft.keyModelId,
+      ...(magpieProviders.has(draft.providerId) ? {
+        enginePreferenceId: JSON.stringify(['magpie-route', draft.keyModelId]),
+        ...(legacyMagpieIds.get(draft.providerId)?.get(unifiedModelKeyId(draft.keyModelId))?.size === 1
+          ? { legacyEnginePreferenceId: unifiedModelKeyId(draft.keyModelId) } : {}),
+      } : {}),
       displayName: display?.name ?? draft.keyModelId,
       ...(display?.description !== undefined ? { description: display.description } : {}),
       ...(display?.group !== undefined ? { group: display.group } : {}),

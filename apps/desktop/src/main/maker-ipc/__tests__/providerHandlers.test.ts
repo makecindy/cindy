@@ -5421,3 +5421,121 @@ it.each([undefined, 'https://api.minimax.io/v1/old-models'])(
     });
   },
 );
+
+describe('Magpie discovery source lifecycle through real IPC and persistence', () => {
+  const configFor = (): CustomProviderConfig => ({ id: 'magpie-ipc', name: 'Magpie', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'a/gpt-5.5', name: 'GPT', opaqueModelId: true,
+        discoveredSource: { kind: 'magpie', providerId: 'Old' } }] } } });
+  const inputFor = (config: CustomProviderConfig) => ({ agent: 'pi', savedProviderId: config.id,
+    baseUrl: config.runtimes.pi!.baseUrl, authMethod: 'none', wireProtocol: 'openai-chat' });
+
+  it('keeps a source on unchanged-context failure but clears it on a key replacement', async () => {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-original-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: async () => ({ ok: false, code: 'UNKNOWN' }),
+    }));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...inputFor(config), authMethod: 'apiKey' })).toMatchObject({ ok: false });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config);
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { pi: 'fixture-replacement-key' });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('does not attach discovery under an unsaved API key to the saved connection', async () => {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-original-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [{
+        id: 'a/gpt-5.5', display_name: 'GPT', owned_by: 'WrongAccount', magpie_label: 'GPT · Wrong account',
+      }] }))),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      ...inputFor(config), authMethod: 'apiKey', apiKey: 'fixture-unsaved-key',
+    }) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, models: mergeDiscoveredRuntimeModels(config.runtimes.pi!.models, fetched.models),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
+  });
+
+  it('commits a current source and clears it on a successful response that omits source fields', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let withSource = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      getModelCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider(config)] }),
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [{
+        id: 'a/gpt-5.5', display_name: 'GPT', ...(withSource ? { owned_by: 'A', magpie_label: 'GPT · Supplier A' } : {}),
+      }] }))),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    let current = (await getCustomProvider(config.id))!;
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...current, runtimes: { pi: {
+      ...current.runtimes.pi!, models: mergeDiscoveredRuntimeModels(current.runtimes.pi!.models, fetched.models),
+    } } });
+    current = (await getCustomProvider(config.id))!;
+    expect(current.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+    withSource = false;
+    const refreshed = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...current, runtimes: { pi: {
+      ...current.runtimes.pi!, models: mergeDiscoveredRuntimeModels(current.runtimes.pi!.models, refreshed.models),
+    } } });
+    const restored = (await getCustomProvider(config.id))!.runtimes.pi!.models[0];
+    expect(restored.discoveredSource).toBeUndefined();
+    expect(restored.opaqueModelId).toBe(true);
+  });
+
+  it('rejects an older request after a newer request completes', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    let resolveOld!: (value: { ok: boolean; models: DiscoveredModel[] }) => void;
+    const old = new Promise<{ ok: boolean; models: DiscoveredModel[] }>(resolve => { resolveOld = resolve; });
+    let request = 0;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: () => ++request === 1 ? old : Promise.resolve({ ok: true, models: [] }),
+    }));
+    const earlier = harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config))).toMatchObject({ ok: true });
+    resolveOld({ ok: true, models: [] });
+    expect(await earlier).toMatchObject({ ok: false, detail: 'model discovery context changed' });
+  });
+
+  it('does not revive a prior source after an endpoint edit and an ABA edit back', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [
+        { id: 'a/gpt-5.5', display_name: 'GPT', owned_by: 'Stale', magpie_label: 'GPT · Stale' },
+      ] }))),
+    }));
+    const stale = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, baseUrl: 'http://127.0.0.1:9999/v1',
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, models: mergeDiscoveredRuntimeModels(config.runtimes.pi!.models, stale.models),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+});

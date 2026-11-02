@@ -75,6 +75,7 @@ import {
   buildUnifiedListSections,
   buildUnifiedRail,
   computeSelectedRowScrollTop,
+  enginePreferenceModelIds,
   priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
@@ -691,7 +692,7 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
@@ -788,7 +789,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -1105,7 +1106,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),

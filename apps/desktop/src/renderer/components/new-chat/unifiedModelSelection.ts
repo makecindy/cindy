@@ -892,3 +892,10 @@ export function priceTierOf(outputPerMtok: number, currency: string): 1 | 2 | 3 
   if (usd <= 15) return 2;
   return 3;
 }
+
+/** A colliding legacy bridge key stays stored but is never guessed onto a gateway route. */
+export function enginePreferenceModelIds(entry: UnifiedModelEntry): string[] {
+  return entry.enginePreferenceId
+    ? [...new Set([entry.enginePreferenceId, ...(entry.legacyEnginePreferenceId ? [entry.legacyEnginePreferenceId] : [])])]
+    : [entry.modelId];
+}
