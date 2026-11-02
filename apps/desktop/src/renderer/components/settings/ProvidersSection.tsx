@@ -111,18 +111,19 @@ import {
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { ProviderImportDialog } from './ProviderImportDialog';
+import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
-import { XDIncMark } from '@/components/icons/XDIncMark';
+import { CindyMark } from '@/components/icons/CindyMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
+import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import {
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
@@ -314,7 +315,7 @@ function useRemoteControlEnabled(): boolean | null {
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
   if (hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
+    return <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />;
   }
   return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
 }
@@ -2019,8 +2020,8 @@ function XdGatewayHeader({
   return (
     <DetailHeader
       children={children}
-      icon={<XDIncMark size={18} />}
-      title={t('settings.providers.xd.title')}
+      icon={<ProviderLogoMark providerId="xd" logoKind={provider?.logoKind} size={18} />}
+      title={provider ? providerDisplayName(provider, t) : t('settings.providers.xd.title')}
       identityBadge={
         syncStatus.accountTier === 'free' ? (
           <span
@@ -2233,7 +2234,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
           color: 'var(--settings-integration-avatar-icon)',
         }}
       >
-        <XDIncMark size={14} />
+        <CindyMark size={14} />
       </div>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
@@ -2278,7 +2279,7 @@ function ListRow({
     () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
     [provider],
   );
-  const title = provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name;
+  const title = providerDisplayName(provider, t);
   return (
     <div
       className={cn(
@@ -2350,7 +2351,8 @@ function ListRow({
               {t('settings.providers.pill.suspended')}
             </span>
           ) : (
-            modelCount !== null && (
+            // Keep the account suffix visible in the narrow rail; the detail lists the count.
+            provider.id !== 'xd' && modelCount !== null && (
               <span
                 className="shrink-0 text-11 tabular-nums"
                 style={{ color: 'var(--text-tertiary)' }}
@@ -2391,7 +2393,7 @@ function SuggestionRow({
 }) {
   const { t } = useTranslation();
   const cliName = localCliDisplayName(detection.cli);
-  const title = provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name;
+  const title = providerDisplayName(provider, t);
   return (
     <button
       type="button"
@@ -2471,6 +2473,7 @@ export function ProvidersSection() {
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
   const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
+  const ownedShares = useOwnedProviderShares(ownRemoteProviders.map(entry => entry.deviceId));
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
@@ -2520,7 +2523,7 @@ export function ProvidersSection() {
     modelId: string;
     agent?: AgentKind;
   } | null>(null);
-  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | string[] | null>(null);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
   const finishProviderImport = useCallback(
     (providerId: string) => {
@@ -2639,6 +2642,10 @@ export function ProvidersSection() {
         : orderedVisibleProviders,
     [orderedVisibleProviders, pendingProviderOrderIds],
   );
+  const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
+  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
@@ -2732,27 +2739,29 @@ export function ProvidersSection() {
 
   const moveProviderWithKeyboard = useCallback(
     (providerId: string, delta: -1 | 1): void => {
-      const currentIds = listProviders.map((provider) => provider.id);
+      const shared = ownedShares.get(null)?.has(providerId) === true;
+      const currentIds = listProviders
+        .filter(provider => (ownedShares.get(null)?.has(provider.id) === true) === shared)
+        .map(provider => provider.id);
       const index = currentIds.indexOf(providerId);
       const nextIndex = index + delta;
       if (index < 0 || nextIndex < 0 || nextIndex >= currentIds.length) return;
       const nextIds = [...currentIds];
       const [moved] = nextIds.splice(index, 1);
       nextIds.splice(nextIndex, 0, moved!);
-      persistVisibleProviderOrder(nextIds);
+      const sectionIds = new Set(currentIds);
+      let sectionIndex = 0;
+      persistVisibleProviderOrder(listProviders.map(provider => sectionIds.has(provider.id) ? nextIds[sectionIndex++]! : provider.id));
       const provider = byId.get(providerId);
       setOrderAnnouncement(
         t('settings.providers.order.moved', {
-          provider:
-            provider?.id === 'xd'
-              ? t('settings.providers.xd.title')
-              : (provider?.name ?? providerId),
+          provider: provider ? providerDisplayName(provider, t) : providerId,
           position: nextIndex + 1,
           total: currentIds.length,
         }),
       );
     },
-    [byId, listProviders, persistVisibleProviderOrder, t],
+    [byId, listProviders, ownedShares, persistVisibleProviderOrder, t],
   );
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -3129,6 +3138,52 @@ export function ProvidersSection() {
     />
   ) : null;
 
+  const renderLocalProviderList = (sectionProviders: ProviderView[]) => (
+    <SortableList
+      items={sectionProviders}
+      getId={provider => provider.id}
+      onReorder={ids => {
+        const sectionIds = new Set(ids);
+        let index = 0;
+        persistVisibleProviderOrder(listProviders.map(provider => sectionIds.has(provider.id) ? ids[index++]! : provider.id));
+      }}
+      renderItem={(provider, index) => (
+        <ListRow
+          provider={provider}
+          selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
+          reconnectRequired={
+            (provider.id === 'openai' && openaiReconnectRequired) ||
+            provider.openAiAccount?.reconnectRequired === true
+          }
+          onSelect={() => {
+            setFocusedModel(null);
+            selectProvider(provider.id);
+          }}
+          position={index + 1}
+          total={sectionProviders.length}
+          onMove={delta => moveProviderWithKeyboard(provider.id, delta)}
+          sortable={sectionProviders.length > 1}
+        />
+      )}
+      disabled={sectionProviders.length < 2}
+      reducedMotion={reducedMotion}
+      filter="input, textarea, select, a, [data-no-drag]"
+      className="flex flex-col gap-0.5"
+      rowClassName="provider-settings-sortable-row"
+    />
+  );
+
+  const renderRemoteProviderRows = (entries: readonly OwnRemoteProvider[]) => (
+    <OwnRemoteProviderRows
+      entries={entries}
+      selectedKey={selectedRemote?.key ?? null}
+      onSelect={key => {
+        setFocusedModel(null);
+        selectRemote(key);
+      }}
+    />
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-[14px]">
       {shareManagePage ?? (<>
@@ -3177,53 +3232,33 @@ export function ProvidersSection() {
                   }}
                 />
               )}
-              {listProviders.length > 1 && (
+              {(ordinaryLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
                 <div className="select-none px-1.5 pb-1 pt-1">
                   <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
                     {t('settings.providers.order.hint')}
                   </span>
                 </div>
               )}
-              <SortableList
-                items={listProviders}
-                getId={(provider) => provider.id}
-                onReorder={persistVisibleProviderOrder}
-                renderItem={(provider, index) => (
-                  <ListRow
-                    provider={provider}
-                    selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
-                    reconnectRequired={
-                      (provider.id === 'openai' && openaiReconnectRequired) ||
-                      provider.openAiAccount?.reconnectRequired === true
-                    }
-                    onSelect={() => {
-                      setFocusedModel(null);
-                      selectProvider(provider.id);
-                    }}
-                    position={index + 1}
-                    total={listProviders.length}
-                    onMove={(delta) => moveProviderWithKeyboard(provider.id, delta)}
-                    sortable={listProviders.length > 1}
-                  />
-                )}
-                disabled={listProviders.length < 2}
-                reducedMotion={reducedMotion}
-                filter="input, textarea, select, a, [data-no-drag]"
-                className="flex flex-col gap-0.5"
-                rowClassName="provider-settings-sortable-row"
-              />
+              {renderLocalProviderList(ordinaryLocalProviders)}
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
-              <OwnRemoteProviderRows
-                entries={ownRemoteProviders}
-                selectedKey={selectedRemote?.key ?? null}
-                onSelect={(key) => {
-                  setFocusedModel(null);
-                  selectRemote(key);
-                }}
-              />
+              {renderRemoteProviderRows(ordinaryRemoteProviders)}
+              {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
+                <div
+                  data-testid="provider-share-owned"
+                  role="group"
+                  aria-label={t('providerShare.owned.title')}
+                  className="flex flex-col gap-0.5"
+                >
+                  <span className="truncate px-2.5 pb-1 pt-3 text-11 font-medium text-[var(--text-tertiary)]">
+                    {t('providerShare.owned.title')}
+                  </span>
+                  {renderLocalProviderList(sharedLocalProviders)}
+                  {renderRemoteProviderRows(sharedRemoteProviders)}
+                </div>
+              )}
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
                 selectedShareId={selectedShare?.shareId ?? null}
@@ -3255,7 +3290,7 @@ export function ProvidersSection() {
               )}
             </div>
             <div id="settings-search-settings-providers-addProvider"
-              className="border-t p-2"
+              className="flex flex-col gap-2 border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
               <Button
@@ -3269,6 +3304,10 @@ export function ProvidersSection() {
                 <Plus size={15} />
                 {t('settings.providers.addProvider')}
               </Button>
+              <ProviderImportFileButton
+                key={`${dataOwnerId}:${ownerGeneration}`}
+                onImported={setProviderImportId}
+              />
             </div>
           </div>
 
@@ -3308,7 +3347,7 @@ export function ProvidersSection() {
                     color: 'var(--settings-integration-avatar-icon)',
                   }}
                 >
-                  <XDIncMark size={24} />
+                  <CindyMark size={24} />
                 </div>
                 <span
                   className="mt-4 text-24 font-medium leading-[1.2]"
@@ -3578,7 +3617,14 @@ export function ProvidersSection() {
         />
       )}
 
-      {providerImportId && (
+      {Array.isArray(providerImportId) ? (
+        <ProviderImportBatchDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId.join(',')}`}
+          importIds={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
+        />
+      ) : providerImportId && (
         <ProviderImportDialog
           key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
           importId={providerImportId}

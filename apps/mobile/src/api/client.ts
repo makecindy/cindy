@@ -1,5 +1,11 @@
 import { i18n } from '@/i18n';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { selfHostedRelayAuthorizationFor } from '@/device-link/selfHostedRelayRouting';
+
+/** 自建中转的 401 统一成这个码:只表示中转凭证失效,不可刷新账号 token,也不触发账号退出。 */
+export const RELAY_CREDENTIAL_INVALID = 'RELAY_CREDENTIAL_INVALID';
+/** 目标是自建中转但本机没有可用凭证:请求不发出。 */
+export const RELAY_CREDENTIAL_UNAVAILABLE = 'RELAY_CREDENTIAL_UNAVAILABLE';
 
 export class ApiError extends Error {
   constructor(
@@ -54,8 +60,14 @@ export async function apiFetchRaw<T>(
 ): Promise<T> {
   opts.assertCurrent?.();
   if (opts.signal?.aborted) throw requestAborted();
+  // 自建中转(docs/self-hosted-relay-plan.md §5.3):按目标地址换成中转凭证,账号 token 不发过去。
+  const relayAuth = selfHostedRelayAuthorizationFor(opts.baseUrl);
+  if (relayAuth?.kind === 'blocked') {
+    throw new ApiError(RELAY_CREDENTIAL_UNAVAILABLE, 0, i18n.t('relay.errors.credentialUnavailable'));
+  }
   const headers: Record<string, string> = { ...opts.headers, 'Content-Type': 'application/json' };
-  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  if (relayAuth) headers.Authorization = `CindyRelay ${relayAuth.credential}`;
+  else if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.cache === 'no-store') {
     // Also tell native HTTP caches not to reuse or store short-lived responses.
     headers['Cache-Control'] = 'no-cache, no-store';
@@ -141,7 +153,11 @@ export async function apiFetchRaw<T>(
   if (opts.signal?.aborted) throw requestAborted();
   if (!response.ok) {
     const error = readError(data);
-    const code = error.code ?? `HTTP_${response.status}`;
+    // 中转(或它前面的代理)回的任何 401 都只说明中转凭证不对:不能被当成账号 token 过期去刷新,
+    // 更不能凭它自报的 ACCOUNT_UNAVAILABLE 让账号退出。
+    const code = relayAuth && response.status === 401
+      ? RELAY_CREDENTIAL_INVALID
+      : error.code ?? `HTTP_${response.status}`;
     if (response.status === 401 && code === 'ACCOUNT_UNAVAILABLE') {
       try {
         await accountUnavailableHandler?.();

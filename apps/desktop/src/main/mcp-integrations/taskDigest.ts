@@ -105,14 +105,17 @@ function minutesSince(now: number, since: number | null | undefined): number | n
 /** 一句 PR 状态:最多三个,「PR #12 open,3 条评审未解决」。 */
 export function formatPrStatuses(
   results: ReadonlyArray<
-    | { ok: true; prNumber: number; repo: string; status: string; unresolvedCount: number | null }
+    | { ok: true; prNumber: number; repo: string; status: string; unresolvedCount: number | null; checks?: { total: number; failed: number; pending: number; passed: number; skipped: number } | null; observedAt?: number }
     | { ok: false; prNumber: number; repo: string }
   >,
 ): string | null {
   const parts = results.slice(0, 3).map((pr) => {
     if (!pr.ok) return `PR ${pr.repo}#${pr.prNumber} 状态未知`;
     const unresolved = pr.unresolvedCount ? `,${pr.unresolvedCount} 条评审未解决` : '';
-    return `PR ${pr.repo}#${pr.prNumber} ${pr.status}${unresolved}`;
+    const c = pr.checks;
+    const ci = !c ? 'CI 未知' : c.failed ? `CI ${c.failed} 失败` : c.pending ? `CI ${c.pending} 进行中` : !c.total ? '无检查' : c.passed === c.total ? 'CI 通过' : `CI ${c.passed} 通过/${c.skipped} 跳过`;
+    const age = pr.observedAt ? `,${Math.max(0, Math.floor((Date.now() - pr.observedAt) / 60000))} 分钟前` : '';
+    return `PR ${pr.repo}#${pr.prNumber} ${pr.status}${unresolved},${ci}${age}`;
   });
   return parts.length ? parts.join(';') : null;
 }

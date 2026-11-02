@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import type { Stream } from 'node:stream';
-import { app } from 'electron';
+import { app, powerMonitor } from 'electron';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -319,11 +319,23 @@ interface ProcessSnapshotEntry {
 }
 
 interface WindowIdentity {
-  kind: 'electron-dev' | 'node-dev' | 'browser' | 'terminal' | 'unknown';
+  kind: 'electron-dev' | 'node-dev' | 'browser' | 'terminal' | 'ios-simulator' | 'unknown';
   workspace_root?: string;
   confidence: number;
   labels: string[];
+  /**
+   * Model-facing routing facts about this target that the driver cannot tell
+   * from the window alone. Written from the 2026-10 audit: every simulator
+   * session tried synthetic clicks first, every Electron text session tried
+   * keystrokes first; both routes fail and the hint names the working one.
+   */
+  hints?: string[];
 }
+
+const IOS_SIMULATOR_INPUT_HINT =
+  'Synthetic clicks and keystrokes are not delivered to iOS Simulator / Device Hub windows (background, foreground or AX). Observe it here if needed, but drive it with `xcrun simctl` (launch, openurl, io screenshot) or AXe.';
+const WEB_CONTENT_TEXT_HINT =
+  'Electron / web content: type_text into its text fields is refused in background and unreliable in foreground; use set_value with the field\'s element_token.';
 
 interface ProcessSnapshotResult {
   processes: Map<number, ProcessSnapshotEntry>;
@@ -1589,20 +1601,38 @@ function inferWindowIdentity(
   workspaceRootCache: Map<string, string | undefined>,
 ): WindowIdentity {
   const labels: string[] = [];
+  // Every kind comes from the app and its process only. A window title is page or
+  // document content: a Chrome tab titled "Node.js documentation" or "iOS Simulator
+  // guide" must not be classified (or routed) as the thing it talks about.
   const haystack = [
     typeof window.app_name === 'string' ? window.app_name : '',
-    typeof window.title === 'string' ? window.title : '',
     processInfo?.name ?? '',
     processInfo?.command ?? '',
     processInfo?.executable ?? '',
   ].join(' ').toLowerCase();
+  const appName = (typeof window.app_name === 'string' ? window.app_name : '').trim().toLowerCase();
+  const executableText = `${processInfo?.name ?? ''} ${processInfo?.command ?? ''} ${processInfo?.executable ?? ''}`.toLowerCase();
+  const isIosSimulator =
+    appName === 'simulator' ||
+    appName === 'device hub' ||
+    /(?:^|[\\/])simulator\.app[\\/]|(?:^|[\\/])device hub\.app[\\/]|com\.apple\.(?:iphonesimulator|coresimulator)/.test(executableText);
 
   let kind: WindowIdentity['kind'] = 'unknown';
   let confidence = 0;
-  if (/\b(electron|electron-forge)\b/.test(haystack)) {
+  const hints: string[] = [];
+  // Simulator first: its process line also mentions node/electron-free paths,
+  // and a Device Hub (Cindy's simulator surface) window must never fall into
+  // the generic branches below.
+  if (isIosSimulator) {
+    kind = 'ios-simulator';
+    confidence = 0.8;
+    labels.push('simulator');
+    hints.push(IOS_SIMULATOR_INPUT_HINT);
+  } else if (/\b(electron|electron-forge)\b/.test(haystack)) {
     kind = 'electron-dev';
     confidence = 0.75;
     labels.push('electron');
+    hints.push(WEB_CONTENT_TEXT_HINT);
   } else if (/\b(pnpm|npm|yarn|node|tsx|vite)\b/.test(haystack)) {
     kind = 'node-dev';
     confidence = 0.65;
@@ -1611,6 +1641,7 @@ function inferWindowIdentity(
     kind = 'browser';
     confidence = 0.7;
     labels.push('browser');
+    hints.push(WEB_CONTENT_TEXT_HINT);
   } else if (/\b(terminal|iterm|powershell|cmd\.exe|windows terminal|wt\.exe)\b/.test(haystack)) {
     kind = 'terminal';
     confidence = 0.7;
@@ -1624,6 +1655,7 @@ function inferWindowIdentity(
     workspace_root: workspaceRoot,
     confidence,
     labels,
+    ...(hints.length > 0 ? { hints } : {}),
   };
 }
 
@@ -2257,15 +2289,24 @@ async function callCuaMcpTool(
   if ((result as { isError?: unknown }).isError) {
     const text = firstTextFromMcpResult(result);
     const details = objectValue(parseMcpToolResult(result));
+    const message = typeof details?.message === 'string'
+      ? details.message
+      : (text ?? `cua-driver mcp tool ${name} returned an error`);
+    const reportedCode = typeof details?.code === 'string'
+      ? details.code
+      // The driver also reports snake_case codes (tool_invocation_failed);
+      // keep them instead of collapsing to the generic code.
+      : typeof details?.error === 'string' && /^[A-Za-z][A-Za-z0-9_]+$/.test(details.error)
+        ? details.error
+        : 'COMPUTER_DRIVER_ERROR';
     throw new ComputerDriverError(
-      typeof details?.message === 'string'
-        ? details.message
-        : (text ?? `cua-driver mcp tool ${name} returned an error`),
-      typeof details?.code === 'string'
-        ? details.code
-        : typeof details?.error === 'string' && /^[A-Z][A-Z0-9_]+$/.test(details.error)
-          ? details.error
-          : 'COMPUTER_DRIVER_ERROR',
+      message,
+      // cua-driver 0.37 reports a missing app as the generic tool_invocation_failed;
+      // older drivers named it. Keep the stable name the MCP recovery and smoke rely on.
+      name === 'launch_app' && reportedCode !== 'APP_NOT_INSTALLED'
+        && /^No installed macOS app found (?:for |with )?name\b/i.test(message)
+        ? 'APP_NOT_INSTALLED'
+        : reportedCode,
       getComputerTool(name)?.readOnly !== true && (
         details?.effect === 'partial' || details?.effect === 'unverifiable' ||
         details?.code === 'type_text_incomplete'
@@ -3492,6 +3533,134 @@ export async function grantComputerDriverPermissions(
 // Own sequential primitives retain their observations; overlapping reads do not.
 const inputObservations = new Map<string, { windows: Map<string, number | symbol>; requiresObservation: boolean }>();
 
+/**
+ * Foreground delivery shares the keyboard and mouse with whoever is at this
+ * Mac. The 2026-10 audit found eight sessions where the Agent's foreground
+ * input landed while the person was typing in Slack / Chrome / another Cindy;
+ * the model only noticed from a later screenshot. Before a foreground action,
+ * treat any system input newer than the Agent's own last dispatch as a person
+ * and refuse with a structured code instead of competing for focus.
+ *
+ * `powerMonitor.getSystemIdleTime()` is whole seconds since the last HID
+ * event, including events the Agent itself posted, so the Agent's dispatch
+ * time is subtracted: input is attributed to a person only when it is newer
+ * than that by more than the clock granularity.
+ */
+export const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
+/**
+ * The tail after an Agent HID action returns in which the driver may still be
+ * delivering its own events (2026-10-31 smoke run: a background click that had
+ * returned 2.2 s earlier left the idle clock at 1 s). Input inside this tail is
+ * indistinguishable from the Agent's and is attributed to it; the cost is that a
+ * person's input within this long of an Agent action is not seen by one check.
+ * It is kept at the smallest value the smoke run needs.
+ */
+const AGENT_INPUT_ATTRIBUTION_SLACK_MS = 1_500;
+let lastAgentInputEndedAt = 0;
+let agentInputsInFlight = 0;
+let screenLockedByEvent: boolean | undefined;
+let powerMonitorHooked = false;
+
+/**
+ * Tools that synthesize keyboard / pointer events and therefore move the system
+ * idle clock. `set_value` (AX write), `launch_app`, recording and the like do not,
+ * so they must not take the credit for a person's input that follows them.
+ */
+const HID_SYNTHESIZING_TOOLS: ReadonlySet<string> = new Set([
+  'click', 'double_click', 'right_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll',
+]);
+
+function isRefusedDriverResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const candidate = result as { effect?: unknown; ok?: unknown };
+  return candidate.effect === 'refused' || candidate.ok === false;
+}
+
+/**
+ * Called around every non-read driver dispatch. Only an input that may really
+ * have produced HID events is attributed to the Agent: the tool must synthesize
+ * events, and the call must have returned or failed with an unknown outcome
+ * (partial typing). A refusal (background_unavailable, USER_INPUT_ACTIVE, stale
+ * snapshot) sent nothing and leaves the person's activity record untouched.
+ */
+async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): Promise<T> {
+  if (!HID_SYNTHESIZING_TOOLS.has(name)) return run();
+  agentInputsInFlight += 1;
+  let attributable = false;
+  try {
+    const result = await run();
+    // A driver refusal comes back as a normal result (`effect: "refused"`, e.g.
+    // background_unavailable) and sent nothing, so it must not take the credit either.
+    attributable = !isRefusedDriverResult(result);
+    return result;
+  } catch (err) {
+    attributable = (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
+    throw err;
+  } finally {
+    agentInputsInFlight -= 1;
+    if (attributable) lastAgentInputEndedAt = Date.now();
+  }
+}
+
+export function resetDesktopInputGuardStateForTests(): void {
+  lastAgentInputEndedAt = 0;
+  agentInputsInFlight = 0;
+  screenLockedByEvent = undefined;
+}
+
+function hookPowerMonitor(): void {
+  if (powerMonitorHooked) return;
+  powerMonitorHooked = true;
+  try {
+    powerMonitor.on('lock-screen', () => { screenLockedByEvent = true; });
+    powerMonitor.on('unlock-screen', () => { screenLockedByEvent = false; });
+  } catch {
+    // powerMonitor is unavailable before app ready in some test harnesses; the
+    // idle-state probe below still answers.
+  }
+}
+
+/** True when the screen is locked, from events when seen, else the idle-state probe. */
+export function isDesktopScreenLocked(): boolean {
+  hookPowerMonitor();
+  if (screenLockedByEvent !== undefined) return screenLockedByEvent;
+  try {
+    return powerMonitor.getSystemIdleState(1) === 'locked';
+  } catch {
+    return false;
+  }
+}
+
+/** Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown. */
+function msSinceForeignDesktopInput(now = Date.now()): number | null {
+  let idleSeconds: number;
+  try {
+    idleSeconds = powerMonitor.getSystemIdleTime();
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(idleSeconds) || idleSeconds < 0) return null;
+  // Another Agent input is still being delivered: its events are ours.
+  if (agentInputsInFlight > 0) return Number.POSITIVE_INFINITY;
+  // The idle clock is floored to whole seconds: the last input happened at or before
+  // this instant, and at most a second earlier. Only when even the latest possible
+  // moment lies within the Agent's delivery tail is the whole range the Agent's.
+  const latestInputAt = now - idleSeconds * 1000;
+  if (latestInputAt <= lastAgentInputEndedAt + AGENT_INPUT_ATTRIBUTION_SLACK_MS) return Number.POSITIVE_INFINITY;
+  return idleSeconds * 1000;
+}
+
+/** Refuse foreground delivery while a person is using this computer. */
+export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
+  if (getComputerTool(name)?.readOnly === true || args.delivery_mode !== 'foreground') return;
+  const since = msSinceForeignDesktopInput();
+  if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
+  throw new ComputerDriverError(
+    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Wait until they stop, use background delivery or set_value, or ask them before taking the foreground.`,
+    'USER_INPUT_ACTIVE',
+  );
+}
+
 export async function callComputerDriverTool(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
@@ -3536,6 +3705,7 @@ export async function callComputerDriverTool(
     if (desktopInputRevision() !== revision) {
       throw new ComputerDriverError('Remote desktop input arrived. Agent yielded before further input; previous input may have completed. Get fresh window state before continuing.', 'DESKTOP_INPUT_YIELDED');
     }
+    assertNoRecentUserInput(name, args);
     if (isHumanDesktopInputActive()) {
       throw new ComputerDriverError('Remote desktop input is active. Yield briefly, then get fresh window state before retrying; the remote connection can stay open.', 'DESKTOP_INPUT_BUSY');
     }
@@ -3597,7 +3767,9 @@ async function callComputerDriverToolImpl(
           observation.requiresObservation = true;
           observation.windows.clear();
         }
-        return invoke();
+        // Only HID-synthesizing input moves the system idle clock; neither a read nor
+        // an AX write may mask a person's input.
+        return trackAgentInputDispatch(name, invoke);
       }, { signal, assertCurrent: assertActive });
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;
   } catch (err) {
@@ -3758,13 +3930,17 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
     },
     callTool: async (name, args, context) => {
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
-        throw new ComputerDriverError('Computer Use is disabled in Settings.');
+        throw new ComputerDriverError(
+          'Computer Use is disabled in Settings. Tell the person this step needs it: Settings → Built-in tools → Computer Use (link: cindy://settings/builtin-tools; macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
+          'COMPUTER_USE_DISABLED',
+        );
       }
       await ensureRuntime();
       return callComputerDriverTool(name, args, context);
     },
     // Loaded on use: the 代输入 driver brings the native input helpers with it.
     isSecureTarget: async (target) => (await import('../input-handoff/macDriver.js')).isSecureInputTarget(target),
+    describeDesktop: async () => ({ screen_locked: isDesktopScreenLocked() }),
     logger,
   };
 }

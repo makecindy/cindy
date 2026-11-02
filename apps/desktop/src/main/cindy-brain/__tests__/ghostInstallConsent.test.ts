@@ -1,3 +1,4 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -9,7 +10,10 @@ import {
 import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
+  confirmedControlPoints,
   confirmedTaskCapability,
+  confirmedUiCapability,
+  type GhostInstallConsentPrompt,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
   trackGhostInstallConsentPrompt,
@@ -75,6 +79,24 @@ it('records tasks only when that capability was included in explicit install/upd
   const unrelated = await obtainGhostInstallConsent(policy,old,expanded,reviewedDigest);
   assertGhostInstallConsent(unrelated,old,expanded,reviewedDigest);
   expect(confirmedTaskCapability(unrelated,old,expanded)).toBeUndefined();
+});
+// Rule (control points, 2026-10-31): a plugin that declared a point before this Host knew it must
+// not gain it silently on upgrade; the next update re-shows it. Existing cases cover only tasks/ui.
+it('records control points only when shown, and re-shows declared points the user never approved', async () => {
+  const point = 'will-schedule-run' as const;
+  const next = {...manifest(['api.weather.test']),slots:['network','subscribe'],subscribe:{hooks:[point]}} as GhostManifest;
+  const policy = {mode:'prompt' as const,prompt:userPrompt(true),initiator:'user' as const,origin:'market' as const};
+  const fresh = await obtainGhostInstallConsent(policy,null,next,reviewedDigest);
+  expect(confirmedControlPoints(fresh,null,next)).toEqual([point]);
+  expect(confirmedControlPoints({mode:'unprompted'},null,next)).toEqual([]);
+  // Same manifest, installed by an older Host: the point was never shown, so the update prompts for it.
+  const preDeclared = installed(next);
+  const update = await obtainGhostInstallConsent(policy,preDeclared,next,reviewedDigest);
+  expect(update).toMatchObject({mode:'confirmed'});
+  expect(confirmedControlPoints(update,preDeclared,next)).toEqual([point]);
+  // Already approved: nothing new to confirm.
+  const approvedBefore = {...installed(next),approvedControlPoints:[point]};
+  expect(await obtainGhostInstallConsent(policy,approvedBefore,next,reviewedDigest)).toEqual({mode:'unprompted'});
 });
 const replacedDigest = 'b'.repeat(64);
 
@@ -300,4 +322,88 @@ it('records target consent only when the independent capability was shown', asyn
   const unrelated = await obtainGhostInstallConsent(policy, alreadyDeclared, expanded, reviewedDigest);
   assertGhostInstallConsent(unrelated, alreadyDeclared, expanded, reviewedDigest);
   expect(confirmedTaskCapability(unrelated, alreadyDeclared, expanded, 'targets')).toBeUndefined();
+});
+
+// Page capability is additive: old receipts retain the declaration but do not grant
+// file reads. Existing generic permission tests do not cover app-only tool authority.
+describe('interactive page consent', () => {
+  function pages(): GhostManifest {
+    return { ...manifest(['api.weather.test']), tools: [{ name: 'open', description: 'Open' }, { name: 'save', description: 'Save' }],
+      mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html'
+        }], tools: { open: { resourceUri: "ui://planner" }, save: { visibility: ['model'] } } } } };
+  }
+  it('requires explicit consent for preserved declarations and grants only the page capability', async () => {
+    const { hasGhostUiPermission, validateInstalledGhostManifest } = await import('../../../shared/ghost.js');
+    const { confirmedUiCapability } = await import('../ghostInstallConsent.js');
+    const base = pages(), old = installed(base), prompt = userPrompt(true);
+    expect(validateInstalledGhostManifest(base)).toMatchObject({ ok: true, manifest: { mcpApps: base.mcpApps } });
+    expect(hasGhostUiPermission(old)).toBe(false);
+    const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, old, base, reviewedDigest);
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ added: [expect.objectContaining({ key: 'ui:pages' })] }) }));
+    expect(confirmedUiCapability(decision, old, base)).toBe(true);
+    expect(hasGhostUiPermission({ ...old, uiCapabilityApproved: true })).toBe(true);
+    expect(hasGhostUiPermission({ ...old, uiCapabilityApproved: true, enabled: false })).toBe(false);
+  });
+  // unit: legacy remote installation confirms existing facts, not the newly negotiated UI capability.
+  // Minimal input: accepted install with ui.pages and a prompt from a v0 controller.
+  it.each([false, true])('grants pages only when the controller renders their facts (negotiated=%s)', async negotiated => {
+    const next = pages();
+    const prompt: GhostInstallConsentPrompt = Object.assign(userPrompt(true), { uiCapabilityApproval: negotiated });
+    const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, null, next, reviewedDigest);
+    assertGhostInstallConsent(decision, null, next, reviewedDigest);
+    expect(confirmedUiCapability(decision, null, next)).toBe(negotiated);
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ permissions: expect.arrayContaining([
+      expect.objectContaining({ key: 'ui:pages', detailKey: 'uiPageAccess', detailArgs: expect.objectContaining({ pages: 'ui://planner', tools: 'open' }) }),
+    ]) }) }));
+  });
+  // Unit: server default delivery is the approval authority for pages, too.
+  // Existing default-install tests lacked ui; minimal input adds one page to an
+  // approved plugin whose old Host receipt has no uiCapabilityApproved fact.
+  it.each([null, 'existing'] as const)('grants default-delivered pages with the package approval (%s)', async receiver => {
+    const next = pages(), previous = manifest(['api.weather.test']);
+    const old = receiver === null ? null : installed(previous);
+    const decision = await obtainGhostInstallConsent({ mode: 'exempt', reason: 'server-default-install' }, old, next, reviewedDigest);
+    assertGhostInstallConsent(decision, old, next, reviewedDigest);
+    expect(confirmedUiCapability(decision, old, next)).toBe(true);
+  });
+  // URI renames are identifiers, not new authority. Exercise the install decision,
+  // including rename + added domain, rather than comparing serializer strings. Tier: unit.
+  it.each(['uri', 'file', 'uri-and-domain'] as const)('compares resource authority across %s changes', async kind => {
+    const base = pages(), next = structuredClone(base);
+    const old = { ...installed(base), uiCapabilityApproved: true as const };
+    const ui = getPluginToolUi(next)!;
+    if (kind === 'file') ui.resources[0].file = 'ui/replaced.html';
+    else {
+      ui.resources[0].uri = 'ui://renamed/v2';
+      ui.tools.open.resourceUri = 'ui://renamed/v2';
+    }
+    if (kind === 'uri-and-domain') ui.resources[0].csp = { connectDomains: ['https://api.weather.test'] };
+    const decision = obtainGhostInstallConsent({ mode: 'automatic' }, old, next, reviewedDigest);
+    if (kind === 'uri-and-domain') await expect(decision).rejects.toThrow();
+    else await expect(decision).resolves.toEqual({ mode: 'unprompted' });
+  });
+  it.each(['page', 'domain', 'app-access'] as const)('requires consent when adding %s', async kind => {
+    const base = pages(), next = structuredClone(base), old = { ...installed(base), uiCapabilityApproved: true as const };
+    if (kind === 'page') getPluginToolUi(next)!.resources.push({ uri: 'ui://second', file: 'ui/second.html' });
+    if (kind === 'domain') getPluginToolUi(next)!.resources[0].csp = { connectDomains: ['https://api.weather.test'] };
+    if (kind === 'app-access') getPluginToolUi(next)!.tools.save.visibility = ['model', 'app'];
+    await expect(obtainGhostInstallConsent({ mode: 'automatic' }, old, next, reviewedDigest)).rejects.toThrow();
+    const reduced = structuredClone(base); getPluginToolUi(reduced)!.tools.open.visibility = ['model'];
+    await expect(obtainGhostInstallConsent({ mode: 'automatic' }, old, reduced, reviewedDigest)).resolves.toEqual({ mode: 'unprompted' });
+  });
+});
+
+it('records observe consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { tasks: true } };
+  const next = { ...previous, agent: { tasks: true, observe: true } };
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'observe')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'targets')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observe')).toBeUndefined();
 });

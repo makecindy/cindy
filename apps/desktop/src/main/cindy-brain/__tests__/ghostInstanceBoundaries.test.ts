@@ -33,12 +33,14 @@ function harness() {
   const send = vi.fn(() => true);
   const setEnabled = vi.fn(async () => ({}));
   const stop = vi.fn();
+  const cancelModelPicker = vi.fn();
   const ghostCanRead = vi.fn(async () => true);
   const preview = new GhostPreviewGate({ ghostCanRead,
     getBlobInfo: async () => ({ mimeType: 'image/png', ext: '.png' }),
     blobUrl: (hash, ext) => 'cindy-media://blobs/' + hash + ext });
   const api = load({ availableGhosts: () => ghosts, findInstalledGhostByInstanceId, resolveInstalledGhost,
     installedGhostPhysicalKeys,
+    modelPickerSingleton: { cancel: cancelModelPicker },
     requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled,
       findInstalledInstance: (key: string) => ghosts.find((ghost) => installedGhostStoragePart(ghost) === key) }),
     beginGhostMutation: () => vi.fn(), captureGhostMutationOwner: vi.fn(),
@@ -61,10 +63,13 @@ function harness() {
     ghostInstallApprovalToken, log: { info: vi.fn(), warn: vi.fn() },
     getGhostPreviewGate: () => preview, prepareMailAttachmentUpload,
   });
-  return { ...api, root, organization, ghosts, send, setEnabled, stop, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
+  return { ...api, root, organization, ghosts, send, setEnabled, stop, cancelModelPicker, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
 }
 
 describe('production plugin instance boundaries', () => {
+  // The disable callback now cancels pending model picks. Inject that dependency
+  // and verify it uses the same physical installation gate as stopping runtime
+  // (plugin-security §3/§5). Existing tests previously omitted the picker fixture.
   it('rejects a confirmed close after source replacement before stopping any runtime', async () => {
     const fixture = harness();
     const confirmedApproval = ghostInstallApprovalToken(fixture.organization.approval);
@@ -72,20 +77,25 @@ describe('production plugin instance boundaries', () => {
     await expect(fixture.setGhostEnabledForUser('helper', false, confirmedApproval)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
     const currentApproval = ghostInstallApprovalToken(fixture.organization.approval);
     await fixture.setGhostEnabledForUser('helper', false, currentApproval);
     expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval, undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
   });
   it('does not disable a logical twin after the original physical target disappears', async () => {
     const fixture = harness();
     await fixture.setGhostEnabledForUser('helper', false);
     expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval), undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
     fixture.setEnabled.mockClear();
     fixture.stop.mockClear();
+    fixture.cancelModelPicker.mockClear();
     fixture.ghosts.splice(0, 1);
     await expect(fixture.setGhostEnabledForUser('helper', false)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
   });
   it.each(['root', 'in-place', 'organization'])('opens Mobile media with the protocol host and %s physical authority', async (layout) => {
     const fixture = harness();

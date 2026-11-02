@@ -23,7 +23,7 @@ export const REGION_SCREENSHOT_CHANNEL = {
   CLEAR: 'region-screenshot:clear',
   /** main → 浮层: 会话结束, 清空画面与全部交互态后隐藏。 */
   END: 'region-screenshot:end',
-  /** invoke(token, windowId, x, y): 指针下的界面元素, 由内到外 (DIP)。 */
+  /** invoke(token, windowId, x, y): 实际命中窗口与由内到外的元素 (DIP)。 */
   ELEMENTS_AT: 'region-screenshot:elements-at',
   /** send(token, text): 复制取到的颜色值。 */
   COPY_TEXT: 'region-screenshot:copy-text',
@@ -138,6 +138,16 @@ export interface RegionScreenshotBitmap {
 export interface RegionScreenshotWindow {
   id: number;
   rect: RegionRect;
+  /** Captured native regions in hit order; absent on older helpers/platforms. */
+  snapRects?: RegionRect[];
+}
+
+/** A point query can correct the rectangular window guess through transparent overlays. */
+export interface RegionScreenshotHit {
+  window: RegionScreenshotWindow | null;
+  rects: RegionRect[];
+  /** Default document/content region; finer elements remain available via wheel. */
+  preferredRect?: RegionRect;
 }
 
 export interface RegionScreenshotBegin {

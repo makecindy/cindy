@@ -421,6 +421,72 @@ describe('agent_task_update workflowProgress', () => {
   });
 });
 
+describe('getRunningSnapshot pending request identity', () => {
+  it('publishes a replacement request even while the session remains pending', () => {
+    const sessionId = 'pending-request-identity';
+    const ask = (requestId: string): void => {
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId,
+        type: 'ask_user_question',
+        source: 'codex',
+        data: { requestId, questions: [] },
+      } as CCAgentStreamEvent);
+    };
+    try {
+      ask('first');
+      const first = makerChatStore.getRunningSnapshot();
+      expect(first.get(sessionId)?.pendingRequestKeys).toEqual(['ask:first']);
+      expect(makerChatStore.getRunningSnapshot()).toBe(first);
+
+      ask('second');
+      const second = makerChatStore.getRunningSnapshot();
+      expect(second).not.toBe(first);
+      expect(second.get(sessionId)?.pendingRequestKeys).toEqual(['ask:second']);
+      expect(second.get(sessionId)?.hasPendingAskUser).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+
+  it('publishes a new handoff step without a pending-state transition', () => {
+    // #3259: the same request stays pending through multiple owner-input steps.
+    const sessionId = 'pending-handoff-step';
+    const handoff = (stepNumber: number, revision: number, phase: 'ready' | 'finishing' = 'ready'): void => {
+      makerChatStore.__applyInputHandoffRequestForTest(sessionId, {
+        kind: 'input_handoff', requestId: 'same-request', revision,
+        phase, purpose: 'Sign in', source: { app: 'Test' },
+        stepNumber, controls: phase === 'ready'
+          ? [{ id: 'email', kind: 'text', label: 'Email', contentType: 'email' }]
+          : [],
+      });
+    };
+    try {
+      handoff(1, 1);
+      const first = makerChatStore.getRunningSnapshot();
+      expect(first.get(sessionId)?.pendingRequestKeys).toEqual(['handoff:same-request:1']);
+      expect(first.get(sessionId)?.hasActionableInputHandoff).toBe(true);
+
+      handoff(1, 2);
+      expect(makerChatStore.getRunningSnapshot()).toBe(first);
+
+      handoff(2, 3, 'finishing');
+      const second = makerChatStore.getRunningSnapshot();
+      expect(second).not.toBe(first);
+      expect(second.get(sessionId)?.hasPendingInputHandoff).toBe(true);
+      expect(second.get(sessionId)?.hasActionableInputHandoff).toBe(false);
+      expect(second.get(sessionId)?.pendingRequestKeys).toEqual(['handoff:same-request:2']);
+
+      handoff(2, 4);
+      const third = makerChatStore.getRunningSnapshot();
+      expect(third).not.toBe(second);
+      expect(third.get(sessionId)?.hasActionableInputHandoff).toBe(true);
+      expect(third.get(sessionId)?.pendingRequestKeys).toEqual(['handoff:same-request:2']);
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+});
+
 describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
   const statusUpdate = (
     sessionId: string,
@@ -1060,7 +1126,6 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
       window?: { electronAPI?: unknown };
     };
     const previousWindow = globalWindow.window;
-    const previousElectronApi = previousWindow?.electronAPI;
     try {
       setDataOwnerGeneration('account-a', 1);
       makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));

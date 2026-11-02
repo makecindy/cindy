@@ -1,5 +1,6 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
-import { PluginVersionUpdates } from './PluginVersionUpdates';
 import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
@@ -37,7 +38,9 @@ import { PluginUsageCard } from './PluginUsageCard';
 import { PluginSharedUsage } from './PluginSharedUsage';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
+import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
+import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -53,7 +56,9 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
+  declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
+  ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   isUserInstallReservedGhostId,
   type GhostPermissionItem,
@@ -119,9 +124,7 @@ interface GhostPluginDetailViewProps {
   /** Opens publishing; package preparation and submission belong to the dialog. */
   onContribute?: () => void;
   contributionBusy?: boolean;
-  contributionSummary?: string;
   publishingPreview?: PreparedPluginContribution;
-  onRefreshPublishing?: () => void;
   contributionUnavailableReason?: string;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
@@ -164,9 +167,7 @@ export function GhostPluginDetailView({
   onExport,
   onContribute,
   contributionBusy = false,
-  contributionSummary,
   publishingPreview,
-  onRefreshPublishing,
   contributionUnavailableReason,
   toggleDisabled,
   onIconLoadError,
@@ -174,7 +175,6 @@ export function GhostPluginDetailView({
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
-  const contributionNoticeId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [taskApprovalPending, setTaskApprovalPending] = useState(false);
@@ -209,6 +209,9 @@ export function GhostPluginDetailView({
     ? remoteFileUpdate && !isUserInstallReservedGhostId(detail.ghostId)
     : import.meta.env.DEV || !isUserInstallReservedGhostId(detail.ghostId);
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
+  const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
+    ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && ghost.namespace === null &&
+    !ghost.builtin && !isUserInstallReservedGhostId(ghost.manifest.id);
 
   return (
     <main
@@ -219,7 +222,7 @@ export function GhostPluginDetailView({
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
-        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : undefined}
+        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader
@@ -297,7 +300,6 @@ export function GhostPluginDetailView({
                   onClick={onContribute}
                   loading={contributionBusy}
                   disabled={Boolean(contributionUnavailableReason)}
-                  aria-describedby={contributionNoticeId}
                   title={contributionUnavailableReason}
                 >
                   {t('settings.ghosts.contribution.publishPlugin')}
@@ -516,9 +518,30 @@ export function GhostPluginDetailView({
           hiddenTasksDeclared={ghostDeclaresHiddenTasks(ghost?.manifest)}
         />
 
+        {ghost && !remote ? (
+          <PluginControlPointsSection
+            ghostId={detail.id}
+            declared={declaredGhostControlPoints(ghost.manifest).length > 0}
+          />
+        ) : null}
+
         {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
+        {ghost && pluginHasToolUi(ghost.manifest) && <section className="mt-4 space-y-3">
+          <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.mcpUi')}</h3>
+          {ghost.manifest.tools?.filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name]).map(tool => <div key={tool.name} className="text-13 text-[var(--text-secondary)]">
+            <p>{tool.name}</p>
+            <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
+          </div>)}
+          {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
+            catch { toast.error(t('settings.ghosts.errors.generic')); }
+            finally { setTaskApprovalPending(false); }
+          }}>{t('settings.ghosts.installConsent.updateNeedsConsent')}</Button>}
+        </section>}
+
         {!remote && enabled && ghost?.manifest.agent?.tasks === true && ghost.taskCapabilityApproved !== true ? (
           <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
@@ -533,50 +556,30 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentTasksRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.observe === true && ghost.observeCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'observe');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentObserveRequest')}
+          </Button>
+        ) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
+        {!remote ? (
+          <GhostHandoffFilesSection
+            ghostId={detail.id}
+            declared={(ghost?.manifest.tools ?? []).some((tool) => ghostToolDeclaresHandoff(tool))}
+          />
+        ) : null}
 
-        {publishingSection ?? ((onContribute || contributionUnavailableReason || publishingPreview || detail.releaseNotes?.trim()) ? (
-          <PluginVersionUpdates key={detail.id}>
-            {(onContribute || contributionUnavailableReason) ? (
-              <div className="mt-3 space-y-1 text-13 leading-5 text-[var(--text-secondary)]">
-                <p id={contributionNoticeId}>
-                  {contributionUnavailableReason ?? t('settings.ghosts.contribution.publishHint')}
-                </p>
-                {contributionBusy || contributionSummary ? (
-                  <p role="status">
-                    {contributionBusy ? t('settings.ghosts.contribution.preparing') : contributionSummary}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
-            {publishingPreview ? (
-              <section className="space-y-2 text-13 leading-5 text-[var(--text-secondary)]">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="font-medium text-[var(--text-primary)]">
-                    {publicationBlocked ? `${t('settings.ghosts.contribution.version')} · ${publishingPreview.version}` : t('settings.ghosts.contribution.publishingVersion', { version: publishingPreview.version })}
-                  </h3>
-                  <Button size="sm" variant="secondary" tone="quiet" onClick={onRefreshPublishing}>
-                    {t('settings.ghosts.contribution.refreshSummary')}
-                  </Button>
-                </div>
-                {publishingPreview.releaseNotes?.trim() ? (
-                  <>
-                    <h4 className="font-medium text-[var(--text-primary)]">{t('settings.ghosts.contribution.releaseNotes')}</h4>
-                    <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words">{publishingPreview.releaseNotes}</p>
-                  </>
-                ) : null}
-                {!publicationBlocked ? <p>{t('settings.ghosts.contribution.versionConsumedHint')}</p> : null}
-              </section>
-            ) : detail.releaseNotes?.trim() ? (
-              <section className="space-y-2">
-                <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.contribution.releaseNotes')} · {detail.version}</h3>
-                <p className="whitespace-pre-wrap break-words text-13 leading-5 text-[var(--text-secondary)]">{detail.releaseNotes}</p>
-              </section>
-            ) : null}
-          </PluginVersionUpdates>
-        ) : null)}
+        {publishingSection}
 
         <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
       </article>

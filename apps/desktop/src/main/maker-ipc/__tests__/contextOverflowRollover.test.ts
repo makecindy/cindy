@@ -55,6 +55,10 @@ describe('isContextOverflowErrorData', () => {
   });
 
   it('treats Codex remote compact encrypted-content 400 as rebuildable', () => {
+    expect(isContextOverflowErrorData({
+      reason: 'remote-compact-encrypted-content',
+      message: 'Error running remote compact task',
+    })).toBe(true);
     expect(
       isContextOverflowErrorData({
         message:
@@ -1180,6 +1184,17 @@ describe('createContextOverflowRollover', () => {
       return deps;
     }
 
+    it('does not stack legacy rebuild or learning on a native cache recovery decision', async () => {
+      const deps = makePiDeps([msg('user', 'Reply OK', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      expect(await rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection,
+        piCacheRecoveryHandled: true })).toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
     it.each([
       rejection,
       ...['prompt_cache_key', 'prompt_cache_retention'].map(field => '400: ' + JSON.stringify({
@@ -1653,6 +1668,41 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Regression: the empty model-switch divider used to count as a side effect.
+  // Exercise the recovery entry point: only metadata may be ignored, never output.
+  it.each([
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: true } }, true],
+    ['Already sent the approval.', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', null, false],
+    ['', { modelChange: {} }, false],
+    ['', { modelChange: { toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra' } }, false],
+    ['', { modelChange: { fromModel: 1, toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: null, modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: false } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: 1 } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: 'true' } }, false],
+    ['', { modelChange: [] }, false],
+  ])('recovers remote compact failure only for a pure model marker (%j)', async (content, agentMeta, expected) => {
+    const deps = makeDeps([
+      msg('user', 'Continue the pending work', 'u1'),
+      { ...msg('assistant', content, 'm1'), agentMeta },
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', {
+      message: 'Error running remote compact task: invalid_encrypted_content',
+    })).resolves.toBe(expected);
+    if (expected) {
+      expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({ sourceUserClientId: 'u1' }), expect.anything());
+      expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', 'Continue the pending work', undefined, expect.anything());
+    } else {
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    }
   });
 
   it('rebuilds before send when the trailing error is a Codex remote compact encrypted-content 400', async () => {

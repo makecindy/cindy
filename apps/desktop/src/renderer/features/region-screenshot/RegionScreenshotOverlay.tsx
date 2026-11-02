@@ -36,6 +36,8 @@ import {
   type RegionScreenshotBegin,
   type RegionScreenshotBitmap,
   type RegionScreenshotWindow,
+  type RegionScreenshotHit,
+  intersectRegion,
   type RegionSize,
 } from '../../../shared/regionScreenshot';
 import {
@@ -59,7 +61,7 @@ import {
   type ShapeAnnotation,
   type TextAnnotation,
 } from './annotations';
-import { bitmapToImageData, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
+import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
 import { colorHex, colorRgb, Magnifier, type PixelColor } from './Magnifier';
 import { ScreenshotModeBar, ScreenshotStyleBar, ScreenshotToolbar, TOOL_SHORTCUTS, type ScreenshotMode } from './ScreenshotToolbar';
 import { SCREENSHOT_INK, SCREENSHOT_OVERLAY, type ScreenshotInk } from './screenshotColors';
@@ -180,7 +182,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const longResultRef = useRef(longResult);
   longResultRef.current = longResult;
   const [selection, setSelection] = useState<RegionRect | null>(null);
-  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number } | null>(null);
+  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number; defaultRect: RegionRect } | null>(null);
   const [pointer, setPointer] = useState<RegionPoint | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<AnnotationTool | null>(null);
@@ -239,8 +241,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const elementsRef = useRef<{
     inFlight: boolean;
     pending: RegionPoint | null;
-    cache: { windowId: number; rects: RegionRect[] } | null;
-  }>({ inFlight: false, pending: null, cache: null });
+    cache: { point: RegionPoint; hit: RegionScreenshotHit } | null;
+    defaults: Map<number, RegionRect[]>;
+  }>({ inFlight: false, pending: null, cache: null, defaults: new Map() });
 
   const viewport = session?.viewport ?? { width: window.innerWidth, height: window.innerHeight };
   const safe = session?.safeArea ?? { x: 0, y: 0, width: viewport.width, height: viewport.height };
@@ -272,7 +275,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     setOverToolbar(false);
     busyRef.current = false;
     wheelRef.current = 0;
-    elementsRef.current = { inFlight: false, pending: null, cache: null };
+    elementsRef.current = { inFlight: false, pending: null, cache: null, defaults: new Map() };
   }, []);
 
   useEffect(() => {
@@ -288,13 +291,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       }
       initialCursorRef.current = payload.cursor ?? null;
       // 各工具上次用的颜色 / 粗细跨截图保留 (浮层复用, 本次运行内有效)。
-      const canvas = frameRef.current;
       const frameData = bitmapToImageData(payload.frame);
-      if (canvas) {
-        canvas.width = payload.frame.width;
-        canvas.height = payload.frame.height;
-        canvas.getContext('2d')?.putImageData(frameData, 0, 0);
-      }
+      // The layout effect writes the frozen frame once after React has mounted
+      // its canvas (including the independent editor's first image).
       setSession({
         token: payload.token,
         scaleFactor: payload.scaleFactor,
@@ -470,13 +469,44 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const refreshHover = useCallback((point: RegionPoint) => {
     const current = state.current.session;
     if (!current) return;
-    const window = topWindowAt(current.windows, point);
     const cache = elementsRef.current.cache;
-    const elements = cache && window && cache.windowId === window.id ? cache.rects : [];
+    // A parent rectangle containing a new point does not prove that its old
+    // element chain (or the window under a transparent pixel) is still valid.
+    const hit = cache && cache.point.x === point.x && cache.point.y === point.y ? cache.hit : null;
+    const rectangularWindow = topWindowAt(current.windows, point);
+    // Keep a corrected target (including an explicit null for an unknown
+    // occluder) while this point is pending under the same captured front window.
+    // This is only a display fallback: requestElements still queries the new
+    // point, and its reply is authoritative. Leaving a known corrected target's
+    // bounds or entering a different front window ends retention immediately.
+    const pendingHit = !hit && cache && rectangularWindow
+      && cache.hit.window?.id !== rectangularWindow.id
+      && topWindowAt(current.windows, cache.point)?.id === rectangularWindow.id
+      && (!cache.hit.window || rectContains(cache.hit.window.rect, point)) ? cache.hit : null;
+    const window = hit ? hit.window : pendingHit ? pendingHit.window : rectangularWindow;
+    const snapshot = current.windows.find((candidate) => candidate.id === window?.id);
+    // Default regions belong to the frozen capture, not a point query. UIA may
+    // finish later or fail without making the outline bounce back to the window.
+    // Older helpers/macOS can retain a known content region while a new query is
+    // pending, but never reuse its fine element chain at a different point.
+    const remembered = window && elementsRef.current.defaults.get(window.id)?.find((rect) => rectContains(rect, point));
+    const native = snapshot?.snapRects?.find((rect) => rectContains(rect, point));
+    const preferred = native && window && !sameRegion(native, window.rect) ? native
+      : remembered ?? hit?.preferredRect
+        ?? (snapshot?.snapRects ? window?.rect : undefined);
+    const elements = [...(hit?.rects ?? []), ...(snapshot?.snapRects ?? []), ...(preferred ? [preferred] : [])]
+      .sort((a, b) => a.width * a.height - b.width * b.height);
     const candidates = snapCandidates(point, window, elements, current.viewport);
+    const clipped = preferred && intersectRegion(preferred, current.viewport);
+    const defaultLevel = clipped ? Math.max(0, candidates.findIndex((rect) => sameRegion(rect, clipped))) : 0;
+    const defaultRect = candidates[defaultLevel];
     setHover((previous) => {
-      const keep = previous && previous.candidates[0] && sameRegion(previous.candidates[0], candidates[0]);
-      return { candidates, level: keep ? Math.min(previous.level, candidates.length - 1) : 0 };
+      const selected = previous && sameRegion(previous.defaultRect, defaultRect)
+        ? candidates.findIndex((rect) => sameRegion(rect, previous.candidates[previous.level])) : -1;
+      const level = selected >= 0 ? selected : defaultLevel;
+      const keep = previous && previous.level === level && previous.candidates.length === candidates.length
+        && previous.candidates.every((rect, index) => sameRegion(rect, candidates[index]));
+      return keep && sameRegion(previous.defaultRect, defaultRect) ? previous : { candidates, level, defaultRect };
     });
   }, []);
 
@@ -494,18 +524,29 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       tracker.inFlight = true;
       void bridge
         .elementsAt(current.token, window.id, point.x, point.y)
-        .then((rects) => {
-          if (state.current.session?.token !== current.token) return;
-          tracker.cache = { windowId: window.id, rects: Array.isArray(rects) ? rects : [] };
+        .then((hit) => {
+          if (state.current.session?.token !== current.token || elementsRef.current !== tracker || !hit) return;
           const latest = state.current.pointer;
-          if (latest && !state.current.selection && !state.current.drag) refreshHover(latest);
+          if (latest && latest.x === point.x && latest.y === point.y && !state.current.selection && !state.current.drag) {
+            // Some browsers have no content HWND. Learn their document regions
+            // once per capture; an empty/partial UIA reply must not erase them.
+            if (hit.window && hit.preferredRect && !sameRegion(hit.preferredRect, hit.window.rect)) {
+              const regions = tracker.defaults.get(hit.window.id) ?? [];
+              if (regions.length < 256 && !regions.some((rect) => sameRegion(rect, hit.preferredRect!))) {
+                tracker.defaults.set(hit.window.id, [...regions, hit.preferredRect]
+                  .sort((a, b) => a.width * a.height - b.width * b.height));
+              }
+            }
+            tracker.cache = { point, hit };
+            refreshHover(latest);
+          }
         })
         .catch(() => undefined)
         .finally(() => {
           tracker.inFlight = false;
           const pending = tracker.pending;
           tracker.pending = null;
-          if (pending && state.current.session?.token === current.token && !state.current.selection) {
+          if (pending && elementsRef.current === tracker && state.current.session?.token === current.token && !state.current.selection) {
             requestElements(pending);
           }
         });
@@ -545,19 +586,27 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       const source = annotationSource();
       if (!mapped || !source) return;
       const { crop, output } = mapped;
-      const canvas = document.createElement('canvas');
-      canvas.width = output.width;
-      canvas.height = output.height;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
-      const sx = output.width / rect.width;
-      const sy = output.height / rect.height;
-      ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
-      drawAnnotations(ctx, list, source);
-      const image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
+      // Unedited, pixel-aligned captures already have their pixels in memory.
+      // Avoid an extra canvas backing store and GPU readback. Resizing,
+      // annotations and alpha compositing retain the existing canvas path.
+      let image = list.length === 0 && crop.width === output.width && crop.height === output.height
+        ? cropOpaqueImageDataToBitmap(current.frameData, crop)
+        : null;
+      if (!image) {
+        const canvas = document.createElement('canvas');
+        canvas.width = output.width;
+        canvas.height = output.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
+        const sx = output.width / rect.width;
+        const sy = output.height / rect.height;
+        ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
+        drawAnnotations(ctx, list, source);
+        image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
+      }
       busyRef.current = true;
       setAiMenuOpen(false);
       const ok = await bridge

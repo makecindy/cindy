@@ -75,31 +75,26 @@ it('shows readable message previews rather than Markdown delimiters or link targ
   expect(node.textContent).not.toMatch(/\*\*|https:\/\/|`/);
 });
 
-it('shows shared public generation instead of raw preview without changing online dot', async () => {
+it('shows shared public generation and one working dot, then offline error', async () => {
   const busy = { ...item, item: { ...item.item, display: { ...item.item.display,
     preview: 'Raw tool commentary', generation: { phase: 'replying', startedAt: 1 } } } };
   await act(async () => root.render(el(Rows, { items: [busy], isOnline: () => true,
     onSelect: vi.fn() })));
   expect(node.textContent).toContain('devices.companions.working.replying');
   expect(node.textContent).not.toContain('Raw tool commentary');
-  expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone')).toBe('ready');
+  expect(node.querySelector('[data-testid="teammate.status.running"]')).not.toBeNull();
   await render(false);
-  expect(node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone')).toBe('off');
+  expect(node.querySelector('[data-testid="teammate.status.error"]')).not.toBeNull();
   expect(node.textContent).not.toContain('devices.companions.working.replying');
 });
 
-it('keeps the connection green while the roster is unverified, and unknown neutral', async () => {
+it('does not invent an offline error while the roster is unverified', async () => {
   for (const connected of [true, null]) {
     await act(async () => root.render(el(Rows, { items: [item], isOnline: () => false,
       connectionState: () => connected, onSelect: vi.fn() })));
     expect(node.textContent).not.toContain('devices.resources.hostOffline');
-    const tone = node.querySelector('[data-testid="teammate.connection"] [data-testid="status-dot"]')?.getAttribute('data-tone');
-    expect(tone).not.toBe('off');
-    if (connected) expect(tone).toBe('ready');
-    else {
-      expect(tone).toBe('muted');
-      expect(node.textContent).toContain('devices.resources.connectionUnknown');
-    }
+    expect(node.querySelector('[data-testid="teammate.status.error"]')).toBeNull();
+    if (connected === null) expect(node.textContent).toContain('devices.resources.connectionUnknown');
   }
 });
 
@@ -246,7 +241,8 @@ it('updates waiting, unread and connection states without reparsing the reply', 
   expect(node.textContent).toContain('devices.companions.awaiting · Last reply');
   h.unread.add('bot');
   await act(async () => root.render(el(Rows, { ...props })));
-  expect(node.querySelector('[data-testid="companion.row.unread"]')).not.toBeNull();
+  expect(node.querySelector('[data-testid="teammate.status.awaiting"]')).not.toBeNull();
+  expect(node.querySelector('button')?.getAttribute('aria-label')).toContain('devices.companions.unread');
   h.unread.clear();
   await act(async () => root.render(el(Rows, { ...props, isOnline: () => false })));
   expect(node.querySelector('[data-testid="companion.row.unread"]')).toBeNull();

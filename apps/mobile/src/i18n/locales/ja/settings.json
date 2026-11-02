@@ -63,7 +63,35 @@
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "字体と文体",
+      "hint": "AI は選んだ文体で回答します。「通常の回答」では画面は文言のまま、回答はあなたの言語に合わせます。",
+      "scriptAriaLabel": "文言の字体",
+      "styleAriaLabel": "AI の回答文体",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "文言文（既定）",
+        "tang-poetry": "唐詩",
+        "song-ci": "宋詞",
+        "yuan-qu": "元曲",
+        "chu-ci": "楚辞",
+        "parallel-prose": "駢文",
+        "pre-qin": "先秦諸子",
+        "historian": "史伝",
+        "ming-qing-essay": "明清小品",
+        "plain": "通常の回答"
+      }
     }
   },
   "version": {
@@ -96,9 +124,7 @@
   "betaChannel": {
     "title": "Beta チャンネル",
     "badge": "Beta",
-    "description": "リリース前のクライアント更新を先行して受け取ります。",
-    "restartHint": "Beta チャンネルは再起動後に反映されます。アプリを再起動してください。",
-    "ok": "わかりました",
+    "description": "リリース前のクライアント更新を先行して受け取ります。コンテンツ更新は次の更新確認時にダウンロードされ、アプリの再起動後に反映されます。",
     "saveFailed": "Beta チャンネル設定の保存に失敗しました",
     "unavailable": "Beta チャンネルは利用できません。Beta 更新サーバーに接続できませんでした。"
   },

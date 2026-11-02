@@ -22,12 +22,14 @@ export async function captureLiveRegion(display: Display, selection: RegionRect,
   if (!source || source.thumbnail.isEmpty()) throw new Error('Display capture unavailable');
   const mapping = regionSelectionToImageCrop(selection, display.bounds, source.thumbnail.getSize(), display.scaleFactor);
   if (!mapping) throw new Error('Invalid capture region');
-  let image = source.thumbnail.crop(mapping.crop).resize(mapping.output);
+  let image = source.thumbnail.crop(mapping.crop);
+  if (image.getSize().width !== mapping.output.width || image.getSize().height !== mapping.output.height) image = image.resize(mapping.output);
   const maxSide = mode === 'gif' ? 960 : mode === 'video' ? 1920 : 32768;
   const ratio = Math.min(1, maxSide / Math.max(mapping.output.width, mapping.output.height));
   if (ratio < 1) image = image.resize({ width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) });
   const size = image.getSize();
-  return { ...size, data: new Uint8Array(image.toBitmap()) };
+  const pixels = image.toBitmap();
+  return { ...size, data: pixels.buffer instanceof ArrayBuffer && pixels.byteLength === pixels.buffer.byteLength ? new Uint8Array(pixels.buffer) : new Uint8Array(pixels) };
 }
 
 /** Reuses one user-session capture backend for the recording; never opens the
@@ -46,7 +48,7 @@ export class RegionVideoCapture {
       return result;
     }
     if (!this.native) {
-      this.native = new NativeDesktopCapture();
+      this.native = new NativeDesktopCapture({ encodeOnRequest: true });
     }
     const frame = await this.native.frame(String(display.id), true, { quality: 'hd', fps: 30, audio: false });
     if (generation !== this.generation || !frame || typeof frame === 'string') throw new Error('Region capture unavailable');
@@ -54,8 +56,14 @@ export class RegionVideoCapture {
     const mapping = regionSelectionToImageCrop(selection, display.bounds, source.getSize(), display.scaleFactor);
     if (!mapping) throw new Error('Invalid capture region');
     const ratio = Math.min(1, edge / Math.max(mapping.output.width, mapping.output.height));
-    const image = source.crop(mapping.crop).resize({ width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) });
-    return { ...image.getSize(), data: new Uint8Array(image.toBitmap()) };
+    const output = { width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) };
+    let image = source.crop(mapping.crop);
+    if (image.getSize().width !== output.width || image.getSize().height !== output.height) image = image.resize(output);
+    // toBitmap owns this buffer; a view avoids copying the entire selected frame
+    // again before Electron serializes it. Copy sliced buffers so IPC cannot
+    // clone bytes outside the selection from a larger backing buffer.
+    const pixels = image.toBitmap();
+    return { ...image.getSize(), data: pixels.buffer instanceof ArrayBuffer && pixels.byteLength === pixels.buffer.byteLength ? new Uint8Array(pixels.buffer) : new Uint8Array(pixels) };
   }
 
   stop(): void { this.generation++; this.native?.stop(); this.native = null; }

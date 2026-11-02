@@ -1,3 +1,4 @@
+import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageBridge.js';
 /**
  * hook-control/ipc.ts
  * ---------------------------------------------------------------------------
@@ -112,7 +113,6 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
-import { resetTelegramSpeakerRegistrationCache } from '../im/telegram/contactsAutoRegister.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
@@ -647,6 +647,26 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     // Slack 网关工具桥: lizi_slack provider 经叶子注册表取用(不直接 import
     // 本模块, 避免 mcp-providers <-> ipc 的静态引用闭环)
     const m = manager;
+    registerGroupImageReader(async (lane, downloadToken) => {
+      if (!hookControlAvailable()) return null;
+      const binding = m.snapshot().telegram.binding;
+      if (binding?.state !== 'confirmed' || lane.provider !== `telegram:${binding.principalId}`)
+        return null;
+      const token = authManager.getAccessToken();
+      if (!token) return null;
+      const bytes = await fetchOfficialGroupImage(
+        getClientEndpoint('telegramHookWsUrl'),
+        token,
+        downloadToken,
+      );
+      const current = m.snapshot().telegram.binding;
+      return hookControlAvailable() &&
+        current?.state === 'confirmed' &&
+        current.bindingId === binding.bindingId &&
+        current.principalId === binding.principalId
+        ? bytes
+        : null;
+    });
     registerSlackToolBridge({
       availability: () =>
         hookControlAvailable()
@@ -1247,8 +1267,8 @@ export async function stopHookControlAccount(): Promise<void> {
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   unregisterSlackToolBridge();
+  registerGroupImageReader(null);
   resetGroupContextCursorsSafely(options);
-  resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
   manager = null;
   store = null;

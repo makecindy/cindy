@@ -44,6 +44,12 @@ export interface ApiFetchOptions {
   cache?: RequestCache;
   /** 显式传 token；不传则取 authManager.getAccessToken()。 */
   token?: string | null;
+  /**
+   * 完整的 Authorization 头(如自建中转的 `CindyRelay <凭证>`)。提供时不注入 Cindy 账号
+   * token,调用方还应同时设置 skipAutoRefresh / skipSessionInvalidation,避免对方的 401
+   * 牵连官方登录态。
+   */
+  authorization?: string;
   /** 跳过 401 自动 refresh（避免无限循环；refresh 自身调用时禁用）。 */
   skipAutoRefresh?: boolean;
   /** Fixed-identity teardown requests must not invalidate a newer active account. */
@@ -90,9 +96,13 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     'Accept-Language': getResolvedMainLocale(),
     ...(opts.headers ?? {}),
   };
-  const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
-  if (token) {
-    headers['Authorization'] = 'Bearer ' + token;
+  if (opts.authorization !== undefined) {
+    headers['Authorization'] = opts.authorization;
+  } else {
+    const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
   }
   const timeoutMs = opts.timeoutMs ?? 0;
   const controller = timeoutMs > 0 ? new AbortController() : null;

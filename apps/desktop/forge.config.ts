@@ -24,6 +24,7 @@ import { preparePackagedNodePty } from './forge-node-pty';
 import { prunePackagedRuntime, prunePackagedMigrationSnapshots } from './forge-prune-runtime';
 import { copyRuntimeDependencyTrees as copyRuntimeTrees } from './forge-runtime-deps';
 import { packagedResourcesPath, stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { stageMacPermissionLocales } from './forge-mac-locales';
 import {
   swiftTargetTriple,
   swiftTargetTriplesForForgeArch,
@@ -804,6 +805,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/cc-manager',
     'resources/anthropic-compat-proxy',
     'resources/remote-file-service',
+    // 自建中转单文件:「部署到我的服务器」经 SSH 上传到用户服务器运行。
+    'resources/device-link-relay',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
@@ -1893,14 +1896,15 @@ const config: ForgeConfig = {
         "Cindy's AI agent needs access to read and write files in your Documents folder.",
       NSDownloadsFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files in your Downloads folder.",
-      // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
-      // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
+      // 通讯录插件(cindy-contacts)的 Node 工作进程经 osascript 向"通讯录"发 Apple Events
+      // 导入名片; macOS 按 Cindy 应用授权。缺这条声明会不弹授权窗直接拒绝(-1743)。
       NSAppleEventsUsageDescription:
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
+      // Device Link 局域网直连(direct-link-v1)。
       NSLocalNetworkUsageDescription:
-        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
+        'Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
@@ -1981,6 +1985,9 @@ const config: ForgeConfig = {
       (buildPath, _electronVersion, platform, _arch, callback) => {
         try {
           prunePackagedMigrationSnapshots(packagedResourcesPath(buildPath, platform));
+          if (platform === 'darwin' || platform === 'mas') {
+            stageMacPermissionLocales(packagedResourcesPath(buildPath, platform));
+          }
           callback();
         } catch (err) {
           callback(err as Error);
@@ -2126,14 +2133,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
-          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
-          entry: 'src/main/bot-import/openclawCronWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          entry: 'src/main/performance-trace/traceRedactionWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2172,7 +2178,7 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/skillhub/customizationScanProcess.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          config: 'vite.node-worker.config.ts',
           // File approvals can stall native scandir indefinitely. Keep discovery
           // in a killable utility process so Main can time out and recover.
           target: 'preload',

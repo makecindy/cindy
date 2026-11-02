@@ -7,6 +7,11 @@ const { translate } = vi.hoisted(() => ({
   translate: (key: string, args?: { version?: string; time?: string }) =>
     args?.version || args?.time ? `${key}: ${args.version ?? args.time}` : key,
 }));
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 vi.mock('@/lib/toast', () => ({
   toast: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() },

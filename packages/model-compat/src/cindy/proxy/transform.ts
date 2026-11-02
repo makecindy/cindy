@@ -1886,3 +1886,25 @@ export function createToolExchangeAdjacencyRecoveryRule(opts: {
     threadIdHeaders: opts.threadIdHeaders,
   };
 }
+
+/** Retry only after a gateway explicitly rejects the top-level context editor (#7041). */
+export function createAnthropicContextManagementRecoveryRule(): RecoveryRule {
+  return {
+    id: 'anthropic_context_management',
+    enabled: () => true,
+    matches: (text) => /(?:^|[\s"'])context_management\s*:\s*extra inputs are not permitted\b/i.test(text),
+    strip: (body) => {
+      try {
+        const parsed: unknown = JSON.parse(body.toString('utf8'));
+        if (!isPlainObject(parsed) || !Array.isArray(parsed.messages) || !('context_management' in parsed)) return null;
+        const next = { ...parsed };
+        delete next.context_management;
+        return Buffer.from(JSON.stringify(next), 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
+  };
+}

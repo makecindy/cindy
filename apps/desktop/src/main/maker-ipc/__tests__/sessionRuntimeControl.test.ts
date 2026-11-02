@@ -761,6 +761,22 @@ describe('session runtime fallback selection', () => {
       .toBe('medium');
   });
 
+  // #7449: null means unspecified even for a user selection. Unit tier exercises
+  // the production resolver; previous cases covered only non-null/fixed axes.
+  it.each([
+    { defaultEffort: 'max' as const, expected: 'max' },
+    { defaultEffort: null, expected: 'low' },
+  ])('resolves unspecified user effort to $expected (default=$defaultEffort)', ({ defaultEffort, expected }) => {
+    const model = {
+      ...provider('kimi', [{ id: 'k3.1-pro', efforts: ['low', 'max'] }]).models.codex![0]!,
+      defaultEffort,
+    };
+    expect(resolveSessionRuntimeAxes({
+      model, effort: null, fastMode: false, effortExplicit: true, fastExplicit: true,
+      allowFixedEffortPlaceholder: true,
+    })).toEqual({ ok: true, effort: expected, fastMode: false });
+  });
+
   it('rejects explicit unsupported axes and normalizes inherited axes', () => {
     const model = provider('xd', [
       { id: 'gpt-main', efforts: ['medium'], fast: false },

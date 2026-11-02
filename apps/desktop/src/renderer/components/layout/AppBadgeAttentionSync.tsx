@@ -90,7 +90,9 @@ export function AppBadgeAttentionSync() {
     publishNavigationAttention({ tasks: count, teammates });
   }, [count, teammates, owner]);
   useEffect(() => {
-    if (isLoading || error || history.isLoading || history.error) return;
+    // 历史桶(includeArchived:'all')只用于补齐目录 ID 做去重，它的加载/失败不影响
+    // 本桶的计数；用它 gate 整次推送会让角标永久停在旧值上(投影响应一次永不再发)。
+    if (isLoading || error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
         count: count + localTeammates,
@@ -102,6 +104,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, localTeammates, isLoading, error, history.isLoading, history.error, catalogSessionIds, owner]);
+  }, [count, localTeammates, isLoading, error, catalogSessionIds, owner]);
   return null;
 }

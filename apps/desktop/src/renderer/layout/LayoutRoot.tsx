@@ -12,6 +12,7 @@ import {
 
 import {
   MIN_SPLIT_CHILD_FRACTION,
+  tabGroupIdFromPanelKind,
   transferSplitFraction,
   transferSplitFractionRelay,
   type Layout,
@@ -24,6 +25,7 @@ import { registerBuiltinPanels } from '../panels/builtinPanels';
 import {
   getPanelKind,
   getPanelRegistryVersion,
+  isPanelKindParked,
   subscribePanelRegistry,
   type PanelDefinition,
 } from '../panels/registry';
@@ -81,12 +83,21 @@ const NON_CHAT_FLOOR_PX = 120;
 const GRID_PANE_MIN_HEIGHT_PX = 120;
 
 /**
- * pane 是否在本窗口渲染:未注册 kind(历史遗留的插件停靠面板 `ghost:*`、未安装
+ * pane 是否在本窗口挂载:未注册 kind(历史遗留的插件停靠面板 `ghost:*`、未安装
  * 面板的残留)不渲染 —— 树数据一律保留(architecture-invariants「未注册的面板
- * 允许保留在存档中但不渲染」)。
+ * 允许保留在存档中但不渲染」)。停放中的 kind 仍挂载(见 isPanelKindVisible)。
+ */
+function isPanelKindMounted(kind: string): boolean {
+  return getPanelKind(kind) !== null;
+}
+
+/**
+ * pane 是否占布局空间:已挂载且未停放。停放(registry `setPanelKindParked`)的 pane 保持
+ * 挂载但容器 0 宽 / 0 高、不画分割线、不进份额账本 —— 路由离开聊天页时边页签组靠它
+ * 保住 webview,不被卸载重建(#8081)。账本、分割线、自愈、撑满态一律按这个口径。
  */
 function isPanelKindVisible(kind: string): boolean {
-  return getPanelKind(kind) !== null;
+  return isPanelKindMounted(kind) && !isPanelKindParked(kind);
 }
 
 /**
@@ -132,14 +143,21 @@ interface SplitChildEntry {
   treeIndex: number;
   /** 树上的原始份额(写树寻址用)。 */
   fraction: number;
-  /** 在场份额:只在渲染中的兄弟之间分配 100%(Σ在场 share = 1)。渲染与拖缝都用它。 */
+  /** 在场份额:只在渲染中的兄弟之间分配 100%(Σ在场 share = 1)。渲染与拖缝都用它。停放项为 0。 */
   share: number;
+  /** 停放:挂载但不占空间(见 isPanelKindVisible)。 */
+  parked: boolean;
   node: LayoutNode;
 }
 
 interface ActiveSplitLedger {
-  /** 在场子项(未注册/已抽离/已最小化的 pane 已剔除),保留树内原始下标。 */
+  /** 在场子项(未注册/已抽离/已最小化/停放的 pane 已剔除),保留树内原始下标。 */
   entries: SplitChildEntry[];
+  /**
+   * 挂载子项 = 在场子项 + 停放子项,按树序;在场项与 `entries` 是同一批对象。渲染用它保证
+   * 停放项原位保持挂载(换位 / 换父会让 webview 宿主重载),分割线与份额只看 `entries`。
+   */
+  mounted: SplitChildEntry[];
   /**
    * Σ在场 fraction —— 在场份额与树份额之间的比例尺:`树份额 = share × scale`。
    * 缝把手把份额增量写回树时必须乘它,否则隐藏面板占着的那份会被重复计算。
@@ -153,23 +171,33 @@ function isLayoutNodeVisible(node: LayoutNode): boolean {
   return node.children.some((child) => isLayoutNodeVisible(child.node));
 }
 
+/** split 只要有一个后代 pane 挂载(含停放)就需要渲染。 */
+function isLayoutNodeMounted(node: LayoutNode): boolean {
+  if (node.type === 'pane') return isPanelKindMounted(node.panelKind);
+  return node.children.some((child) => isLayoutNodeMounted(child.node));
+}
+
 /**
  * 在场份额账本:过滤出可见子项并把份额在它们之间归一化(见文件头「在场份额」)。
  * 隐藏子项的 fraction 不参与分配、也不被改写。
  */
 function activeSplitLedger(children: { fraction: number; node: LayoutNode }[]): ActiveSplitLedger {
-  const visible = children
+  const mountedChildren = children
     .map((c, treeIndex) => ({ treeIndex, fraction: c.fraction, node: c.node }))
-    .filter((e) => isLayoutNodeVisible(e.node));
+    .filter((e) => isLayoutNodeMounted(e.node));
+  const visible = mountedChildren.filter((e) => isLayoutNodeVisible(e.node));
   const scale = visible.reduce((sum, e) => sum + e.fraction, 0);
-  return {
-    scale,
-    entries: visible.map((e) => ({
-      ...e,
-      // scale 异常(空分割 / 全零份额)时退化为均分,不产出 NaN 宽度。
-      share: scale > 0 ? e.fraction / scale : 1 / Math.max(1, visible.length),
-    })),
-  };
+  const mounted: SplitChildEntry[] = mountedChildren.map((e) =>
+    isLayoutNodeVisible(e.node)
+      ? {
+          ...e,
+          // scale 异常(空分割 / 全零份额)时退化为均分,不产出 NaN 宽度。
+          share: scale > 0 ? e.fraction / scale : 1 / Math.max(1, visible.length),
+          parked: false,
+        }
+      : { ...e, share: 0, parked: true },
+  );
+  return { scale, mounted, entries: mounted.filter((e) => !e.parked) };
 }
 
 /** 过滤出可见子项(未注册/已抽离 kind 的 pane 不可见),保留树内原始下标供 fraction 操作寻址。 */
@@ -301,6 +329,13 @@ function StaticDivider({ direction, id }: { direction: 'row' | 'column'; id: str
   );
 }
 
+/** 根横排里可被停放的 pane:左边页签组(上下组在聊天列里,列的格子本来就有稳定容器)。 */
+function isParkablePaneNode(node: LayoutNode): boolean {
+  if (node.type !== 'pane') return false;
+  const groupId = tabGroupIdFromPanelKind(node.panelKind);
+  return groupId !== null && groupId !== 'right';
+}
+
 function containsPanelKind(node: LayoutNode, kind: string): boolean {
   if (node.type === 'pane') return node.panelKind === kind;
   return node.children.some((child) => containsPanelKind(child.node, kind));
@@ -338,7 +373,7 @@ function NodeView({
       <PanelHost
         node={node}
         definition={getPanelKind(node.panelKind)}
-        visible={isPanelKindVisible(node.panelKind)}
+        visible={isPanelKindMounted(node.panelKind)}
         fill={fillPane}
         atWindowTop={atWindowTop}
         atWindowLeft={atWindowLeft}
@@ -346,15 +381,20 @@ function NodeView({
     );
   }
   const ledger = activeSplitLedger(node.children);
-  const visible = chatOnly
+  // 停放项(parked)原位渲染成 0 尺寸的容器:同 key 同类型,停放 / 解除停放不重挂载;
+  // 分割线与「第一格」判定只看在场项。
+  const rendered = chatOnly
     ? ledger.entries.filter((entry) => containsChat(entry.node))
-    : ledger.entries;
+    : ledger.mounted;
   const items: ReactNode[] = [];
-  visible.forEach((entry, i) => {
+  let previous: SplitChildEntry | null = null;
+  let activeIndex = -1;
+  rendered.forEach((entry) => {
+    if (!entry.parked) activeIndex += 1;
+    const i = entry.parked ? -1 : activeIndex;
     const entryHasMaximized =
       maximizedKind !== null && containsPanelKind(entry.node, maximizedKind);
-    if (i > 0 && maximizedKind === null) {
-      const previous = visible[i - 1];
+    if (previous !== null && !entry.parked && maximizedKind === null) {
       items.push(
         node.direction === 'column' ? (
           <ColumnDivider
@@ -378,23 +418,28 @@ function NodeView({
     }
     const share = liveFractions?.[entry.node.id] ?? entry.share;
     const hiddenByMaximize = maximizedKind !== null && !entryHasMaximized;
+    const collapsed = hiddenByMaximize || entry.parked;
     const childAtWindowTop =
       atWindowTop &&
+      !entry.parked &&
       (node.direction === 'row' || (maximizedKind !== null ? entryHasMaximized : i === 0));
     const childAtWindowLeft =
       atWindowLeft &&
+      !entry.parked &&
       (node.direction === 'column' || (maximizedKind !== null ? entryHasMaximized : i === 0));
     // 接管态下列里只剩聊天区一格:撑满整列,不按旧份额留空。
-    const fillsColumn = entryHasMaximized || (chatOnly && visible.length === 1);
+    const fillsColumn = entryHasMaximized || (chatOnly && rendered.length === 1);
     items.push(
       <div
         key={entry.node.id}
         data-layout-node-id={entry.node.id}
+        aria-hidden={entry.parked || undefined}
+        inert={entry.parked || undefined}
         className={`flex min-h-0 min-w-0 overflow-hidden ${
           node.direction === 'column' ? 'w-full flex-col' : 'h-full flex-row'
         } ${fillsColumn ? 'flex-1' : 'flex-none'}`}
         style={
-          hiddenByMaximize
+          collapsed
             ? node.direction === 'column'
               ? { height: 0 }
               : { width: 0 }
@@ -416,6 +461,7 @@ function NodeView({
         />
       </div>,
     );
+    if (!entry.parked) previous = entry;
   });
   return (
     <div
@@ -952,6 +998,8 @@ export function LayoutRoot({
     // 容器的 flex 子项。接管态只留 chat-main(见 LayoutRootProps)。
     const ledger = activeSplitLedger(content.children);
     const visible = ledger.entries.filter((e) => !suppressNonChatPanels || containsChat(e.node));
+    // 停放项原位保持挂载(0 宽、aria-hidden);接管态(设置页)不渲染它们。
+    const rendered = suppressNonChatPanels ? visible : ledger.mounted;
     const leftmostIndex = visible.findIndex(
       ({ node }) => !(rightTabsCollapsed && node.type === 'pane' && node.panelKind === 'right-tabs'),
     );
@@ -967,7 +1015,7 @@ export function LayoutRoot({
     if (maximizedEntry) {
       body = (
         <>
-          {visible.map((entry) =>
+          {rendered.map((entry) =>
             entry === maximizedEntry ? (
               <div key={entry.node.id} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
                 <NodeView
@@ -1009,9 +1057,34 @@ export function LayoutRoot({
       );
     }
     const items: ReactNode[] = [];
-    visible.forEach((entry, i) => {
-      if (i > 0) {
-        const prev = visible[i - 1];
+    let prev: SplitChildEntry | null = null;
+    let activeIndex = -1;
+    rendered.forEach((entry) => {
+      if (!entry.parked) activeIndex += 1;
+      const i = entry.parked ? -1 : activeIndex;
+      if (entry.parked) {
+        // 停放:原位 0 宽保持挂载,不画分割线;容器与解除停放后的容器同 key 同类型。
+        items.push(
+          <div
+            key={entry.node.id}
+            data-layout-root-child-id={entry.node.id}
+            aria-hidden
+            inert
+            className="flex h-full min-h-0 w-0 min-w-0 flex-none overflow-hidden"
+          >
+            <NodeView
+              node={entry.node}
+              atWindowLeft={false}
+              liveFractions={liveFractions}
+              maximizedKind={null}
+              onLive={setLiveFractions}
+              onCommitted={setLayout}
+            />
+          </div>,
+        );
+        return;
+      }
+      if (prev !== null) {
         if (content.direction === 'row') {
           items.push(
             <RootDivider
@@ -1065,6 +1138,21 @@ export function LayoutRoot({
             />
           </div>,
         );
+      } else if (isParkablePaneNode(entry.node)) {
+        // 可停放的 pane 恒带容器(display: contents 不影响布局),停放时同一个容器收成 0 宽,
+        // 子树不换父、不重挂载。
+        items.push(
+          <div key={entry.node.id} data-layout-root-child-id={entry.node.id} className="contents">
+            <NodeView
+              node={entry.node}
+              atWindowLeft={i === leftmostIndex}
+              liveFractions={liveFractions}
+              maximizedKind={null}
+              onLive={setLiveFractions}
+              onCommitted={setLayout}
+            />
+          </div>,
+        );
       } else {
         items.push(
           <NodeView
@@ -1078,6 +1166,7 @@ export function LayoutRoot({
           />,
         );
       }
+      prev = entry;
     });
     body = <>{items}</>;
   } else {

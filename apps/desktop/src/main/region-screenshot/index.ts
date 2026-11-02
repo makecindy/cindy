@@ -210,7 +210,7 @@ function registerIpc(): void {
   ipcMain.handle(
     C.ELEMENTS_AT,
     (event, token: unknown, windowId: unknown, x: unknown, y: unknown) =>
-      active?.elementsAt(event.sender, event.senderFrame, token, windowId, x, y) ?? [],
+      active?.elementsAt(event.sender, event.senderFrame, token, windowId, x, y) ?? null,
   );
   ipcMain.handle(
     C.EXPORT,

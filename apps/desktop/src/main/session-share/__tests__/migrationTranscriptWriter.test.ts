@@ -45,6 +45,16 @@ describe('writeMigratedTranscript', () => {
     expect(fs.readFileSync(target, 'utf8')).toBe(JSON.stringify({ ...header, id: 'new-native-id', cwd: '/target/project' }) + tail);
   });
 
+  it('retags only the Codex session header provider and keeps history bytes', async () => {
+    const header = { type: 'session_meta', payload: { id: 't1', model_provider: 'openai', cwd: '/x' } };
+    const tail = '\n{"type":"response_item","payload":{"type":"message","model_provider":"openai"}}\n';
+    const target = path.join(dir, 'codex.jsonl');
+    await writeMigratedTranscript(chunked(Buffer.from(JSON.stringify(header) + tail), 5), target,
+      { agent: 'codex-provider', modelProvider: 'cindy_gateway' });
+    expect(fs.readFileSync(target, 'utf8')).toBe(
+      JSON.stringify({ ...header, payload: { ...header.payload, model_provider: 'cindy_gateway' } }) + tail);
+  });
+
   for (const [name, text] of Object.entries(samples)) {
     it.each([
       ['cc', 1],

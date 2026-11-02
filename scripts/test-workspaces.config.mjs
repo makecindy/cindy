@@ -279,6 +279,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
   'src/renderer/__tests__/iconButtonTooltips.test.ts',
   'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  // Existing project-picker source assertions enforce cross-file routing/design contracts.
+  'src/renderer/__tests__/newMakerProjectPicker.test.ts',
   'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
   'src/renderer/__tests__/projectsSidebarSection.test.ts',
   'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',
@@ -514,6 +516,7 @@ export default {
     requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
+    requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
     requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
     noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),

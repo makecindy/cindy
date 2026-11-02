@@ -80,7 +80,9 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  it('forks on the member that ran it, and reports a failed native fork as such instead of an unavailable computer', { timeout: 180_000 }, async () => {
+  // Direct history lives only on M; the existing relay-only scenario cannot catch
+  // accidentally sending that native ID to O. Both routes use the real CLI (e2e).
+  it.each(['relay', 'direct'] as const)('forks native history on M with %s routing and preserves native failures', { timeout: 180_000 }, async route => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -100,7 +102,7 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
       startHosted: (input) => agent.startSession(hostedStartOptions(input)),
       forkHosted: (_kind, opts) => agent.forkSdkSession(opts),
       isControllerAuthorized: () => true,
-      controllerTrust: () => 'owner',
+      controllerTrust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
       providerAccess: { resolve: async (_kind, _model, providerId) => providerId ?? MEMBER.providerId, isAllowed: () => true },
       bindGuestProviderRoute: async () => ({ routeToken: 'route', modelIds: [MODEL], release: () => {} }),
       captureOwner: () => 'owner',
@@ -145,7 +147,8 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
       log: { info: () => {}, warn: (msg, data) => { ownerWarnings.push({ msg, data }); } },
     });
 
-    const guestPoller = new RemoteAgentPoller(async (args) => roundTrip(await owner.handle(GUEST, roundTrip(args[0]))));
+    const executionHost = route === 'direct' ? member : owner;
+    const guestPoller = new RemoteAgentPoller(async (args) => roundTrip(await executionHost.handle(GUEST, roundTrip(args[0]))));
     const events: AgentEvent[] = [];
     let turnDone: () => void = () => {};
     const turn = new Promise<void>((resolve) => { turnDone = resolve; });
@@ -181,13 +184,20 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
       const anchor = events.filter((event) => event.type === 'text').map((event) => event.agentMeta?.uuid)
         .find((uuid): uuid is string => typeof uuid === 'string');
       expect(anchor).toBeDefined();
-      const fork = (upToMessageId: string, newSessionId: string, acceptsForkFailed = true) => owner.handle(GUEST, roundTrip({
+      const forkRequest = (upToMessageId: string, newSessionId: string, acceptsForkFailed = true) => roundTrip({
         op: 'fork', sourceSessionId: 'guest-task', newSessionId, agentKind: 'claude-code',
         sourceSdkSessionId: started.id, model: MODEL, upToMessageId,
         ...(acceptsForkFailed ? { acceptsForkFailed: true } : {}),
-      }));
+      });
+      const fork = (upToMessageId: string, newSessionId: string, acceptsForkFailed = true) =>
+        executionHost.handle(GUEST, forkRequest(upToMessageId, newSessionId, acceptsForkFailed));
 
       await expect(fork(anchor!, 'guest-child')).resolves.toMatchObject({ newSdkSessionId: expect.any(String) });
+      if (route === 'direct') {
+        await expect(owner.handle(GUEST, forkRequest(anchor!, 'wrong-owner-child'))).rejects.toThrow('REMOTE_AGENT_INVALID');
+        await expect(member.handle('share-other-guest', forkRequest(anchor!, 'wrong-guest-child'))).rejects.toThrow('REMOTE_AGENT_INVALID');
+        expect(relay.plan).not.toHaveBeenCalled();
+      }
 
       const missing = '00000000-0000-4000-8000-000000000000';
       const failure = await fork(missing, 'guest-child-2').then(() => null, (error: unknown) => error as Error);
@@ -197,7 +207,7 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
         msg: 'remote agent: native fork failed',
         data: expect.objectContaining({ error: expect.objectContaining({ message: expect.stringContaining(missing) }) }),
       })]);
-      expect(ownerWarnings).toEqual([expect.objectContaining({
+      expect(ownerWarnings).toEqual(route === 'direct' ? [] : [expect.objectContaining({
         msg: 'remote agent: a computer in the provider group could not fork the shared task',
         data: expect.objectContaining({ error: expect.objectContaining({ code: 'REMOTE_AGENT_FORK_FAILED' }) }),
       })]);
@@ -206,7 +216,7 @@ describe.skipIf(!available)('a shared user forks a real Claude Code task through
       const legacy = await fork(missing, 'guest-child-3', false).then(() => null, (error: unknown) => error as Error);
       expect(legacy?.message).toMatch(/^\[REMOTE_AGENT_UNAVAILABLE\]/);
     } finally {
-      for (const host of [owner, member]) { await host.abortAll(); host.dispose(); }
+      for (const host of [owner, member]) { await host.abortAll(); await host.purgeControllers(() => true); host.dispose(); }
     }
   });
 });

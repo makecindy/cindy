@@ -725,6 +725,7 @@ describe('feishu group lane adapter hooks', () => {
       chatKind: 'group',
       chatId: 'oc_note1',
       senderId: 'ou_owner',
+      senderIsOwner: true,
       toolsHint,
     });
     await vi.waitFor(() => expect(getChatName).toHaveBeenCalledWith('oc_note1'));
@@ -734,13 +735,20 @@ describe('feishu group lane adapter hooks', () => {
       chatId: 'oc_note1',
       chatName: '产品群',
       senderId: 'ou_owner',
+      senderIsOwner: true,
       toolsHint,
     });
     // 预取失败不影响本条, 也不抛错。
     getChatName.mockRejectedValueOnce(new Error('no permission'));
     expect(
       await adapter.channelNoteSourceFor?.(groupEvent({ senderId: 'g/oc_note2', chatId: 'oc_note2' })),
-    ).toEqual({ chatKind: 'group', chatId: 'oc_note2', senderId: 'ou_owner', toolsHint });
+    ).toEqual({ chatKind: 'group', chatId: 'oc_note2', senderId: 'ou_owner', senderIsOwner: true, toolsHint });
+    // 群成员发言不标主人。
+    expect(
+      await adapter.channelNoteSourceFor?.(
+        groupEvent({ senderId: 'g/oc_note2', chatId: 'oc_note2', speaker: { id: 'ou_m', name: '', isOwner: false } }),
+      ),
+    ).toEqual({ chatKind: 'group', chatId: 'oc_note2', senderId: 'ou_m', toolsHint });
   });
 
   it('channelToolScopeFor: 作用域钉在触发消息所在的 chat / 话题, 主人身份只认 Main 校验过的 speaker / owner', () => {

@@ -38,7 +38,7 @@ const bridge: RegionScreenshotOverlayBridge | undefined = editor ? {
   abandon: () => { if (editorToken) editor.cancel(editorToken); },
   // Rendering adapters only: none of these unused capture capabilities cross preload.
   onClear: () => () => {}, focused: () => {}, selectionStarted: () => {}, copyText: () => {},
-  elementsAt: async () => [], autoScroll: async () => false, restoreEditor: async () => false,
+  elementsAt: async () => null, autoScroll: async () => false, restoreEditor: async () => false,
   holdCapture: async () => {}, startLive: async () => null, liveFrame: async () => null, saveRecording: async () => false,
   recordingControls: async () => null, previewRecording: async () => false,
 } : window.regionScreenshot;

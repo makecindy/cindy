@@ -24,7 +24,12 @@
   // 一键启用/唤起插件,也不能用 $command 显式点名;但 AI 的工具发现与调用不受影响
   // (仅检查插件启用状态与 tools 声明)。除非你的插件完全靠 panel 或 subscribe 驱动,
   // 否则请始终声明一个 command。
-  "tools": [ /* 见 §3 */ ],
+  "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
+  // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
+  "mcpApps": { "ui": {
+    "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
+    "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
+  } },
   "cindy": { "image": ["generate", "edit"] },   // 直接声明能力及详单,见下
   // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
   // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1);
@@ -62,6 +67,8 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
 准确填写：它供发布服务选择兼容 release，也记录插件真实依赖的首个 Host 版本。
 
+`mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
+
 ### whenToUse:只写发现线索,不写使用规则
 
 在作者契约里,`whenToUse` 是专门给模型做插件发现与判断的唯一字段;
@@ -90,11 +97,11 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 "whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"
 ```
 
-### 2.1 本地化资源(locales)
+## 2.1 本地化资源(locales)
 
 插件语言**只跟随 Cindy 宿主当前语言**。不要读取 `navigator.language`、操作系统语言或
 浏览器偏好，也不要在插件内保存另一份语言选择。宿主当前支持
-`zh-CN / en / ja / ko`；插件没提供宿主当前语言时固定使用英文，因此只要声明
+`zh-CN / zh-TW / en / ja / ko / es / fr / de / pt-PT / pt-BR`；插件没提供宿主当前语言时固定使用英文，因此只要声明
 `locales` 就必须提供 `en`。
 
 locale JSON 覆盖清单中已有的可本地化字段。**翻译是可选项**：提供的条目必须合法，
@@ -158,9 +165,9 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`。不用的字段直接省略。
-`deviceSync` 的声明与调用约定见 [§4.10.2 同账号电脑间的插件资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
+`deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
 阅读邮件可声明 `mailReader:{tool,hosts}`，工具接收 `{url}` 并返回 MailMessage，默认只读。

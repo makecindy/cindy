@@ -87,6 +87,7 @@ export function PluginManagementConfirmation(
         </Text>
         {body(props.deviceName)}
         {body(info?.identity)}
+        {body(info?.trust)}
         {body(info?.origin)}
         {body(info?.version)}
         {info?.permissions.map((permission, index) => (

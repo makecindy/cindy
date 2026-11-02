@@ -1,23 +1,28 @@
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useIsFocused } from 'expo-router';
 import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
-import { enqueueChatMessage, settleChatOutbox } from './chatOutbox';
+import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
 import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore } from './chatHistoryStore';
 import { cacheChatMessages, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { createChatServerUpload } from './chatServerUpload';
+import { uploadPublicAvatar } from './publicAvatarUpload';
+import type { MobileLocalAttachmentUploadDeps } from '@/session/mobileLocalAttachmentUpload';
+import type { RemoteSerializedAttachment } from '@/session/types';
+import { useTranslation } from 'react-i18next';
 
 // Shared only within the current authenticated account generation and realm.
 let listOwner = '';
@@ -73,7 +78,30 @@ export function useChatClient() {
       return createChatHistory({ api: request, current, newGeneration: randomUUID,
         store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
     });
-    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client,
+    const upload = createChatServerUpload({ request, current,
+      operationId: () => `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      put: async (url, uri, type, signal) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, type, {}, { signal, signedHeaders: { 'Content-Type': type } });
+      },
+    });
+    /** A group avatar file (already resized) to a public URL; see publicAvatarUpload.ts. */
+    const uploadAvatar = (file: { uri: string; size: number; mimeType: 'image/jpeg' | 'image/png' }) => uploadPublicAvatar({ current,
+      presign: async body => {
+        check();
+        let base: string;
+        try { base = chatHttpsUrl(getMobileEndpointForRealm(realm, 'ossApiBaseUrl')).replace(/\/$/, ''); }
+        catch { throw new Error('PROFILE_AVATAR_UPLOAD_FAILED'); }
+        return deps.current.apiFetch('/api/oss/presign-put', { baseUrl: base, method: 'POST', body, cache: 'no-store', assertCurrent: check });
+      },
+      put: async (url, uri, headers) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, file.mimeType, {}, { signedHeaders: headers });
+      },
+    }, file);
+    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client, upload, uploadAvatar,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
 }
@@ -119,7 +147,10 @@ export function useChatServerRoster(enabled: boolean) {
                 || run.reasons.some(reason => ['focus', 'connected', 'visible'].includes(reason)));
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
-            if (!value.room.archived) rows.push(chatRoomRow(room, value, self));
+            if (!value.room.archived) {
+              const activity = await api.client.rosterActivity(room.id, value);
+              rows.push(chatRoomRow(room, value, self, activity));
+            }
           } catch (error) {
             if (!chatAccessLost(error)) {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
@@ -215,6 +246,8 @@ export function useChatServerRoster(enabled: boolean) {
 /** Reads and sends use the account's Chat Server identity, never its computer identity. */
 export function useChatServerGroup(groupId: string, enabled: boolean, threadRootId?: string) {
   const api = useChatClient();
+  const focused = useIsFocused();
+  const { t } = useTranslation();
   const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
   const ledger = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
@@ -227,7 +260,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
-  const olderPending = useRef(false);
+  const olderPending = useRef<Promise<void> | null>(null);
   const valid = () => api.current() && active.current === identity;
   const loseAccess = () => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
@@ -235,6 +268,13 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   };
   const view = (next: ChatPage, self: string, actors: ChatActor[]) => ({ ...chatGroupView(next, self, actors), ...api.client.lifecycleCapabilities() });
+  const hydrate = async (previous: NonNullable<typeof page.current>) => {
+    const enriched = await api.client.hydrateThreads(groupId, previous.page);
+    if (!valid() || page.current !== previous || olderPending.current) return;
+    page.current = { ...previous, page: enriched };
+    setState(old => ({ ...old, value: { kind: 'ready', group: view(enriched, previous.self, previous.actors) } }));
+    void cacheChatMessages(groupId, { version: 1, page: enriched, self: previous.self, actors: previous.actors });
+  };
   useEffect(() => subscribeChatInvalidation(roomId => {
     if (roomId !== groupId || !valid()) return;
     accessGeneration.current++; freshRead.current = false; page.current = null;
@@ -272,9 +312,11 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       freshRead.current = true;
       page.current = { identity, page: next, self, actors };
       void cacheChatMessages(groupId, { version: 1, page: next, self, actors }).then(saved => {
-        if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(next.messages.map(message => message.id)));
+        if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(next.messages.map(message => message.id)),
+          new Set(Object.entries(chatThreadMetadata(next, self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
       }).catch(() => undefined);
       setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, loadingOlder: false });
+      void hydrate(page.current).catch(() => undefined);
     } catch (error) {
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       if (chatAccessLost(error)) loseAccess();
@@ -321,11 +363,16 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(recovery); } });
     return () => { stop?.(); clearInterval(recovery); foreground.remove(); };
   }, [api, enabled, groupId, identity, reload, request]));
-  const receipts = pending.map(row => row.chat?.messageId ?? '').join('|');
-  useEffect(() => { if (receipts.replaceAll('|', '')) reload(); }, [receipts, reload]);
-  const pendingAction = async (clientId: string, action: 'retry' | 'cancel') => {
+  const receipts = pending.filter(row => row.chat?.messageId).map(row => `${row.chat!.messageId}:${row.chat!.shareToMain?.state ?? ''}`).join('|');
+  const previousReceipts = useRef('');
+  useEffect(() => { if (receipts || previousReceipts.current) reload(); previousReceipts.current = receipts; }, [receipts, reload]);
+  const pendingAction = async (clientId: string, action: 'retry' | 'cancel' | 'dismiss-share') => {
     const row = pending.find(row => row.item.clientId === clientId);
     if (!row || !valid()) return;
+    if (action === 'dismiss-share' && row.chat?.messageId && row.chat.shareToMain && (row.chat.shareToMain.state === 'unavailable' || row.suspended)) { await mobileDurableOutbox.remove(row); return; }
+    if (action === 'retry' && row.chat?.shareToMain?.state === 'failed' && !row.suspended) {
+      await mobileDurableOutbox.update(row, { chat: { ...row.chat, shareToMain: { ...row.chat.shareToMain, state: 'pending', error: undefined } } }); return;
+    }
     if (action === 'cancel') {
       if (row.enqueueStarted || row.state === 'sending') throw new Error('MESSAGE_ALREADY_SENDING');
       await mobileDurableOutbox.remove(row);
@@ -333,21 +380,24 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       await mobileDurableOutbox.update(row, { state: 'queued', error: undefined });
     }
   };
-  const loadOlder = async () => {
+  const loadOlder = () => {
     const previous = page.current;
-    if (!previous || previous.identity !== identity || olderPending.current) return;
-    olderPending.current = true;
+    if (!previous || previous.identity !== identity || olderPending.current) return Promise.resolve();
     setState(old => ({ ...old, loadingOlder: true }));
-    try {
-      const next = await api.client.older(groupId, previous.page);
-      if (!valid() || page.current !== previous) return;
-      page.current = { ...previous, page: next };
-      void cacheChatMessages(groupId, { version: 1, page: next, self: previous.self, actors: previous.actors });
-      setState({ identity, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false });
-    } catch (error) {
-      if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
-      throw error;
-    } finally { olderPending.current = false; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
+    olderPending.current = (async () => {
+      try {
+        const next = await api.client.older(groupId, previous.page);
+        if (!valid() || page.current !== previous) return;
+        page.current = { ...previous, page: next };
+        void cacheChatMessages(groupId, { version: 1, page: next, self: previous.self, actors: previous.actors });
+        setState({ identity, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false });
+        void hydrate(page.current).catch(() => undefined);
+      } catch (error) {
+        if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
+        throw error;
+      } finally { olderPending.current = null; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
+    })();
+    return olderPending.current;
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
     if (action === 'stop') {
@@ -369,25 +419,44 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
       return { effects: [] };
     }
-    if (action !== 'send' || !input || input.division || (Array.isArray(input.attachments) && input.attachments.length)) throw new Error('UNSUPPORTED_CHAT_ACTION');
+    if (action !== 'send' || !input || input.division) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
-    const mentions = input.mentions as { all: boolean; botIds: string[] };
+    const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
     const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
+      ...(threadRootId && input.alsoSendToMain === true ? { alsoSendToMain: true as const } : {}),
+      attachments: input.attachments as RemoteSerializedAttachment[] | undefined,
       ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
         ? { quote: { messageId: String(input.quote.messageId) } } : {}),
-      mentions: { all: mentions.all, botIds: [...new Set(recipients)] },
+      mentions: { ...mentions, botIds: [...new Set(recipients)] },
     }, latest.page.messages.length, input.quote as import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView | undefined,
     latest.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) > BigInt(seq) ? message.seq : seq, undefined));
     if (!isMobileAuthOwnerCurrent(owner)) throw new Error('OWNER_CHANGED');
     return { effects: [] };
+  };
+  const uploadAttachment: MobileLocalAttachmentUploadDeps['upload'] = async (candidate, uri, options) => {
+    const generation = accessGeneration.current;
+    if (!enabled || !valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+    try {
+      const attachment = await api.upload(groupId, candidate, uri, options.signal);
+      if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
+      return attachment;
+    } catch (error) {
+      if (valid() && generation === accessGeneration.current && chatAccessLost(error)) loseAccess();
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOO_LARGE') {
+        throw new Error(t('groupChat.server.attachmentTooLarge', { size: 100 }));
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UNAVAILABLE') throw new Error(t('composer.upload.noFileRead'));
+      if (error instanceof Error && error.message === 'UPLOAD_CANCELLED') throw new Error(t('composer.upload.cancelled'));
+      throw error;
+    }
   };
   const media = async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
     const generation = accessGeneration.current;
@@ -428,9 +497,51 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     api.client.personalList.merge(value);
     if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
   }, [api, groupId]);
+  const followThread = async (following: boolean) => {
+    if (!valid() || !enabled || !threadRootId) throw new Error('THREAD_FOLLOW_UNSUPPORTED');
+    const operationId = (await import('expo-crypto')).randomUUID();
+    const result = await api.client.followThread(groupId, threadRootId, following, operationId);
+    // Commit the page already being fetched before replacing it with follow metadata or a reload.
+    while (olderPending.current) await olderPending.current.catch(() => undefined);
+    if (valid()) {
+      const latest = page.current;
+      if (latest?.identity === identity && latest.page.snapshot.reads) {
+        const reads = latest.page.snapshot.reads;
+        const previous = reads.find(read => read.thread_key === threadRootId);
+        const next = { ...latest.page, snapshot: { ...latest.page.snapshot,
+          reads: [...reads.filter(read => read.thread_key !== threadRootId), { ...previous, thread_key: threadRootId, read_seq: previous?.read_seq ?? '0', following: result.following }] } };
+        page.current = { ...latest, page: next };
+        setState(old => ({ ...old, value: { kind: 'ready', group: view(next, latest.self, latest.actors) } }));
+      }
+      reload();
+    }
+    return result.following;
+  };
+  const shareToMain = async (messageId: string) => {
+    const latest = page.current;
+    if (!valid() || !enabled || !latest || latest.identity !== identity) throw new Error('SHARE_UNAVAILABLE');
+    const message = view(latest.page, latest.self, latest.actors).messages.find(message => message.id === messageId);
+    if (!message || latest.page.snapshot.room.archived || latest.page.snapshot.room.dissolved_at) throw new Error('SHARE_UNAVAILABLE');
+    const owner = getMobileAuthOwner();
+    await enqueueChatShare(mobileDurableOutbox, owner.accountKey, groupId, message);
+  };
+  const react = async (messageId: string, emoji: string, present: boolean) => {
+    if (!valid() || !enabled) throw new Error('OWNER_CHANGED');
+    const operationId = (await import('expo-crypto')).randomUUID();
+    await api.client.react(groupId, messageId, emoji, present, operationId);
+    if (valid()) reload();
+  };
+  const latest = page.current?.identity === identity ? page.current : null;
+  const retryAt = latest?.page.threadRetryAt;
+  useEffect(() => {
+    if (!enabled || !focused || retryAt === undefined || AppState.currentState !== 'active') return;
+    const timer = setTimeout(() => { if (valid() && AppState.currentState === 'active') void request({ reason: 'changed' }); }, Math.max(0, retryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [identity, enabled, focused, retryAt, request]);
+  const threadMeta = enabled && latest ? chatThreadMetadata(latest.page, latest.self) : undefined;
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
-    online: state.identity === identity && state.online, reload, act, pending, pendingAction,
+    online: state.identity === identity && state.online, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
-    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead };
+    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };
 }

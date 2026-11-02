@@ -10,6 +10,7 @@
 export * from "./protocol.js";
 export * from "./allowlist.js";
 export * from "./client.js";
+export * from "./routedClient.js";
 export * from "./directPath.js";
 export * from "./directNegotiation.js";
 export * from "./directRuntimeBridge.js";
@@ -61,6 +62,9 @@ export * from "./sessionMessageReuse.js";
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
 export * from "./clipboardTransfer.js";
+
+export * from "./selfHostedRelay.js";
+export * from "./selfHostedRelayAuth.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";

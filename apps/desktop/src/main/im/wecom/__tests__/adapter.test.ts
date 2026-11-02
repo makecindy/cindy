@@ -56,7 +56,7 @@ describe('wecom group window', () => {
 
   beforeEach(async () => {
     const dir = path.resolve(__dirname, '../../../../../drizzle');
-    const sql = ['0083_', '0086_', '0087_', '0088_']
+    const sql = ['0083_', '0086_', '0087_', '0088_', '0136_']
       .map((prefix) => {
         const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
         if (!file) throw new Error(`${prefix} migration not found`);

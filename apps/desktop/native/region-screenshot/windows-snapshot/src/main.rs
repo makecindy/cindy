@@ -6,7 +6,8 @@
 //! Electron converts them to DIP.
 //!
 //! - `{"id":1,"op":"windows"}` → visible top-level windows, top of the z-order
-//!   first, using the DWM frame (without the invisible resize border).
+//!   first, using the DWM frame (without the invisible resize border), plus
+//!   bounded native child rectangles for synchronous default-region hit testing.
 //! - `{"id":2,"op":"elements","hwnd":N,"x":X,"y":Y}` → UI Automation elements of
 //!   that window under the point, innermost first. The window is located from
 //!   the snapshot instead of hit-testing the screen, because Cindy's overlay
@@ -33,6 +34,8 @@ use windows::{
             WindowsAndMessaging::{
                 EnumWindows, GetWindowLongW, GetWindowRect, IsIconic, IsWindowVisible, GWL_EXSTYLE,
                 WS_EX_TRANSPARENT, WindowFromPoint, GetAncestor, GA_ROOT, PostMessageW, WM_MOUSEWHEEL,
+                ChildWindowFromPointEx, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT,
+                GetWindow, GW_CHILD, GW_HWNDNEXT,
             },
         },
     },
@@ -68,12 +71,14 @@ fn main() {
                 let hwnd = request.get("hwnd").and_then(Value::as_i64);
                 let x = request.get("x").and_then(Value::as_i64);
                 let y = request.get("y").and_then(Value::as_i64);
-                match (&automation, hwnd, x, y) {
-                    (Some(automation), Some(hwnd), Some(x), Some(y)) => json!({
-                        "id": id,
-                        "rects": element_chain(automation, hwnd as isize, x as i32, y as i32),
-                    }),
-                    (None, ..) => json!({ "id": id, "rects": [] }),
+                match (hwnd, x.and_then(|v| i32::try_from(v).ok()), y.and_then(|v| i32::try_from(v).ok())) {
+                    (Some(hwnd), Some(x), Some(y)) => {
+                        let native = content_rect(HWND(hwnd as isize as *mut _), x, y);
+                        let (rects, document) = automation.as_ref()
+                            .map(|a| element_chain(a, hwnd as isize, x, y)).unwrap_or_default();
+                        json!({ "id": id, "rects": rects,
+                            "preferredRect": native.or(document).or_else(|| window_rect(HWND(hwnd as isize as *mut _))).as_ref().map(rect_json) })
+                    },
                     _ => json!({ "id": id, "error": "invalid-request" }),
                 }
             }
@@ -230,7 +235,10 @@ unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
         return true.into();
     }
     if let Some(rect) = window_rect(hwnd) {
-        windows.push(json!({ "hwnd": hwnd.0 as isize, "rect": rect_json(&rect) }));
+        let mut regions = Vec::new();
+        let mut remaining = 256;
+        snapshot_children(hwnd, &rect, 0, &mut remaining, &mut regions);
+        windows.push(json!({ "hwnd": hwnd.0 as isize, "rect": rect_json(&rect), "snapRects": regions }));
     }
     true.into()
 }
@@ -251,47 +259,97 @@ fn area(rect: &RECT) -> i64 {
     (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
 }
 
-/// Walks the control view from the window down, at each level taking the
-/// smallest child that contains the point. Returns innermost first.
-fn element_chain(automation: &IUIAutomation, hwnd: isize, x: i32, y: i32) -> Vec<Value> {
+/// Native content hosts remain available even when Chromium has not enabled UIA.
+/// Start inside the captured window: screen hit testing would hit our overlay.
+fn content_rect(root: HWND, x: i32, y: i32) -> Option<RECT> {
+    let outer = window_rect(root)?;
+    let mut current = root;
+    let mut result = None;
+    for _ in 0..MAX_DEPTH {
+        let mut point = POINT { x, y };
+        if !unsafe { ScreenToClient(current, &mut point) }.as_bool() { break; }
+        let child = unsafe { ChildWindowFromPointEx(current, point, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT) };
+        if child.0.is_null() || child == current { break; }
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(child, &mut rect) }.is_ok() && usable(&rect)
+            && contains(&rect, x, y) && area(&rect) < area(&outer) {
+            result = Some(rect);
+        }
+        current = child;
+    }
+    result
+}
+
+/// Capture once, before the overlay appears. Descendants precede parents and
+/// sibling subtrees retain native z-order, so the first containing region wins.
+/// Clipping to ancestors prevents a child from snapping outside its host.
+unsafe fn snapshot_children(parent: HWND, bounds: &RECT, depth: usize, remaining: &mut usize, regions: &mut Vec<Value>) {
+    if depth >= MAX_DEPTH || *remaining == 0 { return; }
+    let mut child = GetWindow(parent, GW_CHILD).unwrap_or_default();
+    while !child.0.is_null() && *remaining > 0 {
+        *remaining -= 1;
+        if IsWindowVisible(child).as_bool()
+            && GetWindowLongW(child, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 == 0 {
+            let mut rect = RECT::default();
+            if GetWindowRect(child, &mut rect).is_ok() {
+                rect.left = rect.left.max(bounds.left);
+                rect.top = rect.top.max(bounds.top);
+                rect.right = rect.right.min(bounds.right);
+                rect.bottom = rect.bottom.min(bounds.bottom);
+                if usable(&rect) {
+                    snapshot_children(child, &rect, depth + 1, remaining, regions);
+                    regions.push(rect_json(&rect));
+                }
+            }
+        }
+        child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+    }
+}
+
+/// Explore overlapping siblings within one budget. Chrome can expose an empty
+/// container before the equally sized branch that actually owns the document.
+fn element_chain(automation: &IUIAutomation, hwnd: isize, x: i32, y: i32) -> (Vec<Value>, Option<RECT>) {
     let started = Instant::now();
-    let mut chain: Vec<RECT> = Vec::new();
+    let mut best: Vec<RECT> = Vec::new();
+    let mut preferred = None;
     let mut walk = || -> windows::core::Result<()> {
         unsafe {
             let cache = automation.CreateCacheRequest()?;
             cache.AddProperty(UIA_BoundingRectanglePropertyId)?;
+            cache.AddProperty(UIA_ControlTypePropertyId)?;
             let condition = automation.ControlViewCondition()?;
             cache.SetTreeFilter(&condition)?;
-            let mut current = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
-            for _ in 0..MAX_DEPTH {
-                if started.elapsed() > ELEMENT_BUDGET {
-                    break;
+            let root = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
+            let mut pending = vec![(root, Vec::<RECT>::new(), None::<RECT>, 0usize)];
+            let mut visited = 0;
+            while let Some((current, chain, document, depth)) = pending.pop() {
+                if started.elapsed() > ELEMENT_BUDGET || visited >= 256 { break; }
+                visited += 1;
+                if (document.is_some() && preferred.is_none())
+                    || (document.is_some() == preferred.is_some() && chain.len() > best.len()) {
+                    best = chain.clone(); preferred = document;
                 }
-                let children = current.FindAllBuildCache(TreeScope_Children, &condition, &cache)?;
-                let mut best: Option<(i64, IUIAutomationElement, RECT)> = None;
-                for index in 0..children.Length()? {
-                    if started.elapsed() > ELEMENT_BUDGET {
-                        break;
-                    }
+                if depth >= MAX_DEPTH { continue; }
+                let Ok(children) = current.FindAllBuildCache(TreeScope_Children, &condition, &cache) else { continue };
+                let mut candidates = Vec::new();
+                for index in 0..children.Length()?.min(512) {
+                    if started.elapsed() > ELEMENT_BUDGET { break; }
                     let Ok(child) = children.GetElement(index) else { continue };
                     let Ok(rect) = child.CachedBoundingRectangle() else { continue };
-                    if !usable(&rect) || !contains(&rect, x, y) {
-                        continue;
-                    }
-                    let size = area(&rect);
-                    if best.as_ref().map_or(true, |(best_size, ..)| size < *best_size) {
-                        best = Some((size, child, rect));
-                    }
+                    if !usable(&rect) || !contains(&rect, x, y) { continue; }
+                    let document = document.or_else(|| (child.CachedControlType().ok() == Some(UIA_DocumentControlTypeId)).then_some(rect));
+                    candidates.push((child, rect, document));
                 }
-                let Some((_, child, rect)) = best else { break };
-                if chain.last() != Some(&rect) {
-                    chain.push(rect);
+                candidates.sort_by_key(|(_, rect, _)| area(rect));
+                for (child, rect, document) in candidates.into_iter().rev() {
+                    let mut next = chain.clone();
+                    if next.last() != Some(&rect) { next.push(rect); }
+                    pending.push((child, next, document, depth + 1));
                 }
-                current = child;
             }
             Ok(())
         }
     };
     let _ = walk();
-    chain.iter().rev().map(rect_json).collect()
+    (best.iter().rev().map(rect_json).collect(), preferred)
 }

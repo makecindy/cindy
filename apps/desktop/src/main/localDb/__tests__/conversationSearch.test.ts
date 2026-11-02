@@ -72,6 +72,7 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
@@ -195,6 +196,7 @@ describe('conversationSearch remote project aliases', () => {
         db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(root, id);
       }
       db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'worktree');
+      db.prepare('UPDATE sessions SET working_dir = ?, project_dir = ? WHERE id = ?').run('/tmp/arbitrary-checkout', root, 'older');
       db.exec("UPDATE sessions SET status = 'archived' WHERE id = 'archived'");
       db.exec("UPDATE sessions SET hidden_at = 1 WHERE id = 'hidden'");
       db.exec("UPDATE sessions SET orca_role = 'worker' WHERE id = 'worker'");
@@ -204,6 +206,10 @@ describe('conversationSearch remote project aliases', () => {
       const request = { query: 'CUSTOMER', limit: 2, semanticMode: 'keyword' as const, filters: { status: 'active' as const } };
       const result = await searchConversations(request, { remoteVisibleOnly: true });
       expect(result.results.map(item => item.session.id).sort()).toEqual(['older', 'worktree']);
+      expect(result.results.find(item => item.session.id === 'older')?.session)
+        .toMatchObject({ workingDir: '/tmp/arbitrary-checkout', projectDir: root });
+      expect((await searchConversations({ ...request, filters: { workingDirs: [root], status: 'active' } }, { remoteVisibleOnly: true })).results.map(item => item.session.id).sort())
+        .toEqual(['older', 'worktree']);
       expect(result.results.every(item => item.titleMatchIndices.length === 0)).toBe(true);
       expect(result.results.every(item => item.session.title.startsWith('needle '))).toBe(true);
       expect((await searchConversations(request)).results).toEqual([]);
@@ -234,6 +240,10 @@ describe('conversationSearch workingDir filtering', () => {
       const rows = [
         ['drive', 'C:/work/repo'],
         ['unc', '//SERVER/Share/Work/Repo'],
+        // #7644 (unit): exercise the real DB search filter with a mixed-case container;
+        // previous fixtures only varied the base path and missed worktree folding.
+        ['worktree-drive', 'C:/Work/Repo/.CINDY-WORKTREES/topic'],
+        ['worktree-unc', '//server/share/work/repo/.XDT-WORKTREES/topic'],
         ['other', 'C:/work/other'],
         ['posix-lower', '/work/repo'],
         ['posix-upper', '/Work/Repo'],
@@ -248,7 +258,9 @@ describe('conversationSearch workingDir filtering', () => {
         semanticMode: 'keyword',
         filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
       });
-      expect(windows.results.map((item) => item.session.id).sort()).toEqual(['drive', 'unc']);
+      expect(windows.results.map((item) => item.session.id).sort()).toEqual([
+        'drive', 'unc', 'worktree-drive', 'worktree-unc',
+      ]);
 
       const posix = await searchConversations({
         query: 'needle',

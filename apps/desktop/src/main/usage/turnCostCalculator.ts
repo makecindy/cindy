@@ -2,7 +2,9 @@
  * 单轮费用计算。定价先看实际 billing route，再看模型；模型名不再决定来源。
  */
 
+import { isByokProviderId, type AgentKind } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 
 import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
@@ -228,7 +230,8 @@ export function computePriceQuoteTurnMoney(
       : computeGatewayTurnCost(tokens, price);
   if (standardAmount == null) return null;
   const discount =
-    price.source === 'gateway' &&
+    (price.source === 'gateway' ||
+      (price.source === 'provider-reference' && isByokProviderId(price.providerId))) &&
     typeof price.costDiscount === 'number' &&
     Number.isFinite(price.costDiscount) &&
     price.costDiscount > 0 &&
@@ -274,13 +277,14 @@ export function computePriceQuoteTurnMoney(
 
 export function resolveTurnCost(args: {
   rawModel: string;
+  agent?: AgentKind;
   tokens: TurnTokenDeltas;
   sdkCostDelta?: number;
   pricing: ModelPricingCatalog | null | undefined;
   context: TurnPricingContext;
   segments?: readonly TurnUsageSegment[];
 }): TurnCostResolution {
-  const { rawModel, tokens, sdkCostDelta, pricing, context, segments } = args;
+  const { rawModel, agent = 'claude-code', tokens, sdkCostDelta, pricing, context, segments } = args;
   const model = normalizeModelIdForPricing(rawModel);
 
   // An explicit provider API route is authoritative. User-defined providers may legitimately
@@ -317,7 +321,7 @@ export function resolveTurnCost(args: {
 
   const providerQuote =
     context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
+      ? getModelPriceQuote(pricing, context.providerId, model, agent)
       : undefined;
   if (context.accessKind === 'managed') {
     return {
@@ -551,12 +555,21 @@ export function buildClaudeTurnUsageDetails(
   perModel?: ResolvedModelCost[],
   durationMs?: number,
   turnDurationMs?: number,
+  billing?: UsageBillingSource,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
     ?.filter((item) => item.money && item.money.amount > 0)
-    .map((item) => ({ model: item.model, money: item.money! }));
+    .map((item) => {
+      const billingSource = item.source === 'gateway' ? 'cindy-ai' as const
+        : item.source === 'subscription' ? 'subscription' as const : billing?.billingSource;
+      // A bridge can use another account type in the same turn. Never attach
+      // the selected provider's identity to that different billing source.
+      return { model: item.model, money: item.money!,
+        ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
+    });
   return buildTurnUsageDetails({
+    ...billing,
     inputTokens: hasModelUsageDeltas
       ? deltas?.reduce((sum, delta) => sum + delta.inputTokensDelta, 0)
       : usage?.input_tokens,

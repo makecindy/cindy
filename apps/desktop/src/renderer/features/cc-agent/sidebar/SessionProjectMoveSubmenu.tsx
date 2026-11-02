@@ -1,5 +1,7 @@
 import { Folder, FolderPlus, MessageCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import type { Session } from '@/lib/ccAgent.types';
 
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
@@ -7,7 +9,7 @@ import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdow
 export interface SessionProjectMoveSubmenuProps {
   heading?: string;
   projectOptions: readonly FolderPickerOption[];
-  currentWorkingDir?: string | null;
+  currentSession?: Pick<Session, 'projectDir' | 'workingDir'>;
   isDialogue: boolean;
   onSelectProject: (workingDir: string) => void;
   onBrowseProject?: () => void;
@@ -22,14 +24,16 @@ function normalizePath(value: string | null | undefined): string | null {
 export function SessionProjectMoveSubmenu({
   heading,
   projectOptions,
-  currentWorkingDir,
+  currentSession,
   isDialogue,
   onSelectProject,
   onBrowseProject,
   onMoveToDialogue,
 }: SessionProjectMoveSubmenuProps) {
   const { t } = useTranslation();
-  const normalizedCurrent = normalizePath(currentWorkingDir);
+  const normalizedCurrent = normalizePath(
+    !isDialogue && currentSession ? sessionProjectDirectory(currentSession) : null,
+  );
 
   return (
     <>

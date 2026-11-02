@@ -8,6 +8,8 @@ export interface FilePreviewChromeProps {
   bottom: number;
   left: number;
   right: number;
+  /** Shown outside a navigation route (Modal): every control stays in the page, never in the host route's bar. */
+  standalone?: boolean;
   source?: boolean;
   busy: boolean;
   /** The file has not opened yet: address editing and the more menu stay disabled. */

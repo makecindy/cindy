@@ -155,6 +155,24 @@ describe('provider share received catalogs', () => {
 });
 
 describe('provider share identity scrubbing', () => {
+  // provider-sharing.md §6: org/membership suffixes must not cross accounts.
+  // Existing cases covered subscription identities, not Cindy AI membership names.
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])('removes membership identity from shared labels and catalogs: %s', async (name) => {
+    const { scrubProviderShareLabel, scrubSharedProviderCatalog, parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const provider = { id: 'xd', name, logoKind: 'xd' };
+    expect(scrubProviderShareLabel(name)).toBe('Cindy AI');
+    expect(scrubSharedProviderCatalog({ providers: [provider] })).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    const [entry] = parseProviderShareReceivedCatalogs({ shares: [{
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'xd', providerLabel: name, deviceName: 'Cindy',
+      owner: { displayName: 'Alice', avatarUrl: null }, status: 'active', hostOnline: true,
+      catalog: { providers: [provider] },
+    }] });
+    expect(entry?.providerLabel).toBe('Cindy AI');
+    expect(entry?.catalog).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    expect(provider.name).toBe(name); // Same-account presentation is not mutated.
+    expect(provider.logoKind).toBe('xd');
+  });
+
   it('drops account identity fields and removes login names or emails from provider names', async () => {
     const { scrubProviderShareLabel, scrubSharedProvider, scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
     expect(scrubProviderShareLabel('OpenAI · alice@corp.com')).toBe('OpenAI');

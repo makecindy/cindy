@@ -213,13 +213,29 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
       assertCurrent: () => void,
       replaceMembers = false,
     ): Promise<Outgoing> {
+      assertCurrent();
+      const snapshot = read();
+      writable(snapshot);
+      const previous = snapshot.outgoing[group];
+      const members = replaceMembers ? [...new Set(destinations)].sort() : undefined;
+      // Retrying an unacknowledged revision is a read, not a mutation. Avoid
+      // updateAtomic's forced cache invalidation and disk write in this case.
+      // Real changes still recompute from the latest snapshot under its lock.
+      if (
+        previous &&
+        previous.allowFast === allowFast &&
+        (!replaceMembers || JSON.stringify(previous.members) === JSON.stringify(members)) &&
+        destinations.every((device) => previous.targets[device] !== undefined)
+      ) {
+        return previous;
+      }
       const value = await store.updateAtomic(({ value }) => {
         assertCurrent();
         writable(value);
         const previous = value.outgoing[group];
-        const members = replaceMembers ? [...new Set(destinations)].sort() : previous?.members;
+        const nextMembers = replaceMembers ? members : previous?.members;
         const sameMembers =
-          !replaceMembers || JSON.stringify(previous?.members) === JSON.stringify(members);
+          !replaceMembers || JSON.stringify(previous?.members) === JSON.stringify(nextMembers);
         const revision =
           previous && previous.allowFast === allowFast && sameMembers
             ? previous.revision
@@ -229,7 +245,12 @@ export function createGroupFastPolicyStore(options: { filePath(): string; scopeK
         return {
           outgoing: {
             ...value.outgoing,
-            [group]: { revision, allowFast, targets, ...(members ? { members } : {}) },
+            [group]: {
+              revision,
+              allowFast,
+              targets,
+              ...(nextMembers ? { members: nextMembers } : {}),
+            },
           },
         };
       });

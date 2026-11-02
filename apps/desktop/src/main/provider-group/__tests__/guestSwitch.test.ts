@@ -11,7 +11,7 @@ import {
 } from '../guestSwitch';
 
 describe('provider group guest switch tokens', () => {
-  it('moves an offered token to the next open, once', () => {
+  it('keeps an offered token for a failed open, then releases it after success', () => {
     const tokens = createProviderGroupGuestSwitch(() => 0);
     expect(tokens.takeForOpen('s1')).toBeUndefined();
     tokens.offer('s1', 'token-a');
@@ -19,6 +19,8 @@ describe('provider group guest switch tokens', () => {
     expect(tokens.claim('s1')).toBe(false);
     expect(tokens.takeForOpen('s2')).toBeUndefined();
     expect(tokens.takeForOpen('s1')).toBe('token-a');
+    expect(tokens.takeForOpen('s1')).toBe('token-a');
+    tokens.release('s1');
     expect(tokens.takeForOpen('s1')).toBeUndefined();
   });
 

@@ -143,7 +143,8 @@ describe('hosted shadow workspace cleanup', () => {
       expect(fastPolicy).toHaveBeenCalledWith('controller-1', expect.objectContaining({ group: 'openai', revision: 2, allowFast: false }));
     } finally { host.dispose(); }
   });
-  it('removes the shadow workspace once the run is disposed', async () => {
+  it.each(['dispose', 'sweep'] as const)('waits for %s shadow deletion and shares disposal completion', async entry => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const starts: Array<() => void> = [];
     const first = whenStarted();
     starts.push(first.resolve);
@@ -152,9 +153,110 @@ describe('hosted shadow workspace cleanup', () => {
     await first.promise;
     expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(true);
 
-    host.dispose();
-    await settle();
-    await vi.waitFor(() => expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(false));
+    // #7976: disposal returned before recursive deletion finished. Waiting for
+    // the native deletion boundary must work even when the filesystem is slow.
+    const deleting = whenStarted();
+    const releaseDelete = whenStarted();
+    const deleted = whenStarted();
+    const realRm = fs.promises.rm.bind(fs.promises);
+    const workspace = sessionRoot('controller-1', 'task-1');
+    const rm = vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+      if (String(target) === workspace) {
+        deleting.resolve();
+        await releaseDelete.promise;
+      }
+      try { return await realRm(target, options); }
+      finally { if (String(target) === workspace) deleted.resolve(); }
+    });
+    if (entry === 'sweep') {
+      await settle();
+      clock += 61_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await deleting.promise;
+    }
+    let completed = false;
+    const disposal = host.dispose();
+    const completion = Promise.resolve(disposal).then(() => { completed = true; });
+    try {
+      expect(host.dispose()).toBe(disposal);
+      await deleting.promise;
+      expect(completed).toBe(false);
+      releaseDelete.resolve();
+      await completion;
+      expect(fs.existsSync(workspace)).toBe(false);
+    } finally {
+      releaseDelete.resolve();
+      await completion;
+      await deleted.promise;
+      rm.mockRestore();
+    }
+  });
+
+  // #7991 review: close/revocation can already be finishing when dispose starts.
+  // Unit: real close dispatch must retain the workspace until native teardown,
+  // preserve the first mode/reason, and coalesce a reentrant revocation request.
+  it.each(['close', 'detach'] as const)('waits for an in-flight %s before deleting the workspace', async mode => {
+    const ready = whenStarted();
+    const closing = whenStarted();
+    const releaseClose = whenStarted();
+    const endEvents = whenStarted();
+    const eventsEnded = whenStarted();
+    let reentrant: Promise<void> | undefined;
+    const stop = vi.fn(async () => {
+      reentrant = host.abortControllers(() => true);
+      endEvents.resolve();
+      await eventsEnded.promise;
+      closing.resolve();
+      await releaseClose.promise;
+    });
+    const close = vi.fn(stop);
+    const detach = vi.fn(stop);
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async input => ({
+        ...idleHandle(input), close, detach,
+        events: () => ({ async *[Symbol.asyncIterator]() {
+          ready.resolve();
+          try {
+            await endEvents.promise;
+            yield { type: 'done' as const, data: {}, source: 'claude-code' as const };
+          } finally { eventsEnded.resolve(); }
+        } }),
+      }),
+      isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
+    });
+    let request: Promise<unknown> | undefined;
+    let duplicate: Promise<unknown> | undefined;
+    let disposal: Promise<void> | undefined;
+    try {
+      await host.handle('controller-1', { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await ready.promise;
+      const initial = await host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ cursor: number }> };
+      const boundary = host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: initial.runs[0].cursor }], waitMs: 10_000 });
+      request = host.handle('controller-1', { op: 'close', runId: RUN_1, mode, reason: 'navigation' });
+      await closing.promise;
+      let duplicateFinished = false;
+      duplicate = host.handle('controller-1', { op: 'close', runId: RUN_1, mode: 'close', reason: 'app-quit' }).then(() => { duplicateFinished = true; });
+      let disposed = false;
+      disposal = host.dispose().then(() => { disposed = true; });
+      await settle();
+      expect(disposed).toBe(false);
+      expect(duplicateFinished).toBe(false);
+      expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(true);
+      releaseClose.resolve();
+      await Promise.all([request, duplicate, reentrant, disposal]);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(mode === 'detach' ? detach : close).toHaveBeenCalledWith({ reason: 'navigation' });
+      expect(mode === 'detach' ? close : detach).not.toHaveBeenCalled();
+      const result = await boundary as { runs: Array<{ data?: string }> };
+      const rows = result.runs.flatMap(run => run.data ? Buffer.from(run.data, 'base64').toString().trim().split('\n').map(line => JSON.parse(line)) : []);
+      expect(rows.at(-1)).toEqual({ t: 'closed', reason: mode === 'detach' ? 'detached' : 'closed' });
+      expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(false);
+    } finally {
+      endEvents.resolve();
+      releaseClose.resolve();
+      await Promise.all([request, duplicate, reentrant, disposal, host.dispose()]);
+    }
   });
 
   it('keeps the workspace of a replacement run and removes it when that run ends', async () => {
@@ -274,6 +376,42 @@ describe('idle reclaim by the provider', () => {
     };
     return { host, handle: () => handle, pass, rows, cursor: () => cursor };
   }
+
+  // Unit regression: app shutdown used to mark even idle runs aborted. Read the
+  // real shutdown stream, including the reason an older controller will see.
+  it.each([
+    ['dispose', false], ['dispose', true], ['shutdown', false], ['shutdown', true],
+    ['shutdown-then-dispose', false], ['shutdown-then-dispose', true],
+  ] as const)('publishes a compatible shutdown boundary through %s; running=%s', async (entry, running) => {
+    const { host, pass, cursor } = await openBusy(0, { turn: running, background: 0, wake: 0 });
+    await pass(0);
+    const pending = host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: cursor() }], waitMs: 10_000 });
+    const closing = entry === 'dispose' ? undefined : host.abortAll('app-quit');
+    if (entry !== 'shutdown') host.dispose();
+    await closing;
+    const result = await pending as { runs: Array<{ data?: string }> };
+    const rows = result.runs.flatMap(run => run.data ? Buffer.from(run.data, 'base64').toString().trim().split('\n').map(line => JSON.parse(line)) : []);
+    expect(rows.at(-1)).toEqual(running
+      ? { t: 'closed', reason: 'provider-restarting' }
+      : { t: 'closed', reason: 'ended', idleReclaimed: true });
+    host.dispose();
+    await settle();
+  });
+
+  // An explicit disconnect can race the later host dispose; it must never acquire
+  // idleReclaimed, otherwise the controller would reconnect despite user intent.
+  it.each([false, true])('keeps intentional disconnect terminal across disposal; running=%s', async running => {
+    const { host, pass, cursor } = await openBusy(0, { turn: running, background: 0, wake: 0 });
+    await pass(0);
+    const pending = host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: cursor() }], waitMs: 10_000 });
+    const closing = host.abortAll('navigation');
+    host.dispose();
+    await closing;
+    const result = await pending as { runs: Array<{ data?: string }> };
+    const rows = result.runs.flatMap(run => run.data ? Buffer.from(run.data, 'base64').toString().trim().split('\n').map(line => JSON.parse(line)) : []);
+    expect(rows.at(-1)).toEqual({ t: 'closed', reason: 'controller-disconnected' });
+    await settle();
+  });
 
   it.each(['turn', 'background', 'wake', 'hold', 'rewind'] as const)('keeps a run while it is busy (%s) and reclaims it after a full idle period', async (reason) => {
     const busy: Busy = { turn: reason === 'turn', background: reason === 'background' ? 1 : 0, wake: reason === 'wake' ? 1 : 0 };

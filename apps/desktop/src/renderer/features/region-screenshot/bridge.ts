@@ -1,5 +1,6 @@
 import type {
   RegionRect,
+  RegionScreenshotHit,
   RegionScreenshotBegin,
   RegionScreenshotBitmap,
   RegionScreenshotExport,
@@ -30,7 +31,7 @@ export interface RegionScreenshotOverlayBridge {
   copyText(token: string, text: string): void;
   cancel(token: string): void;
   abandon(): void;
-  elementsAt(token: string, windowId: number, x: number, y: number): Promise<RegionRect[]>;
+  elementsAt(token: string, windowId: number, x: number, y: number): Promise<RegionScreenshotHit | null>;
   exportImage(token: string, payload: RegionScreenshotExport): Promise<boolean>;
 }
 
@@ -94,4 +95,27 @@ export function imageDataToBitmap(image: ImageData): RegionScreenshotBitmap {
   const data = new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength);
   swapRedBlue(data, data);
   return { width: image.width, height: image.height, data: data as Uint8Array<ArrayBuffer> };
+}
+
+/** Pixel-exact crop + RGBA → BGRA in one pass, without mutating the frozen frame.
+ * Alpha requires Canvas's premultiplication/rounding; return null for that path.
+ */
+export function cropOpaqueImageDataToBitmap(image: ImageData, crop: RegionRect): RegionScreenshotBitmap | null {
+  const { x, y, width, height } = crop;
+  if (!littleEndian || image.data.byteOffset % 4 !== 0
+    || ![x, y, width, height].every(Number.isInteger)
+    || x < 0 || y < 0 || width <= 0 || height <= 0
+    || x + width > image.width || y + height > image.height) return null;
+  const input = new Uint32Array(image.data.buffer, image.data.byteOffset, image.data.length / 4);
+  const output = new Uint32Array(width * height);
+  for (let row = 0; row < height; row++) {
+    const start = (y + row) * image.width + x;
+    const target = row * width;
+    for (let col = 0; col < width; col++) {
+      const pixel = input[start + col];
+      if (pixel >>> 24 !== 255) return null;
+      output[target + col] = (pixel & 0xff00ff00) | ((pixel & 0xff) << 16) | ((pixel >>> 16) & 0xff);
+    }
+  }
+  return { width, height, data: new Uint8Array(output.buffer) };
 }

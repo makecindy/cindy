@@ -758,9 +758,7 @@ export function SessionContentHeader({
               canMoveToProject && (
                 <SessionProjectMoveSubmenu
                   projectOptions={projectOptions}
-                  currentWorkingDir={
-                    session.workspaceKind === 'project' ? session.workingDir : null
-                  }
+                  currentSession={session}
                   isDialogue={session.workspaceKind === 'dialogue'}
                   onSelectProject={(workingDir) =>
                     void handleMoveSession({ kind: 'project', workingDir })

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', inviteBase: 'https://relay.example.test', region: 'global' as 'global' | 'cn' | 'dev', handle: vi.fn(), refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: fixture.refresh }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: (key: string) => key === 'deviceLinkApiBaseUrl' ? fixture.inviteBase : 'https://chat.cindy.app' }));
+vi.mock('../../../shared/brandRegion.js', () => ({ get CURRENT_CINDY_REGION() { return fixture.region; } }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
@@ -55,6 +56,7 @@ describe('Chat Server invitation contract', () => {
   let members: unknown[];
   beforeEach(() => {
     fixture.packaged = true; fixture.profiles = []; fixture.sockets = [];
+    fixture.inviteBase = 'https://relay.example.test'; fixture.region = 'global';
     expiresAt = null; reusable = true;
     members = [{ id: selfId, ownerActorId: selfId, state: 'joined', role: 'owner' }];
     fixture.handle.mockImplementation(route => {
@@ -70,9 +72,51 @@ describe('Chat Server invitation contract', () => {
   afterEach(() => { service.dispose(); vi.clearAllMocks(); });
   it.each([[null, true], ['2026-10-10T12:00:00.000Z', false], ['2026-10-10T12:00:00.000Z', undefined]] as const)('preserves expiry %s / reusable %s across creation and preview', async (value, reuse) => {
     expiresAt = value; reusable = reuse;
-    expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: true, link, expiresAt, ...(reusable !== undefined ? { reusable } : {}) });
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toEqual({ ok: true, link: `https://relay.example.test/chat-invite/join#${token}?app=cindy`, expiresAt, ...(reusable !== undefined ? { reusable } : {}) });
     expect(await service.chatServer!.previewInvite({ link })).toEqual({ ok: true, groupId, name: 'Group', inviterName: 'Host', expiresAt, ...(reusable !== undefined ? { reusable } : {}), joined: false });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${groupId}/invite-links`, 'POST', { operationId: clientId }, expect.objectContaining({ 'X-Chat-Actor': selfId }));
+  });
+  // Unit regression: real createInvite must return a browser-shareable link, not the old
+  // scheme-only result. Existing expiry tests never checked regional mobile handoff or
+  // round-tripping the generated URL through preview. No real HTTP or accounts are used.
+  it.each([['global', 'cindy'], ['cn', 'cindycn']] as const)(
+    'creates a public invitation with the %s build hint and previews it on the current account', async (region, scheme) => {
+      fixture.region = region; fixture.inviteBase = 'https://relay.example.test/dl/';
+      const created = await service.chatServer!.createInvite({ groupId, clientId });
+      expect(created).toMatchObject({ ok: true, link: `https://relay.example.test/dl/chat-invite/join#${token}?app=${scheme}` });
+      if (!created.ok) throw new Error('Expected invitation');
+      const page = new URL(created.link);
+      expect(page.search).toBe(''); expect(page.username).toBe('');
+      expect(page.pathname).not.toContain(token);
+      fixture.urls.length = 0;
+      expect((await service.chatServer!.previewInvite({ link: created.link })).ok).toBe(true);
+      expect(fixture.handle).toHaveBeenCalledWith('/invite-links/preview', 'POST', { token }, expect.anything());
+      expect(await service.chatServer!.revokeInvite({ groupId, link: created.link, clientId })).toEqual({ ok: true, revoked: true });
+      expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${groupId}/invite-links/revoke`, 'POST', { token, operationId: clientId }, expect.anything());
+      expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/') && !url.includes(token))).toBe(true);
+    },
+  );
+  it.each(['https://dev-relay.example.test', ''])('retains the legacy dev output without requiring a public page (%s)', async base => {
+    fixture.region = 'dev'; fixture.inviteBase = base;
+    expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link });
+  });
+  it.each(['http://localhost:3018', 'http://127.0.0.1:3018', 'https://[::1]:3018'])(
+    'does not share a recipient-unreachable local page (%s)', async base => {
+      fixture.inviteBase = base;
+      expect(await service.chatServer!.createInvite({ groupId, clientId })).toMatchObject({ ok: true, link });
+    },
+  );
+  it.each(['', 'not-a-url', 'http://relay.example.test', 'https://user:fixture@relay.example.test', 'https://relay.example.test?key=fixture', 'https://relay.example.test#fixture'])(
+    'does not disguise a missing or invalid public endpoint as a successful scheme fallback (%s)', async base => {
+      fixture.inviteBase = base;
+      expect((await service.chatServer!.createInvite({ groupId, clientId })).ok).toBe(false);
+      expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/invite-links'))).toBe(false);
+    },
+  );
+  it('continues to preview a bare token as well as the legacy scheme', async () => {
+    expect((await service.chatServer!.previewInvite({ link: token })).ok).toBe(true);
+    expect((await service.chatServer!.previewInvite({ link })).ok).toBe(true);
+    expect(fixture.handle).toHaveBeenCalledWith('/invite-links/preview', 'POST', { token }, expect.anything());
   });
   it.each([undefined, '', 'bad-date', 123])('rejects invalid expiry %s instead of calling it permanent', async value => {
     expiresAt = value;

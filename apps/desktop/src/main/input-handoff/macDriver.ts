@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { nativeImage } from 'electron';
 import { promisify } from 'node:util';
 import {
   readDesktopInputPermission,
@@ -15,7 +16,7 @@ import type {
   WindowCapture,
   WindowCaptureError,
 } from './types.js';
-import { captureWindowArea, captureWindowQr, type DetectedQr } from './windowCapture.js';
+import { captureWindowArea, captureWindowQr, cutQrFromImage, type DetectedQr } from './windowCapture.js';
 
 const exec = promisify(execFile);
 
@@ -99,7 +100,7 @@ async function runHelper(request: Record<string, unknown>, timeoutMs: number): P
  * QR codes in one photographed window; null when the helper could not look (not "no code").
  * The picture travels on a pipe only; the reply carries no pixels.
  */
-async function detectQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
+export async function detectHandoffQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
   const binary = await resolveDesktopInputBinary();
   const reply = await new Promise<string>((resolve, reject) => {
     const child = spawn(binary, ['--handoff-qr'], { stdio: 'pipe' });
@@ -141,6 +142,21 @@ async function detectQr(jpeg: Buffer): Promise<DetectedQr[] | null> {
     codes.push({ text: entry.text, box: entry.box.map((n) => Math.min(1, Math.max(0, n))) });
   }
   return codes;
+}
+
+/**
+ * The sign-in QR code in a picture the agent supplied (代输入 from a
+ * screenshot): cut out like a window's code; null when the picture has none.
+ */
+export async function readPictureQr(
+  bytes: Buffer,
+): Promise<{ text: string; jpeg: Buffer; width: number; height: number } | null | { error: 'not_image' | 'unreadable' }> {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return { error: 'not_image' };
+  const found = await cutQrFromImage(image, detectHandoffQr);
+  if (!found) return null;
+  if ('error' in found) return { error: 'unreadable' };
+  return { text: found.text, jpeg: found.jpeg, width: found.width, height: found.height };
 }
 
 /**
@@ -222,11 +238,11 @@ export function createMacHandoffDriver(): HandoffDriver {
     async qr(target, frame) {
       if (frame) {
         const id = await windowIdAt(target.pid, frame);
-        return typeof id === 'number' ? captureWindowQr(frame, id, detectQr) : id;
+        return typeof id === 'number' ? captureWindowQr(frame, id, detectHandoffQr) : id;
       }
       const raised = await raiseWindow(target);
       if ('error' in raised) return raised;
-      return raised.windowId ? captureWindowQr(raised.frame, raised.windowId, detectQr) : { error: 'unavailable' };
+      return raised.windowId ? captureWindowQr(raised.frame, raised.windowId, detectHandoffQr) : { error: 'unavailable' };
     },
     async raise(target) {
       const raised = await raiseWindow(target);

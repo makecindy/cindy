@@ -20,6 +20,24 @@ Server 明确给出的 Pi `reasoning: false` / `reasoningEfforts` 属于通道�
 删除临时兼容补项前，必须验证随包 Pi 已原生支持相同模型、协议及参数；
 仅 Server 新增该模型不足以证明可以删除兼容代码。专项规则见 [Pi harness](pi-harness.md)。
 
+## Codex 进程与任务供应商一致性
+
+本地代理的原生 `model_provider` 必须与任务使用的 identity 一致；不能让进程固定为
+`cindy_gateway`，仅在 `thread/start` 或 `thread/resume` 传 `cindy_openai`。
+Codex 0.166.0 会在输入前复核进程配置并拒绝这种组合，0.159.2 未做同样限制。
+供应商选择沿用任务的实际来源：ChatGPT 订阅、Cindy AI 普通模型、Cindy AI `codex/*`
+及自定义供应商分别保留自己的路由；进程持有 OAuth 不代表任务应改走订阅。
+
+不按版本号猜续接能力：先调用原生 resume，只有结构化 `modelProviderMismatch`
+证明当前进程已是目标供应商、旧历史属于另一 identity 时，才用原生 fork 保留完整历史。
+不改写旧 rollout，不忽略权限或认证错误。摘要压缩回退同样对齐进程；退出未确认时不启动
+第二个 writer，仍有原生子代理运行时不为自动回退重启进程。SSH daemon 保持其原生配置。
+
+升级候选 Codex 时，用候选二进制运行
+`CINDY_CODEX_TEST_BINARY=<binary> pnpm --filter @cindy/maker-core exec vitest run src/agents/codex/provider-compatibility.integration.test.ts`。
+该回归使用真实 CLI、独立临时目录和本地 Responses 服务，覆盖并行供应商、续聊、跨来源
+切换、压缩回退与重开；不会读取账号凭证。它验证已知契约，不能保证未知上游破坏性变更自动兼容。
+
 ## 上下文显示错误的排查顺序
 
 先检查活动目录是否就写错了窗口，再检查当前路由的运行时上报与校正，最后检查旧任务

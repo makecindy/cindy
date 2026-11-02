@@ -32,7 +32,7 @@ import {
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../../drizzle');
-  return ['0083_', '0086_', '0087_', '0088_']
+  return ['0083_', '0086_', '0087_', '0088_', '0136_']
     .map((prefix) => {
       const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
       if (!file) throw new Error(`${prefix} migration not found`);
