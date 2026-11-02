@@ -18841,6 +18841,9 @@
     "failed": "Der Vorgang wurde nicht abgeschlossen. Versuch es erneut oder öffne die lokalen Dateien."
   },
   "attachmentPreview": {
+    "fitWidth": "An Breite anpassen",
+    "fitPage": "An Seite anpassen",
+    "pageNumber": "Seitenzahl",
     "more": "Weitere Aktionen",
     "retry": "Erneut versuchen",
     "image": "Bild",
