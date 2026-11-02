@@ -57,6 +57,10 @@ mountPage({
     let begin: Parameters<RegionScreenshotOverlayBridge['onBegin']>[0] | undefined;
     let selected = { x: 100, y: 100, width: 480, height: 240 };
     const bridge: RegionScreenshotOverlayBridge = {
+      onLocaleChanged: (callback) => {
+        Object.assign(window, { captureLocaleChanged: callback });
+        return () => { Object.assign(window, { captureLocaleChanged: undefined }); };
+      },
       onTranslationLanguageChanged: (callback) => {
         Object.assign(window, { translationChanged: callback });
         return () => { Object.assign(window, { translationChanged: undefined }); };
@@ -91,6 +95,6 @@ mountPage({
         return true;
       },
     };
-    return <ScrollFixture bridge={bridge} locale={ctx.locale} imageEditor={ctx.case === "translation-editor"} />;
+    return <ScrollFixture bridge={bridge} locale={ctx.locale} imageEditor={ctx.case.endsWith('-editor')} />;
   },
 });

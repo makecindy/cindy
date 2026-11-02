@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('regionScreenshotEditor', {
   shellReady: () => ipcRenderer.send(C.READY),
   onBegin: (callback: (payload: RegionScreenshotBegin) => void) => onPayload(C.BEGIN, callback),
   onEnd: (callback: () => void) => onPayload(C.END, callback),
+  onLocaleChanged: (callback: (payload: { token: string; locale: string }) => void) => onPayload(C.LOCALE_CHANGED, callback),
   onTranslationLanguageChanged: (callback: (payload: { token: string; preference: import('../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void) =>
     onPayload(C.TRANSLATION_LANGUAGE_CHANGED, callback),
   painted: (token: string) => ipcRenderer.send(C.PAINTED, token),

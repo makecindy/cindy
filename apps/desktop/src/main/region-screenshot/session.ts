@@ -130,6 +130,14 @@ export class RegionScreenshotSession {
 
   get hasEditor(): boolean { return this.handedToEditor; }
 
+  setLocale(locale: string): void {
+    if (this.closed) return;
+    for (const { overlay } of this.members.values()) {
+      if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
+        REGION_SCREENSHOT_CHANNEL.LOCALE_CHANGED, { token: this.token, locale });
+    }
+  }
+
   /** 打开浮层; 一块屏都没准备好时返回 false 并结束会话。 */
   async open(): Promise<boolean> {
     this.releaseTranslationPreference = onScreenshotTranslationPreferenceChanged((preference) => {
@@ -142,7 +150,6 @@ export class RegionScreenshotSession {
     screen.on('display-added', this.onDisplaysChanged);
     screen.on('display-removed', this.onDisplaysChanged);
     screen.on('display-metrics-changed', this.onDisplayMetricsChanged);
-    const locale = getResolvedMainLocale();
     const cursor = screen.getCursorScreenPoint();
     // Start all cold shells together: one slow display must not defer creation
     // (or restart the timeout budget) of every subsequent display. Keep capture
@@ -181,7 +188,7 @@ export class RegionScreenshotSession {
     for (const { overlay, capture } of this.members.values()) {
       overlay.window.webContents.send(
         REGION_SCREENSHOT_CHANNEL.BEGIN,
-        this.beginPayload(capture, locale, cursor),
+        this.beginPayload(capture, getResolvedMainLocale(), cursor),
       );
     }
     return true;

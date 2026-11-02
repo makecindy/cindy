@@ -322,6 +322,10 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       translationPreferenceRef.current = preference;
       setTranslationPreference(preference);
     });
+    const offLocale = bridge.onLocaleChanged?.(({ token, locale }) => {
+      if (state.current.session?.token !== token) return;
+      if (i18n.language !== locale) void i18n.changeLanguage(locale);
+    });
     const offEnd = bridge.onEnd(() => {
       resetInteraction();
       setActiveDisplay(false);
@@ -360,6 +364,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       offEnd();
       offClear();
       offTranslation?.();
+      offLocale?.();
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('blur', onBlur);
     };

@@ -14,6 +14,7 @@ import {
 import { createLogger } from '../logger';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState';
 import { t } from '../i18n';
+import type { SupportedLocale } from '../../shared/locale';
 import {
   getAppShortcutStore,
   setGlobalShortcutRegistrationFailures,
@@ -70,6 +71,11 @@ const editor = new ScreenshotEditor((result) => {
 /** 每块显示器上一次截图的选区 (DIP), 供「重复上次区域」; 只在本次运行内记住。 */
 const lastRegions = new Map<number, RegionRect>();
 const disposers: Array<() => void> = [];
+
+export function setRegionScreenshotLocale(locale: SupportedLocale): void {
+  editor.setLocale(locale);
+  active?.setLocale(locale);
+}
 
 export function initRegionScreenshot(): void {
   if (initialized) return;

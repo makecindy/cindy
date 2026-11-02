@@ -913,6 +913,11 @@ describe('screenshot window lifecycle', () => {
       pool.markShellReady(contents, contents.mainFrame);
       await session.open();
       mocks.locale = 'ja';
+      editor.setLocale('ja');
+      session.setLocale('ja');
+      expect(win.webContents.send).toHaveBeenCalledWith('region-screenshot-editor:locale-changed', { token: begin.token, locale: 'ja' });
+      expect(contents.send).toHaveBeenCalledWith('region-screenshot:locale-changed', { token: session.token, locale: 'ja' });
+      expect(begin.locale).toBe('ja'); // Retained payload also serves a late READY.
       // The renderer still sends the language resolved before Main's locale change.
       const payload = { action: 'translate', image: bitmap, selection, translationLanguage: preference === 'ui' ? 'en' : 'fr' };
       expect(mocks.handlers.get(E.EXPORT)!(event, begin.token, payload)).toBe(true);
@@ -921,6 +926,12 @@ describe('screenshot window lifecycle', () => {
       for (const result of [editorResult, captureResult]) {
         expect(result).toHaveBeenCalledWith(expect.objectContaining({ translationLanguage: preference === 'ui' ? 'ja' : 'fr' }));
       }
+      win.webContents.send.mockClear();
+      vi.mocked(contents.send).mockClear();
+      editor.setLocale('ko');
+      session.setLocale('ko');
+      expect(win.webContents.send).not.toHaveBeenCalledWith('region-screenshot-editor:locale-changed', expect.anything());
+      expect(contents.send).not.toHaveBeenCalled();
     } finally { session.close(); editor.dispose(); }
   });
 

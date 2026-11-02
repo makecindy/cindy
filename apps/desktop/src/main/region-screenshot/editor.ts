@@ -4,6 +4,7 @@ import { activeOwnerScopeKey } from '../appSessionState';
 import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
 import { getResolvedMainLocale, t } from '../i18n';
+import type { SupportedLocale } from '../../shared/locale';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { createScreenshotPageWindow } from './pageWindow';
@@ -60,6 +61,15 @@ export class ScreenshotEditor {
 
   prewarm(): void { this.controller.prewarm(); }
   dispose(): void { this.document = null; this.releaseTranslationPreference(); this.controller.dispose(); }
+
+  setLocale(locale: SupportedLocale): void {
+    this.controller.setLocale(locale);
+    if (!this.document) return;
+    this.document.payload.locale = locale;
+    if (this.ready && this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send(C.LOCALE_CHANGED, { token: this.document.payload.token, locale });
+    }
+  }
 
   open(image: RegionScreenshotBitmap, display: Display, selection: RegionRect, ownerScope = activeOwnerScopeKey()): boolean {
     // Do not overwrite an unfinished image if another capture reaches Edit.

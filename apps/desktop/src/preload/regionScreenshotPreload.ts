@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('regionScreenshot', {
   onBegin: (callback: (payload: RegionScreenshotBegin) => void): (() => void) =>
     onPayload(C.BEGIN, callback),
   onEnd: (callback: () => void): (() => void) => onPayload(C.END, callback),
+  onLocaleChanged: (callback: (payload: { token: string; locale: string }) => void) => onPayload(C.LOCALE_CHANGED, callback),
   onTranslationLanguageChanged: (callback: (payload: { token: string; preference: import('../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): (() => void) =>
     onPayload(C.TRANSLATION_LANGUAGE_CHANGED, callback),
   onClear: (callback: () => void): (() => void) => onPayload(C.CLEAR, callback),

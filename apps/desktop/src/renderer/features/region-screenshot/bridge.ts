@@ -12,6 +12,7 @@ import type { RegionCaptureBegin, RegionCaptureFrame, RegionCaptureMode } from '
 
 /** 框选浮层 preload (regionScreenshotPreload) 暴露的能力。 */
 export interface RegionScreenshotOverlayBridge {
+  onLocaleChanged?(callback: (payload: { token: string; locale: string }) => void): () => void;
   onTranslationLanguageChanged?(callback: (payload: { token: string; preference: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): () => void;
   setTranslationLanguage(token: string, value: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean>;
   recordingControls(token: string, expanded: boolean, point?: { x: number; y: number }, dragging?: boolean): Promise<RegionRect | null>;
@@ -55,7 +56,7 @@ export interface RegionScreenshotPinBridge {
 declare global {
   interface Window {
     regionScreenshot?: RegionScreenshotOverlayBridge;
-    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage' | 'setTranslationLanguage' | 'onTranslationLanguageChanged'> & { failed(): void; minimize(token: string): void };
+    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage' | 'setTranslationLanguage' | 'onTranslationLanguageChanged' | 'onLocaleChanged'> & { failed(): void; minimize(token: string): void };
     regionScreenshotPin?: RegionScreenshotPinBridge;
   }
 }

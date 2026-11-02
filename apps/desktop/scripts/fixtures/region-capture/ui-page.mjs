@@ -4,6 +4,8 @@ export default {
   real: 'RegionScreenshotOverlay, ScrollCaptureOverlay, LiveCapturePanel, ScrollCapture, CaptureRecorder, real Chromium canvas/MediaRecorder and GIF encoding',
   notCovered: 'Native screen acquisition, global keyboard sampling, macOS permissions and native save dialogs; frame source is synthetic.',
   cases: {
+    locale: { about: 'An open capture updates its translation label and export after the Main locale changes, retaining annotations' },
+    'locale-editor': { about: 'An open editor follows the Main locale without replacing its document or annotations' },
     translation: { about: 'Follow UI language, choose a remembered target, recover from save failure, and export the chosen language' },
     'translation-editor': { about: 'The independent image editor uses the same translation controls and export language' },
     snapping: { about: 'Correct a transparent window guess, hover adjacent elements, cycle hierarchy and click to select' },
@@ -17,6 +19,31 @@ export default {
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
   async check(page, ui) {
+    if (ui.case.startsWith('locale')) {
+      const editor = ui.case.endsWith('-editor');
+      if (!editor) {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const box = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(editor ? box.x + 30 : 200, editor ? box.y + 30 : 200);
+      await page.locator('textarea').fill('Keep this annotation');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      const name = (locale, language) => new Intl.DisplayNames([locale], { type: 'language' }).of(language);
+      const oldLabel = await ui.t('regionScreenshot.translation.action', { language: name(ui.locale, ui.locale) });
+      await page.evaluate(() => window.captureLocaleChanged({ token: 'stale', locale: 'ja' }));
+      await page.getByRole('menuitem', { name: oldLabel, exact: true }).waitFor();
+      await page.evaluate(token => window.captureLocaleChanged({ token, locale: 'ja' }), editor ? 'editor' : 'fixture');
+      const label = await ui.t('regionScreenshot.translation.action', { lng: 'ja', language: name('ja', 'ja') });
+      const action = page.getByRole('menuitem', { name: label, exact: true });
+      await action.waitFor();
+      assert.equal(await page.locator('textarea').inputValue(), 'Keep this annotation');
+      await ui.capture('locale-synchronized');
+      await action.click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'ja');
+      return;
+    }
     if (ui.case.startsWith('translation')) {
       if (ui.case === 'translation') {
         await page.mouse.move(100, 100); await page.mouse.down();
