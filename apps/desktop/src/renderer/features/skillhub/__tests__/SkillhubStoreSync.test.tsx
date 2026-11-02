@@ -88,6 +88,43 @@ it.each([
   expect(picker.result.current.projects).toEqual(originalTargets);
 });
 
+// Unit regression (PR #8019 review r4439529931): groupSessions identifies a project
+// by sessionProjectDirectory (explicit projectDir wins over cwd), so the stable
+// representative spelling must be chosen from that same field, not from workingDir.
+// Minimal failure: two sessions share one cwd; their projectDir casing aliases swap
+// updatedAt priority. The catalogue keeps the cwd as its own independent scan root.
+it.each([
+  ['D:/Projects/hf-parent', 'd:/projects/hf-parent'],
+  ['//Server/Share/hf-parent', '//server/share/hf-parent'],
+])('keeps explicit projectDir root and hash stable when alias activity changes: %s', (firstProject, secondProject) => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
+  mocks.loading = false;
+  const cwd = 'D:/Shared/.cindy-worktrees/task';
+  mocks.sessions = [firstProject, secondProject].map((projectDir, index) => ({
+    id: `explicit-${index}`, workingDir: cwd, projectDir, workspaceKind: 'project', status: 'active',
+    createdAt: '2026-09-08T00:00:00Z',
+    updatedAt: index === 0 ? '2026-09-09T00:00:00Z' : '2026-09-08T00:00:00Z',
+    userSendAt: null, pinnedAt: null, _count: { messages: 1 },
+  } as Session));
+  const storeSync = renderHook(useSkillhubStoreSync);
+  const picker = renderHook(useProjectsForPicker);
+  const originalProjects = mocks.syncProjects.mock.lastCall![0];
+  const originalTargets = picker.result.current.projects;
+  expect(originalProjects).toHaveLength(2);
+  expect(originalProjects).toEqual(expect.arrayContaining([
+    expect.objectContaining({ projectRoot: firstProject, hash: projectHash(firstProject) }),
+    expect.objectContaining({ projectRoot: cwd, hash: projectHash(cwd) }),
+  ]));
+  expect(originalTargets).toHaveLength(1);
+  expect(originalTargets[0].projectRoot).toBe(firstProject);
+  const latestSession = { ...mocks.sessions[1], updatedAt: '2026-09-10T00:00:00Z' };
+  mocks.sessions = [latestSession, mocks.sessions[0]];
+  storeSync.rerender();
+  picker.rerender();
+  expect(mocks.syncProjects.mock.lastCall![0]).toEqual(originalProjects);
+  expect(picker.result.current.projects).toEqual(originalTargets);
+});
+
 it('keeps pinned and newly created local project directories in the scan catalogue', () => {
   const session = (id: string, workingDir: string, extra: Partial<Session> = {}) => ({
     id, workingDir, workspaceKind: 'project', status: 'active',
