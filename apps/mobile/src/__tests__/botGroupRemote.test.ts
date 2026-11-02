@@ -326,3 +326,10 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(quoted, '@Ann', false, next, [], { all: false, botIds: ['picked', 'other'] }, 'another').clientId).toBe('c6');
   });
 });
+
+// Wire: a phone must retain the host's personal setting and reject unknown modes.
+it('retains notification capability and confirmed mode from a computer', () => {
+  expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
+    .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
+});

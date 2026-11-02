@@ -13702,11 +13702,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
+        autoReviewUserText,
         clientId,
         toolsDisabled,
         onQueued,
@@ -20562,9 +20563,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch: async (item) => {

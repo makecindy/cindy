@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  Pressable,
   StyleSheet,
   View,
 } from "react-native";
@@ -18,7 +17,7 @@ import { Text } from "@/components/AppText";
 import { ImageLightbox } from "@/session/ImageLightbox";
 import { buildMediaPayload } from "@/session/messagePayload";
 import { lightboxImagesForPayload } from "@/session/messageGallery";
-import { RemoteMediaPlayerWebView } from "@/session/mediaPlayerWebView";
+import { PreviewHeader } from "@/session/PreviewChrome";
 import {
   fontWeight,
   lineHeight,
@@ -49,6 +48,9 @@ export function PluginMediaViewer({
   const sharing = useRef<Promise<void> | undefined>(undefined),
     alive = useRef(true);
   useEffect(() => {
+    alive.current = true;
+    setFailed(false);
+    setMedia(undefined);
     const abort = new AbortController();
     let owned: typeof media;
     void readPluginMediaFile(intent.path, intent.mediaKind, read, abort.signal)
@@ -74,12 +76,12 @@ export function PluginMediaViewer({
         ? lightboxImagesForPayload(
             [],
             buildMediaPayload(
-              { kind: "image", url: media.uri, previewable: true },
+              { kind: intent.mediaKind, url: media.uri, previewable: true },
               intent.ghostName,
             ),
           )
         : [],
-    [media, intent.ghostName],
+    [media, intent.ghostName, intent.mediaKind],
   );
   const share = async () => {
     if (!media || !alive.current || sharing.current) return;
@@ -93,7 +95,7 @@ export function PluginMediaViewer({
       if (sharing.current === work) sharing.current = undefined;
     }
   };
-  if (media && intent.mediaKind === "image")
+  if (media)
     return (
       <ImageLightbox
         images={images}
@@ -109,41 +111,15 @@ export function PluginMediaViewer({
         style={[
           styles.root,
           {
-            paddingTop: insets.top,
+            paddingTop: insets.top + 64,
             paddingBottom: insets.bottom,
             paddingLeft: insets.left,
             paddingRight: insets.right,
           },
         ]}
       >
-        <View style={styles.header}>
-          <Pressable
-            accessibilityRole="button"
-            style={styles.button}
-            onPress={onClose}
-          >
-            <Text style={styles.body}>{t("plugins.returnToPlugin")}</Text>
-          </Pressable>
-          {media ? (
-            <Pressable
-              accessibilityRole="button"
-              style={styles.button}
-              onPress={() => void share()}
-              onLongPress={() => void share()}
-            >
-              <Text style={styles.body}>{t("plugins.shareMedia")}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-        {media ? (
-          <RemoteMediaPlayerWebView
-            kind="video"
-            url={media.uri}
-            mimeType={media.mime}
-            title={intent.ghostName}
-            style={styles.root}
-          />
-        ) : failed ? (
+        <PreviewHeader name={intent.ghostName} onClose={onClose} />
+        {failed ? (
           <Text style={styles.body}>{t("plugins.previewFailed")}</Text>
         ) : (
           <ActivityIndicator color={colors.textSecondary} />

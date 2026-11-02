@@ -1,3 +1,6 @@
+import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
+import { ProviderNameSearch } from './ProviderNameSearch';
+import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
@@ -15,6 +18,7 @@ let detectionRequestSequence = 0;
 
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  useMemo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -181,6 +185,9 @@ interface ProviderConnectionDialogProps {
   initial?: CustomProviderConfig;
   /** Effective modes from the same connection's active catalog, separate from editable overrides. */
   catalogModels?: ProviderView['models'];
+  providers?: ProviderView[];
+  suspended?: boolean;
+  onSelectProvider?: (target: ProviderSearchTarget) => void;
   /** 已占用的全部 provider id（内置 anthropic/openai/xd + 全部自定义）；新建时自动生成 id 时避让，防撞内置保留 id。 */
   existingIds?: string[];
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
@@ -205,6 +212,7 @@ interface ModelPickerState {
 }
 type DialogChildLayer =
   | { kind: 'preset-menu' }
+  | { kind: 'provider-search' }
   | { kind: 'model-picker'; value: ModelPickerState }
   | null;
 interface HeaderRow {
@@ -466,6 +474,9 @@ export function ProviderConnectionDialog({
   onDetected,
   initial,
   catalogModels,
+  providers = [],
+  suspended = false,
+  onSelectProvider,
   existingIds,
   returnFocusRef,
   focusAgent,
@@ -474,6 +485,8 @@ export function ProviderConnectionDialog({
 }: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
   const dialog = useDialogExit(returnFocusRef);
+  const suspendedRef = useRef(suspended);
+  useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
   const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
   const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
   const editing = !!initial;
@@ -604,6 +617,7 @@ export function ProviderConnectionDialog({
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
+  const providerChoices = useMemo(() => providerSearchChoices(providers, sortPresetsForRegion(withSpeechApiPresets(presets), CURRENT_CINDY_REGION), i18n.language, t('settings.providers.local.title'), t('settings.providers.llamacpp.title'), OFFICIAL_API_PRESETS), [providers, presets, i18n.language, t]);
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
   const [keyHydrationFailed, setKeyHydrationFailed] = useState<Record<DialogAgentKind, boolean>>({
@@ -736,6 +750,7 @@ export function ProviderConnectionDialog({
   }, []);
 
   useEffect(() => {
+    if (suspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
@@ -760,7 +775,7 @@ export function ProviderConnectionDialog({
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
+  }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp, suspended]);
 
   // 最新 runtime 表单状态镜像：拉取响应到达时据此构建弹层行/预勾选，而不是用请求发出时的
   // 闭包快照——在途期间被用户删除的行不得复活。镜像在每个 setRt updater 内**同步**更新
@@ -2333,6 +2348,8 @@ export function ProviderConnectionDialog({
     );
   };
 
+  if (suspended) return null;
+
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) dismissTopmostLayer(); }}>
       <Dialog.Portal>
@@ -2351,7 +2368,7 @@ export function ProviderConnectionDialog({
           event.preventDefault();
           dialogPanelRef.current?.querySelector<HTMLInputElement>('input')?.focus();
         }}
-        onCloseAutoFocus={dialog.onCloseAutoFocus}
+        onCloseAutoFocus={event => { if (suspendedRef.current) event.preventDefault(); else dialog.onCloseAutoFocus(event); }}
         onEscapeKeyDown={(event) => {
           // The existing window-capture owner handles child layers and IME first.
           event.preventDefault();
@@ -2442,6 +2459,15 @@ export function ProviderConnectionDialog({
               reserveFeedback
             >
               {(control) => (
+                !editing && onSelectProvider ? (
+                  <ProviderNameSearch {...control} surface="ivory" value={name} onChange={setName}
+                    placeholder={t('settings.providers.custom.fields.namePlaceholder')}
+                    choices={providerChoices} disabled={saving} open={!saving && childLayer?.kind === 'provider-search'}
+                    onOpenChange={open => setChildLayer(current => open
+                      ? (current?.kind === 'model-picker' ? current : { kind: 'provider-search' })
+                      : current?.kind === 'provider-search' ? null : current)}
+                    onSelect={target => { if (!savingRef.current) onSelectProvider(target); }} />
+                ) : (
                 <SettingsTextInput
                   {...control}
                   surface="ivory"
@@ -2450,6 +2476,7 @@ export function ProviderConnectionDialog({
                   onChange={setName}
                   placeholder={t('settings.providers.custom.fields.namePlaceholder')}
                 />
+                )
               )}
             </FormField>
           </div>

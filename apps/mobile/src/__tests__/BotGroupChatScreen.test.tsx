@@ -188,7 +188,7 @@ vi.mock('@/session/BotGroupAvatars', () => ({
 }));
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name),
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null),
 }));
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
@@ -240,7 +240,13 @@ vi.mock('@/session/ComposerAttachmentTray', () => ({
     { 'data-testid': testID, onClick: onPress }, String(attachments.length + pendingUploads.length)),
 }));
 vi.mock('@/session/ImageLightbox', () => ({
-  ImageLightbox: ({ images, initialUrl }: any) => el('div', { 'data-testid': 'lightbox', 'data-url': initialUrl, 'data-count': String(images.length) }),
+  ImageLightbox: ({ images, initialUrl, resolveOpaqueSource, onResolveRemoteMedia }: any) => {
+    const [url, setUrl] = useState(resolveOpaqueSource ? '' : initialUrl);
+    useEffect(() => {
+      if (resolveOpaqueSource) void onResolveRemoteMedia({ url: initialUrl }, {}).then((value: any) => setUrl(value.url));
+    }, []);
+    return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
+  },
 }));
 vi.mock('@/session/MessageRenderer', () => ({
   AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
@@ -253,7 +259,7 @@ vi.mock('@/session/MessageRenderer', () => ({
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
 }));
-vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async () => { throw new Error('offline'); } }));
+vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' }) }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
@@ -384,6 +390,11 @@ describe('group timeline', () => {
     await render(parseBotGroupChatData(deleted)!);
     expect(byId('botGroup.quote')!.textContent).toContain('groupChat.quote.deleted');
     expect(node.textContent).not.toContain('私密的原文');
+    // PR #8009: moving the quote into a bubble must preserve its locate action.
+    // A missing source with no older page must report unavailability, not silently do nothing.
+    await render({ ...deleted, hasMoreBefore: false, messages: [deleted.messages[1]] });
+    await click('botGroup.quote');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.quote.unavailable');
   });
 
   it('shows a task another owner\'s teammate started from the group as its posted title and state', async () => {
@@ -775,6 +786,11 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     expect(h.row.value).toBe('引用回复');
     expect(byId('botGroup.cancelReply')).not.toBeNull();
+    // PR #8009: replacing the cancel control must remove only the quote, not the draft.
+    await click('botGroup.cancelReply');
+    expect(byId('botGroup.quote')).toBeNull();
+    expect(h.row.value).toBe('引用回复');
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '引用回复', quote: { messageId: originalId }, clientId: 'uuid-1',
@@ -1691,6 +1707,42 @@ it('renders component body as readable text without changing the message', async
   expect(reply.content).toBe(content);
 });
 
+// PR #7806 integration fixture: the real screen/work area consumes server state.
+// A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
+it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+    { botId: 'mimi', sessionId: 's-mimi', activity: 'reply', executionStatus: 'stopping', stopping: true },
+  ] } });
+  await render(active);
+  expect(node.textContent).toContain('groupChat.list.running');
+  expect(all('botGroup.work.stop')).toHaveLength(1);
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+  let finish!: () => void;
+  h.chat.act.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  await click('botGroup.work.stop');
+  expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  expect(h.chat.act).toHaveBeenCalledWith('stop');
+  await act(async () => finish());
+  expect(byId('botGroup.work')).not.toBeNull();
+  await render(group());
+  expect(byId('botGroup.work')).toBeNull();
+  expect(node.textContent).not.toContain('groupChat.list.running');
+  expect(byId('botGroup.composer.stop')).toBeNull();
+});
+
+it('keeps active status and reports a failed stop so the user can retry', async () => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply' },
+  ] } });
+  await render(active);
+  h.chat.act.mockRejectedValueOnce(new Error('offline'));
+  await click('botGroup.work.stop');
+  expect(h.alert).toHaveBeenCalled();
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+  expect(node.textContent).toContain('groupChat.list.running');
+});
+
 
 // Unit: the actual main/thread timeline must retain owner-only historical progress.
 // The remote resource parser and the disclosure state have separate regression coverage.
@@ -2110,3 +2162,13 @@ describe('mobile group threads', () => {
     await act(async () => { h.hardwareBack?.(); }); expect(h.leave).toHaveBeenCalledTimes(2);
   });
 });
+
+vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ visible, children }: any) => visible ? children : null }));
+
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
