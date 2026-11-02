@@ -19,7 +19,12 @@ export interface CompanionSkillFiles {
   truncated: boolean;
 }
 /** What a take-over learned is missing from the cloud; this computer passes it on until it has the file. */
-export type CompanionSkillFileGaps = Record<string, { omitted: string[]; truncated?: boolean | undefined }>;
+export type CompanionSkillFileGaps = Record<string, {
+  omitted: string[];
+  truncated?: boolean | undefined;
+  /** An older copy kept here because the cloud's version did not arrive (path → sha256): not news until edited. */
+  stale?: Record<string, string> | undefined;
+}>;
 
 const record = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
 
@@ -56,7 +61,7 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
   let retried = false;
   const seen = new Set<string>();
   const resolved: CompanionPreferenceValue[] = [];
-  const list = (key: string, slug: string, files: CompanionSkillFile[], omitted: string[], truncated: boolean): CompanionPreferenceValue => {
+  const list = (key: string, slug: string, files: CompanionSkillFile[], omitted: string[], truncated: boolean, stale: Record<string, string> = {}): CompanionPreferenceValue => {
     // One value has to hold the list: what does not fit stays behind, like any other unsendable file.
     // Counted per entry: this runs every upload cycle on the main process, however long the list.
     const bytes = (item: unknown) => Buffer.byteLength(canonicalJson(item)) + 1;
@@ -67,7 +72,10 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
       if (dropped) { omitted.push(dropped.path); size += bytes(dropped.path) - bytes(dropped); }
       else { size -= bytes(omitted.pop()); truncated = true; }
     }
-    if (omitted.length || truncated) gaps[slug] = { omitted: omitted.filter(path => !seen.has(`${slug}/${path}`)), ...(truncated ? { truncated } : {}) };
+    if (omitted.length || truncated) {
+      gaps[slug] = { omitted: omitted.filter(path => stale[path] || !seen.has(`${slug}/${path}`)), ...(truncated ? { truncated } : {}),
+        ...(Object.keys(stale).length ? { stale } : {}) };
+    }
     return { key, value: { slug, files, ...(omitted.length ? { omitted } : {}), ...(truncated ? { truncated } : {}) } };
   };
   for (const entry of values) {
@@ -76,8 +84,10 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
     for (const file of entry.localFiles) seen.add(`${slug}/${file.path}`);
     const files: CompanionSkillFile[] = [];
     const omitted = (deps.gaps?.[slug]?.omitted ?? []).filter(path => !seen.has(`${slug}/${path}`));
+    const stale: Record<string, string> = {};
     let retry = false;
     for (const { absolutePath, ...file } of entry.localFiles) {
+      if (deps.gaps?.[slug]?.stale?.[file.path] === file.sha256) { stale[file.path] = file.sha256; omitted.push(file.path); continue; }
       let mediaId = file.size === 0 ? '' : deps.known(file.sha256) ?? inUse[file.sha256];
       if (mediaId === undefined && !storageMissing) {
         try {
@@ -94,7 +104,7 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
       files.push({ ...file, mediaId });
     }
     if (retry) { retried = true; resolved.push({ key: entry.key, value: null, unread: true }); continue; }
-    resolved.push(list(entry.key, slug, files, omitted, deps.gaps?.[slug]?.truncated === true));
+    resolved.push(list(entry.key, slug, files, omitted, deps.gaps?.[slug]?.truncated === true, stale));
   }
   // Every file of this skill stayed behind: without a list the next take-over would delete them there.
   for (const [slug, gap] of Object.entries(deps.gaps ?? {})) {

@@ -450,7 +450,7 @@ describe('materializeCompanion', () => {
 describe('skill files on take-over', () => {
   const skill = { key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 'steps' } };
   const file = { path: 'run.sh', size: 2, sha256: 'abc', mediaId: 'media-1', executable: true };
-  const take = async (prefs: Array<{ key: string; value: unknown }>, download = vi.fn(async () => ({ name: 'run.sh', category: 'file', mimeType: 'application/octet-stream', size: 2, url: null, path: '/downloads/run.sh' }))) => {
+  const take = async (prefs: Array<{ key: string; value: unknown }>, download = vi.fn(async () => ({ name: 'run.sh', category: 'file', mimeType: 'application/octet-stream', size: 2, url: null, path: '/downloads/run.sh' })), localFiles: Array<{ path: string; sha256: string }> = []) => {
     const { api } = cloud([profilePref, ...prefs]);
     const local = fakeLocal();
     const order: string[] = [];
@@ -461,7 +461,7 @@ describe('skill files on take-over', () => {
       return fetched.flatMap((value, index) => (value === null ? [files[index]!.path] : []));
     });
     const { state } = memoryState();
-    const run = materializeCompanion({ api, state, host: { ...local.host, applySkillFiles, saveSkill: async () => { order.push('skill'); } } as never, actor, roomId: async () => ROOM, download });
+    const run = materializeCompanion({ api, state, host: { ...local.host, applySkillFiles, saveSkill: async () => { order.push('skill'); }, readSkillFiles: async () => localFiles } as never, actor, roomId: async () => ROOM, download });
     return { run, state, applySkillFiles, order, fetched, download };
   };
 
@@ -508,5 +508,8 @@ describe('skill files on take-over', () => {
     expect(gone.state.bot('bot_mia')?.demoted).toBeUndefined();
     // Not having it here is no deletion: the next upload still says it exists, so the home keeps its copy.
     expect(gone.state.bot('bot_mia')?.skillFileGaps).toEqual({ brew: { omitted: ['run.sh'] } });
+    const older = await take([skill, list], vi.fn(async () => { throw Object.assign(new Error('MEDIA_NOT_FOUND'), { status: 404 }); }), [{ path: 'run.sh', sha256: 'old' }]);
+    await older.run;
+    expect(older.state.bot('bot_mia')?.skillFileGaps).toEqual({ brew: { omitted: ['run.sh'], stale: { 'run.sh': 'old' } } });
   });
 });

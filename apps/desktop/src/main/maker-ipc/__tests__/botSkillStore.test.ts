@@ -532,6 +532,12 @@ describe('skill files for cloud companions', () => {
     expect(await fs.readFile(path.join(skillDir(), 'kept/.env'), 'utf8')).toBe('TOKEN=1');
   });
 
+  it('restores a file whose name is as long as the disk allows', async () => {
+    const name = `${'n'.repeat(250)}.md`;
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(name, '')], async () => null, { removeOthers: false })).toEqual([]);
+    expect(await fs.readFile(path.join(skillDir(), name), 'utf8')).toBe('');
+  });
+
   it('never writes outside the skill folder', async () => {
     const outside = await fs.mkdtemp(path.join(userDataDir, 'outside-'));
     await fs.symlink(outside, path.join(skillDir(), 'linked'));

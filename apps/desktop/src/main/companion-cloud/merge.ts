@@ -164,7 +164,8 @@ export async function mergeCompanionsInto(input: {
       // The kept companion's home sends these to its own room with its next upload.
       if (list && host.applySkillFiles && input.media) {
         const fetch = companionSkillFileFetch(await input.roomOf(source), list.files, input.media.download, input.log);
-        await host.applySkillFiles(keep.externalId, slot.name, list.files, fetch, { removeOthers: false }, fence);
+        const missing = await host.applySkillFiles(keep.externalId, slot.name, list.files, fetch, { removeOthers: false }, fence);
+        if (missing.length) input.log?.warn('Companion skill files not merged', { count: missing.length });
       }
     }
 

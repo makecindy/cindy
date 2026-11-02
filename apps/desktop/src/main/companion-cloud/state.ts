@@ -49,7 +49,7 @@ const bot = z.object({
   /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
   skillFileMedia: z.record(z.string(), z.string()).optional(),
   /** Skill files the cloud does not have, learned at take-over; passed on until this computer has them. */
-  skillFileGaps: z.record(z.string(), z.object({ omitted: z.array(z.string()), truncated: z.boolean().optional() })).optional(),
+  skillFileGaps: z.record(z.string(), z.object({ omitted: z.array(z.string()), truncated: z.boolean().optional(), stale: z.record(z.string(), z.string()).optional() })).optional(),
   /** Deleted here while this computer was the home; disable the cloud actor until it succeeds. */
   retirePending: z.boolean().optional(),
 });

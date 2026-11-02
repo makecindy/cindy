@@ -240,12 +240,14 @@ export async function materializeCompanion(input: {
       await apply('skill-files', async () => {
         const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
         const missing = await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
+        const held = missing.length && host.readSkillFiles ? await step(() => host.readSkillFiles!(botId, slug)) : [];
+        const stale = Object.fromEntries(held.filter(file => missing.includes(file.path)).map(file => [file.path, file.sha256]));
         state.update(botId, actor.id, entry => {
           entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.filter(file => file.mediaId).map(file => [file.sha256, file.mediaId])) };
           const { [slug]: _previous, ...gaps } = entry.skillFileGaps ?? {};
           // A file that did not arrive still exists where it came from: this computer not having it is no deletion.
           const omitted = [...list.omitted, ...missing];
-          entry.skillFileGaps = omitted.length || list.truncated ? { ...gaps, [slug]: { omitted, ...(list.truncated ? { truncated: true } : {}) } } : gaps;
+          entry.skillFileGaps = omitted.length || list.truncated ? { ...gaps, [slug]: { omitted, ...(list.truncated ? { truncated: true } : {}), ...(Object.keys(stale).length ? { stale } : {}) } } : gaps;
         });
         applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
       });

@@ -247,6 +247,20 @@ describe('skill files', () => {
     expect(await pass([memory('a.md', 'a')], gaps)).toHaveLength(1);
   });
 
+  it('does not publish an older copy kept because the newer one did not arrive, until it is edited', async () => {
+    const retain = vi.fn();
+    const held = { ...local('run.sh'), sha256: 'old' };
+    const gaps = { brew: { omitted: ['scripts/run.sh'], stale: { 'scripts/run.sh': 'old' } } };
+    const upload = vi.fn(async () => 'media');
+    const unchanged = await resolveCompanionSkillFiles([{ key, value: null, localFiles: [held] }], { known: () => undefined, upload, gaps, retain });
+    expect(upload).not.toHaveBeenCalled();
+    expect(unchanged[0]?.value).toEqual({ slug: 'brew', files: [], omitted: ['scripts/run.sh'] });
+    expect(retain).toHaveBeenLastCalledWith({}, gaps);
+    const edited = await resolveCompanionSkillFiles([{ key, value: null, localFiles: [{ ...held, sha256: 'edited' }] }], { known: () => undefined, upload, gaps, retain });
+    expect(edited[0]?.value).toMatchObject({ files: [{ path: 'scripts/run.sh', sha256: 'edited' }] });
+    expect(retain).toHaveBeenLastCalledWith({ edited: 'media' }, {});
+  });
+
   it('keeps the list inside one value', async () => {
     // Also the cost: once per upload cycle on the main process.
     const started = performance.now();

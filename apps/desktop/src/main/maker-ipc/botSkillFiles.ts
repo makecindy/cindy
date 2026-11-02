@@ -2,7 +2,7 @@
  * The files a skill keeps beside its SKILL.md (scripts, templates, references), for cloud
  * companions. Dependency folders, hidden files and key material stay on the computer that has them.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -133,7 +133,8 @@ export async function applySkillFolderFiles(skillDir: string, files: BotSkillFil
       const existing = await fs.lstat(target).catch(() => null);
       if (existing?.isDirectory() && !await fs.rmdir(target).then(() => true, () => false)) { missing.push(file.path); continue; }
       await fs.mkdir(path.dirname(target), { recursive: true });
-      const temporary = `${target}.${process.pid}.tmp`;
+      // A name of its own: the target's name may already be as long as the disk allows. Hidden, so never listed.
+      const temporary = path.join(path.dirname(target), `.skill-${randomUUID()}.tmp`);
       try {
         if (source === null) await fs.writeFile(temporary, '');
         else await fs.copyFile(source, temporary);
