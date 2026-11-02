@@ -178,7 +178,11 @@ it.each(['DEVICE_LINK_TIMEOUT', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_CHANN
     expect(profiles.get()?.name).toBe('Draft');
     await expect(write).rejects.toSatisfy(error => extractIpcError(error)?.code === code);
     expect(profiles.get()?.name).toBe('Sora');
-    expect(host.invoke).toHaveBeenCalledTimes(2);
+    // A version conflict re-reads the profile once to roll back to the latest copy;
+    // that is a read, never a second write of the rejected draft.
+    const conflictReread = code === 'PRECONDITION_FAILED' ? 1 : 0;
+    expect(host.invoke).toHaveBeenCalledTimes(2 + conflictReread);
+    if (conflictReread) expect(sent(2)).toMatchObject({ input: { op: 'profile.get' } });
     host.invoke.mockResolvedValueOnce(ok({ profile: profile({ name: 'Draft', currentVersion: 2 }) }));
     await target.profile.update('bot-1', { name: 'Draft' });
     expect(profiles.get()).toMatchObject({ name: 'Draft', currentVersion: 2 });

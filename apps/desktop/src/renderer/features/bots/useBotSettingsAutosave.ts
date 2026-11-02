@@ -186,6 +186,7 @@ export function useBotSettingsAutosave(
   /** The user gave up an unsaveable draft: stop pending saves until the page shows the baseline again. */
   const discard = useCallback(() => {
     autosave.cancel();
+    autosave.discardPendingModelSelection();
     discardedRef.current = true;
     handleStatus('idle');
   }, [autosave, handleStatus]);

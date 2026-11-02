@@ -224,10 +224,10 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
   mocks.initialSearch = initialSearch;
   const onBack = vi.fn();
   const onOpenSession = vi.fn();
-  // The capability page asks before discarding an edited Skill, as in the app shell.
+  // The capability page asks before discarding an edited Skill, as in the app shell
+  // (the file-level `render` already wraps ConfirmDialogProvider).
   const view = render(
     <BotSettings bot={bot(overrides)} onBack={onBack} onOpenSession={onOpenSession} />,
-    { wrapper: ConfirmDialogProvider },
   );
   return { ...view, onBack, onOpenSession };
 }
