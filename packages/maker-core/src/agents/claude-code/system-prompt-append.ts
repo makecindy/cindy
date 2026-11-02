@@ -8,8 +8,8 @@
 // 查询一并移除）。host 层注入口保留：
 //   apps/desktop/src/main/maker-host/host-system-prompt.md  (vendor-neutral；当前是两行
 //   产品身份锚点：身份声明 + 源码仓库地址，让模型知道自己是 Cindy 及源码在哪)
-//   apps/desktop/src/main/maker-host/claude-system-prompt.md (Claude host 专属；当前为空——
-//   原「绘图走 art MCP」规则已删，画图路由交给意识(Ghost)触发体系)
+//   apps/desktop/src/main/maker-host/agent-shared-system-prompt.md (Claude/Codex 共用的
+//   agent 段；两份字节级相同的文件已于 2026-11-02 合并为单一来源)
 // 由 host 通过 runtimeConfig.systemPrompt 注入，跟本常量在 startSession 拼成一段
 // (拼接顺序见 ./index.ts 内 `systemPrompt: (() => { ... })()` 那段)。
 //

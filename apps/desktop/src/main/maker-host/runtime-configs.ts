@@ -24,8 +24,10 @@ import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { readUserToolSearchOverride } from './claude-user-tool-search.js';
-import claudeSystemPrompt from './claude-system-prompt.md?raw';
-import codexSystemPrompt from './codex-system-prompt.md?raw';
+// Claude 与 Codex 的 agent 专属段原本是两份字节级相同的文件（用户可见计划的写法），
+// 按本仓约定「vendor-neutral 规则不进 agent 专属段」，合并为单一来源避免漂移。
+// Pi 路径不注入该段（行为保持不变）。
+import agentSharedSystemPrompt from './agent-shared-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
@@ -191,7 +193,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     // 代输入: sudo / ssh / git password prompts of this task go to the owner.
     taskShellEnv: inputHandoffTaskShellEnv,
     // 产品身份 + Skill 来源优先级 + Claude 专属段，按顺序拼接后给 maker-core append。
-    systemPrompt: composeHostPrompt(claudeSystemPrompt),
+    systemPrompt: composeHostPrompt(agentSharedSystemPrompt),
     answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
     // Maker Memory 需要的 user-data 绝对路径 (maker-core 没 Electron 依赖, 必须 host 注入)。
     userDataPath: app.getPath('userData'),
@@ -314,7 +316,7 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // 代输入: sudo / ssh / git password prompts of this task go to the owner.
   taskShellEnv: inputHandoffTaskShellEnv,
   // 产品身份 + Skill 来源优先级 + Codex 专属段。
-  systemPrompt: composeHostPrompt(codexSystemPrompt),
+  systemPrompt: composeHostPrompt(agentSharedSystemPrompt),
   answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
   // lazy getter(与 endpoint/memoryEnabled 同一惯用法,issue #1956):import 期
   // 不探测 bundled ripgrep,纯 node / vitest 环境 import 本模块不再炸;真正的
