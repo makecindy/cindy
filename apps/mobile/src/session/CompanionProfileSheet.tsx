@@ -101,6 +101,12 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   useEffect(() => () => { current.current = ''; }, []);
   const panel = page === 'editor' ? editor?.panels.find(item => item.id === editorPanel) : data?.panels.find(item => item.id === page);
   const dirty = editing && (modelSelection || profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values));
+  // Legacy hosts can save a changed route but cannot acknowledge same-value fallback recovery.
+  // Task-only edits do not turn an unchanged primary selection into a supported request.
+  const unsupportedModelSelection = page === 'models' && modelSelection && panel?.acceptsModelSelection !== true
+    && (values.followsDefault === true) === (draftBase.current.followsDefault === true)
+    && (values.followsDefault === true || serializeModelRoutes(readCompanionModelChain(values.modelChain))
+      === serializeModelRoutes(readCompanionModelChain(draftBase.current.modelChain)));
   const draftScope = useRef({ dirty, page, base: page === 'editor' ? editor : data });
   draftScope.current = { dirty, page, base: page === 'editor' ? editor : data };
   const label = (value: RemoteText) => resolveRemoteText(value, i18n.language);
@@ -169,6 +175,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     setValues(data?.panels.find(item => item.id === next)?.values ?? {});
   };
   const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {
+    if (target.id === 'models' && unsupportedModelSelection) return false;
     if (!target.action || target.action.disabled || inFlight.current || !online || !resource || conflict?.page === page) return false;
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
     inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setReceipt(null);
@@ -267,7 +274,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   // discard it instead of silently keeping the user on a page they cannot leave.
   const settleDraft = async (proceed: () => void | Promise<void>) => {
     if (!dirty || !panel) { await proceed(); return; }
-    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
+    if (online && resource && panel.action && !panel.action.disabled && !unsupportedModelSelection && conflict?.page !== page) {
       if (await submit(panel)) await proceed();
       return;
     }
@@ -323,6 +330,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
   };
   const models = <View style={{ gap: spacing.lg }}>
+    {unsupportedModelSelection ? note('hostUpgrade') : null}
     <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={next => { setModelSelection(true); changeValues(next); }}
       onPick={index => pickModel('primary', index)} />
     {panel?.action?.fields?.some(field => field.id === 'taskModel') && <View style={{ gap: spacing.sm }}>

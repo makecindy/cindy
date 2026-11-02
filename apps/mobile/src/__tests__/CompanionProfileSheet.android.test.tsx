@@ -260,17 +260,25 @@ async function renderModels() {
   expect(h.sheet.trailingAction).toBeUndefined();
   await press(byTest('companionProfile.models'));
 }
-it('enables Android Save for an explicit unchanged primary selection', async () => {
+it.each([true, false])('handles Android unchanged primary selection with host support=%s', async supported => {
   const route = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
   const values = { modelChain: JSON.stringify([route]), followsDefault: false };
   const data = home();
-  data.panels.push(form('models', [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }], values));
+  data.panels.push({ ...form('models', [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }], values), ...(supported ? { acceptsModelSelection: true } : {}) });
   h.read.mockResolvedValue(data);
   await render(); await press(byTest('companionProfile.models'));
   expect(h.sheet.trailingAction.disabled).toBe(true);
   await act(async () => h.model.onChange({ ...values }));
   expect(h.sheet.trailingAction.disabled).toBe(false);
   await act(async () => h.sheet.trailingAction.onPress());
+  if (!supported) {
+    expect(h.invoke).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('devices.companionProfile.hostUpgrade');
+    expect(h.sheet.preventDismiss).toBe(true);
+    await act(async () => h.sheet.onBack());
+    expect(h.alert).toHaveBeenCalledOnce();
+    return;
+  }
   expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: values });
   expect(h.sheet.trailingAction.disabled).toBe(true);
 });

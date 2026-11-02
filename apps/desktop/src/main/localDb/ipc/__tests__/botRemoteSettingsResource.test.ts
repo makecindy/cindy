@@ -36,6 +36,7 @@ describe('opaque teammate settings actions', () => {
     const f = fixture();
     const resource = await f.get();
     expect(JSON.stringify(resource)).not.toContain('PRIVATE');
+    expect(resource.blocks?.find(block => block.id === 'models')?.data).toMatchObject({ acceptsModelSelection: true });
     expect(resource.blocks?.find(block => block.id === 'models')?.fallbackMarkdown).toContain('user-selected-model · connected-source · pi · high · Fast: true');
     expect(resource.blocks?.find(block => block.id === 'skills')?.fallbackMarkdown).toContain('Learned');
     expect(resource.blocks?.find(block => block.id === 'direct')?.fallbackMarkdown).toBe('Cindy: hello');
