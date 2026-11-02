@@ -354,6 +354,53 @@ describe('ContextWindowBudgetChip', () => {
     await waitFor(() => expect(screen.queryByRole('radiogroup')).toBeNull());
   });
 
+  // #8215: companion controls reuse the real ring/card without exposing task-window
+  // settings. Existing cases only covered ordinary tasks and assumed known usage.
+  // Minimal regression: a companion with 120K/1M, or no runtime snapshot. Unit tier.
+  it.each([undefined, 'companion-host'])('shows companion usage and explicit compaction without window settings on %s', async (deviceId) => {
+    const compact = vi.fn();
+    render(<ContextCapacityRing
+      sessionId={SESSION_ID}
+      contextTokens={120_000}
+      sdkContextWindow={1_000_000}
+      model="grok-4.6"
+      providerId="xd"
+      vendorKey="cc"
+      providers={routeCatalog}
+      deviceId={deviceId}
+      showWindowBudget={false}
+      onCompact={compact}
+    />);
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    expect(trigger.textContent).toBe('12%');
+    fireEvent.click(trigger);
+    expect((await screen.findByRole('progressbar')).getAttribute('aria-valuenow')).toBe('12');
+    expect(screen.queryByText('ccAgent.contextRingPanel.adjust')).toBeNull();
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(compact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.contextRingPanel.compact' }));
+    expect(compact).toHaveBeenCalledOnce();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a companion without a runtime usage snapshot unknown rather than reporting zero percent', async () => {
+    render(<ContextCapacityRing
+      sessionId={SESSION_ID}
+      contextTokens={0}
+      sdkContextWindow={0}
+      contextUsageKnown={false}
+      showWindowBudget={false}
+      model="grok-4.6"
+      vendorKey="cc"
+    />);
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    expect(trigger.textContent).toBe('—');
+    fireEvent.click(trigger);
+    expect(await screen.findByText('ccAgent.contextRingPanel.unknownHint')).toBeTruthy();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ccAgent.contextRingPanel.compact' })).toBeNull();
+  });
+
   it('keeps the card open when the trigger is clicked after hover opened it', async () => {
     // 与底栏用量 chip（TodaySpendChip）一致：展开/收起只由 hover、焦点与 outside-click
     // 驱动，点击不当作开关。用户实测：左边卡片悬浮展开后点击不会收起，本卡却会 —— 两张

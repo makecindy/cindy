@@ -6297,16 +6297,16 @@ function CCAgentSessionContent({
                 也复用这一行 inline 显示,替换原 Monitor+basename chip。完成后 store
                 自动 clear,UI 回到正常显示。设计参考用户反馈"把这部分的体验逻辑放到
                 chatinput 底部 显示 work dir 的地方"——不再在 chat stream 插 SystemCard。 */}
-              {!botChatIdentity ? (
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && 'invisible',
+                    !botChatIdentity && !session?.workingDir && !worktreeCreation && 'invisible',
+                    botChatIdentity && 'justify-end',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
                   click 区域宽度与文本一致(不拉伸到整行) */}
-                  {worktreeCreation?.status === 'creating' ? (
+                  {botChatIdentity ? null : worktreeCreation?.status === 'creating' ? (
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Spinner size={12} className="text-[var(--workingdir-icon)]" />
                       <span className="block min-w-0 truncate text-12 font-medium leading-none text-[var(--workingdir-text)]">
@@ -6368,7 +6368,7 @@ function CCAgentSessionContent({
 
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">
-                    {session?.usedProjectContext && (
+                    {!botChatIdentity && session?.usedProjectContext && (
                       <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
                         <Brain
                           size={14}
@@ -6378,7 +6378,7 @@ function CCAgentSessionContent({
                         />
                       </Tip>
                     )}
-                    <TodaySpendChip
+                    {!botChatIdentity && <TodaySpendChip
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
                       modelId={agentSwitchIntent?.model ?? session?.model ?? null}
                       providerId={usageChipProviderId}
@@ -6389,8 +6389,10 @@ function CCAgentSessionContent({
                       remoteHostId={session?.remoteHostId ?? null}
                       deviceLinkDeviceId={remoteDeviceId ?? null}
                       usageAccount={usageAccount}
-                    />
+                    />}
                     <ContextCapacityRing
+                      showWindowBudget={!botChatIdentity}
+                      contextUsageKnown={!botChatIdentity || agentStatus.contextWindowFromRuntime === true || agentStatus.contextTokens > 0}
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
                       providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
@@ -6432,7 +6434,6 @@ function CCAgentSessionContent({
                     />
                   </div>
                 </div>
-              ) : null}
             </div>
           </div>
         </div>

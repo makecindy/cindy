@@ -13888,6 +13888,7 @@
       "continueHint": "Mach weiter. Noch keine Anpassung nötig.",
       "unknownHint": "Die aktuelle Nutzung erscheint, sobald das Modell sie meldet.",
       "tokens": "{{used}} / {{total}} Tokens",
+      "snapshotHint": "Die Nutzung basiert auf der letzten Meldung oder Schätzung und kann sich mit der nächsten Anfrage ändern.",
       "compact": "Kontext komprimieren",
       "compactHelp": "Frühere Inhalte zusammenfassen, um Platz zu schaffen. Einige Details können entfallen.",
       "adjust": "Fenster anpassen",

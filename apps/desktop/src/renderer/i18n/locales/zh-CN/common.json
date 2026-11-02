@@ -13822,6 +13822,7 @@
       "continueHint": "可以继续对话，暂时无需调整。",
       "unknownHint": "收到模型的用量数据后，这里会显示当前占用。",
       "tokens": "{{used}} / {{total}} tokens",
+      "snapshotHint": "占用按最近上报或估算显示，可能随下一次请求变化。",
       "compact": "压缩上下文",
       "compactHelp": "概括较早内容，腾出空间。部分细节可能省略。",
       "adjust": "调整窗口",

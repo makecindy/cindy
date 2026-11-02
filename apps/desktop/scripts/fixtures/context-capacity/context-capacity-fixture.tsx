@@ -58,13 +58,16 @@ mountPage({
       <div className="flex items-center gap-3" data-testid="context-footer">
         <ContextCapacityRing
           sessionId="fixture-session"
+          showWindowBudget={!ctx.data.companion}
+          contextUsageKnown={ctx.data.snapshotKnown !== false}
+          deviceId={ctx.data.remote ? 'fixture-host' : undefined}
           providerId="xd"
           model={ctx.data.unknown ? 'unknown' : 'fixture-model'}
           vendorKey={ctx.data.codex ? 'codex' : 'cc'}
-          contextTokens={ctx.data.high ? 250_240 : 32_640}
-          sdkContextWindow={272_000}
+          contextTokens={ctx.data.snapshotKnown === false ? 0 : ctx.data.high ? 250_240 : 32_640}
+          sdkContextWindow={ctx.data.snapshotKnown === false ? 0 : 272_000}
           disabled={ctx.data.readOnly === true}
-          onCompact={!ctx.data.codex && !ctx.data.readOnly ? forbid('compact') : undefined}
+          onCompact={!ctx.data.codex && !ctx.data.readOnly && ctx.data.snapshotKnown !== false ? forbid('compact') : undefined}
         />
       </div>
     </div>
