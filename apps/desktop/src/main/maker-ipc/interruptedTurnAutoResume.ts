@@ -218,9 +218,17 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   //
   // stall / idle / reconnect-stalled 也放行，但 coordinator 对它们是 **CONTINUE-only**：
   // 见 `isAcceptedTurnContinuationOnlyReason`。
+  //
+  // `malformed-tool-markup` 同理放行（#2518 类 B）：translator 判据严格——本轮没有任何
+  // 结构化 tool_use，正文却命中已观测的裸 invoke + parameter 或 DSML 标记对。
+  // 检测不解析 Markdown；围栏内演示相同损坏形态仍可能误报，见检测器的已知代价。
+  // 泄漏正文已作为 assistant 消息落库，恢复必走「已有进展 → 续跑提示 + checkpoint」
+  // 分支（不会克隆重发原消息），模型基于上下文重发调用即可救回（issue 实测 3/3）。
+  // 止损同上：连续失败上限 / 人工介入周期硬上限 / 退避，预算耗尽后交还用户。
   if (
     reason === UPSTREAM_OVERLOAD_REASON ||
     reason === 'empty-response' ||
+    reason === 'malformed-tool-markup' ||
     isAcceptedTurnContinuationOnlyReason(reason)
   ) {
     return true;
