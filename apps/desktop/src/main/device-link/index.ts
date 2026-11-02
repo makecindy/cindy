@@ -97,6 +97,7 @@ import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
+  hasRemoteInvokeWorkForPeer,
   setControllersChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setRemoteInvokeBusyChangedListener,
@@ -772,6 +773,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   client = new RoutedDeviceLinkClient({
     ...connectionOptions,
     directRuntime: desktopDirectRuntime,
+    isPeerBusy: hasRemoteInvokeWorkForPeer,
     getWsUrl: wsUrl,
     // 自建中转用中转凭证(CindyRelay),官方中转用账号 token(Bearer);两者每次建连前同一轮取值。
     authorizationScheme: () => (activeSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),

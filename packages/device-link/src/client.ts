@@ -284,6 +284,8 @@ interface RelayChallengeQueue {
 export interface DeviceLinkClientOptions {
   /** Host WebRTC adapter. Both peers must opt in; unavailable/old hosts keep using relay. */
   directRuntime?: DirectRuntime;
+  /** Host executions/outbox can outlive transport admission; keep their direct peer alive. */
+  isPeerBusy?(peer: string): boolean;
   /** relay 的完整 ws(s) URL,如 wss://host/api/device-link/ws */
   getWsUrl(): string;
   /** 每次(重)连前取新鲜 token;null = 当前无登录态,跳过本轮并按退避重试 */
@@ -951,7 +953,7 @@ export class DeviceLinkClient {
       kind: (id) => isProviderSharePeer(id) ? 'share' : 'device',
       isBusy: (id) => {
         const peer = this.peerTransport.get(id);
-        return !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
+        return this.opts.isPeerBusy?.(id) === true || !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
           || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0);
       },
       diagnostic: (id, event) => this.logDirectDiagnostic(id, event),

@@ -3324,6 +3324,11 @@ function remoteInvokeAdmissionState(src: string): { messages: number; bytes: num
   return { messages, bytes };
 }
 
+/** Host work outlives the reliable frame ACK, including replies waiting in outbox. */
+export function hasRemoteInvokeWorkForPeer(src: string): boolean {
+  return remoteInvokeAdmissionState(src).messages > 0;
+}
+
 function sendRequestIdReuseError(
   client: DeviceLinkClient,
   src: string,
