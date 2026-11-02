@@ -482,9 +482,12 @@ const inheritedProxyKeys: ReadonlySet<string> = new Set([
 
 /** 代理 URL 的 userinfo（`user:pass@`）是凭据：返回需要脱敏的明文（整条值与 userinfo）。 */
 function proxyCredentialSecrets(value: string): string[] {
-  const authority = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/, 1)[0];
+  // 首尾空白不改变 URL 解析结果（new URL 会忽略），检测在去空白的副本上做；
+  // 原值与去空白后的值都登记，传给进程的值不变。
+  const trimmed = value.trim();
+  const authority = trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/, 1)[0];
   const at = authority.lastIndexOf('@');
-  return at > 0 ? [value, authority.slice(0, at)] : [];
+  return at > 0 ? [...new Set([value, trimmed, authority.slice(0, at)])] : [];
 }
 
 /**

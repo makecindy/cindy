@@ -2076,8 +2076,10 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
       }
     }
 
-    it('带 userinfo 的代理 URL 不出现在日志与退出诊断里，传给进程的值不变', async () => {
-      const proxy = 'http://proxy-user:proxy-pass-123@127.0.0.1:7890';
+    it.each([
+      ['标准写法', 'http://proxy-user:proxy-pass-123@127.0.0.1:7890'],
+      ['带首尾空白', '  http://proxy-user:proxy-pass-123@127.0.0.1:7890 '],
+    ])('带 userinfo 的代理 URL（%s）不出现在日志与退出诊断里，传给进程的值不变', async (_label, proxy) => {
       const { message, logged, forwarded } = await runWorkerThatPrintsProxy(proxy);
 
       expect(forwarded).toBe(proxy);
