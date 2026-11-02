@@ -1210,27 +1210,6 @@ test.describe('CLI', { concurrency: false }, () => {
     );
   });
 
-  test('CLI --report 只写统计报告,不改台账', () => {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'design-inventory-report-'));
-    const sandboxDoc = path.join(sandbox, 'design-inventory.md');
-    const sandboxReport = path.join(sandbox, 'report.md');
-    fs.copyFileSync(INVENTORY_PATH, sandboxDoc);
-    const before = fs.readFileSync(sandboxDoc, 'utf8');
-    try {
-      const result = spawnSync(process.execPath, [CLI_PATH, '--report'], {
-        cwd: ROOT,
-        encoding: 'utf8',
-        env: { ...process.env, CINDY_INVENTORY_DOC: sandboxDoc, CINDY_INVENTORY_REPORT: sandboxReport },
-      });
-      assert.equal(result.status, 0, result.stderr || result.stdout);
-      assert.equal(fs.readFileSync(sandboxDoc, 'utf8'), before);
-      const report = fs.readFileSync(sandboxReport, 'utf8');
-      assert.match(report, /\| `desktop\.chat\.session` \| desktop \| .+ \| \d+ \| \d+ \| \d+ \|/);
-    } finally {
-      fs.rmSync(sandbox, { recursive: true, force: true });
-    }
-  });
-
   test('CLI generate 不写日期:连续生成字节一致,--check 通过', () => {
     // 在临时目录拷贝上跑 CLI（CINDY_INVENTORY_DOC 重定向写读）：统计仍扫真实源码，
     // 但 generate 不再改写受版本控制的真实台账——跨日跑 test:runner 不留脏工作区。

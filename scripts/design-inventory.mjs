@@ -13,7 +13,6 @@
  *   node scripts/design-inventory.mjs --report  # 统计报告（root: pnpm design:inventory:report）
  *   CINDY_INVENTORY_DOC=<path> 覆盖台账写读路径（测试用：指向临时目录拷贝，
  *   不改真实 docs/design-rules/design-inventory.md）
- *   CINDY_INVENTORY_REPORT=<path> 覆盖统计报告输出路径（测试用）
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,9 +52,7 @@ const DOC_PATH =
 const ROUTER_PATH = path.join(repoRoot, ...ROUTER_REL_PATH.split('/'));
 const MAIN_ENTRY_PATH = path.join(repoRoot, ...MAIN_ENTRY_REL_PATH.split('/'));
 const RENDERER_INDEX_PATH = path.join(repoRoot, ...RENDERER_INDEX_REL_PATH.split('/'));
-const REPORT_PATH =
-  process.env.CINDY_INVENTORY_REPORT ??
-  path.join(repoRoot, ...REPORT_REL_PATH.split('/'));
+const REPORT_PATH = path.join(repoRoot, ...REPORT_REL_PATH.split('/'));
 
 const checkOnly = process.argv.includes('--check');
 const reportOnly = process.argv.includes('--report');
@@ -280,7 +277,7 @@ if (reportOnly) {
   fs.mkdirSync(path.dirname(REPORT_PATH), { recursive: true });
   fs.writeFileSync(REPORT_PATH, renderStatsReport(surfaces), 'utf8');
   console.log(
-    `[design-inventory] ✅ 统计报告已写入 ${path.relative(repoRoot, REPORT_PATH) || REPORT_PATH}` +
+    `[design-inventory] ✅ 统计报告已写入 ${REPORT_REL_PATH}` +
       `（${surfaces.length} 个 surface；不入库，台账未改动）`,
   );
   process.exit(0);
