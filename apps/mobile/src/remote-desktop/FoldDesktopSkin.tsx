@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Image, Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
@@ -16,6 +16,13 @@ import type { LayoutRect } from "@/platform/windowGeometry";
 import { retroMacArtwork } from "./retroMacArtwork";
 import { FoldTouchpad } from "./FoldTouchpad";
 import { RemoteKeySurface } from "./RemoteKeySurface";
+import {
+  CONTROL_ASPECT,
+  DECK_RAIL,
+  WELL_PADDING,
+  deckWell,
+  retroDeckLayout,
+} from "./retroDeckLayout";
 import type { KeyRect } from "./remoteKeyLayout";
 
 export const FOLD_DESKTOP_SKINS = [
@@ -34,10 +41,70 @@ export const DEFAULT_FOLD_DESKTOP_SKIN: FoldDesktopSkin = "keyboard";
 export function foldDesktopSkinColors(skin: FoldDesktopSkin) {
   return skin === "powerbook" || skin === "thinkpad" ? darkColors : lightColors;
 }
-function heritageArtwork(skin: FoldDesktopSkin) {
+function heritageDisplay(skin: FoldDesktopSkin) {
   return skin === "macii" || skin === "powerbook" || skin === "thinkpad"
-    ? retroMacArtwork.heritage[skin]
+    ? retroMacArtwork.displays[skin]
     : null;
+}
+function deckArtwork(skin: RetroDesktopSkin) {
+  return skin === "macii" || skin === "powerbook" || skin === "thinkpad"
+    ? retroMacArtwork.decks[skin]
+    : retroMacArtwork.decks.classic;
+}
+/** Resizes artwork around one opening, so its edges keep their proportion. */
+function SlicedArtwork({
+  source,
+  opening,
+  size,
+  target,
+}: {
+  source: number;
+  opening: LayoutRect;
+  size: { width: number; height: number };
+  target: LayoutRect;
+}) {
+  const sourceX = [0, opening.x, opening.x + opening.width, 1];
+  const sourceY = [0, opening.y, opening.y + opening.height, 1];
+  const targetX = [0, target.x, target.x + target.width, size.width];
+  const targetY = [0, target.y, target.y + target.height, size.height];
+  return (
+    <>
+      {[0, 1, 2].flatMap((row) =>
+        [0, 1, 2].map((column) => {
+          const width = targetX[column + 1] - targetX[column];
+          const height = targetY[row + 1] - targetY[row];
+          if (width <= 0 || height <= 0) return null;
+          const imageWidth = width / (sourceX[column + 1] - sourceX[column]);
+          const imageHeight = height / (sourceY[row + 1] - sourceY[row]);
+          return (
+            <View
+              key={`${row}-${column}`}
+              style={{
+                position: "absolute",
+                left: targetX[column],
+                top: targetY[row],
+                width,
+                height,
+                overflow: "hidden",
+              }}
+            >
+              <Image
+                source={source}
+                resizeMode="stretch"
+                style={{
+                  position: "absolute",
+                  left: -sourceX[column] * imageWidth,
+                  top: -sourceY[row] * imageHeight,
+                  width: imageWidth,
+                  height: imageHeight,
+                }}
+              />
+            </View>
+          );
+        }),
+      )}
+    </>
+  );
 }
 const VIEWPORTS = {
   macii: { x: 0.072, y: 0.082, width: 0.856, height: 0.73 },
@@ -133,28 +200,8 @@ export function FoldDesktopBezel({
   const source =
     skin === "compact" || skin === "edge"
       ? retroMacArtwork[skin]
-      : (heritageArtwork(skin)?.display ?? retroMacArtwork.display);
+      : (heritageDisplay(skin) ?? retroMacArtwork.display);
   const opening = VIEWPORTS[skin];
-  // Resize the original case around the very same opening used by the viewer.
-  // Nine cropped regions preserve its artwork while fitting any host aspect.
-  const sourceX = [0, opening.x, opening.x + opening.width, 1];
-  const sourceY = [0, opening.y, opening.y + opening.height, 1];
-  const targetX = viewport
-    ? [
-        0,
-        viewport.x - region.x,
-        viewport.x - region.x + viewport.width,
-        region.width,
-      ]
-    : [];
-  const targetY = viewport
-    ? [
-        0,
-        viewport.y - region.y,
-        viewport.y - region.y + viewport.height,
-        region.height,
-      ]
-    : [];
   return (
     <View
       pointerEvents="none"
@@ -171,41 +218,19 @@ export function FoldDesktopBezel({
         },
       ]}
     >
+      {/* Resize the original case around the very same opening used by the viewer. */}
       {viewport ? (
-        [0, 1, 2].flatMap((row) =>
-          [0, 1, 2].map((column) => {
-            const width = targetX[column + 1] - targetX[column];
-            const height = targetY[row + 1] - targetY[row];
-            if (width <= 0 || height <= 0) return null;
-            const imageWidth = width / (sourceX[column + 1] - sourceX[column]);
-            const imageHeight = height / (sourceY[row + 1] - sourceY[row]);
-            return (
-              <View
-                key={`${row}-${column}`}
-                style={{
-                  position: "absolute",
-                  left: targetX[column],
-                  top: targetY[row],
-                  width,
-                  height,
-                  overflow: "hidden",
-                }}
-              >
-                <Image
-                  source={source}
-                  resizeMode="stretch"
-                  style={{
-                    position: "absolute",
-                    left: -sourceX[column] * imageWidth,
-                    top: -sourceY[row] * imageHeight,
-                    width: imageWidth,
-                    height: imageHeight,
-                  }}
-                />
-              </View>
-            );
-          }),
-        )
+        <SlicedArtwork
+          source={source}
+          opening={opening}
+          size={region}
+          target={{
+            x: viewport.x - region.x,
+            y: viewport.y - region.y,
+            width: viewport.width,
+            height: viewport.height,
+          }}
+        />
       ) : (
         <Image source={source} resizeMode="stretch" style={styles.artwork} />
       )}
@@ -309,120 +334,117 @@ export function FoldDesktopDeck({
 }) {
   const { send, enabled } = keys;
   const palette = foldDesktopSkinColors(skin);
-  const artwork = heritageArtwork(skin);
-  const darkHardware = skin === "powerbook" || skin === "thinkpad";
-  // These two source images include a narrow white exterior along their
-  // sides. Crop that exterior, keeping the hardware itself edge-to-edge.
-  const deckArtwork = [styles.artwork, darkHardware && styles.darkDeckArtwork];
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const artwork = deckArtwork(skin);
+  const { well, control } = retroDeckLayout(
+    size,
+    skin,
+    safeInsets,
+    bottomReserve,
+  );
+  const aspect =
+    CONTROL_ASPECT[
+      skin === "macii" || skin === "powerbook" || skin === "thinkpad"
+        ? skin
+        : "classic"
+    ];
+  const controlHeight = Math.min(
+    control.height - 8,
+    skin === "thinkpad" ? 24 : 56,
+  );
   return (
     <View
       testID="remoteDesktop.retroDeck"
+      onLayout={({ nativeEvent: { layout } }) =>
+        setSize({ width: layout.width, height: layout.height })
+      }
       style={{
         flex: 1,
         overflow: "hidden",
-        backgroundColor: foldDesktopSkinColors(skin).surface,
+        backgroundColor: palette.surface,
       }}
     >
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <SlicedArtwork
+          source={artwork.deck}
+          opening={deckWell(skin)}
+          size={size}
+          target={well}
+        />
+      </View>
       <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
         style={{
-          height: 44 + safeInsets.top,
-          paddingTop: safeInsets.top,
-          paddingLeft: safeInsets.left,
-          paddingRight: safeInsets.right,
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: control.y,
+          height: control.height,
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
-        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <Image
-            source={artwork?.rail ?? retroMacArtwork.rail}
-            resizeMode="stretch"
-            style={deckArtwork}
-          />
-        </View>
-        <FoldDesktopSkinSwitch skin={skin} onChange={onChange} />
-      </View>
-      <View style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <Image
-            source={artwork?.keys ?? retroMacArtwork.keys}
-            resizeMode="stretch"
-            style={deckArtwork}
-          />
-        </View>
-        <View
+        <Image
+          source={artwork.control}
+          resizeMode="contain"
           style={{
-            flex: 1,
-            marginHorizontal: artwork ? "5%" : "3.2%",
-            marginVertical: 6,
-            paddingLeft: safeInsets.left,
-            paddingRight: safeInsets.right,
+            width: Math.max(0, controlHeight) * aspect,
+            height: Math.max(0, controlHeight),
           }}
-        >
-          <RemoteKeySurface
-            {...keys}
-            testID="remoteDesktop.retroKeys"
-            palette={palette}
-            mode="classic"
-            renderKeycap={(rect) => (
-              <FoldDesktopKeycap
-                skin={skin}
-                wide={rect.width > rect.height * 1.3}
-              />
-            )}
-            renderOverlay={
-              skin === "thinkpad"
-                ? (rects) => <Trackpoint rects={rects} />
-                : undefined
-            }
-          />
-        </View>
+        />
       </View>
-      <View style={{ height: 68 + safeInsets.bottom + bottomReserve }}>
-        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <Image
-            source={artwork?.palm ?? retroMacArtwork.pad}
-            resizeMode={artwork ? "cover" : "stretch"}
-            style={styles.artwork}
-          />
-        </View>
-        {artwork && (
-          <View
-            pointerEvents="none"
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                alignItems: "center",
-                justifyContent: "center",
-                paddingBottom: safeInsets.bottom + bottomReserve,
-                paddingLeft: safeInsets.left,
-                paddingRight: safeInsets.right,
-              },
-            ]}
-          >
-            <Image
-              source={artwork.control}
-              resizeMode="contain"
-              style={{
-                width: skin === "powerbook" ? 66 : 96,
-                height: skin === "powerbook" ? 60 : 44,
-              }}
+      <View
+        testID="remoteDesktop.palmrest"
+        style={{
+          position: "absolute",
+          left: safeInsets.left,
+          right: safeInsets.right,
+          top: control.y,
+          height: control.height,
+        }}
+      >
+        <FoldTouchpad send={send} enabled={enabled} bare />
+      </View>
+      <View
+        style={{
+          position: "absolute",
+          left: well.x + WELL_PADDING,
+          top: well.y + WELL_PADDING,
+          width: Math.max(0, well.width - WELL_PADDING * 2),
+          height: Math.max(0, well.height - WELL_PADDING * 2),
+        }}
+      >
+        <RemoteKeySurface
+          {...keys}
+          testID="remoteDesktop.retroKeys"
+          mode="classic"
+          palette={palette}
+          renderKeycap={(rect) => (
+            <FoldDesktopKeycap
+              skin={skin}
+              wide={rect.width > rect.height * 1.3}
             />
-          </View>
-        )}
-        <View
-          testID="remoteDesktop.palmrest"
-          style={[
-            StyleSheet.absoluteFill,
-            {
-              left: safeInsets.left,
-              right: safeInsets.right,
-              bottom: safeInsets.bottom + bottomReserve,
-            },
-          ]}
-        >
-          <FoldTouchpad send={send} enabled={enabled} bare />
-        </View>
+          )}
+          renderOverlay={
+            skin === "thinkpad"
+              ? (rects) => <Trackpoint rects={rects} />
+              : undefined
+          }
+        />
+      </View>
+      {/* Last, so a swipe on the rail stays clear of the keys below it. */}
+      <View
+        style={{
+          position: "absolute",
+          left: safeInsets.left,
+          right: safeInsets.right,
+          top: safeInsets.top,
+          height: DECK_RAIL,
+        }}
+      >
+        <FoldDesktopSkinSwitch skin={skin} onChange={onChange} />
       </View>
     </View>
   );
@@ -521,7 +543,6 @@ export function FoldDesktopKeycap({
 }
 
 const styles = StyleSheet.create({
-  darkDeckArtwork: { left: "-2%", width: "104%" },
   keycapEnd: { height: "100%", aspectRatio: 0.25, overflow: "hidden" },
   // Native Image keeps its asset's intrinsic size unless both dimensions are
   // explicit; absoluteFill alone does not constrain a bundled bitmap.

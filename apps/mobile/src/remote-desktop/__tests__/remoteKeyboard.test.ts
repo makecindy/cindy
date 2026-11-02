@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { retroDeckLayout } from "../retroDeckLayout";
 import { KEY_CAPS, KEY_FN, RemoteKeyInput } from "../remoteKeyInput";
 import {
   classicKeyboardRows,
@@ -100,6 +101,45 @@ describe("classic keyboard", () => {
     const last = rects[rects.length - 1];
     expect(last.y + last.height).toBeCloseTo(300, 3);
   });
+
+  it("staggers its rows, ends them flush and stacks the arrow column", () => {
+    const rects = keyRects(classicKeyboardRows("darwin"), 650, 300, false);
+    const at = (id: string) => rects.find((rect) => rect.id === id)!;
+    for (const id of ["Backspace", "Backslash", "Enter", "Slash", "ArrowRight"])
+      expect(at(id).x + at(id).width).toBeCloseTo(650, 3);
+    expect(at("KeyQ").x).toBeLessThan(at("KeyA").x);
+    expect(at("KeyA").x).toBeLessThan(at("KeyZ").x);
+    expect(at("ArrowUp").x).toBeCloseTo(at("ArrowDown").x, 0);
+  });
+});
+
+describe("retro deck", () => {
+  const safe = { top: 6, bottom: 20, left: 0, right: 0 };
+  it("keeps keys near square and reserves the palm above the toolbar", () => {
+    const { well, control } = retroDeckLayout(
+      { width: 760, height: 490 },
+      "macii",
+      safe,
+      60,
+    );
+    const keyWidth = (well.width - 12 - 12 * 5) / 13;
+    const keyHeight = (well.height - 12 - 4 * 5) / 5;
+    expect(keyHeight / keyWidth).toBeCloseTo(1, 1);
+    expect(control.y).toBeCloseTo(well.y + well.height, 3);
+    expect(control.y + control.height).toBe(490 - 20 - 60);
+    expect(control.height).toBeGreaterThanOrEqual(52);
+  });
+  it("shrinks keys in a short window, keeping the control zone and system insets", () => {
+    const { well, control } = retroDeckLayout(
+      { width: 760, height: 300 },
+      "powerbook",
+      { ...safe, left: 80 },
+      60,
+    );
+    expect(well.x).toBe(80);
+    expect(control.height).toBe(52);
+    expect(well.height).toBeGreaterThan(0);
+  });
 });
 
 describe("keyboard bar", () => {
@@ -191,8 +231,8 @@ describe("keyRects", () => {
       305,
       40,
     );
-    expect(esc.width).toBeCloseTo(100, 3);
-    expect(undo.x).toBeCloseTo(205, 3);
+    expect(esc.width).toBeCloseTo(295 / 3, 3);
+    expect(undo.x).toBeCloseTo(305 - 295 / 3, 3);
     expect(undo.x + undo.width).toBeCloseTo(305, 3);
   });
 

@@ -83,24 +83,33 @@ export function classicKeyboardRows(platform: HostPlatform): KeyCell[][] {
   const meta = mac ? "⌘" : platform === "win32" ? "Win" : "Super";
   return [
     [
-      key("Escape", "Esc"),
+      key("Escape", "Esc", 1.25),
       ...[..."1234567890"].map((digit) => key(`Digit${digit}`, digit)),
-      key("Backspace", "⌫"),
+      key("Backspace", "⌫", 1.75),
     ],
-    [key("Tab", "Tab"), ...letters("QWERTYUIOP")],
-    [...letters("ASDFGHJKL"), key("Enter", mac ? "Return" : "Enter")],
     [
-      key("ShiftLeft", "Shift"),
+      key("Tab", "Tab", 1.5),
+      ...letters("QWERTYUIOP"),
+      key("Backslash", "\\", 1.5),
+    ],
+    [
+      key(KEY_CAPS, "Caps", 1.75),
+      ...letters("ASDFGHJKL"),
+      key("Enter", mac ? "Return" : "Enter", 2.25),
+    ],
+    [
+      key("ShiftLeft", "Shift", 2),
       ...letters("ZXCVBNM"),
       key("Comma", ","),
       key("Period", "."),
       key("ArrowUp", "↑"),
+      key("Slash", "/"),
     ],
     [
-      key("ControlLeft", "Ctrl"),
-      key("AltLeft", mac ? "Option" : "Alt"),
-      key("MetaLeft", meta),
-      key("Space", "", 4),
+      key("ControlLeft", "Ctrl", 1.25),
+      key("AltLeft", mac ? "Option" : "Alt", 1.25),
+      key("MetaLeft", meta, 1.5),
+      key("Space", "", 6),
       key("ArrowLeft", "←"),
       key("ArrowDown", "↓"),
       key("ArrowRight", "→"),
@@ -276,12 +285,14 @@ export function keyRects(
         sum + cell.weight + (cell.groupGap ?? 0) + (cell.trailingGap ?? 0),
       0,
     );
-    const unit =
-      Math.max(0, width - left - right - GAP * (slots.length - 1)) / total;
+    // A wide key spans the gaps it covers, keeping columns aligned across rows.
+    const unit = Math.max(0, width - left - right - GAP * (total - 1)) / total;
+    const span = (weight: number) => weight * unit + (weight - 1) * GAP;
+    const skip = (weight: number) => weight * (unit + GAP);
     let x = left;
     for (const cell of slots) {
-      x += (cell.groupGap ?? 0) * unit;
-      const cellWidth = cell.weight * unit;
+      x += skip(cell.groupGap ?? 0);
+      const cellWidth = span(cell.weight);
       if (cell.half === "top") {
         const lower = row.find((other) => other.half === "bottom")!;
         const half = (currentHeight - GAP / 2) / 2;
@@ -296,7 +307,7 @@ export function keyRects(
       } else {
         rects.push({ ...cell, x, y, width: cellWidth, height: currentHeight });
       }
-      x += cellWidth + (cell.trailingGap ?? 0) * unit + GAP;
+      x += cellWidth + skip(cell.trailingGap ?? 0) + GAP;
     }
     y += currentHeight + GAP;
   });

@@ -365,25 +365,21 @@ vi.mock("@/theme", async () => {
       ),
   };
 });
-vi.mock("../retroMacArtwork", () => ({
-  retroMacArtwork: {
-    display: 1,
-    deck: 2,
-    keycap: 3,
-    compact: 4,
-    edge: 5,
-    rail: 6,
-    keys: 7,
-    pad: 8,
-    darkKeycap: 9,
-    trackpoint: 10,
-    heritage: {
-      macii: { display: 11, rail: 12, keys: 13, palm: 14, control: 15 },
-      powerbook: { display: 16, rail: 17, keys: 18, palm: 19, control: 20 },
-      thinkpad: { display: 21, rail: 22, keys: 23, palm: 24, control: 25 },
+vi.mock("../retroMacArtwork", () => {
+  const deck = { deck: 1, control: 2 };
+  return {
+    retroMacArtwork: {
+      display: 1,
+      compact: 2,
+      edge: 3,
+      keycap: 4,
+      darkKeycap: 5,
+      trackpoint: 6,
+      displays: { macii: 7, powerbook: 8, thinkpad: 9 },
+      decks: { classic: deck, macii: deck, powerbook: deck, thinkpad: deck },
     },
-  },
-}));
+  };
+});
 vi.mock("@/device-link/DeviceLinkContext", () => ({
   useDeviceLink: () => ({
     status: fixture.status,
