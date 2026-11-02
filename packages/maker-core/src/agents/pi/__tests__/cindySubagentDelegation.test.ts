@@ -448,3 +448,78 @@ describe('Pi subagent provider selection', () => {
     expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
   });
 });
+
+describe('Pi delegation workflow ordering', () => {
+  const chain = () => extension.normalizeInvocation({
+    tasks: [
+      { agent: 'planner', id: 'plan', task: 'read the auth module' },
+      { agent: 'worker', id: 'build', task: 'implement the fix', dependsOn: ['plan'] },
+      { agent: 'reviewer', id: 'check', task: 'review the diff', dependsOn: ['build'] },
+    ],
+  });
+
+  it('carries dependsOn through to the launch config and reports a chain run', () => {
+    const invocation = chain();
+    expect(invocation.mode).toBe('chain');
+    expect(invocation.tasks.map((task: { id: string }) => task.id)).toEqual(['plan', 'build', 'check']);
+    expect(invocation.tasks.map((task: { dependsOn: string[] }) => task.dependsOn))
+      .toEqual([[], ['plan'], ['build']]);
+  });
+
+  it('labels fan-in as a workflow rather than a parallel batch', () => {
+    expect(chain().mode).toBe('chain');
+    expect(extension.normalizeInvocation({
+      tasks: [
+        { agent: 'scout', id: 'a', task: 'x' },
+        { agent: 'scout', id: 'b', task: 'y' },
+        { agent: 'planner', id: 'c', task: 'z', dependsOn: ['a', 'b'] },
+      ],
+    }).mode).toBe('workflow');
+    // Fan-out (one step feeding two dependents) is also a graph, not a batch.
+    expect(extension.normalizeInvocation({
+      tasks: [
+        { agent: 'scout', id: 'a', task: 'x' },
+        { agent: 'reviewer', id: 'b', task: 'y', dependsOn: ['a'] },
+        { agent: 'reviewer', id: 'c', task: 'z', dependsOn: ['a'] },
+      ],
+    }).mode).toBe('workflow');
+  });
+
+  it('keeps parallel and single labels when nothing declares a dependency', () => {
+    expect(extension.normalizeInvocation({ agent: 'scout', task: 'x' }).mode).toBe('single');
+    expect(extension.normalizeInvocation({
+      tasks: [{ agent: 'scout', task: 'a' }, { agent: 'scout', task: 'b' }],
+    }).mode).toBe('parallel');
+  });
+
+  it('fails closed before any spawn on a graph the runner could never schedule', () => {
+    const two = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      () => extension.normalizeInvocation({
+        tasks: [{ agent: 'scout', task: 'a', ...a }, { agent: 'scout', task: 'b', ...b }],
+      });
+    expect(two({ id: 'a' }, { id: 'b', dependsOn: ['missing'] })).toThrow('depends on unknown task');
+    expect(two({ id: 'a', dependsOn: ['a'] }, { id: 'b' })).toThrow('cannot depend on itself');
+    expect(two({ id: 'a', dependsOn: ['b'] }, { id: 'b', dependsOn: ['a'] })).toThrow('dependency cycle');
+    expect(two({ id: 'a' }, { id: 'b', dependsOn: 'a' })).toThrow('must be an array of task ids');
+    expect(two({ id: 'a' }, { id: 'b', dependsOn: ['b'] })).toThrow('cannot depend on itself');
+  });
+
+  it('exposes id and dependsOn in the tool schema', async () => {
+    const f = await fixture();
+    const properties = f.tool.parameters.properties.tasks.items.properties;
+    expect(properties.id.type).toBe('string');
+    expect(properties.dependsOn.type).toBe('array');
+    expect(properties.dependsOn.items.type).toBe('string');
+  });
+
+  it('advertises the workflow contract on the capabilities action', async () => {
+    const f = await fixture();
+    const result = await f.execute({ action: 'capabilities' });
+    const capabilities = JSON.parse(result.content[0].text);
+    expect(capabilities.workflow).toEqual({
+      idField: 'id',
+      dependencyField: 'dependsOn',
+      modes: ['single', 'parallel', 'chain', 'workflow'],
+    });
+  });
+});

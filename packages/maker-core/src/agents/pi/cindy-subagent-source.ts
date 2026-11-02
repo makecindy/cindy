@@ -209,6 +209,29 @@ function profileNames() {
 }
 
 /**
+ * The run label follows the graph, not the batch size: a linear chain stays
+ * chain, fan-in or fan-out becomes workflow, and an edgeless batch stays
+ * parallel. The runner does not branch on the label — it schedules from
+ * dependsOn alone — but the status record and the subagent card render it, so a
+ * batch that waits on earlier steps must not be reported as a parallel fan-out.
+ * (No backticks here: this file is a String.raw template.)
+ */
+function workflowMode(tasks) {
+  const fanIn = new Map();
+  let edges = 0;
+  for (const task of tasks) {
+    for (const dependency of task.dependsOn) {
+      edges += 1;
+      fanIn.set(dependency, (fanIn.get(dependency) || 0) + 1);
+    }
+  }
+  if (edges === 0) return tasks.length > 1 ? 'parallel' : 'single';
+  const branches = tasks.some(function (task) { return task.dependsOn.length > 1; })
+    || Array.from(fanIn.values()).some(function (count) { return count > 1; });
+  return branches ? 'workflow' : 'chain';
+}
+
+/**
  * 现读子代理运行期快照(model + provider)。每次派子代理都读 —— 会话中途 setModel 后
  * 立即生效。
  *
@@ -711,6 +734,7 @@ async function managementResult(params, ctx, signal, delivery) {
     }), models: Object.keys(runtime.modelRoutes || {}),
       modelProviders: modelProviderMap(runtime),
       maxTasks: MAX_TASKS, concurrency: MAX_CONCURRENCY, context: ['fresh', 'fork'],
+      workflow: { idField: 'id', dependencyField: 'dependsOn', modes: ['single', 'parallel', 'chain', 'workflow'] },
       actions: ['run', 'list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'] });
   }
   if (!['list', 'get', 'wait', 'stop', 'steer', 'follow_up', 'resume'].includes(action)) {
@@ -1034,7 +1058,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     bridgeExtension: bridgeExtension,
     permissionFile: permissionFile,
     depth: readDepth() + 1,
-    mode: tasks.length > 1 ? 'parallel' : 'single',
+    mode: workflowMode(tasks),
     context: context,
     title: typeof displayTitle === 'string' && displayTitle.trim()
       ? displayTitle.trim().slice(0, MAX_TITLE_CHARS)
@@ -1338,9 +1362,27 @@ function normalizeInvocation(params) {
     if (thinking && ('|' + THINKING_LEVELS + '|').indexOf('|' + thinking + '|') < 0) {
       throw new Error('subagent: unsupported thinking level "' + thinking + '".');
     }
+    // Workflow ordering: the runner already schedules by step id and appends each
+    // dependency's output to the dependent task (see cindy-subagent-runner-source).
+    // Until now the extension hard-coded an empty list, so that path was unreachable
+    // from the model. Validation stays here so a bad graph fails before any spawn.
+    if (item.dependsOn !== undefined && !Array.isArray(item.dependsOn)) {
+      throw new Error('subagent: task ' + (index + 1) + ' dependsOn must be an array of task ids');
+    }
+    const dependsOn = [];
+    for (const rawDependency of item.dependsOn === undefined ? [] : item.dependsOn) {
+      const dependency = typeof rawDependency === 'string' ? rawDependency.trim() : '';
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(dependency)) {
+        throw new Error('subagent: task ' + (index + 1) + ' has an invalid dependsOn entry');
+      }
+      if (dependency === id) {
+        throw new Error('subagent: task "' + id + '" cannot depend on itself');
+      }
+      if (dependsOn.indexOf(dependency) < 0) dependsOn.push(dependency);
+    }
     return {
       id: id,
-      dependsOn: [],
+      dependsOn: dependsOn,
       agent: agent,
       title: title,
       task: task,
@@ -1357,6 +1399,27 @@ function normalizeInvocation(params) {
     if (ids.has(task.id)) throw new Error('subagent: duplicate task id "' + task.id + '"');
     ids.add(task.id);
   }
+  const tasksById = new Map(tasks.map(function (task) { return [task.id, task]; }));
+  for (const task of tasks) {
+    for (const dependency of task.dependsOn) {
+      if (!tasksById.has(dependency)) {
+        throw new Error('subagent: task "' + task.id + '" depends on unknown task "' + dependency + '"');
+      }
+    }
+  }
+  // A cycle would leave every member queued forever: the runner keeps polling for
+  // ready tasks until the wall-clock timeout instead of reporting the real cause.
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = function (id) {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error('subagent: dependency cycle through task "' + id + '"');
+    visiting.add(id);
+    for (const dependency of tasksById.get(id).dependsOn) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const task of tasks) visit(task.id);
   const timeoutSeconds = input.timeoutSeconds === undefined
     ? DEFAULT_TIMEOUT_SECONDS
     : Number(input.timeoutSeconds);
@@ -1371,7 +1434,7 @@ function normalizeInvocation(params) {
     );
   }
   return {
-    mode: tasks.length > 1 ? 'parallel' : 'single',
+    mode: workflowMode(tasks),
     context: input.context === 'fork' ? 'fork' : 'fresh',
     timeoutMs: timeoutSeconds * 1000,
     tasks: tasks,
@@ -1523,6 +1586,8 @@ export default async function cindySubagent(pi: any) {
       + 'modelProviders). Pass async:true for a detached background run that survives parent navigation. '
       + 'Results are collected before this parent turn settles; notify:false leaves collection explicit. '
       + 'Pass {agent, task} for one, or {tasks:[{agent, task}, ...]} to fan out in parallel. '
+      + 'Give tasks an id and list earlier ids in dependsOn to run them as an ordered workflow: each dependent '
+      + 'task starts only after its dependencies complete, receives their results, and fails if one of them fails. '
       + 'Use action:capabilities/list/get/wait/stop/steer/follow_up/resume for durable runs. Select childId to control one child. Children cannot spawn further subagents.',
     parameters: {
       type: 'object',
@@ -1573,6 +1638,13 @@ export default async function cindySubagent(pi: any) {
             type: 'object',
             properties: {
               agent: { type: 'string', description: 'Agent profile: ' + profileNames() },
+              id: { type: 'string', description: 'Stable step id other tasks reference in dependsOn (default step-N).' },
+              dependsOn: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Step ids this task waits for. The task starts after all of them complete, receives '
+                  + 'their results, and fails if one of them fails.',
+              },
               title: { type: 'string', description: 'Optional user-facing name for this task.' },
               task: { type: 'string' },
               model: { type: 'string' },
