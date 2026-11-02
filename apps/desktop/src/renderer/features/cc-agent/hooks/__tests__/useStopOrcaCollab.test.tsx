@@ -3,13 +3,16 @@
  * 测试价值
  * - 生产入口与可观察结果：`useStopOrcaCollab().requestStop`（普通 Lead 路由的「结束协同」入口，
  *   CCAgentSessionView 在该路由上不传 orcaMode，navigateOnSuccess 落到默认值 true）；
- *   断言 HashRouter 的当前页面不被改写。
+ *   用户已离开 Lead 时断言 HashRouter 的当前页面不被改写；仍停在该 Lead 的地址上（旧协同
+ *   路由 /cc-agent/orca/<lead>）时断言仍回到普通 Lead 路由，跟转判断两侧的改坏都会被发现。
  * - Bug／规则依据：结束协同要等 Worker worktree 回收（实测数秒到数十秒，未提交文件越多越久），
  *   期间用户点「新建」、切到其他任务或删除 Lead，请求完成后页面仍被 replace 回 Lead。
  * - 现有覆盖缺口：此前没有任何测试覆盖结束协同完成后的跳转；相邻的
  *   useSessionLifecycleActions.test.tsx 测的是另一个 hook，且 mock 掉了 useNavigate 与
  *   sessionsStore（形状不同），并入会让两边互相牵制，故单独成文件。
- * - 最小失败输入：disableOrca 挂起 → 路由切到其他页面 → disableOrca 完成。
+ * - 最小失败输入：disableOrca 挂起 → 路由切到其他页面 → disableOrca 完成；以及停在
+ *   /cc-agent/orca/<lead> → disableOrca 完成（判断恒为 false 时失败）。注意当前 /cc-agent/orca/:id
+ *   只是兼容转发页，CCAgentSessionView 不会停在该地址，这条守的是 hook 自身的跳转约定。
  * - tier：unit（jsdom + 真实 HashRouter，其余依赖进程内 fake）。
  */
 
@@ -113,5 +116,17 @@ describe('useStopOrcaCollab navigation after disableOrca', () => {
 
     expect(router.state.location.pathname).toBe(route);
     expect(window.location.hash).toBe(`#${route}`);
+  });
+
+  it('still returns to the plain Lead route when the user stayed on that Lead', async () => {
+    window.history.replaceState(null, '', `#/cc-agent/orca/${LEAD_ID}`);
+    mocks.disableOrca.mockResolvedValue({ ok: true });
+    const { router, api } = renderLeadRoute();
+
+    await act(async () => {
+      await expect(api.current!.requestStop()).resolves.toBe(true);
+    });
+
+    expect(router.state.location.pathname).toBe(`/cc-agent/${LEAD_ID}`);
   });
 });
