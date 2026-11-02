@@ -2601,6 +2601,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       mode: import('../shared/botImConnection').BotImGroupActivationMode;
     }): Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload> =>
       ipcRenderer.invoke('botImConnection:set-group-activation', payload),
+    setGuestAccess: (
+      payload: import('../shared/botImConnection').BotImGuestAccessUpdate,
+    ): Promise<import('../shared/botImConnection').BotImConnectionListPayload> =>
+      ipcRenderer.invoke('botImConnection:set-guest-access', payload),
     listLanes: (payload: {
       id: string;
     }): Promise<import('../shared/botImConnection').BotImConnectionLanesPayload> =>

@@ -11311,6 +11311,28 @@
         "archiveAria": "封存「{{lane}}」",
         "archiveFailed": "不能封存差事"
       },
+      "guests": {
+        "title": "賓客",
+        "hint": "汝以外私語 {{name}} 者。各繫於一相關之案：此後其訊唯行於彼案，自有其記。",
+        "unboundLabel": "未繫案之賓客",
+        "unbound": {
+          "shared": "共用",
+          "refuse": "謝絕"
+        },
+        "unboundHint": {
+          "shared": "仍用 {{name}} 之工作目錄與記，如舊。",
+          "refuse": "唯得一短告，{{name}} 不答。"
+        },
+        "noProject": "不繫案",
+        "projectLabel": "{{guest}} 之案",
+        "projectMissing": "案已不相關，訊皆謝絕",
+        "empty": "尚無賓客。賓客初私語後現於此。",
+        "noProjects": "先於「相關之案」繫一案，乃可繫賓客。",
+        "loadFailed": "未能讀賓客",
+        "saveFailed": "未能存，請再試。",
+        "refusedNotice": "🔒 此機器人尚未為汝開放。",
+        "engineUnsupported": "{{name}} 今用 Pi，Pi 不能限賓客於其案：已繫案之賓客皆謝絕。欲應之，請易 {{name}} 為 Claude 或 Codex。"
+      },
       "add": {
         "button": "增平台",
         "title": "為 {{name}} 增平台",

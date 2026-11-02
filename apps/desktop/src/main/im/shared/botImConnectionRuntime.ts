@@ -15,7 +15,8 @@
  * 这里不 import host.ts, 避免把 IM 子系统拽进单测收集期。
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
 import type { DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
 
@@ -40,6 +41,7 @@ import {
   type BotImConnectionRemoveResult,
   type BotImConnectionView,
   type BotImFeishuService,
+  type BotImGuestAccessUpdate,
 } from '../../../shared/botImConnection';
 import {
   addBotImConnectionRecord,
@@ -51,10 +53,21 @@ import {
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
   setBotImConnectionGroupActivation,
+  setBotImConnectionGuestAccess,
+  isBotImGuestId,
   updateBotImConnectionRecord,
 } from './botImConnectionStore';
+import { linkedProjectDirectoryKey, readBotLinkedProjects } from '../../maker-ipc/botWorkbenchService';
+import { ownerScopedUserDataPath } from '../../appSessionState';
+import { overlapsProtectedDir } from './botImGuestAccess';
 import { companionConnectionRouteKeyPrefix } from './imBotBindingRoute';
-import { archiveBotImConnectionLane, listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
+import {
+  archiveBotImConnectionLane,
+  listBotImConnectionGuestLanes,
+  listBotImConnectionLanes,
+  resetBotImConnectionLane,
+  restartBotImConnectionGuestLane,
+} from './botImLaneRuntime';
 import type { ImOrchestrator } from './orchestrator';
 
 const log = createLogger('im:bot-connections');
@@ -610,6 +623,100 @@ export async function setBotImConnectionGroupMode(
   return listBotImConnectionGroups(id);
 }
 
+/**
+ * Owner-only (#8359): bind a guest to one of the teammate's linked local
+ * projects, unbind it, or choose what unbound guests get. The project must be
+ * linked at the moment of binding; runtime re-checks it on every start.
+ */
+export async function setBotImConnectionGuestAccessForSettings(
+  update: BotImGuestAccessUpdate,
+): Promise<BotImConnectionListPayload> {
+  const record = readBotImConnection(update.connectionId);
+  if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const projectPath = update.binding?.projectPath;
+  if (projectPath) {
+    const linked = (await readBotLinkedProjects(ownerScopedUserDataPath(), record.botId))
+      .filter((project) => !project.deviceId)
+      .find((project) => linkedProjectDirectoryKey(project.path) === linkedProjectDirectoryKey(projectPath));
+    if (!linked) throwIpcError('PRECONDITION_FAILED', 'PROJECT_NOT_LINKED');
+    // A project that contains Cindy's own data would expose every Bot Home and
+    // every other guest's memory to this guest.
+    if (await overlapsProtectedDir(projectPath, [app.getPath('userData'), ownerScopedUserDataPath()])) {
+      throwIpcError('PRECONDITION_FAILED', 'PROJECT_CONTAINS_APP_DATA');
+    }
+  }
+  let updated: BotImConnectionRecord | null;
+  try {
+    updated = await setBotImConnectionGuestAccess(record.id, {
+      ...(update.unbound ? { unbound: update.unbound } : {}),
+      ...(update.binding ? { binding: update.binding } : {}),
+    });
+  } catch (error) {
+    throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'INVALID_GUEST_ACCESS');
+  }
+  if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const live = instances.get(record.id);
+  if (live) live.record = updated;
+  await restartGuestLanesAfterAccessChange(record.id, record, updated, update);
+  log.info(`bot im connection ${record.id}: guest access updated (bindings=${Object.keys(updated.guestAccess?.bindings ?? {}).length}, unbound=${updated.guestAccess?.unbound ?? 'shared'})`);
+  broadcastChanged();
+  return buildBotImConnectionListPayload();
+}
+
+/**
+ * A live guest runtime keeps its working directory, memory snapshot and
+ * resumed history until it restarts, so every lane whose access changed gets a
+ * clean restart (same task, fresh context). Best effort: a failure is logged,
+ * and the next start re-resolves the binding anyway.
+ */
+async function restartGuestLanesAfterAccessChange(
+  id: string,
+  before: BotImConnectionRecord,
+  after: BotImConnectionRecord,
+  update: BotImGuestAccessUpdate,
+): Promise<void> {
+  const bound = (record: BotImConnectionRecord, guestId: string) =>
+    record.guestAccess?.bindings && Object.hasOwn(record.guestAccess.bindings, guestId)
+      ? record.guestAccess.bindings[guestId].projectPath : null;
+  const policyChanged = (before.guestAccess?.unbound ?? 'shared') !== (after.guestAccess?.unbound ?? 'shared');
+  let lanes: Array<{ sessionId: string; guestId: string }>;
+  try {
+    lanes = await listBotImConnectionGuestLanes(id);
+  } catch (err) {
+    log.warn(`bot im connection ${id}: guest lanes unavailable after access change: ${String(err)}`);
+    return;
+  }
+  for (const lane of lanes) {
+    const changed = update.binding?.guestId === lane.guestId
+      ? bound(before, lane.guestId) !== bound(after, lane.guestId)
+      : policyChanged && bound(after, lane.guestId) === null;
+    if (!changed) continue;
+    try {
+      await restartBotImConnectionGuestLane(id, lane.sessionId);
+    } catch (err) {
+      log.warn(`bot im connection ${id}: guest lane restart failed: ${String(err)}`);
+    }
+  }
+}
+
+export function parseBotImGuestAccessUpdate(payload: unknown): BotImGuestAccessUpdate {
+  const p = (payload ?? {}) as { connectionId?: unknown; unbound?: unknown; binding?: unknown };
+  if (!isBotImConnectionId(p.connectionId)) throwIpcError('INVALID_PARAMS', 'connectionId is invalid');
+  const out: BotImGuestAccessUpdate = { connectionId: p.connectionId };
+  if (p.unbound !== undefined) {
+    if (p.unbound !== 'shared' && p.unbound !== 'refuse') throwIpcError('INVALID_PARAMS', 'unbound is invalid');
+    out.unbound = p.unbound;
+  }
+  if (p.binding !== undefined) {
+    const b = (p.binding ?? {}) as { guestId?: unknown; projectPath?: unknown };
+    if (!isBotImGuestId(b.guestId)) throwIpcError('INVALID_PARAMS', 'guestId is invalid');
+    if (b.projectPath !== null && typeof b.projectPath !== 'string') throwIpcError('INVALID_PARAMS', 'projectPath is invalid');
+    out.binding = { guestId: b.guestId, projectPath: b.projectPath };
+  }
+  if (!out.unbound && !out.binding) throwIpcError('INVALID_PARAMS', 'nothing to change');
+  return out;
+}
+
 export async function removeBotImConnection(id: string): Promise<BotImConnectionRemoveResult> {
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
@@ -776,6 +883,10 @@ export function registerBotImConnectionIpc(): void {
     return setBotImConnectionGroupMode(p.id, p.chatId, mode);
   });
   // 隐藏任务小节: 群名沿用「群聊」小节同一份已知群(deps.listKnownGroups)。
+  ipcMain.handle('botImConnection:set-guest-access', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    return setBotImConnectionGuestAccessForSettings(parseBotImGuestAccessUpdate(payload));
+  });
   ipcMain.handle('botImConnection:list-lanes', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const id = (payload as { id?: unknown } | null)?.id;

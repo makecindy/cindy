@@ -19,10 +19,15 @@ import {
   ensureBotChannelLaneSession,
   findBotChannelLaneSession,
 } from '../../localDb/ipc/bots';
-import { botProfiles, sessions } from '../../localDb/schema';
+import { botProfiles, botSessionLinks, sessions } from '../../localDb/schema';
+import { resolveBotGuestLaneAccess } from '../../maker-ipc/botWorkspaceRuntime';
 import { resolveBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionRegistry';
-import { prepareBotSessionForImSend, tryGetBotDelegationService } from '../../maker-ipc/register';
-import type { ImCompanionRouteDeps, ImCompanionSessionResult } from './imBotBindingRoute';
+import { prepareBotSessionForImSend, previewBotSessionRoute, tryGetBotDelegationService } from '../../maker-ipc/register';
+import {
+  COMPANION_GUEST_REFUSED,
+  type ImCompanionRouteDeps,
+  type ImCompanionSessionResult,
+} from './imBotBindingRoute';
 
 async function readProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
@@ -40,6 +45,31 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
     .where(eq(sessions.id, sessionId))
     .limit(1);
   return row?.status === 'active' && row.source === 'bot';
+}
+
+/** Refuse before the send lock, so a guest never starts a runtime it may not use. */
+async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
+  const [link] = await getDbClient()
+    .drizzle.select({
+      botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey,
+      agentKind: sessions.agentKind,
+      agentDeviceId: sessions.agentDeviceId,
+    })
+    .from(botSessionLinks)
+    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+    .where(eq(botSessionLinks.sessionId, sessionId))
+    .limit(1);
+  if (!link || link.role !== 'channel') return false;
+  const access = await resolveBotGuestLaneAccess(link.botId, link.routeKey);
+  if (access.kind !== 'bound') return access.kind === 'refused';
+  // Pi cannot confine a bound guest (it refuses to start), nor can an engine on
+  // another computer; answer with the same plain notice instead of a start
+  // failure. Judge the route the next start will use (the model chain may have
+  // moved since this row was written), not the stored one; hydration re-checks.
+  const route = await previewBotSessionRoute(sessionId).catch(() => null);
+  const agentKind = route ? route.agentKind : link.agentKind;
+  const agentDeviceId = route ? route.agentDeviceId : link.agentDeviceId;
+  return agentKind === 'pi' || !!agentDeviceId;
 }
 
 export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
@@ -86,6 +116,9 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
 
     archiveLane: (routeKey) => archiveBotChannelLanes({ routeKey }),
 
-    prepareSend: (sessionId) => prepareBotSessionForImSend(sessionId),
+    guestRefused: (sessionId) => isRefusedGuestLane(sessionId),
+
+    prepareSend: async (sessionId) =>
+      (await isRefusedGuestLane(sessionId)) ? COMPANION_GUEST_REFUSED : prepareBotSessionForImSend(sessionId),
   };
 }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildReviewReadGrants, type ReviewReadGrant } from '../shared/review-read-scope.js';
-import { callReviewReadTool, isWindowsReviewLocalPath } from './review-read-tools.js';
+import { GUEST_PROJECT_TOOLS, callGuestProjectTool, callReviewReadTool, isWindowsReviewLocalPath } from './review-read-tools.js';
 
 describe('Windows Review path support', () => {
   it.each(['C:\\review', 'c:/review/file.md', './file.md', '../artifact.md'])('accepts local drive evidence %s', (target) => {
@@ -148,5 +148,52 @@ describe('Windows Review host reads', () => {
       expect((await callReviewReadTool('review_read_file', { path: target }, work, grants)).success).toBe(false);
     }
     expect(realpath).not.toHaveBeenCalled();
+  });
+});
+
+// #8359: a confined guest on Windows reads through these tools. Same scope
+// checks as Review, but the names, descriptions and refusals speak about the
+// conversation's project, never about Review or evidence.
+describe('confined guest project tools', () => {
+  let root: string;
+  let project: string;
+  let grants: ReviewReadGrant[];
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-guest-tools-'));
+    project = path.join(root, 'client-a');
+    await fs.mkdir(project);
+    await fs.writeFile(path.join(project, 'infoA.txt'), 'secret A');
+    await fs.mkdir(path.join(root, 'client-b'));
+    await fs.writeFile(path.join(root, 'client-b', 'infoB.txt'), 'secret B');
+    // A real image outside the project: the image tool must refuse it too.
+    await fs.writeFile(path.join(root, 'client-b', 'photo.png'), Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+    grants = await buildReviewReadGrants(project, []);
+  });
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('describes the project scope without Review wording', () => {
+    expect(GUEST_PROJECT_TOOLS.map((tool) => tool.name)).toEqual(['project_read_file', 'project_list_directory', 'project_view_image']);
+    for (const tool of GUEST_PROJECT_TOOLS) expect(tool.description).not.toMatch(/review|evidence/i);
+  });
+
+  it('reads inside the project and refuses everything else with the project wording', async () => {
+    const inside = await callGuestProjectTool('project_read_file', { path: 'infoA.txt' }, project, grants);
+    expect(inside.success).toBe(true);
+    expect(JSON.stringify(inside.contentItems)).toContain('secret A');
+    for (const [name, args] of [
+      ['project_read_file', { path: '../client-b/infoB.txt' }],
+      ['project_read_file', { path: path.join(root, 'client-b', 'infoB.txt') }],
+      ['project_list_directory', { path: root }],
+      ['project_view_image', { path: '../client-b/photo.png' }],
+      ['review_read_file', { path: 'infoA.txt' }],
+    ] as const) {
+      const refused = await callGuestProjectTool(name, args, project, grants);
+      expect(refused.success).toBe(false);
+      expect(JSON.stringify(refused.contentItems)).toContain('outside this conversation');
+      expect(JSON.stringify(refused.contentItems)).not.toContain('secret B');
+    }
   });
 });

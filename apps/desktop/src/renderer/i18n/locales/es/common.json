@@ -11451,6 +11451,28 @@
         "archiveFailed": "No se pudo archivar la tarea",
         "messageCount_many": "{{count}} mensajes en el contexto"
       },
+      "guests": {
+        "title": "Invitados",
+        "hint": "Personas distintas de ti que escriben en privado a {{name}}. Vincula cada una a un proyecto vinculado: sus mensajes se ejecutan solo en ese proyecto, con su propia memoria.",
+        "unboundLabel": "Invitados sin proyecto",
+        "unbound": {
+          "shared": "Compartido",
+          "refuse": "Rechazar"
+        },
+        "unboundHint": {
+          "shared": "Usan el directorio de trabajo y la memoria de {{name}}, como antes.",
+          "refuse": "Reciben un aviso breve y {{name}} no responde."
+        },
+        "noProject": "Sin proyecto",
+        "projectLabel": "Proyecto de {{guest}}",
+        "projectMissing": "El proyecto ya no está vinculado; los mensajes se rechazan",
+        "empty": "Aún no hay invitados. Un invitado aparece aquí tras su primer mensaje privado.",
+        "noProjects": "Vincula primero un proyecto en Proyectos vinculados para asignarle un invitado.",
+        "loadFailed": "No se pudieron cargar los invitados",
+        "saveFailed": "No se guardó. Inténtalo de nuevo.",
+        "refusedNotice": "🔒 Este bot aún no está disponible para ti.",
+        "engineUnsupported": "{{name}} funciona con Pi, que no puede limitar a un invitado a su proyecto: los invitados vinculados a un proyecto se rechazan. Cambia {{name}} a Claude o Codex para atenderlos."
+      },
       "add": {
         "button": "Agregar plataforma",
         "title": "Agregar una plataforma para {{name}}",

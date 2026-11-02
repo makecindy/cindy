@@ -113,7 +113,10 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
-import { REVIEW_READ_TOOLS, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
+import {
+  GUEST_PROJECT_TOOLS, REVIEW_READ_TOOLS, callGuestProjectTool, callReviewReadTool, guestReadDenied,
+  isGuestProjectTool, isWindowsReviewLocalPath, reviewReadDenied,
+} from './review-read-tools.js';
 import {
   annotatePermissionRequestForAutoReview,
   composeAutoReviewIntentWithApprovedPlan,
@@ -645,6 +648,7 @@ function mapPermissionToCodex(
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
 const REVIEW_PERMISSION_PROFILE = 'cindy-review-readonly';
+const GUEST_PERMISSION_PROFILE = 'cindy-guest-project';
 const REVIEW_CREDENTIAL_GLOB_DENIES: Record<string, 'deny'> = Object.fromEntries(
   REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map((pattern) => [pattern, 'deny'] as const),
 );
@@ -3573,6 +3577,11 @@ assertRouteCurrent();
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
+    // A bound IM guest (#8359): the native sandbox, not the model, keeps file
+    // and shell access inside the project. Review has its own stricter profile.
+    const guestConfined = opts.workspaceConfinement === 'project' && !reviewMode && !opts.remoteHostId;
+    const confinePermissionMode = (mode: PermissionMode): PermissionMode =>
+      guestConfined && mode === 'bypassPermissions' ? 'ask' : mode;
     // 设备托管：Codex 在本机运行(本机的登录与供应商)，项目、文件与命令在任务所在电脑上。
     // 那台电脑经隧道提供 Codex 原生的 exec-server 环境，命令、读写与补丁都在那里执行；
     // Cindy 工具也经隧道。opts.workingDir 是本机影子目录。
@@ -4884,7 +4893,7 @@ assertRouteCurrent();
     let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
-      reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
+      reviewMode ? 'ask' : confinePermissionMode(opts.permissionMode ?? 'ask');
     let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
@@ -4903,6 +4912,19 @@ assertRouteCurrent();
         }
       } catch (error) {
         // Codex app-server has not been contacted before review grants are validated.
+        throw new AgentStartupStoppedError(error);
+      }
+    }
+    // Windows sandboxes cannot enforce a split read scope, so a confined guest
+    // reads through the same host-checked tools as Windows Review.
+    let guestReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
+    if (guestConfined && process.platform === 'win32') {
+      try {
+        if (!isWindowsReviewLocalPath(opts.workingDir, opts.workingDir)) {
+          throw new Error('A confined guest project must be on a local drive.');
+        }
+        guestReadGrants = await buildReviewReadGrants(opts.workingDir, []);
+      } catch (error) {
         throw new AgentStartupStoppedError(error);
       }
     }
@@ -4965,6 +4987,7 @@ assertRouteCurrent();
       // Windows Review requires 0.156+ and exposes flat function tools. The legacy
       // ordinary provider gate concerns namespace tools, not these scoped reads.
       ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
+      ...(guestConfined && process.platform === 'win32' ? GUEST_PROJECT_TOOLS : []),
       ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
     ];
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
@@ -5646,6 +5669,13 @@ assertRouteCurrent();
         `Cindy Review requires Codex permission profiles from app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
+    if (guestConfined && (!readonlyReferenceDirsSupported
+      || (process.platform === 'win32' && !codexUserAgentAtLeast(initResp.userAgent, [0, 156, 0])))) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `A confined guest requires Codex permission profiles (app-server 0.144.6+, 0.156+ on Windows; current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -5787,6 +5817,18 @@ assertRouteCurrent();
         network: { enabled: false },
       },
     };
+    const guestPermissionsConfig = (): Record<string, unknown> => ({
+      [`permissions.${GUEST_PERMISSION_PROFILE}`]: {
+        filesystem: {
+          ':root': 'deny',
+          ':minimal': 'read',
+          ':tmpdir': 'deny',
+          ':slash_tmp': 'deny',
+          [opts.workingDir]: { '.': 'write', '.git': 'read' },
+        },
+        network: { enabled: false },
+      },
+    });
     // Codex same-turn 插话走 `turn/steer` 方法，不走
     // `experimentalFeature/enablement/set`。这里特意不 push `{ steer: true }`:
     // 2026-06 实测当前内置 app-server 的 enablement 白名单没有 `steer`，
@@ -6356,6 +6398,7 @@ assertRouteCurrent();
 
     function currentWorkspacePermissionProfile(): string | undefined {
       if (reviewMode) return REVIEW_PERMISSION_PROFILE;
+      if (guestConfined) return GUEST_PERMISSION_PROFILE;
       if (
         readonlyReferenceDirsSupported
         && (mutableExtraDirs.length > 0 || mutableWritableDirs.length > 0)
@@ -6510,6 +6553,7 @@ assertRouteCurrent();
           ? readonlyReferencesConfig()
           : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
+        ...(permissionProfile === GUEST_PERMISSION_PROFILE ? guestPermissionsConfig() : {}),
         // Workspace routing reloads retained config without thread/start's RPC
         // overrides (Codex 0.156+). Keep the selected permission syntax in that
         // config too, otherwise our profile definitions have no default and
@@ -6550,6 +6594,22 @@ assertRouteCurrent();
               'features.remote_plugin': false,
             }
           : {}),
+        // A confined guest on Windows has no shell: the native sandbox cannot
+        // enforce the project-only read scope there (same reason as Review).
+        // The native image reader goes too; images go through project_view_image.
+        ...(guestConfined && process.platform === 'win32' ? {
+          project_doc_max_bytes: 0,
+          'features.shell_tool': false,
+          'features.unified_exec': false,
+          'features.shell_snapshot': false,
+          'features.view_image': false,
+          'features.js_repl': false,
+          'features.code_mode': false,
+          'features.code_mode_only': false,
+          'features.computer_use': false,
+          'features.browser_use': false,
+          'features.browser_use_external': false,
+        } : {}),
         // 受邀者：固定关闭本机的插件 / hooks / connectors / 记忆，再按功能清单关闭白名单之外的 Codex 功能；
         // 不含 mcp_servers.* 键，经隧道的 MCP(readHostedMcpConfig)保持启用。联网搜索不变。
         ...(hostedGuest ? { ...CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG, ...hostedGuestFeatureConfig } : {}),
@@ -6628,7 +6688,7 @@ assertRouteCurrent();
       };
       if (
         currentWorkspacePermissionProfile() !== undefined &&
-        (!activeTurnPermissionPolicy || mutablePermissionMode === 'bypassPermissions')
+        (guestConfined || !activeTurnPermissionPolicy || mutablePermissionMode === 'bypassPermissions')
       ) {
         // The profile was selected on thread/start or thread/resume. Repeating
         // the selector here makes Codex 0.145.0 reload its base config (which
@@ -10068,6 +10128,16 @@ assertRouteCurrent();
         const response = await callReviewReadTool(params.tool, params.arguments, opts.workingDir, reviewReadGrants);
         return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
           ? response : reviewReadDenied();
+      }
+      if (guestConfined && process.platform === 'win32' && !params.namespace && isGuestProjectTool(params.tool)) {
+        const readIsActive = () => !closed && isCurrentHost()
+          && params.threadId === threadId && params.turnId === currentTurnId
+          && !turnInterruptOrigins.has(params.turnId)
+          && !resolvedWhileBufferedRequestIds.has(String(meta.requestId));
+        if (!readIsActive()) return guestReadDenied();
+        const response = await callGuestProjectTool(params.tool, params.arguments, opts.workingDir, guestReadGrants);
+        return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
+          ? response : guestReadDenied();
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {
@@ -14428,7 +14498,7 @@ assertRouteCurrent();
         const tightensCurrentTurn =
           (newMode === 'ask' && wasOpen) ||
           (newMode === 'auto' && wasBypass);
-        mutablePermissionMode = newMode;
+        mutablePermissionMode = confinePermissionMode(newMode);
         // 下一 turn 通过 approvalPolicy + 已激活的 profile / sandboxPolicy 透传。
         //
         // 收紧兜底 (auto/bypass → ask): 见 interruptTurnForPermissionTighten 顶注。

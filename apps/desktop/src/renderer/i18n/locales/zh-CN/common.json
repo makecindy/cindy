@@ -11311,6 +11311,28 @@
         "archiveAria": "归档「{{lane}}」",
         "archiveFailed": "未能归档任务"
       },
+      "guests": {
+        "title": "访客",
+        "hint": "除你之外私聊 {{name}} 的人。把每位访客绑定到一个关联项目：之后 TA 的消息只在该项目里运行，并使用 TA 自己的记忆。",
+        "unboundLabel": "未绑定项目的访客",
+        "unbound": {
+          "shared": "共用",
+          "refuse": "拒绝"
+        },
+        "unboundHint": {
+          "shared": "沿用 {{name}} 的工作目录和记忆，与以前一样。",
+          "refuse": "只收到一句简短提示，{{name}} 不回复。"
+        },
+        "noProject": "不绑定项目",
+        "projectLabel": "{{guest}} 的项目",
+        "projectMissing": "项目已不再关联，消息会被拒绝",
+        "empty": "还没有访客。访客第一次私聊后会出现在这里。",
+        "noProjects": "先在「关联项目」里关联一个项目，才能绑定访客。",
+        "loadFailed": "访客读取失败",
+        "saveFailed": "没保存上，请重试。",
+        "refusedNotice": "🔒 这个机器人暂未向你开放。",
+        "engineUnsupported": "{{name}} 当前使用 Pi，Pi 无法把访客限制在其项目内：绑定了项目的访客会被拒绝。要为他们服务，请把 {{name}} 切换到 Claude 或 Codex。"
+      },
       "add": {
         "button": "添加平台",
         "title": "给 {{name}} 添加平台",

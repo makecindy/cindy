@@ -508,3 +508,10 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 ### 例行任务显式送达（2026-10-30）
 
 伙伴例行任务可把最终结果明确送到已连接的个人／伙伴 Telegram bot 的已知私聊、群或话题。宿主复用同一个 `sendMarkdownText` 与 lane 编码，不新建 Telegram HTTP 实现；连接身份变更或断开时记录送达失败，不重跑工作。默认仍直接显示在发起伙伴的 Cindy 主任务，不自动向所有绑定聊天广播。官方 Telegram hook 不属于此项本机连接选择，沿原通知合同；本项不改变两个 bot 既有进度与收口差异。
+
+## 伙伴连接的访客绑定（#8359）
+
+**有意不同**：只有伙伴自有连接（含 Telegram）有访客绑定。主人把某位私聊访客绑定到伙伴关联的
+本机项目后，访客的专线只在该项目里运行、使用独立记忆；未绑定访客按连接策略沿用伙伴 Home（缺省）
+或只收到一句固定提示（`bots.channels.guests.refusedNotice`，跟随主人的 App 语言，`ui.agent.guestRefused`，不起轮次）。个人 bot
+与官方 bot 没有访客专线，不适用。规则正文见 `cindy-bots-runtime.md` 工作目录一节的第二个例外。

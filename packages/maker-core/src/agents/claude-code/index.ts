@@ -234,6 +234,7 @@ import {
 } from '../shared/device-hosted.js';
 import { isSensitiveCredentialPath } from '../shared/sensitive-credential-paths.js';
 import { classifyShellCommand } from '../shared/auto-review.js';
+import { guestConfinementDenial, isConfinedShellTool } from './guest-confinement.js';
 
 type ClaudeSdkEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -1383,6 +1384,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
+    // A bound IM guest (#8359) stays inside its project whatever the teammate's mode.
+    const guestConfined = opts.workspaceConfinement === 'project' && !reviewMode && !opts.remoteHostId;
+    const confinePermissionMode = (mode: PermissionMode): PermissionMode =>
+      guestConfined && mode === 'bypassPermissions' ? 'default' : mode;
     // The routing policy this session actually runs under: user-registered MCP denials
     // (cua-driver → cindy_computer) apply to local runtimes only; see withoutUserMcpRoutes.
     const capabilityRouting = opts.remoteHostId
@@ -2222,6 +2227,21 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     // Native Claude Auto skips canUseTool. Hand back only the calls Cindy itself must decide;
     // everything else stays with the native classifier so no call is reviewed twice.
+    const guestConfinementHook: HookCallback = async (input) => {
+      if (input.hook_event_name !== 'PreToolUse' || !guestConfined) return { continue: true };
+      const pre = input as PreToolUseHookInput;
+      const reason = await guestConfinementDenial(
+        pre.tool_name, pre.tool_input as Record<string, unknown> | undefined, opts.workingDir,
+      );
+      if (reason) {
+        return { continue: true, hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: reason } };
+      }
+      // A command can read anything; route it to the owner's confirmation.
+      if (isConfinedShellTool(pre.tool_name)) {
+        return { continue: true, hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'ask' as const, permissionDecisionReason: 'Commands in a guest conversation need the owner\'s confirmation.' } };
+      }
+      return { continue: true };
+    };
     const nativeAutoPolicyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
       if (
@@ -2281,6 +2301,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             },
             resolveSubagentModelContextWindow,
           ),
+          { PreToolUse: [{ hooks: [guestConfinementHook] }] },
           buildClaudeOrcaCallerProvenanceHooks(),
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
@@ -2300,6 +2321,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         : undefined;
     };
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
+      if (guestConfined && isConfinedShellTool(toolName)) return true;
       const policy = activeTurnPermissionPolicy;
       if (!policy || mutablePermissionMode === 'bypassPermissions') return false;
       try {
@@ -2612,7 +2634,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       // Auto can resolve allow/block without a UI. Other modes retain the
       // existing fail-closed behavior when no interaction surface is attached.
-      const canReviewWithoutUi = mutablePermissionMode === 'auto';
+      const canReviewWithoutUi = mutablePermissionMode === 'auto'
+        && !(guestConfined && isConfinedShellTool(toolName));
       if (!interactionResolver && !canReviewWithoutUi) {
         if (isReadOnlyClaudeTool(toolName)) {
           return { behavior: 'allow', updatedInput: input };
@@ -2624,7 +2647,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
-      let forcePrompt = mutablePermissionMode !== 'auto' && turnPolicyForcePrompt;
+      // A confined guest's shell command can read anything, so only the owner may
+      // approve it: no Auto reviewer verdict, no MCP shortcut (#8359).
+      const ownerOnlyPrompt = guestConfined && isConfinedShellTool(toolName);
+      let forcePrompt = ownerOnlyPrompt || (mutablePermissionMode !== 'auto' && turnPolicyForcePrompt);
       let unavailableHandoff = false;
       let autoReviewAskReason: string | undefined;
       let reviewedWritePath: string | null | undefined;
@@ -2636,7 +2662,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
       const reviewPermissionMode = mutablePermissionMode;
-      if (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt)) {
+      if (!ownerOnlyPrompt
+        && (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt))) {
         // 设备托管：路径都在任务所在电脑上，以那台电脑的真实工作目录为准。
         const reviewWorkingDir = hosted?.workingDir ?? opts.workingDir;
         const workspaceRoots = [reviewWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
@@ -3168,7 +3195,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
-      reviewMode ? 'ask' : opts.permissionMode ?? 'default';
+      reviewMode ? 'ask' : confinePermissionMode(opts.permissionMode ?? 'default');
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
@@ -4507,8 +4534,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
           // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
           settings: buildSettings(),
+          // Neither Review nor a confined guest may ever switch to Full access.
           allowDangerouslySkipPermissions:
-            !reviewMode,
+            !reviewMode && !guestConfined,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
           // SDK debug 等同 --debug CLI flag, 让 cc 子进程吐 verbose 日志。
           // - debug: true 触发 verbose 模式
@@ -7677,7 +7705,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         return mutableFastMode;
       },
 
-      async setPermissionMode(newMode) {
+      async setPermissionMode(requestedMode) {
+        const newMode = confinePermissionMode(requestedMode);
         if (reviewMode) {
           log.debug('setPermissionMode ignored for host-owned hard read-only session', {
             requested: newMode,

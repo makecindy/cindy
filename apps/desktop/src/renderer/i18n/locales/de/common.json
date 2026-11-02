@@ -11357,6 +11357,28 @@
         "archiveAria": "„{{lane}}“ archivieren",
         "archiveFailed": "Aufgabe konnte nicht archiviert werden"
       },
+      "guests": {
+        "title": "Gäste",
+        "hint": "Personen außer dir, die {{name}} privat schreiben. Ordne jede einem verknüpften Projekt zu: Ihre Nachrichten laufen dann nur in diesem Projekt, mit eigenem Gedächtnis.",
+        "unboundLabel": "Gäste ohne Projekt",
+        "unbound": {
+          "shared": "Gemeinsam",
+          "refuse": "Ablehnen"
+        },
+        "unboundHint": {
+          "shared": "Sie nutzen wie bisher das Arbeitsverzeichnis und Gedächtnis von {{name}}.",
+          "refuse": "Sie erhalten einen kurzen Hinweis, und {{name}} antwortet nicht."
+        },
+        "noProject": "Kein Projekt",
+        "projectLabel": "Projekt für {{guest}}",
+        "projectMissing": "Projekt nicht mehr verknüpft; Nachrichten werden abgelehnt",
+        "empty": "Noch keine Gäste. Ein Gast erscheint hier nach seiner ersten Direktnachricht.",
+        "noProjects": "Verknüpfe zuerst unter „Verknüpfte Projekte“ ein Projekt, um einen Gast zuzuordnen.",
+        "loadFailed": "Gäste konnten nicht geladen werden",
+        "saveFailed": "Nicht gespeichert. Versuche es erneut.",
+        "refusedNotice": "🔒 Dieser Bot ist für dich noch nicht freigegeben.",
+        "engineUnsupported": "{{name}} läuft mit Pi, das einen Gast nicht auf sein Projekt beschränken kann: Gäste mit Projekt werden abgelehnt. Stelle {{name}} auf Claude oder Codex um, um sie zu bedienen."
+      },
       "add": {
         "button": "Plattform hinzufügen",
         "title": "Plattform für {{name}} hinzufügen",

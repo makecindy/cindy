@@ -2047,6 +2047,13 @@ export interface StartSessionOptions {
    * visible to the underlying harness.
    */
   reviewReadPaths?: string[];
+  /**
+   * Host-verified confinement of a non-owner IM guest bound to one project
+   * (Desktop #8359). The adapter must keep the agent's own file and shell
+   * access inside workingDir with the harness's native sandbox, never run it
+   * with Full access, and fail closed where the harness cannot enforce that.
+   */
+  workspaceConfinement?: 'project';
   permissionMode?: PermissionMode;
   /**
    * 计划模式开关（与 permissionMode 正交，见 Capabilities.planMode）。

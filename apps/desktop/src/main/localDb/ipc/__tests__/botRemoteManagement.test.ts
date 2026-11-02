@@ -32,6 +32,14 @@ vi.mock('../botRemoteResourceProjection.js', () => ({ botRemoteResourceFromSourc
 vi.mock('../botAvatarSelection.js', () => ({ decodeBotAvatarImage: vi.fn() }));
 vi.mock('../botRemoteSettingsResource.js', () => ({ createBotRemoteSettingsResource: () => ({ bindResource: vi.fn() }) }));
 vi.mock('../botRemoteEditors.js', () => ({ createBotRemoteEditors: vi.fn() }));
+vi.mock('../../../im/shared/botImConnectionRuntime.js', () => {
+  const guestAccess = { unbound: 'refuse', bindings: { '555': { projectPath: '/Users/owner/clients/client-a' } } };
+  const connection = (id: string) => ({ id, botId: 'bot-1', channel: 'telegram', guestAccess });
+  return {
+    buildBotImConnectionListPayload: () => ({ connections: [connection('mine'), connection('other')] }),
+    removeBotImConnection: async () => ({ connections: [connection('other')], archivedSessionIds: [] }),
+  };
+});
 
 import { botRemoteManagement } from '../botRemoteManagement.js';
 import { createBotRemoteEditors } from '../botRemoteEditors.js';
@@ -59,4 +67,20 @@ it('moves a learned skill to the disabled store and refreshes the teammate throu
   await editorDeps.setSkillEnabled('bot-1', 'report', false);
   expect(setBotSkillEnabledForBot).toHaveBeenCalledExactlyOnceWith('bot-1', 'report', false);
   expect(requestBotRuntimeEpochRefresh).toHaveBeenCalledExactlyOnceWith('main-1', 'resource');
+});
+
+// #8359 review: guest bindings (guest ids, local project paths) stay on this computer.
+// The list already dropped them, but remove returned the remaining connections unfiltered.
+// Minimal input: removing one connection while another of the same teammate has a binding.
+it('keeps guest bindings out of every remote messaging-platform response', async () => {
+  const call = (op: string, args?: unknown) => botRemoteManagement.settingsHost.invoke({ controllerDeviceId: 'remote-desktop' }, {
+    collectionId: 'teammates', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'bot-1' },
+    actionId: BOT_SETTINGS_ACTION_ID, client: { protocolVersion: 1, primitives: [] },
+    input: { v: 1, op, ...(args === undefined ? {} : { args }) },
+  });
+  for (const response of [await call('channels.im.list'), await call('channels.im.remove', { id: 'mine' })]) {
+    expect(response.result).toMatchObject({ ok: true });
+    expect(JSON.stringify(response.result)).not.toContain('client-a');
+    expect(JSON.stringify(response.result)).not.toContain('guestAccess');
+  }
 });

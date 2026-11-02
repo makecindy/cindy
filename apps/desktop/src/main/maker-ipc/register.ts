@@ -5276,6 +5276,21 @@ export async function prepareBotSessionForImSend(sessionId: string): Promise<str
   return prepareBotSessionForImSendHolder ? prepareBotSessionForImSendHolder(sessionId) : null;
 }
 
+let previewBotSessionRouteHolder: ((sessionId: string) => Promise<{
+  agentKind: AgentKind; agentDeviceId: string | null;
+} | null>) | null = null;
+
+/**
+ * The route a Bot session's next start will use (model chain applied, read
+ * only). Null when the session is not a Bot session or the reconciler is not
+ * ready; the caller then falls back to the stored row.
+ */
+export async function previewBotSessionRoute(
+  sessionId: string,
+): Promise<{ agentKind: AgentKind; agentDeviceId: string | null } | null> {
+  return previewBotSessionRouteHolder ? previewBotSessionRouteHolder(sessionId) : null;
+}
+
 let applyPiImModelSelectionHolder: ((
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
@@ -13656,7 +13671,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     trashItem: (fullPath) => shell.trashItem(fullPath),
   });
   // The companion "restart": durable handoff from DB history, no replay of any input.
-  async function restartBotCanonicalRuntime(sessionId: string, assertOwnerCurrent: () => void): Promise<void> {
+  async function restartBotCanonicalRuntime(
+    sessionId: string,
+    assertOwnerCurrent: () => void,
+    restartOptions: { isolated?: boolean } = {},
+  ): Promise<void> {
     const recovery = contextOverflowRolloverHolder;
     if (!recovery) throwIpcError('PRECONDITION_FAILED', 'Bot recovery is not ready');
     await restartBotRuntime(sessionId, assertOwnerCurrent, {
@@ -13676,18 +13695,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         cleanupPendingInteractionsForSession(id, 'session_closed');
         await recovery.prepareNativeSessionRecovery(id, null, assertCurrent, signal);
+        if (restartOptions.isolated) await clearRestartedContext(id);
       },
       onClosed: (id) => agentInputCoordinatorHolder?.onSessionClosed(id),
     });
   }
+  /**
+   * A guest whose project binding changed must not see the old project's
+   * conversation (#8359): after the restart, apply the same context boundary as
+   * /clear, so neither the pending handoff nor the DB fallback carries it over.
+   */
+  async function clearRestartedContext(sessionId: string): Promise<void> {
+    agentHandoffPending.invalidate(sessionId);
+    wireNoteMemory.reset(sessionId);
+    try {
+      await clearSessionContextInDb(sessionId, Date.now());
+      await pruneWithdrawnWorkingMemoryForSession(sessionId, ownerScopedUserDataPath()).catch(() => 0);
+    } finally {
+      agentHandoffPending.sealClearBoundary(sessionId);
+    }
+  }
   // 「消息平台」页的隐藏任务「重新开始」: 主任务与 IM 专线共用伙伴这一条显式重启。
   configureBotImLaneRuntime({
     isTurnRunning: (sessionId) => !!maker.getSession(sessionId)?.isTurnRunning?.(),
-    restartSession: async (sessionId) => {
+    restartSession: async (sessionId, restartOptions) => {
       const scope = captureDataOwnerBroadcastScope();
       await restartBotCanonicalRuntime(sessionId, () => {
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('OWNER_CHANGED');
-      });
+      }, restartOptions);
     },
   });
   // A turn is running or queued in a companion's main task: no context rebuild, no hand-over.
@@ -17298,6 +17333,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       onApplied: async (sessionId) => { await updateScheduledPreference(sessionId, null); },
     }),
   });
+  previewBotSessionRouteHolder = async (sessionId) => {
+    const route = await reconcileBotModelRoute.preview(sessionId);
+    return route ? { agentKind: route.agentKind, agentDeviceId: route.agentDeviceId ?? null } : null;
+  };
 
   configureBotModelSelectionCoordinator(createBotModelSelectionCoordinator({
     acquireSessionLock: (sessionId) => acquireSendToSessionLock(sessionId),

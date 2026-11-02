@@ -11357,6 +11357,28 @@
         "archiveAria": "Archive “{{lane}}”",
         "archiveFailed": "Could not archive the task"
       },
+      "guests": {
+        "title": "Guests",
+        "hint": "People other than you who message {{name}} privately. Bind each one to a linked project: their messages then run only in that project, with their own memory.",
+        "unboundLabel": "Guests without a project",
+        "unbound": {
+          "shared": "Shared",
+          "refuse": "Refuse"
+        },
+        "unboundHint": {
+          "shared": "They use {{name}}'s working directory and memory, as before.",
+          "refuse": "They get a short notice and {{name}} doesn't reply."
+        },
+        "noProject": "No project",
+        "projectLabel": "Project for {{guest}}",
+        "projectMissing": "Project no longer linked; messages are refused",
+        "empty": "No guests yet. A guest appears here after their first private message.",
+        "noProjects": "Link a project in Linked Projects to bind a guest to it.",
+        "loadFailed": "Couldn't load guests",
+        "saveFailed": "Not saved. Try again.",
+        "refusedNotice": "🔒 This bot isn't open to you yet.",
+        "engineUnsupported": "{{name}} runs on Pi, which cannot keep a guest inside its project: guests bound to a project are refused. Switch {{name}} to Claude or Codex to serve them."
+      },
       "add": {
         "button": "Add platform",
         "title": "Add a platform for {{name}}",
