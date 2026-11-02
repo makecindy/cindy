@@ -7,16 +7,19 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger, McpProvider } from '@cindy/maker-core';
 import { withMcpRouteIdentity } from '../codexHttpBridge.js';
 import {
+  HERMES_BRIDGE_COLLAB_SERVERS,
   HERMES_BRIDGE_GATED_SERVERS,
   HERMES_BRIDGE_SAFE_SERVERS,
   buildHermesShimServerConfig,
   createHermesBridgePreparer,
+  isHermesCollabEnabled,
   selectHermesBridgeServers,
   syncHermesShimRegistrations,
   type HermesShimRegistrationDeps,
   type HermesShimServerConfig,
 } from '../hermesBridgeHost.js';
 import { readHermesBridgeRuntimeFile } from '../hermesBridgeRuntimeFile.js';
+import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import { resetPiEnvironmentForTest, shutdownPiEnvironment } from '../piEnvironment.js';
 
 function noopLogger(): Logger {
@@ -55,6 +58,23 @@ describe('hermes bridge exposure policy', () => {
     ]);
     // Not on either list → never exposed, opt-in or not.
     expect(selectHermesBridgeServers(['cindy_memory'], new Set(['cindy_memory']))).toEqual([]);
+  });
+
+  it('adds the Orca team server only when collaboration is enabled (ADR 0006, 3.7a)', () => {
+    const all = [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_GATED_SERVERS, ...HERMES_BRIDGE_COLLAB_SERVERS];
+    expect(selectHermesBridgeServers(all)).toEqual(['cindy_docs']);
+    expect(selectHermesBridgeServers(all, new Set(), true)).toEqual(['cindy_docs', 'cindy_orca']);
+    // The worker-side bridge is not exposed to Hermes in 3.7a.
+    expect(selectHermesBridgeServers([...all, 'orca_worker_bridge'], new Set(), true)).not.toContain('orca_worker_bridge');
+    expect(selectHermesBridgeServers(['cindy_docs'], new Set(), true)).toEqual(['cindy_docs']);
+  });
+
+  it('mirrors the Pi collab gate: global switch or active team member, never when the project disabled it', () => {
+    expect(isHermesCollabEnabled(undefined, [], true)).toBe(true);
+    expect(isHermesCollabEnabled(undefined, [], false)).toBe(false);
+    expect(isHermesCollabEnabled({ orcaRole: 'lead' }, [], false)).toBe(true);
+    expect(isHermesCollabEnabled({ orcaRole: 'worker' }, [], false)).toBe(true);
+    expect(isHermesCollabEnabled({ orcaRole: 'lead' }, ['collab'], true)).toBe(false);
   });
 
   it('builds a static shim command with an unexpanded ${VAR} and no secret', () => {
@@ -223,6 +243,72 @@ describe('createHermesBridgePreparer (real bridge, stub providers)', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     const after = await readHermesBridgeRuntimeFile(runtimeFile);
     expect(after?.sessions['sess-H']).toBeUndefined();
+  });
+
+  it('exposes cindy_orca with collaboration on, and a runtime patch cannot widen the frozen tool policy (3.7a)', async () => {
+    const written: string[] = [];
+    const prepare = createHermesBridgePreparer({
+      providers: () => [
+        stubProvider('cindy_docs', 'docs-ok'),
+        stubProvider('cindy_orca', 'orca-ok'),
+        stubProvider('cindy_browser', 'browser-ok'),
+      ],
+      logger: noopLogger(),
+      runtimeFile,
+      resolveShimPath: () => SHIM,
+      globalCollabEnabled: () => true,
+      registration: {
+        listServers: async () => ({}),
+        setServer: async (name) => {
+          written.push(name);
+        },
+        removeServer: async () => undefined,
+      },
+    });
+    const session = await prepare({ sessionId: 'sess-L', workingDir: dir, permissionMode: 'bypassPermissions' });
+    expect(written).toEqual(['cindy_docs', 'cindy_orca']);
+    expect((await callTool('cindy_orca', 'sess-L')).body).toContain('orca-ok');
+
+    // start_team marks the lead in place; a patch naming policy keys is ignored.
+    session!.setVendorOptions!({ orcaRole: 'lead', [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['browser'] });
+    expect((await callTool('cindy_browser', 'sess-L')).body).not.toContain('browser-ok');
+    expect((await callTool('cindy_orca', 'sess-L')).body).toContain('orca-ok');
+    session!.dispose();
+  });
+
+  it('keeps cindy_orca off with collaboration off, unless the resumed session is already a team member', async () => {
+    const run = async (sessionId: string, vendorOptions?: Record<string, unknown>) => {
+      const written: string[] = [];
+      const prepare = createHermesBridgePreparer({
+        providers: () => [stubProvider('cindy_docs', 'docs-ok'), stubProvider('cindy_orca', 'orca-ok')],
+        logger: noopLogger(),
+        runtimeFile,
+        resolveShimPath: () => SHIM,
+        globalCollabEnabled: () => false,
+        registration: {
+          listServers: async () => ({}),
+          setServer: async (name) => {
+            written.push(name);
+          },
+          removeServer: async () => undefined,
+        },
+      });
+      const session = await prepare({
+        sessionId,
+        workingDir: dir,
+        permissionMode: 'bypassPermissions',
+        ...(vendorOptions ? { vendorOptions } : {}),
+      });
+      const orca = await callTool('cindy_orca', sessionId);
+      session!.dispose();
+      return { written, orca: orca.body };
+    };
+    const plain = await run('sess-P');
+    expect(plain.written).toEqual(['cindy_docs']);
+    expect(plain.orca).not.toContain('orca-ok');
+    const lead = await run('sess-R', { orcaRole: 'lead', orcaLeadSessionId: 'sess-R' });
+    expect(lead.written).toEqual(['cindy_docs', 'cindy_orca']);
+    expect(lead.orca).toContain('orca-ok');
   });
 
   it('returns null and touches nothing unless the session is full access (1.5b-5d)', async () => {

@@ -22,6 +22,7 @@ import {
 import {
   normalizeOrcaDisplayAgentKind,
   orcaAgentLabel,
+  orcaLeadAgentLabel,
   orcaVendorForAgentKind,
 } from './lib/orcaAgentDisplay';
 import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
@@ -77,7 +78,7 @@ export function OrcaSplitView({
   const leadAgentKind = normalizeOrcaDisplayAgentKind(leadSession?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaLeadAgentLabel(leadSession?.agentKind),
   });
   const leadPaneIcon = (
     <VendorIcon

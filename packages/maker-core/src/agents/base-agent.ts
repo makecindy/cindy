@@ -777,7 +777,24 @@ export interface AgentDeps {
     workingDir: string;
     /** Requested Cindy permission mode; Cindy tools are full-access only (ROADMAP 1.5b-5d). */
     permissionMode?: PermissionMode;
-  }) => Promise<{ env: Record<string, string>; dispose: () => void } | null>;
+    /** Session vendorOptions at start (Orca role/team ids when resuming a lead, ROADMAP 3.7a). */
+    vendorOptions?: Record<string, unknown>;
+  }) => Promise<{
+    env: Record<string, string>;
+    dispose: () => void;
+    /** Merge a runtime vendorOptions patch into the bridge identity (Orca start_team, 3.7a). */
+    setVendorOptions?: (patch: Record<string, unknown>) => void;
+  } | null>;
+
+  /**
+   * Hermes-only (ROADMAP 3.7a): the Orca lead/worker instructions for the current
+   * vendorOptions, or null when the session is not in a team. Hermes has no system
+   * prompt slot, so the agent prepends this to the next turn whenever it changes.
+   */
+  resolveHermesOrcaPreamble?: (input: {
+    sessionId: string;
+    vendorOptions: Record<string, unknown>;
+  }) => string | null;
 
   /**
    * Pi-only: advisory metadata for Cindy UI/command projection. This resolver

@@ -120,6 +120,34 @@ describe('SessionContextGuardBanner (ROADMAP 2.5b)', () => {
     })).toBe(32_768);
   });
 
+  it('never measures the Hermes home model against a local route (ROADMAP 3.7b)', () => {
+    // Owner repro 2026-11-02: a hermes-default (DeepSeek) Orca lead at 57k tokens showed
+    // "174% full" because the 32k chat.default/provider limit was used.
+    const ollamaDefault: RoutingFile = { ...routing, rules: { ...routing.rules, 'chat.default': 'local-small' } };
+    expect(resolveSessionContextLength({
+      sessionModel: 'hermes-default',
+      sessionProviderId: 'ollama-local',
+      sessionContextWindow: 200_000,
+      routing: ollamaDefault,
+      providers,
+    })).toBe(200_000);
+    // No reported window: no limit (no banner), not a borrowed 32k.
+    expect(resolveSessionContextLength({
+      sessionModel: 'hermes-default',
+      sessionProviderId: 'ollama-local',
+      sessionContextWindow: 0,
+      routing: ollamaDefault,
+      providers,
+    })).toBeUndefined();
+    // A routed local model still uses its endpoint's limit.
+    expect(resolveSessionContextLength({
+      sessionModel: 'qwen3:8b',
+      sessionContextWindow: 200_000,
+      routing: ollamaDefault,
+      providers,
+    })).toBe(32_768);
+  });
+
   it('renders warning banner with "Summarise and continue" button when context is >= 80% and summary route is healthy', () => {
     const probes: ProbeLike[] = [
       { id: 'ollama-local', status: 'online', models: ['qwen3:8b'] },

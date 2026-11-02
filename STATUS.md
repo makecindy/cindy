@@ -10,6 +10,58 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.7b `live-proven` (owner)
+
+- Gate: `apps/desktop unit` 8/8 shards PASS on the owner's Mac (PR #7 head `dda2a8e4`).
+- Live: new Hermes task, `hermes-default`, Full access, same prompt as 3.7a. Lead pane "Lead (Hermes)". No context banner; footer 28% (56.9k tokens, $0.0111). The lead sent the worker "Reply with exactly two lines… obtained by running `date` in the terminal (do not guess it)"; worker **assistant** (`datenow`, Claude Code harness) used the terminal and answered "2026-11-02 / This is the current date reported by the terminal." The lead reported it in English, quoted the worker, and confirmed it with its own terminal call ("Mon 2 Nov 2026, 08:02:42 UTC").
+- Rows: 3.7a ✅ and 3.7b ✅ `live-proven`. Still open for 3.7: Hermes as a worker (3.9), team mode in the draft page for Hermes.
+
+---
+
+## 2026-11-02 — ROADMAP 3.7b: three fixes from the first Hermes-lead run (`unit-tested`)
+
+**Changes:**
+- `apps/desktop/src/renderer/features/cc-agent/lib/orcaAgentDisplay.ts`: `orcaLeadAgentLabel` names a Hermes lead "Hermes"; used for the lead pane label in `CCAgentSessionView.tsx` and `OrcaSplitView.tsx`. Worker labels and vendor icons unchanged.
+- `SessionContextGuardBanner.tsx` `resolveSessionContextLength`: for `hermes-default` (or no model) only the window Hermes reports counts; without one there is no limit and no banner, never a providers.yaml/routing.yaml limit. Routed local models unchanged.
+- `apps/desktop/src/main/maker-ipc/orcaSessionStartOptions.ts`: `HERMES_ORCA_LANGUAGE_RULE` (new text for the Hermes feature) appended by `renderOrcaInstructionsFor` only; Claude Code/Codex/Pi still get the unchanged shared Orca prompt (test asserts this).
+
+**Verification:** `unit-tested`. Tests: banner +1, label +1, Orca start options (extended). Mutation checks, each caught then restored: Hermes branch removed from the limit; Hermes label removed; language rule dropped. `pnpm typecheck` (serial) exit 0, `pnpm test:runner` 607/0, `pnpm check:test-hygiene` PASS. Desktop unit tier on the owner's Mac (8 shards) pending.
+
+**Live recheck for the owner:** repeat the 3.7a prompt in a new Hermes Full-access task. Expect "Lead (Hermes)", no "174% full" banner, and an English answer that states the worker's date.
+
+---
+
+## 2026-11-02 — 3.7a `live-proven`: Hermes led an Orca team (owner)
+
+- Setup: PR #7 branch, dev app restarted, Collab Mode plugin on (default), Claude Code signed in. New Hermes task, model `hermes-default`, **Full access**.
+- Sent: "Start a team, then create a Claude Code worker whose job is to reply with today's date and one sentence about what it is. When it answers, tell me what it said."
+- Observed: split view with a Team pane; worker **tester** (label `date-reporter`, Claude Code harness on `chatgpt/gpt-6-luna`, the teammates default) received "Message from Lead: Reply with today's date and one sentence about what you are…" and answered "2026-11-02 / I'm an Orca worker agent, ready to help with assigned tasks." The lead received "[Auto-bridged: worker 已完成，系统自动回传结果] 2026-11-02 …" and replied (in Chinese) that the team is ready and summarised the workspace (1 worker, idle). Lead turn cost $0.0114, 57.0k tokens.
+- Verdict: the 3.7 "done when" holds (create → dispatch → reply read back), so 3.7a is `live-proven`. Quality notes, not defects of 3.7a: the lead answered in Chinese (the upstream bridge prefix is Chinese) and undersold the worker's reply.
+- Found (logged as 3.7b): lead pane labelled "Lead (Claude)" for a Hermes lead (`orcaAgentDisplay.ts` fallback); context banner "174% full" for `hermes-default` while the footer showed 28% (banner falls back to the `chat.default` route's limit for the Hermes home model).
+
+---
+
+## 2026-11-02 — ROADMAP 3.7a: Hermes can lead an Orca team (`unit-tested`); ADR 0006
+
+**Owner decisions:** expose Orca tools to full-access Hermes sessions (ADR 0006); strong paid routes are fine for the live test ("just ask for a strong model").
+
+**What was missing (read 2026-11-02):** `cindy_orca` was not on the Hermes bridge (ADR 0003 allowed `cindy_docs` only); Cindy injects Orca lead/worker instructions via `userPrompt`, which Hermes ignores; `start_team` marks the lead through `session.setVendorOptions`, which the Hermes handle did not implement (would throw NotSupported).
+
+**Changes:**
+- `apps/desktop/src/main/mcp-integrations/hermesBridgeHost.ts`: `HERMES_BRIDGE_COLLAB_SERVERS = ['cindy_orca']`, `isHermesCollabEnabled` (Pi's gate: global collab or active team member, never if the project disabled `collab`), preparer takes the session's `vendorOptions` and returns `setVendorOptions` that patches the bridge ctx in place but skips the frozen policy keys; own `cindy_orca` shim entries are removed when no longer exposed. `hermesBridgeSession.ts`: type only.
+- `packages/maker-core/src/agents/base-agent.ts`: `prepareHermesBridgeSession` gets `vendorOptions` and may return `setVendorOptions`; new `AgentDeps.resolveHermesOrcaPreamble`.
+- `packages/maker-core/src/agents/hermes/agent.ts`: live vendorOptions; `setVendorOptions` (merge + forward to bridge); Orca instructions prepended to the next turn when they differ from the last sent, after any expert preamble; not resent into a resumed session.
+- `apps/desktop/src/main/maker-ipc/orcaSessionStartOptions.ts`: `renderOrcaInstructionsFor` (same text `applyOrcaInstructions` gives other agents); wired in `maker-host/index.ts`.
+- No CC/Codex/Pi code, no lizi MCP schema, no existing prompt text changed.
+
+**Verification:** `unit-tested`. Bridge host 13/13 (+4, real bridge, stub providers), Hermes agent 38/38 (+2), Orca start options (+1). Mutation checks, each caught then restored: Orca instructions resent every turn; bridge patch not forwarded; policy keys patchable; collab gate ignoring team membership. `pnpm typecheck` (serial) exit 0; `pnpm test:runner` 607 pass / 0 fail; `pnpm check:test-hygiene` PASS. Owner's Mac (2026-11-02): `apps/desktop unit` 8/8 shards PASS first run (no SIGSEGV); `packages/maker-core unit` PASS (50.5 s).
+
+**Live check for the owner (closes 3.7):** Settings → collaboration on; new Hermes task in **Full access** on a strong route; ask "Start a team and create a Claude Code worker that replies with today's date, then tell me its answer." Expect: a worker session in the sidebar, its reply delivered back into the lead, the lead summarising it.
+
+**Open / learned:** Hermes as a worker (3.9). The draft page still hides team mode for Hermes. Lead and worker on paid routes cost money per turn.
+
+---
+
 ## 2026-11-02 — 3.5b starter experts, live (owner): 1 pass, 2 open
 
 All on Hermes + `qwen3-8b (lmstudio-local)`, header chip correct in every case.

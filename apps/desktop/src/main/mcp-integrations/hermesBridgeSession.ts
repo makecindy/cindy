@@ -45,6 +45,8 @@ export interface RegisterHermesBridgeSessionOptions {
 export interface HermesBridgeSession {
   env: Record<string, string>;
   dispose: () => void;
+  /** Runtime vendorOptions patch (Orca start_team/end_team, ROADMAP 3.7a). */
+  setVendorOptions?: (patch: Record<string, unknown>) => void;
 }
 
 export function deriveHermesBridgeSessionToken(sessionId: string): string {

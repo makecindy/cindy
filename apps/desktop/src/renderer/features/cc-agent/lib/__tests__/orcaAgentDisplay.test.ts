@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeOrcaDisplayAgentKind,
   orcaAgentLabel,
+  orcaLeadAgentLabel,
   orcaVendorForAgentKind,
 } from '../orcaAgentDisplay';
 
@@ -26,5 +27,14 @@ describe('orcaAgentDisplay pi support', () => {
     expect(orcaVendorForAgentKind('codex')).toBe('codex');
     expect(orcaAgentLabel('claude-code')).toBe('Claude');
     expect(orcaVendorForAgentKind('claude-code')).toBe('cc');
+  });
+});
+
+describe('orcaLeadAgentLabel (ROADMAP 3.7b)', () => {
+  it('names a Hermes lead as Hermes, not Claude; other agents unchanged', () => {
+    expect(orcaLeadAgentLabel('hermes')).toBe('Hermes');
+    expect(orcaLeadAgentLabel('cc')).toBe('Claude');
+    expect(orcaLeadAgentLabel('codex')).toBe('Codex');
+    expect(orcaLeadAgentLabel('pi')).toBe('Pi');
   });
 });
