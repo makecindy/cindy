@@ -18800,6 +18800,9 @@
     "failed": "操作未毕，请再试或览此机之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图",

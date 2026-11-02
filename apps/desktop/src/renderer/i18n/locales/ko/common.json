@@ -18800,6 +18800,9 @@
     "failed": "작업이 완료되지 않았습니다. 다시 시도하거나 로컬 파일을 확인하세요."
   },
   "attachmentPreview": {
+    "fitWidth": "너비에 맞추기",
+    "fitPage": "페이지에 맞추기",
+    "pageNumber": "페이지 번호",
     "more": "추가 작업",
     "retry": "다시 시도",
     "image": "이미지",

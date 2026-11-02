@@ -18800,6 +18800,9 @@
     "failed": "操作未完成，請重試或查看本機檔案。"
   },
   "attachmentPreview": {
+    "fitWidth": "適應寬度",
+    "fitPage": "適應頁面",
+    "pageNumber": "頁碼",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖片",
