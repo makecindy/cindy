@@ -21,6 +21,7 @@ import {
   activeCindyBuiltInAgentSkills,
   BUILT_IN_SKILLS_BUNDLE_VERSION,
   builtInSkillDescriptors,
+  isPiRuntimeSkillAvailable,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
   refreshBuiltInClaudeSkillLinks,
@@ -1047,6 +1048,22 @@ describe('built-in Skills', () => {
     expect(markCindyBuiltInAgentSkills([command], descriptors)[0]?.builtIn).toBe(true);
     expect(markCindyBuiltInAgentSkills([{ ...command, path: '/user/SKILL.md' }], descriptors)[0]?.builtIn).toBeUndefined();
     expect(activeCindyBuiltInAgentSkills([command], descriptors, () => false)).toEqual([]);
+  });
+
+  it('requires Pi Learn to be present in the loaded runtime command table', () => {
+    const base = {
+      kind: 'agent-skill' as const,
+      name: 'learn',
+      source: 'skill' as const,
+      path: '/system-skills/learn/SKILL.md',
+      enabled: true,
+    };
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'unknown' }, 'learn')).toBe(false);
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded' }, 'learn')).toBe(false);
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'skill:learn' }, 'learn')).toBe(true);
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'cindy:learn' }, 'learn')).toBe(true);
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'failed', runtimeCommandName: 'skill:learn' }, 'learn')).toBe(false);
+    expect(isPiRuntimeSkillAvailable({ ...base, runtimeStatus: 'loaded', runtimeCommandName: 'skill:release' }, 'learn')).toBe(false);
   });
 
   it('resolves source and packaged resource roots', () => {
