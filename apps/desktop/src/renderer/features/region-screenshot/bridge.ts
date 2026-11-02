@@ -55,7 +55,7 @@ export interface RegionScreenshotPinBridge {
 declare global {
   interface Window {
     regionScreenshot?: RegionScreenshotOverlayBridge;
-    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage' | 'setTranslationLanguage'> & { failed(): void; minimize(token: string): void };
+    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage' | 'setTranslationLanguage' | 'onTranslationLanguageChanged'> & { failed(): void; minimize(token: string): void };
     regionScreenshotPin?: RegionScreenshotPinBridge;
   }
 }

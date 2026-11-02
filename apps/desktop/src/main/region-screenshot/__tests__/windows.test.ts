@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { BrowserWindow, Display, NativeImage } from 'electron';
 import type { SnapshotHelper } from '../snapshotHost';
 import type { RegionRect, RegionScreenshotBitmap } from '../../../shared/regionScreenshot';
+import type { ScreenshotTranslationPreference } from '../../../shared/screenshotTranslation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   unregister: vi.fn(),
   liveCapture: vi.fn(),
   saveRecording: vi.fn(async () => true),
+  translationListeners: new Set<(value: ScreenshotTranslationPreference) => void>(),
   copyRecording: vi.fn<(bytes: Uint8Array, format: string, isCurrent: () => boolean) => Promise<void>>(async () => {}),
 }));
 vi.mock('electron', () => ({
@@ -68,7 +70,17 @@ vi.mock('../../appSessionState', () => ({
 }));
 vi.mock('../pageWindow', () => ({ createScreenshotPageWindow: mocks.create }));
 vi.mock('../compose', () => ({ handOffScreenshotToTask: vi.fn() }));
-vi.mock('../translationPreferences', () => ({ readScreenshotTranslationPreference: () => 'ui', writeScreenshotTranslationPreference: vi.fn(async () => 'fr') }));
+vi.mock('../translationPreferences', () => ({
+  readScreenshotTranslationPreference: () => 'ui',
+  onScreenshotTranslationPreferenceChanged: (listener: (value: ScreenshotTranslationPreference) => void) => {
+    mocks.translationListeners.add(listener);
+    return () => { mocks.translationListeners.delete(listener); };
+  },
+  writeScreenshotTranslationPreference: vi.fn(async (value: ScreenshotTranslationPreference) => {
+    for (const listener of mocks.translationListeners) listener(value);
+    return value;
+  }),
+}));
 vi.mock('../save', () => ({ saveScreenshotImage: vi.fn(), saveRegionRecording: mocks.saveRecording }));
 vi.mock('../recordingClipboard', () => ({ copyRegionRecording: mocks.copyRecording }));
 vi.mock('../liveCapture', () => ({ captureLiveRegion: mocks.liveCapture, RegionVideoCapture: class { frame = mocks.liveCapture; stop() {} } }));
@@ -159,6 +171,7 @@ describe('screenshot window lifecycle', () => {
     pool = new OverlayPool();
   });
   afterEach(() => {
+    mocks.translationListeners.clear();
     pool.destroyAll();
     closeAllPins();
     vi.useRealTimers();
@@ -893,6 +906,45 @@ describe('screenshot window lifecycle', () => {
     finish('fr');
     expect(await pending).toBe(false);
     for (const overlay of overlays) expect(overlay.window.webContents.send).not.toHaveBeenCalled();
+  });
+
+  // PR #8410: an unfinished editor can coexist with a new capture. Previous tests
+  // only observed capture members. Unit: save through each real IPC/session entry,
+  // assert the other window's token-scoped payload and the retained editor document.
+  it('synchronizes translation targets between an existing editor and a later capture', async () => {
+    const editor = new ScreenshotEditor(vi.fn());
+    editor.registerIpc();
+    editor.prewarm();
+    const win = windows[0];
+    const event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
+    const signal = (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!(event, ...args);
+    signal(E.READY);
+    editor.open({ width: 4, height: 4, data: new Uint8Array(64) }, display, { x: 0, y: 0, width: 2, height: 2 });
+    const document = win.webContents.send.mock.calls.find(([name]) => name === E.BEGIN)![1];
+    const overlay = pool.ensure(display)!;
+    const contents = overlay.window.webContents;
+    pool.markShellReady(contents, contents.mainFrame);
+    const session = new RegionScreenshotSession({ pool, captures: [{ display, image }], helper: {} as SnapshotHelper,
+      windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    try {
+      await session.open();
+      await session.setTranslationLanguage(contents, contents.mainFrame, session.token, 'fr');
+      expect(win.webContents.send).toHaveBeenCalledWith('region-screenshot-editor:translation-language-changed',
+        { token: document.token, preference: 'fr' });
+      signal(E.READY);
+      expect(win.webContents.send.mock.calls.filter(([name]) => name === E.BEGIN).at(-1)![1].translationPreference).toBe('fr');
+      await signal(E.SET_TRANSLATION_LANGUAGE, document.token, 'de');
+      expect(contents.send).toHaveBeenCalledWith('region-screenshot:translation-language-changed',
+        { token: session.token, preference: 'de' });
+      session.close();
+      vi.mocked(contents.send).mockClear();
+      await signal(E.SET_TRANSLATION_LANGUAGE, document.token, 'ui');
+      expect(contents.send).not.toHaveBeenCalled();
+      signal(E.CANCEL, document.token);
+      win.webContents.send.mockClear();
+      await writeScreenshotTranslationPreference('fr');
+      expect(win.webContents.send).not.toHaveBeenCalled();
+    } finally { session.close(); editor.dispose(); }
   });
 
   it('sends pin pixel dimensions matching an exported 2x screenshot and only displays after painting', async () => {

@@ -4,7 +4,7 @@ import { activeOwnerScopeKey } from '../appSessionState';
 import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
 import { getResolvedMainLocale, t } from '../i18n';
-import { readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
+import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { createScreenshotPageWindow } from './pageWindow';
 import { REGION_SCREENSHOT_EDITOR_CHANNEL as C, isRegionScreenshotAction, validateRegionBitmap, type RegionRect, type RegionScreenshotBitmap, type RegionScreenshotBegin } from '../../shared/regionScreenshot';
@@ -23,6 +23,7 @@ export class ScreenshotEditor {
   private ready = false;
   private document: EditorDocument | null = null;
   private readonly controller: ResourceUsageWindowController;
+  private readonly releaseTranslationPreference: () => void;
 
   constructor(private readonly onResult: (result: RegionScreenshotResult) => void) {
     this.controller = new ResourceUsageWindowController({
@@ -49,10 +50,16 @@ export class ScreenshotEditor {
       onCloseRequested: () => this.close(),
       onUnavailable: () => { this.document = null; },
     });
+    this.releaseTranslationPreference = onScreenshotTranslationPreferenceChanged((preference) => {
+      if (!this.document || !this.window || this.window.isDestroyed()) return;
+      this.document.payload.translationPreference = preference;
+      if (this.ready) this.window.webContents.send(C.TRANSLATION_LANGUAGE_CHANGED,
+        { token: this.document.payload.token, preference });
+    });
   }
 
   prewarm(): void { this.controller.prewarm(); }
-  dispose(): void { this.document = null; this.controller.dispose(); }
+  dispose(): void { this.document = null; this.releaseTranslationPreference(); this.controller.dispose(); }
 
   open(image: RegionScreenshotBitmap, display: Display, selection: RegionRect, ownerScope = activeOwnerScopeKey()): boolean {
     // Do not overwrite an unfinished image if another capture reaches Edit.
@@ -98,7 +105,7 @@ export class ScreenshotEditor {
     ipcMain.handle(C.SET_TRANSLATION_LANGUAGE, async (event, token: unknown, value: unknown) => {
       if (!this.document || typeof token !== 'string' || !this.owns(event, token)) return false;
       await writeScreenshotTranslationPreference(value);
-      return true;
+      return !!this.document && this.owns(event, token);
     });
     ipcMain.on(C.MINIMIZE, (event, token: unknown) => {
       if (this.document && typeof token === 'string' && this.owns(event, token)) this.window?.minimize();

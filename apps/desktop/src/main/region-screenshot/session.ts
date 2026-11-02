@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { getResolvedMainLocale } from '../i18n';
-import { readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
+import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -98,6 +98,7 @@ export class RegionScreenshotSession {
   readonly token = randomUUID();
   private readonly members = new Map<number, Member>();
   private closed = false;
+  private releaseTranslationPreference: (() => void) | null = null;
   private handedToEditor = false;
   private exporting = false;
   private videoCapture: RegionVideoCapture | null = null;
@@ -131,6 +132,13 @@ export class RegionScreenshotSession {
 
   /** 打开浮层; 一块屏都没准备好时返回 false 并结束会话。 */
   async open(): Promise<boolean> {
+    this.releaseTranslationPreference = onScreenshotTranslationPreferenceChanged((preference) => {
+      if (this.closed) return;
+      for (const { overlay } of this.members.values()) {
+        if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
+          REGION_SCREENSHOT_CHANNEL.TRANSLATION_LANGUAGE_CHANGED, { token: this.token, preference });
+      }
+    });
     screen.on('display-added', this.onDisplaysChanged);
     screen.on('display-removed', this.onDisplaysChanged);
     screen.on('display-metrics-changed', this.onDisplayMetricsChanged);
@@ -540,12 +548,8 @@ export class RegionScreenshotSession {
 
   async setTranslationLanguage(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, value: unknown): Promise<boolean> {
     if (!this.member(sender, frame, token) || this.exporting) return false;
-    const preference = await writeScreenshotTranslationPreference(value);
+    await writeScreenshotTranslationPreference(value);
     if (!this.member(sender, frame, token) || this.exporting) return false;
-    for (const { overlay } of this.members.values()) {
-      if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
-        REGION_SCREENSHOT_CHANNEL.TRANSLATION_LANGUAGE_CHANGED, { token: this.token, preference });
-    }
     return true;
   }
 
@@ -649,6 +653,8 @@ export class RegionScreenshotSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.releaseTranslationPreference?.();
+    this.releaseTranslationPreference = null;
     this.stopScrolling();
     this.videoCapture?.stop();
     this.videoCapture = null;

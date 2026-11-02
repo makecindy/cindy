@@ -56,17 +56,13 @@ export default {
       await (await action('de')).waitFor();
       assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '');
       await ui.capture('translation-selected');
-      if (ui.case === 'translation') {
-        await page.evaluate(() => window.translationChanged({ token: 'previous', preference: 'fr' }));
-        await (await action('de')).waitFor();
-        await page.evaluate(() => window.translationChanged({ token: 'fixture', preference: 'fr' }));
-        await (await action('fr')).click();
-        assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'fr');
-        return;
-      }
-      await (await action('de')).click();
+      await page.evaluate(() => window.translationChanged({ token: 'previous', preference: 'fr' }));
+      await (await action('de')).waitFor();
+      await page.evaluate(token => window.translationChanged({ token, preference: 'fr' }),
+        ui.case === 'translation' ? 'fixture' : 'editor');
+      await (await action('fr')).click();
       assert.equal(await page.evaluate(() => window.captureQa.exportedAction), 'translate');
-      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'de');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'fr');
       return;
     }
     if (ui.case === 'snapping') {

@@ -45,6 +45,7 @@ export const REGION_SCREENSHOT_CHANNEL = {
 /** Local-only image editor. Every incoming signal is bound to its top-level renderer. */
 export const REGION_SCREENSHOT_EDITOR_CHANNEL = {
   SET_TRANSLATION_LANGUAGE: 'region-screenshot-editor:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot-editor:translation-language-changed',
   READY: 'region-screenshot-editor:ready',
   BEGIN: 'region-screenshot-editor:begin',
   END: 'region-screenshot-editor:end',
