@@ -68,6 +68,9 @@ const DEFAULT_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 // Oversized compaction is intentionally bounded.  A request beyond this
 // ingress window is rejected without buffering it into memory.
 const MAX_REQUEST_INGRESS_BYTES = 64 * 1024 * 1024;
+// Request transforms run after attachment recovery and can grow the body again;
+// recover to a target this far below the hard limit so the final check still passes.
+const OVERSIZED_RECOVERY_HEADROOM_BYTES = 1024 * 1024;
 
 // 413 响应写回后,等客户端读到响应自行断开的宽限期;超时强制 destroy 防连接悬挂。
 const REQUEST_TOO_LARGE_DRAIN_TIMEOUT_MS = 10 * 1000;
@@ -2387,7 +2390,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       rawBody = recoverOversized
         ? await collectRecoverableBody(req, maxBodyBytes, async body => {
             try {
-              const recovered = await recoverOversized!(body, maxBodyBytes);
+              const recovered = await recoverOversized!(
+                body,
+                Math.max(maxBodyBytes - OVERSIZED_RECOVERY_HEADROOM_BYTES, Math.floor(maxBodyBytes / 2)),
+              );
               if (recovered) logger.info?.('oversized attachments preserved outside request', {
                 reqId, originalBytes: body.bytes, recoveredBytes: recovered.length,
               });
