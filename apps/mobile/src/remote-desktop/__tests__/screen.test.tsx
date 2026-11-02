@@ -6456,8 +6456,9 @@ describe("live screen controls", () => {
     openPanel();
     act(() => control("liveScreen.settings")!.click());
     expect(control("liveScreen.background")).not.toBeNull();
-    expect(control("liveScreen.viewOnly")).not.toBeNull();
-    // Nothing of the computer's: small window, sound, display, disconnect.
+    // Nothing of the computer's: view only, small window, sound, display, disconnect.
+    expect(control("liveScreen.viewOnly")).toBeNull();
+    expect(control("remoteDesktop.viewOnly")).toBeNull();
     expect(control("remoteDesktop.smallWindow")).toBeNull();
     expect(control("remoteDesktop.sound")).toBeNull();
     expect(control("remoteDesktop.displaySettings")).toBeNull();

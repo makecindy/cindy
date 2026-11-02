@@ -3970,11 +3970,6 @@ export function RemoteDesktopSession({
                       available: pipAvailable,
                       onChange: togglePictureInPicture,
                     }}
-                    viewOnly={{
-                      enabled: viewOnlySelected,
-                      disabled: controlDisabled,
-                      onChange: () => void toggleControl(),
-                    }}
                     video={{
                       supported: Boolean(caps?.videoSettings),
                       settings: videoSettings,

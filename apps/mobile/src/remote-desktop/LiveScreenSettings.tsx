@@ -17,19 +17,17 @@ import { RemoteDesktopDisplaySettings } from "./RemoteDesktopDisplaySettings";
 /**
  * Settings for a device screen (a simulator filling the phone), kept apart
  * from the computer's: whether it stays in a small window after going back,
- * watching without touching, and how smooth and sharp the picture is. Nothing
- * about the computer's display, sound or locking applies here.
+ * and how smooth and sharp the picture is. Nothing about the computer's
+ * display, sound or locking applies here.
  */
 export function LiveScreenSettings({
   background,
-  viewOnly,
   video,
   connected,
   controlling,
 }: {
   /** Keep showing the device in a small window after going back. */
   background: { enabled: boolean; available: boolean; onChange(): void };
-  viewOnly: { enabled: boolean; disabled: boolean; onChange(): void };
   video: {
     supported: boolean;
     settings: RemoteDesktopVideoSettings;
@@ -76,14 +74,6 @@ export function LiveScreenSettings({
             background.enabled,
             !background.available && !background.enabled,
             background.onChange,
-          )}
-          <View style={styles.divider} />
-          {row(
-            "viewOnly",
-            t("remoteDesktop.viewOnly"),
-            viewOnly.enabled,
-            viewOnly.disabled,
-            viewOnly.onChange,
           )}
         </View>
         <Text style={styles.hint}>
@@ -134,11 +124,6 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 44,
       alignItems: "flex-end",
       justifyContent: "center",
-    },
-    divider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: colors.sheetActionBorder,
-      marginLeft: spacing.md,
     },
     hint: {
       color: colors.textSecondary,
