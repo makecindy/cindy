@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "Parar"
+  },
   "work": {
     "queued": "Na fila {{count}}",
     "active": "Em andamento {{count}}",

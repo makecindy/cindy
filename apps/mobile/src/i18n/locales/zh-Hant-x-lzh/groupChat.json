@@ -1,4 +1,7 @@
 {
+  "progress": {
+    "stop": "止"
+  },
   "work": {
     "queued": "待次 {{count}}",
     "active": "行事中 {{count}}",
