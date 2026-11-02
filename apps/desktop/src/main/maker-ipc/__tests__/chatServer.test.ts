@@ -708,6 +708,23 @@ describe('Chat Server result delivery and refresh', () => {
       expect(socket.send).not.toHaveBeenCalled();
       expect(snapshotReads()).toBe(reads);
     });
+    it('refreshes a message shown from an older page that the snapshot window no longer holds', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
+      // The snapshot's newest messages hold only the peer's; my messages 3 and 7 come from the page being shown.
+      serve({ ...value, messages: [message('9', peer)] });
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.includes('/messages?') ? { body: [message('9', peer), message('7'), message('3')] } : original(route, method, body));
+      const { socket, group } = await open();
+      expect(group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', false], ['9', undefined]]);
+      vi.mocked(deps.onChanged!).mockClear();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).toHaveBeenCalledTimes(1);
+    });
     it('lets a newer snapshot replace positions received before it', async () => {
       const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
       serve(value);

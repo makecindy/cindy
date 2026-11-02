@@ -1741,7 +1741,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       await decorateThreads(i.groupId, rootViews, [root], page, members, false);
       const replies = await messageViews(i.groupId, [...page].reverse(), members);
       const messageUpdates = projection ? await messageViews(i.groupId, projection.messages.filter(m => m.threadRootId === i.rootId), members) : undefined;
-      const positions = readPositions(i.groupId, s, [root, ...page]);
+      const positions = readPositions(i.groupId, s, [root, ...page, ...(projection?.messages ?? [])]);
       for (const views of [rootViews, replies, messageUpdates ?? []]) markReadByOthers(views, positions);
       const retry = () => {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
@@ -1832,7 +1832,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
     const messageUpdates = projection ? await messageViews(roomId, projection.messages, s.members, ownerMembers) : undefined;
-    const positions = readPositions(roomId, s);
+    // The messages on screen, not only the snapshot's newest 100, so a receipt for an older one still refreshes it.
+    const positions = readPositions(roomId, s, [...page, ...(projection?.messages ?? [])]);
     for (const views of [messages, messageUpdates ?? []]) markReadByOthers(views, positions);
     const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, [...messages, ...(messageUpdates ?? [])],
       [...page, ...(projection?.messages ?? [])], s.messages, s.members, true, o.shownShares);

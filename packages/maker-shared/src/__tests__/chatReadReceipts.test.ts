@@ -43,4 +43,17 @@ describe('read receipts', () => {
     expect(overlay.positions('r', undefined, own)).toBeNull();
     expect(overlay.advance('r', [{ key: 'main', seq: 99n }])).toBe(false);
   });
+
+  it('keeps what an earlier read of the room loaded when another read of it comes after', () => {
+    const overlay = createOthersReadOverlay();
+    const snapshot = [{ thread_key: 'main', read_seq: '5' }];
+    // The Thread panel loads its replies, then the main timeline reads the same snapshot with only its own messages.
+    overlay.positions('r', snapshot, [{ seq: '4', threadRootId: 'Root' }]);
+    overlay.positions('r', snapshot, [{ seq: '9' }]);
+    expect(overlay.advance('r', [{ key: 'root', seq: 4n }])).toBe(true);
+    expect(overlay.advance('r', [{ key: 'main', seq: 9n }])).toBe(true);
+    // A new snapshot starts the list over: nothing earlier is remembered.
+    overlay.positions('r', [{ thread_key: 'main', read_seq: '5' }], [{ seq: '9' }]);
+    expect(overlay.advance('r', [{ key: 'root', seq: 4n }])).toBe(false);
+  });
 });

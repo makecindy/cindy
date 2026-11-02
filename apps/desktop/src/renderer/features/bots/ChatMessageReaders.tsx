@@ -40,7 +40,9 @@ function useMessageReaders(groupId: string | undefined, messageId: string, enabl
       () => settle({ status: 'failed' }),
     );
   }, [enabled, groupId, messageId]);
-  return { state, load };
+  /** Forget the answer (the message was read since): the next open asks again. */
+  const reset = useCallback(() => { latest.current += 1; setState({ status: 'idle' }); }, []);
+  return { state, load, reset };
 }
 
 /** Current members take their current name and avatar; an actor who has left keeps the name the read recorded. */
@@ -104,7 +106,14 @@ export function ChatReadReceipt({ groupId, messageId, read, members, interactive
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const { state, load } = useMessageReaders(groupId, messageId, interactive);
+  const { state, load, reset } = useMessageReaders(groupId, messageId, interactive);
+  // A message read since the list was fetched: an open list reads again, a closed one forgets what it knew.
+  const lastRead = useRef(read);
+  useEffect(() => {
+    if (lastRead.current === read) return;
+    lastRead.current = read;
+    if (open) load(); else reset();
+  }, [read, open, load, reset]);
   const Icon = read ? CheckCheck : Check;
   // On the bubble's own background: its text color, quieter while only sent.
   const icon = <Icon size={14} strokeWidth={2} aria-hidden className={cn('text-[var(--msg-user-text)]', read ? 'opacity-50' : 'opacity-30')} />;

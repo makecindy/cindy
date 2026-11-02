@@ -63,12 +63,12 @@ export function parseReadReceiptFrame(frame: unknown, selfActorId: string): Read
  * the layer, and the layer only ever holds what arrived since.
  */
 export function createOthersReadOverlay() {
-  interface Layer { base: OthersReadEntries | undefined; added: Map<string, bigint>; unread: Array<{ key: string; seq: bigint }> }
+  interface Layer { base: OthersReadEntries | undefined; added: Map<string, bigint>; unread: Map<string, { key: string; seq: bigint }> }
   const layers = new Map<string, Layer>();
   const layer = (room: string, base: OthersReadEntries | undefined): Layer => {
     const known = layers.get(room);
     if (known && known.base === base) return known;
-    const fresh: Layer = { base, added: new Map(), unread: [] };
+    const fresh: Layer = { base, added: new Map(), unread: new Map() };
     layers.set(room, fresh);
     return fresh;
   };
@@ -76,18 +76,20 @@ export function createOthersReadOverlay() {
     /**
      * The positions to show for this snapshot, or null when the server keeps none. `own` are the
      * sender's own loaded messages; the ones still unread are remembered so a later receipt can
-     * tell whether it changed any of them.
+     * tell whether it changed any of them. Reads of the same room (the main timeline, an older page,
+     * a Thread) add to what earlier ones remembered instead of replacing it; the next snapshot
+     * starts the list over.
      */
     positions(room: string, base: OthersReadEntries | undefined, own: ReadonlyArray<{ seq: string; threadRootId?: string | null }> = []): Map<string, bigint> | null {
       const map = othersReadMap(base);
       if (!map) { layers.delete(room); return null; }
       const current = layer(room, base);
       for (const [key, seq] of current.added) if (seq > (map.get(key) ?? 0n)) map.set(key, seq);
-      current.unread = own.flatMap(message => {
+      for (const message of own) {
         const seq = sequence(message.seq);
         const key = readReceiptKey(message.threadRootId);
-        return seq !== null && seq > (map.get(key) ?? 0n) ? [{ key, seq }] : [];
-      });
+        if (seq !== null && seq > (map.get(key) ?? 0n)) current.unread.set(`${key}:${seq}`, { key, seq });
+      }
       return map;
     },
     /**
@@ -100,10 +102,9 @@ export function createOthersReadOverlay() {
       for (const { key, seq } of advances) if (seq > (current.added.get(key) ?? 0n)) current.added.set(key, seq);
       const base = othersReadMap(current.base)!;
       const reached = (message: { key: string; seq: bigint }) => message.seq <= maxOf(base.get(message.key), current.added.get(message.key));
-      const read = current.unread.filter(reached);
-      if (!read.length) return false;
-      current.unread = current.unread.filter(message => !reached(message));
-      return true;
+      let read = false;
+      for (const [id, message] of current.unread) if (reached(message)) { current.unread.delete(id); read = true; }
+      return read;
     },
     forget(room: string) { layers.delete(room); },
     clear() { layers.clear(); },

@@ -68,6 +68,24 @@ describe('the read check', () => {
     expect(check().getAttribute('aria-label')).toContain('readersCount');
   });
 
+  it('reads the list again when the message gets read while it is open, and forgets it when closed', async () => {
+    mocks.readers.mockResolvedValueOnce({ ok: true, readers: list([], 1) });
+    const view = mount({ read: false });
+    fireEvent.click(check());
+    expect(await screen.findByText('readersNone')).toBeTruthy();
+    // Someone reads it: the check turns double, and the open list shows who.
+    mocks.readers.mockResolvedValueOnce({ ok: true, readers: list(['a'], 0) });
+    view.rerender(<Tooltip.Provider><div className="relative"><ChatReadReceipt groupId="room" messageId="m1" read members={members} interactive /></div></Tooltip.Provider>);
+    expect(await screen.findByText('Ada')).toBeTruthy();
+    expect(mocks.readers).toHaveBeenCalledTimes(2);
+    // Closed, a stale answer is dropped: its label is back to the neutral one until opened.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(check().getAttribute('aria-label')).toContain('readersCount');
+    view.rerender(<Tooltip.Provider><div className="relative"><ChatReadReceipt groupId="room" messageId="m1" read={false} members={members} interactive /></div></Tooltip.Provider>);
+    await waitFor(() => expect(check().getAttribute('aria-label')).toBe('readersView'));
+  });
+
   it('closes with Esc and gives focus back to the check', async () => {
     mocks.readers.mockResolvedValue({ ok: true, readers: list(['a']) });
     mount();
