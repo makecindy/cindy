@@ -9,8 +9,25 @@ import {
   isPluginModelPickerRoute,
   type PluginModelPickerRequest,
   type PluginModelPickerResult,
+  type PluginModelPickerRoute,
 } from '../../shared/pluginModelPicker.js';
-import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
+import { GHOST_REMOTE_AGENT_MODELS } from './ghostAgentModels.js';
+
+/** Read the exact execution location; an unavailable remote source never borrows local models. */
+export async function readPluginModelRouteCatalog(
+  route: { agentDeviceId?: string },
+  sources: {
+    local(): Promise<ProviderView[]>;
+    remote?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+    localAgents(): readonly string[];
+  },
+): Promise<{ views: ProviderView[]; agents: readonly string[] }> {
+  if (route.agentDeviceId) {
+    const views = await sources.remote?.(route.agentDeviceId) ?? [];
+    return { views, agents: GHOST_REMOTE_AGENT_MODELS };
+  }
+  return { views: await sources.local(), agents: sources.localAgents() };
+}
 
 // The host supplies a live reader without making the plugin module load Maker.
 // Read on confirmation, so an account reset or disabled engine is reflected.
@@ -52,7 +69,7 @@ export interface PluginModelPickerTarget {
 
 /** Recheck the exact route without discovery, credential claims or inference. */
 export function isPluginModelPickerRouteAvailable(
-  route: PluginTaskRoute,
+  route: PluginModelPickerRoute,
   views: ProviderView[],
   agents: readonly string[],
 ): boolean {
@@ -89,7 +106,7 @@ export class GhostModelPicker {
       getGhost(id: string): InstalledGhost | null;
       installation(id: string): string | null;
       target(ghostId: string, mobilePageId?: string): PluginModelPickerTarget | null;
-      available(route: PluginTaskRoute): Promise<boolean>;
+      available(route: PluginModelPickerRoute): Promise<boolean>;
       timeoutMs?: number;
       now?(): number;
     },
@@ -119,8 +136,10 @@ export class GhostModelPicker {
       return fail('INVALID_REQUEST', 'Invalid model picker options');
     const options = raw as Record<string, unknown>;
     if (
-      Object.keys(options).some((k) => !['type', 'initial', 'mobilePageId'].includes(k)) ||
+      Object.keys(options).some((k) => !['type', 'initial', 'mobilePageId', 'allowRemote'].includes(k)) ||
+      (options.allowRemote !== undefined && typeof options.allowRemote !== 'boolean') ||
       (options.initial !== undefined && !isPluginModelPickerRoute(options.initial)) ||
+      (!!(options.initial as PluginModelPickerRoute | undefined)?.agentDeviceId && options.allowRemote !== true) ||
       (options.mobilePageId !== undefined &&
         (typeof options.mobilePageId !== 'string' ||
           !options.mobilePageId ||
@@ -145,7 +164,8 @@ export class GhostModelPicker {
       requestId: randomUUID(),
       ghostId,
       ghostName: ghost.manifest.name,
-      ...(options.initial ? { initial: { ...(options.initial as PluginTaskRoute) } } : {}),
+      ...(options.allowRemote === true ? { allowRemote: true } : {}),
+      ...(options.initial ? { initial: { ...(options.initial as PluginModelPickerRoute) } } : {}),
       expiresAt: now + (this.deps.timeoutMs ?? 90_000),
     };
     return new Promise((resolve) => {
@@ -200,6 +220,7 @@ export class GhostModelPicker {
       return { handled: true, accepted: true };
     }
     if (!isPluginModelPickerRoute(route)) return { handled: true, accepted: false };
+    if (route.agentDeviceId && !pending.request.allowRemote) return { handled: true, accepted: false };
     const selection = { ...route };
     let available = false;
     try {

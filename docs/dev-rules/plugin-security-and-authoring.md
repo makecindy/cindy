@@ -1048,8 +1048,8 @@ IPC 时追加对应专项规则要求的验证。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
-电子脑 `cindy.pickModel({initial?,mobilePageId?})` 与桌面页面同源 `POST /model-picker`
-复用 Cindy 的统一模型选择器，返回完整 `PluginTaskRoute`（来源、模型、引擎、思考档位、Fast）。
+电子脑 `cindy.pickModel({initial?,mobilePageId?,allowRemote?})` 与桌面页面同源 `POST /model-picker`
+复用 Cindy 的统一模型选择器，返回完整配置（模型、引擎、思考档位、Fast 与可选的 `agentDeviceId` 运行来源）。
 选模不需要新的 manifest 权限、不改变存量批准，不修改默认或现有任务、不执行模型调用。
 任务创建仍走原任务能力批准。仅返回显式配置字段，不返回凭证、endpoint 或 ProviderView。
 
@@ -1060,6 +1060,11 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 手机与远程桌面设置页保留显式 mobilePageId，展示端读取执行电脑目录，缺失/失效来源不回退另一设备。
 旧 Host 通过函数检查/404 明确升级；旧控制端忽略新增可选 modelPickers，超时取消，不产生执行。
 
+远程与分享来源由调用方显式 `allowRemote:true` 开启，默认保留本机选择，避免已有后台任务调用方收到无法执行的配置。
+远程与分享来源复用普通模型选择器的目录与授权通道。选择确认与新任务路由分别重读精确来源目录，
+不可用时不借用本机同名模型；远程 Agent 不要求插件电脑安装对应 Harness。
+`/agent-models` 无参返回可选 `supportsRemoteRoutes:true`；旧 Host 没有该标志时路由插件保留本机行为，
+不回传远程路由，防止旧解析器丢弃来源后误执行。插件自建后台任务仍使用本机 `PluginTaskRoute`。
 实现见 `ghostModelPicker.ts`、`PluginModelPickerHost.tsx`、`mobilePageService.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md`，回归见 `ghostModelPicker.test.ts`。
 

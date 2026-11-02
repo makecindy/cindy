@@ -502,6 +502,16 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.setGoal).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
   });
+  // Bug: a routed share's model was saved on a local session. Both creation paths must
+  // persist the exact Agent location; local-only route cases did not observe this. Tier: unit.
+  it.each(['send', 'goal'] as const)('creates %s on the share selected by the plugin', async (entry) => {
+    const result = await submit({ entry, pluginRoute: async () => ({
+      outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+      route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'share:fixture' },
+    }) });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
+  });
   it('keeps the selected route and still sends when the plugin call fails', async () => {
     const result = await submit({
       providers: [provider(), provider('other', ['high'])],

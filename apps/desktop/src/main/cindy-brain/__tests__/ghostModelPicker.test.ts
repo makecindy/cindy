@@ -8,7 +8,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
+import { GhostModelPicker, readPluginModelRouteCatalog, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -197,4 +197,42 @@ it('reports a routed Harness as missing only when the host says so', async () =>
   expect(await isPluginRouteHarnessInstalled('codex')).toBe(true);
   setPluginRouteAgentStatusProvider(async () => ({ binaryReady: false }));
   expect(await isPluginRouteHarnessInstalled('claude-code')).toBe(true);
+});
+
+// Bug: plugin routing validated only the local catalog; a share with the same provider/model
+// could either disappear or run locally. Exact source catalog is observable through acceptance.
+// Existing availability fixtures cover only local views. Minimal input: share route + local namesake.
+// Tier: unit; no network or Electron.
+it('reads only the selected share and never falls back to a local namesake', async () => {
+  const local = vi.fn(async () => [{ id: 'local' }] as ProviderView[]);
+  const remote = vi.fn(async () => [] as ProviderView[]);
+  expect(await readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, remote, localAgents: () => ['codex'],
+  })).toMatchObject({ views: [] });
+  expect(remote).toHaveBeenCalledWith('share:fixture');
+  expect(local).not.toHaveBeenCalled();
+  expect(await readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, localAgents: () => ['codex'],
+  })).toMatchObject({ views: [] });
+  remote.mockRejectedValueOnce(new Error('share revoked'));
+  await expect(readPluginModelRouteCatalog({ agentDeviceId: 'share:fixture' }, {
+    local, remote, localAgents: () => ['codex'],
+  })).rejects.toThrow('share revoked');
+  expect(local).not.toHaveBeenCalled();
+});
+
+// Old callers use this picker to create local plugin tasks. Remote answers are accepted only
+// after explicit opt-in, so adding route sources cannot change their execution contract. Tier: unit.
+it('requires remote opt-in and keeps the complete share location in the accepted reply', async () => {
+  const h = setup();
+  const remote = { ...route, agentDeviceId: 'share:fixture' };
+  const localResult = h.picker.request('plugin');
+  expect(await h.picker.resolve(7, h.sent[0].requestId, remote)).toEqual({ handled: true, accepted: false });
+  h.close();
+  await localResult;
+  h.advance();
+  const remoteResult = h.picker.request('plugin', { allowRemote: true, initial: remote });
+  expect(h.sent[1].allowRemote).toBe(true);
+  expect(await h.picker.resolve(7, h.sent[1].requestId, remote)).toEqual({ handled: true, accepted: true });
+  expect(await remoteResult).toEqual({ ok: true, route: remote });
 });

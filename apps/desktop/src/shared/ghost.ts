@@ -7589,6 +7589,8 @@ export type GhostAgentModelsResult =
       }>;
       agentDeviceId?: string;
       locations?: Array<{ agentDeviceId: string; name: string }>;
+      /** Picker and will-start-task verdicts preserve and validate agentDeviceId. */
+      supportsRemoteRoutes?: boolean;
     }
   | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
 
@@ -8752,6 +8754,8 @@ export interface GhostRoutineRunPointData {
 
 /** 模型路由(插件看到与回传的同一形状)。agentKind: cc = Claude Code。 */
 export interface GhostModelRoute {
+  /** Agent location relative to the task computer; omitted = local. */
+  agentDeviceId?: string;
   agentKind: 'cc' | 'codex' | 'pi';
   model: string;
   providerId: string;
