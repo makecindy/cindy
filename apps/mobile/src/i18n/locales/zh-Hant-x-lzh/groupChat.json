@@ -2,6 +2,12 @@
   "progress": {
     "stop": "止"
   },
+  "work": {
+    "queued": "待次 {{count}}",
+    "active": "行事中 {{count}}",
+    "expand": "展伙伴所事",
+    "collapse": "斂伙伴所事"
+  },
   "title": "群議",
   "memberSeparator": "、",
   "memberCount_one": "成員 {{count}} 位",
@@ -189,6 +195,7 @@
     "allDone": "皆畢矣"
   },
   "speaking": {
+    "queued": "待次",
     "stopping": "方止…",
     "planning": "方分職…",
     "step": "方為之…"
