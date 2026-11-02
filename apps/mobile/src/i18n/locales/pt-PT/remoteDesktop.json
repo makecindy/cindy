@@ -83,6 +83,7 @@
   "connecting": "A ligar…",
   "reconnecting": "A restabelecer a ligação…",
   "connectionTimeout": "A ligação excedeu o tempo limite. Verifique a rede e se o computador está online e volte a ligar.",
+  "screenNotRunning": "O dispositivo está desligado. Inicie-o no computador e volte a ligar.",
   "lockingOnExit": "A bloquear o computador…",
   "disconnected": "Desligado",
   "compatibility": "Modo de compatibilidade · menor taxa de fotogramas",

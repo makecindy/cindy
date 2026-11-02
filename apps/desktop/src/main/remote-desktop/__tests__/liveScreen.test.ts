@@ -223,6 +223,29 @@ describe('live screen session', () => {
     await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
   });
 
+  it('ends at once when a later offer finds the device shut down, but not on a passing failure', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    const ended = vi.fn();
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      ended,
+    );
+    await session.connect();
+    vi.mocked(plugin.open).mockRejectedValueOnce(new Error('DESKTOP_SCREEN_TIMEOUT'));
+    await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_TIMEOUT');
+    expect(ended).not.toHaveBeenCalled();
+    vi.mocked(plugin.open).mockRejectedValueOnce(new Error('DESKTOP_SCREEN_NOT_RUNNING'));
+    await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_NOT_RUNNING');
+    expect(ended).toHaveBeenCalledOnce();
+    await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
+  });
+
   it('keeps only the latest position of a moving finger while a send is in flight', async () => {
     const url = await serve(() => {});
     const plugin = source(url);

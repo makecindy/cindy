@@ -108,7 +108,8 @@ export class RemoteDesktopViewerSession {
     check();
     const display = options.screen
       ? { id: "live-screen" }
-      : (caps.displays.find((d) => d.id === options.displayId) ?? caps.displays[0]);
+      : (caps.displays.find((d) => d.id === options.displayId) ??
+        caps.displays[0]);
     if (!display) throw new Error("DESKTOP_DISPLAY_MISSING");
     options.onStart?.();
     const starting = { lockScreen: false };
@@ -127,9 +128,16 @@ export class RemoteDesktopViewerSession {
           ...(options.control && caps.autoControl && caps.canControl
             ? { control: true }
             : {}),
-          ...(options.handoff !== undefined ? { handoff: options.handoff } : {}),
+          ...(options.handoff !== undefined
+            ? { handoff: options.handoff }
+            : {}),
           ...(options.screen
-            ? { screen: { plugin: options.screen.plugin, id: options.screen.id } }
+            ? {
+                screen: {
+                  plugin: options.screen.plugin,
+                  id: options.screen.id,
+                },
+              }
             : {}),
         },
         check,
@@ -148,7 +156,10 @@ export class RemoteDesktopViewerSession {
       throw new Error("DESKTOP_VIDEO_STOPPED");
     }
     // A window view that came back as a whole display is not what was asked for.
-    if (options.handoff !== undefined && typeof lease.window?.app !== "string") {
+    if (
+      options.handoff !== undefined &&
+      typeof lease.window?.app !== "string"
+    ) {
       await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
       throw new Error("INVALID_RESPONSE");
     }
@@ -303,7 +314,9 @@ export class RemoteDesktopViewerSession {
         !Number.isFinite(result.display.height) ||
         result.display.height <= 0 ||
         // Control comes back only when it was asked for.
-        (control ? typeof result.controlling !== "boolean" : result.controlling !== false)
+        (control
+          ? typeof result.controlling !== "boolean"
+          : result.controlling !== false)
       )
         throw new Error("INVALID_RESPONSE");
       lease.display = result.display;
@@ -468,8 +481,12 @@ export function remoteDesktopFailureKey(code: string): string | null {
   if (/ACCESS_REVOKED/.test(code)) return "accessRevoked";
   if (/REMOTE_DISABLED/.test(code)) return "remoteDisabled";
   if (/DESKTOP_BUSY/.test(code)) return "connectionBusy";
+  // A device screen whose device was shut down or removed: retrying cannot help.
+  if (/DESKTOP_SCREEN_NOT_(RUNNING|FOUND)/.test(code))
+    return "screenNotRunning";
   if (/DESKTOP_HANDOFF_ENDED/.test(code)) return "handoffEnded";
-  if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code)) return "handoffUnavailable";
+  if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code))
+    return "handoffUnavailable";
   if (/CHANNEL_NOT_ALLOWED/.test(code)) return "upgrade";
   if (/DESKTOP_DISABLED/.test(code)) return "disabled";
   if (/PERMISSION|ACCESSIBILITY/.test(code)) return "permissionHint";

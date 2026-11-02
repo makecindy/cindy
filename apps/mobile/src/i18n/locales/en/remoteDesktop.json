@@ -83,6 +83,7 @@
   "connecting": "Connecting…",
   "reconnecting": "Reconnecting…",
   "connectionTimeout": "Connection timed out. Check your network and that the computer is online, then reconnect.",
+  "screenNotRunning": "The device is off. Start it on the computer, then reconnect.",
   "lockingOnExit": "Locking computer…",
   "disconnected": "Disconnected",
   "compatibility": "Compatibility mode · lower frame rate",

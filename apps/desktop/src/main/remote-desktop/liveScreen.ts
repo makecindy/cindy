@@ -158,7 +158,16 @@ export class LiveScreenSession {
     if (this.closed) throw new Error('DESKTOP_SCREEN_ENDED');
     this.disconnect();
     const generation = ++this.connectGeneration;
-    const opened = this.opened ?? (await this.source.open(this.plugin, this.id));
+    let opened: LiveScreenOpened;
+    try {
+      opened = this.opened ?? (await this.source.open(this.plugin, this.id));
+    } catch (error) {
+      // The device was shut down or removed: end now rather than after the
+      // keepalive gives up, so the viewer can say so.
+      if (error instanceof Error && /DESKTOP_SCREEN_NOT_(RUNNING|FOUND)/.test(error.message))
+        this.end();
+      throw error;
+    }
     this.opened = null; // one GET per URL
     if (this.closed || generation !== this.connectGeneration)
       throw new Error('DESKTOP_SCREEN_ENDED');

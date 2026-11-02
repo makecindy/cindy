@@ -83,6 +83,7 @@
   "connecting": "Conectando…",
   "reconnecting": "Reconectando…",
   "connectionTimeout": "O tempo de conexão esgotou. Verifique sua rede e se o computador está online e reconecte.",
+  "screenNotRunning": "O dispositivo está desligado. Inicie-o no computador e reconecte.",
   "lockingOnExit": "Bloqueando computador…",
   "disconnected": "Desconectado",
   "compatibility": "Modo de compatibilidade · menor taxa de quadros",

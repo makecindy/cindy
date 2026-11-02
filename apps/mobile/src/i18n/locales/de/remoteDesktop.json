@@ -83,6 +83,7 @@
   "connecting": "Verbindung wird hergestellt…",
   "reconnecting": "Verbindung wird wiederhergestellt…",
   "connectionTimeout": "Zeitüberschreitung bei der Verbindung. Prüfe dein Netzwerk und ob der Computer online ist, und verbinde dich erneut.",
+  "screenNotRunning": "Das Gerät ist ausgeschaltet. Starte es auf dem Computer und verbinde dich dann erneut.",
   "lockingOnExit": "Computer wird gesperrt…",
   "disconnected": "Getrennt",
   "compatibility": "Kompatibilitätsmodus · niedrigere Bildrate",

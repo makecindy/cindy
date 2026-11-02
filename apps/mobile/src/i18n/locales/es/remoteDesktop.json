@@ -83,6 +83,7 @@
   "connecting": "Conectando…",
   "reconnecting": "Reconectando…",
   "connectionTimeout": "Se agotó el tiempo de conexión. Verifique su red y que la computadora esté en línea, luego vuelva a conectarse.",
+  "screenNotRunning": "El dispositivo está apagado. Inícielo en la computadora y vuelva a conectarse.",
   "lockingOnExit": "Bloqueando computadora…",
   "disconnected": "Desconectado",
   "compatibility": "Modo de compatibilidad · velocidad de fotogramas más baja",
