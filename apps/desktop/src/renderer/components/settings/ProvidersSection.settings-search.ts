@@ -38,6 +38,11 @@ export const providersSettings = defineSettings({
     tab: 'providers',
     targetId: 'settings-search-settings-providers-addProvider',
     titleKey: 'settings.providers.addProvider',
+    keywordKeys: [
+      'settings.providers.local.title',
+      'settings.providers.llamacpp.title',
+      'settings.providers.custom.nameSearchHint',
+    ],
     sectionKey: 'settings.tabs.providers',
   },
 });

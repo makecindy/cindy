@@ -224,7 +224,9 @@ function eagerGlobModules(overlay) {
             return `{${files.sort().map(candidate => {
               const key = './' + path.relative(dir, candidate).split(path.sep).join('/');
               const binding = `__ui_eager_glob_${imports.length}`;
-              imports.push(`import ${binding} from ${JSON.stringify(candidate)};`);
+              // Relative imports pass through the revision overlay's resolver,
+              // including modules that no longer exist in the current worktree.
+              imports.push(`import ${binding} from ${JSON.stringify(key)};`);
               return `${JSON.stringify(key)}: ${binding}`;
             }).join(',')}}`;
           },

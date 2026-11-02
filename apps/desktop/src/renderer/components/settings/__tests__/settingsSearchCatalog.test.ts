@@ -62,6 +62,9 @@ describe('settings discoverability regressions', () => {
     ['鸿蒙字体', 'settings.appearance.font.uiFamily.label'],
     ['全速', 'settings.agentResource.preset'],
     ['Qwen 实时 ASR', 'voiceInput.customAsrProtocol'],
+    // Option descriptions must be searchable in the current locale and English.
+    ['无需配置任何密钥', 'voiceInput.serviceSource'],
+    ['ASR-capable service', 'voiceInput.serviceSource'],
     ['系统默认浏览器', 'settings.linkOpen.web.label'],
   ])('finds %s without opening the page first', (query, id) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);

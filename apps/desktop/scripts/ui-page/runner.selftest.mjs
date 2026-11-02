@@ -140,6 +140,9 @@ mountPage({ render: () => <div>URL workers loaded</div> });`);
 test('loads eager default globs and preserves compare membership', async () => {
   const first = path.join(dir, 'one.settings-search.ts');
   const added = path.join(dir, 'two.settings-search.ts');
+  // A historical module may already be deleted from the worktree; resolving it
+  // must reach the revision overlay before esbuild checks the current filesystem.
+  const deleted = path.join(dir, 'deleted.settings-search.ts');
   await writeFile(first, 'export default { title: "First" };');
   await writeFile(added, 'export default { title: "Second" };');
   const file = await entry('eager-glob', `
@@ -152,12 +155,14 @@ mountPage({ render: () => <div>{Object.values(modules).map(item => item.title).j
   assert.ok(scanned.inputs.includes(first));
   assert.ok(scanned.inputs.includes(added));
   const before = await buildPage(definition, {
-    atRef: new Set([file, first]),
-    has: candidate => candidate === first,
-    get: candidate => candidate === first ? 'export default { title: "Original" };' : undefined,
-    resolve: () => undefined,
+    atRef: new Set([file, first, deleted]),
+    has: candidate => candidate === first || candidate === deleted,
+    get: candidate => candidate === first ? 'export default { title: "Original" };'
+      : candidate === deleted ? 'export default { title: "Deleted" };' : undefined,
+    resolve: candidate => candidate === deleted ? deleted : undefined,
   });
   assert.ok(before.fingerprints.has(first));
+  assert.ok(before.fingerprints.has(deleted));
   assert.equal(before.fingerprints.has(added), false);
   const result = await run(['--entry', file, '--theme', 'light', '--json']);
   assert.equal(result.code, 0, result.stdout + result.stderr);

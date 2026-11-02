@@ -45,8 +45,13 @@ export function buildSettingsSearchDocuments(
       text(entry.sectionKey, true),
       text(TAB_LABEL_KEY[entry.tab], true),
     ];
+    const keywordKeys = [
+      ...(entry.keywordKeys ?? []),
+      ...(entry.options ?? []).flatMap(({ labelKey, descriptionKey }) =>
+        descriptionKey ? [labelKey, descriptionKey] : [labelKey]),
+    ];
     const searchText = normalizeSettingsSearchText(
-      [title, section, category, ...english, [...(entry.keywordKeys ?? []), ...(entry.options ?? []).map(({ labelKey }) => labelKey)].flatMap((key) => [text(key), text(key, true)]).join(' '), ...(entry.descriptionKey ? [text(entry.descriptionKey), text(entry.descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
+      [title, section, category, ...english, ...keywordKeys.flatMap((key) => [text(key), text(key, true)]), ...(entry.descriptionKey ? [text(entry.descriptionKey), text(entry.descriptionKey, true)] : []), ...(entry.aliases ?? [])].join(' '),
     );
     return { entry, title, section, category, searchText };
   });
