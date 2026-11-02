@@ -87,7 +87,7 @@ beforeEach(async () => {
     if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
-    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?') || path.endsWith('/plans'))) return [];
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
@@ -127,6 +127,50 @@ it('does not show one account\'s saved group to another account', async () => {
   expect(chat.state.kind).toBe('loading');
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// #5759, unit: exercise the actual direct hook/client, not the remote-resource
+// mock. A human-signed proposal previously rendered as text and rejected plan-start.
+it.each(['receipt', 'leave', 'unmount'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Build', kind: 'work', status: 'proposed', current_step: null as number | null,
+    created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [{ position: 0, botId: self, botName: 'Builder', task: 'Build', status: 'pending' }] };
+  let finish!: () => void;
+  const mutation = new Promise<void>(resolve => { finish = resolve; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { await mutation; return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ id: planId, status: 'proposed' }] } });
+  if (transition !== 'receipt') {
+    const loaded = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/snapshot')) await mutation;
+      return loaded(path, options);
+    });
+  }
+  let first!: Promise<unknown>;
+  await act(async () => { first = chat.act('plan-start', { planId }); });
+  await act(async () => { await expect(chat.act('plan-start', { planId })).rejects.toThrow('PLAN_OPEN'); });
+  if (transition !== 'receipt') {
+    await act(async () => {
+      if (transition === 'unmount') { root!.unmount(); root = undefined; }
+      else { showChat = false; await render(); }
+    });
+    await act(async () => { finish(); await expect(first).rejects.toThrow('OWNER_CHANGED'); });
+    expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toBe(false);
+    return;
+  }
+  plan = { ...plan, revision: 3, status: 'running', current_step: 0, steps: [{ ...plan.steps[0], status: 'running' }] };
+  await act(async () => { finish(); await first; });
+  expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ status: 'running' }] } });
+  expect(h.link.invoke).not.toHaveBeenCalled();
+});
 
 // #7847 review: real hook/client pagination must survive a concurrent summary read.
 // Existing root-loss tests never completed hydration between starting and finishing an older page (unit).

@@ -648,6 +648,33 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
   });
 
+  // #5759, unit: direct-server plans used to bypass role checks on the existing
+  // timeline. Render the real card with one non-manageable open plan (no native IO).
+  it('keeps a system-signed plan card and its fallback when plan reading is unavailable', async () => {
+    const data = group();
+    data.plans = []; data.openPlan = null;
+    data.messages = [message('plan', 1, { kind: 'plan', authorKind: 'system', planId: 'p1', content: 'Builder: Build; Reviewer: Review' })];
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('Builder: Build; Reviewer: Review');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.missing');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it.each(['proposed', 'waiting'] as const)('shows a read-only %s plan without management controls', async status => {
+    h.chat.server = true;
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, status, canManage: false, currentStep: status === 'waiting' ? 0 : null,
+      steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: status === 'waiting' && index === 0 ? 'done' : 'pending' })) };
+    data.openPlan = { ...data.openPlan!, status, currentStep: status === 'waiting' ? 0 : null };
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.plan')).not.toBeNull();
+    expect(byId('botGroup.plan.start')).toBeNull();
+    expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
+    expect(byId('botGroup.followUp.continue')).toBeNull();
+    expect(byId('botGroup.followUp.end')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // The computer's 自动交接 survives the phone's parse, so the card does not promise a 继续 that never comes.
   it.each([[true, 'groupChat.plan.autoNote'], [undefined, 'groupChat.plan.pauseNote']] as const)('says how steps hand on (autoContinue=%s)', async (autoContinue, note) => {
     const data = group();

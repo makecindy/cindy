@@ -261,6 +261,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const olderPending = useRef<Promise<void> | null>(null);
+  const planAction = useRef<{ identity: string; key: string; operationId: string; pending: boolean } | null>(null);
+  if (!enabled || planAction.current?.identity !== identity) planAction.current = null;
+  useEffect(() => () => { planAction.current = null; }, [identity, enabled]);
   const valid = () => api.current() && active.current === identity;
   const loseAccess = () => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
@@ -400,6 +403,35 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     return olderPending.current;
   };
   const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (['plan-start', 'plan-dismiss', 'plan-continue', 'plan-retry', 'plan-edit'].includes(action)) {
+      if (!enabled || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      const latest = page.current;
+      const plan = latest?.identity === identity ? latest.page.plans?.find(plan => plan.id === input?.planId) : undefined;
+      if (!plan || !freshRead.current) throw new Error('CHAT_READ_FAILED');
+      if (planAction.current?.identity === identity && planAction.current.pending) throw new Error('PLAN_OPEN');
+      const edit = action === 'plan-edit';
+      if (edit && (input?.action !== 'remove' && input?.action !== 'reassign' || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');
+      const command: import('./chatServerClient').ChatPlanAction = edit
+        ? { action: input!.action as 'remove' | 'reassign', position: input!.position as number, ...(typeof input!.botId === 'string' ? { botId: input!.botId } : {}) }
+        : { action: action.slice(5) as 'start' | 'dismiss' | 'continue' | 'retry' };
+      const key = JSON.stringify([plan.id, plan.revision, command]);
+      const previous = planAction.current;
+      const attempt = { identity, key, pending: true,
+        operationId: previous?.identity === identity && previous.key === key ? previous.operationId : '' };
+      planAction.current = attempt;
+      const generation = accessGeneration.current;
+      const current = () => valid() && accessGeneration.current === generation && planAction.current === attempt;
+      try {
+        attempt.operationId ||= (await import('expo-crypto')).randomUUID();
+        await api.client.actPlan(groupId, plan, command, attempt.operationId, current);
+        if (!current()) throw new Error('OWNER_CHANGED');
+        return { effects: [] };
+      } finally {
+        attempt.pending = false;
+        // A rejection/conflict also needs a fresh role and plan, never an optimistic step advance.
+        if (current()) reload();
+      }
+    }
     if (action === 'stop') {
       const operationId = (await import('expo-crypto')).randomUUID();
       try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }

@@ -123,9 +123,10 @@ function stepAccessibility(t: (key: string, options?: Record<string, unknown>) =
  * plan stopped after a step (steps not done can change hands before 继续 / 重试).
  */
 export function BotGroupPlanCard({
-  plan, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
+  plan, fallback, members, identityFor, deviceId, online, actionable, reassignable, pending, onStart, onDismiss, onEditStep,
 }: {
   plan: BotGroupPlanView | undefined;
+  fallback?: string;
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -140,7 +141,10 @@ export function BotGroupPlanCard({
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  if (!plan) return <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>;
+  if (!plan) return <View style={styles.card}>
+    {fallback ? <Text selectable style={styles.stepText}>{fallback}</Text> : null}
+    <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>
+  </View>;
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
   const finalNote = plan.status === 'superseded' ? 'groupChat.plan.superseded'
     : plan.status === 'dismissed' ? 'groupChat.plan.dismissed'
