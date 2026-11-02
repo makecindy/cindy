@@ -516,6 +516,11 @@ SSH Codex 不提供这项本机原生能力，目录如实标为不可用。
    细节一律不预加载：核心只列主题名，伙伴用 `read_teammate_skill` 按需读取
    （`packages/lizi-mcps/src/xdt-helper/teammate_skills.ts` 的 `TEAMMATE_CORE_TOPICS`）。不用文件链接，
    保证三个引擎和远程运行时都能读到。
+   接入 MCP 同样走这里（2026-11-01 主人要求：不要因为 MCP 让用户新建任务）：核心只写一句「工具出现在实际工具列表
+   且调用成功才算接入；写 `.mcp.json` 等配置文件不算；新连接在原任务下一轮生效」，做法在 `mcp` 主题——已在 Cindy 的
+   服务用能力工具加入（已加入则不动，避免把「跟随全部」改成固定列表），没有的用 `request_mcp_setup` 打开 Cindy 自己的
+   MCP 表单由主人填凭证，下一轮核对并试调用一次。伙伴的原任务由宿主在下一轮按能力纪元原地重启引擎并保留对话
+   （`refreshBotCapabilityEpochBeforeSend`），不需要新任务。只支持远程 HTTP/SSE，与设置页一致。
 2. **系统技能**：待办（`todo`）、例行任务（`routine`）、工作台与跟进（`follow`）。核心里只露名字和一句话，
    用到时读全文。每位伙伴可单独关闭，存为 Profile 的 `capabilities.systemSkillsOff`（缺省 = 全开，旧资料不迁移；
    `shared/botSystemSkills.ts`），新建伙伴默认全开。关闭时三件事一起停：

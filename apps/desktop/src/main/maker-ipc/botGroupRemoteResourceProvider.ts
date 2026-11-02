@@ -544,6 +544,13 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           ownerService();
           return { result: receipt, effects: [] };
         }
+        case 'notifications': {
+          if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'notifications', mode: input.mode as 'all' | 'mentions' | 'none' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [] };
+        }
         case 'read': {
           if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');

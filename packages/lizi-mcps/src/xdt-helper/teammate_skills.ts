@@ -119,6 +119,17 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
       "On a remote runtime without plugin authorization cards: if a plugin returns SETUP_REQUIRED, the requested tool has not run. Ask the user to open the application’s Plugins page on the trusted desktop and complete that plugin’s connection or configuration, then retry the original work after the user confirms readiness. Do not wait for an authorization-completed notification, poll, request credentials in chat, invent login links, or treat login as task execution approval.",
     ].join("\n"),
   },
+  mcp: {
+    name: "mcp",
+    description: "Connecting an MCP server: join one already in Cindy, have the owner add a new one, check it on your next turn.",
+    body: [
+      "An MCP server is connected for you only when its tools appear in your live tool list and a call succeeds. Writing `.mcp.json`, Claude or Codex config, or any other file does not connect anything: teammates load only the MCP servers Cindy assigns them. Never claim a server is connected before that, and never tell the owner to start a new task for it.",
+      "Already in Cindy: `find_teammate_capabilities` with kind=mcp. If it is available but not joined, `set_teammate_capability` with kind=mcp, its id and joined=true. If it is already joined, change nothing: joining while you follow every available server switches you to a fixed list.",
+      "Not in Cindy yet: call `request_mcp_setup` with only the public name, URL and transport (http or sse). It opens Cindy's own MCP form in this chat on the Desktop; the owner fills any token or key there, never in chat, tools or files. Wait for its result: saved returns the serverId, cancelled means stop and ask what the owner wants. Then check it with `find_teammate_capabilities` and join it as above if it is not joined. Cindy adds remote HTTP/SSE servers only; a local command-line (stdio) server cannot be added here, so say that instead of writing config files.",
+      "The new tools load in this same chat when the next message starts your next turn: the host restarts your engine in place and keeps the conversation. Say so and end the turn after saving or joining. On the next turn confirm the tools are listed and make one harmless call before saying it works; if they are still missing, report what you see rather than suggesting a new task.",
+      "Where `request_mcp_setup` is unavailable (a remote runtime, or not on the Desktop), ask the owner to add the server under Settings > Tools > External tools on the trusted Desktop, then join and check it as above.",
+    ].join("\n"),
+  },
   permissions: {
     name: "permissions",
     description: "What autonomous and scheduled turns may do and which risks wait for the owner.",

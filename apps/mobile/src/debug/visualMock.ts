@@ -1,3 +1,4 @@
+import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
@@ -58,7 +59,8 @@ const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
 let uiMockRows: ReturnType<typeof buildUiMockRows> | null = null;
-const getUiMockRows = () => uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' });
+const getUiMockRows = () =>
+  (uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' }));
 const IMAGE_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAABaAgMAAABCqLXBAAAADFBMVEX9/f2BgoIgISTY2NXfCK5xAAAACXBIWXMAAAsTAAALEwEAmpwYAAACCklEQVR42uWXsU7DMBBAk1rqgKyy9xM6nVSJoQv9BJaKlbVh4QcQfEIXWMsQiSZFav8Ao0hMGVhY+IRMmTogVebslsah1Hd0QYKrYrXOq+98Pp99QcAW+bUDPrtF9U5gt8q7kGfmgRwlAwGmxW7zLjdvu931v5lqxYCSU2VY6KWkPNgBIxpMFI7ZSknVg3SOIzZjei7tETa9OQ22jJGdPg2GE2wKjh+n+Aw54PAPguFmUWM/6MSP8oKdCrz2gk6gjbygE3l3vwzWN8doJxjWN0y8E2zUwcmeYFIueKrR5IIzmQS/HXHcE2O+CjngSAaZUUmCNmoKBtjPJECbAdqfBzSYyACEbNLgNMiEyYAM0ORpBmjWM8gaDFBIUEGDqVpybASQ1WRe3fx9UXcPHmKgntdgLdGf1B0uXIf7wD5OZrOEHtXmIJEmtdBhBqvI5gSueuIELnsrmC0UscCbarv6wUtmkkp0wQPv9bvhbklwrJfWABLUWkfGgLOtJcS7hxtmCL6l6Uy/bAUFigPOEET3POrSC0ZIoFgDvKo7htC6mK7B3Ufc1IKLMTbKe2jOLLi8wqb0HsPHuhIvqJmgcEHlAQ9dsPSAronf616Dej9QccHyn1y5aDn/ydWVfRlmX6/ZF3ZWCYDHuWQVFXZcVpmCKV7Rhc/AFj6C48esqtrIoktIQYuE1XhAfgL4ANer/BnN/IZTAAAAAElFTkSuQmCC';
 
@@ -198,9 +200,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       busy: false,
       lastSeenAt: NOW,
     },
-    getPresenceAvailability: (candidateDeviceId: string) => (
-      candidateDeviceId === deviceId ? true : null
-    ),
+    getPresenceAvailability: (candidateDeviceId: string) =>
+      candidateDeviceId === deviceId ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -260,8 +261,14 @@ async function visualMockInvoke<T = unknown>(
       } }],
     } as T;
   }
+  if (channel === "device-link:media:fetch") {
+    const fixture = attachmentPreviewFixture(
+      String((args[0] as { url?: string })?.url ?? ""),
+    );
+    if (fixture) return fixture as T;
+  }
   const realData = await loadVisualRealDataSnapshot();
-  const mailResult = realData ? undefined : mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args);
+  const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
   if (pluginResult !== undefined) return pluginResult as T;
@@ -314,7 +321,8 @@ async function visualMockInvoke<T = unknown>(
     case 'local-db:sessions:list':
       return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
     case 'local-db:history:query':
-      return { ok: true, sessions: visualMockSessions('all').filter(row => row.source === 'bot'), hasMore: false } as T;
+      return { ok: true, sessions: visualMockSessions('all').filter(
+          (row) => row.source === 'bot'), hasMore: false } as T;
     case 'local-db:sessions:get-many':
       return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
@@ -322,14 +330,14 @@ async function visualMockInvoke<T = unknown>(
     case 'local-db:messages:work-details': {
       const rows = visualMockMessages(String(args[0]));
       const ref = args[1] as { firstMessageId: string; lastMessageId: string };
-      const first = rows.findIndex(row => row.id === ref.firstMessageId);
-      const last = rows.findIndex(row => row.id === ref.lastMessageId);
+      const first = rows.findIndex((row) => row.id === ref.firstMessageId);
+      const last = rows.findIndex((row) => row.id === ref.lastMessageId);
       return { version: 1, messages: first >= 0 && last >= first ? rows.slice(first, last + 1) : [], hasMore: false, nextCursor: null } as T;
     }
     case 'local-db:messages:view-intent': return undefined as T;
     case 'local-db:messages:around-client-id': {
       const rows = visualMockMessages(String(args[0]));
-      const index = rows.findIndex(row => row.clientId === args[1]);
+      const index = rows.findIndex((row) => row.clientId === args[1]);
       const radius = Math.max(0, Number((args[2] as { radius?: number } | undefined)?.radius ?? 0));
       return (index < 0 ? [] : rows.slice(Math.max(0, index - radius), index + radius + 1)) as T;
     }
@@ -381,8 +389,19 @@ async function visualMockInvoke<T = unknown>(
       return visualMockDirectory() as T;
     case 'fs:stat-path':
       return { kind: 'dir', resolvedPath: '/repo/xdt-maker' } satisfies RemotePathStatResult as T;
-    case 'text-file:read-preview':
+    case 'text-file:read-preview': {
+      const path = String((args[0] as { filePath?: string })?.filePath ?? "");
+      const fixture = attachmentPreviewFixture(
+        `xdt-file://open?path=${encodeURIComponent(path)}`,
+      );
+      if (fixture && /\.(mmd|mermaid|md|json)$/.test(path))
+        return {
+          success: true,
+          data: globalThis.atob(fixture.inlineBase64),
+          size: fixture.size,
+        } as T;
       return visualMockTextPreview() as T;
+    }
     case 'maker:list-agent-commands':
       return { success: true, commands: [{ kind: 'agent-builtin', name: 'status', description: 'Show status' }] } as T;
     case 'maker:list-agent-skills':
@@ -509,17 +528,21 @@ function realDataSessions(snapshot: VisualRealDataSnapshot, statusFilter?: strin
 }
 
 function realDataSession(snapshot: VisualRealDataSnapshot, sessionId: string): RemoteSession {
-  return snapshot.sessions.find((session) => session.id === sessionId)
+  return (
+    snapshot.sessions.find((session) => session.id === sessionId)
     ?? snapshot.sessions.find((session) => session.id === snapshot.selectedSessionId)
-    ?? snapshot.sessions[0];
+    ?? snapshot.sessions[0]
+  );
 }
 
 function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string): InputProjection {
-  return snapshot.projectionsBySession?.[sessionId] ?? {
+  return (
+    snapshot.projectionsBySession?.[sessionId] ?? {
     ...visualMockProjection(sessionId),
     pendingQueue: [],
     queueExpanded: false,
-  };
+  }
+  );
 }
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
@@ -577,10 +600,13 @@ function visualMockSession(id: string): RemoteSession {
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
   if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
-    || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
+    || [...visualTeammateThreads.values()].some(
+      (thread) => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
   };
-  return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
+  return (
+    visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0]
+  );
 }
 
 function sessionFromShared(
@@ -637,7 +663,8 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-note3', 'assistant', '任务与 PR 的信息已核对，正在整理摘要。', -40000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-result', 'assistant', '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', -30000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
-  const topic = [...visualTeammateThreads.values()].find(thread => thread.sessionId === sessionId);
+  const topic = [...visualTeammateThreads.values()].find(
+    (thread) => thread.sessionId === sessionId);
   if (topic) return topic.replyCount ? [
     message(sessionId, 'visual-topic-user', 'user', '把移动端和群聊的话题入口统一起来。', -180_000),
     message(sessionId, 'visual-topic-reply', 'assistant', '两处都会使用堆叠头像，回复数和时间保持同一字号。', -120_000),
@@ -656,8 +683,36 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
       ...message,
       sessionId,
       role: message.role === 'tool_use' ? 'tool_use' : message.role,
-    } as RemoteMessage));
+    }) as RemoteMessage,
+    );
   }
+  if (sessionId === "ui-mock-showcase-feedback-zh")
+    return [
+      message(
+        sessionId,
+        "attachment-preview-mixed",
+        "user",
+        {
+          text: "附件预览验收：图片、视频、PDF、文本使用同一条消息的集合。",
+          images: [
+            {
+              name: "sample.webp",
+              url: "xdt-file://open?path=%2Fattachment-preview%2Fsample.webp",
+              mimeType: "image/webp",
+            },
+          ],
+          files: [
+            "sample.mp4",
+            "sample.pdf",
+            "code.json",
+            "large.json",
+            "cube.gltf",
+            "flow.mmd",
+          ].map((name) => ({ name, path: `/attachment-preview/${name}` })),
+        },
+        0,
+      ),
+    ];
   const running = sessionId.includes('running');
   const catalog = getUiMockRows().messages.filter((row) => row.sessionId === sessionId);
   if (catalog.length > 0) {
@@ -671,7 +726,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
+        agentMeta: streaming ? { isStreaming: true } : (row.agentMeta ?? null),
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });
@@ -910,7 +965,8 @@ function sharedUiMockFiles(input: unknown): unknown {
   if (!input || typeof input !== 'object') return undefined;
   const request = input as Record<string, unknown>;
   const workdir = String(request.workdir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
-  const project = UI_MOCK_SHOWCASE_PROJECTS.find(item => workdir === `/Users/demo/Projects/${item.name}`);
+  const project = UI_MOCK_SHOWCASE_PROJECTS.find(
+    (item) => workdir === `/Users/demo/Projects/${item.name}`);
   if (!project) return undefined; // Keep the existing media/Markdown regression fixtures.
   const relPath = String(request.relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
   const paths = Object.keys(project.files).sort();
@@ -921,7 +977,8 @@ function sharedUiMockFiles(input: unknown): unknown {
   }
   if (request.op === 'listDir') {
     const prefix = relPath ? `${relPath}/` : '';
-    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number }>();
+    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number;
+      }>();
     for (const path of paths) {
       if (!path.startsWith(prefix)) continue;
       const remainder = path.slice(prefix.length);
@@ -939,12 +996,12 @@ function sharedUiMockFiles(input: unknown): unknown {
   if (request.op === 'searchCollect') {
     const normalize = (value: string) => request.caseSensitive === true ? value : value.toLowerCase();
     const query = normalize(String(request.query ?? ''));
-    const found = query ? paths.flatMap(path => project.files[path].split('\n').flatMap((line, index) =>
+    const found = query ? paths.flatMap((path) => project.files[path].split('\n').flatMap((line, index) =>
       normalize(line).includes(query) ? [{ relPath: path, lineNumber: index + 1, lineText: line }] : [],
     )) : [];
     const cap = typeof request.maxMatches === 'number' && request.maxMatches > 0 ? Math.min(500, request.maxMatches) : 500;
     const matches = found.slice(0, cap);
-    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map(item => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
+    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map((item) => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
   }
   if (request.op === 'thumbnail') return { ok: false, code: 'THUMB_UNSUPPORTED' } satisfies FileBrowserThumbnailResult;
   return { ok: false, message: 'Unsupported demo file operation.' };

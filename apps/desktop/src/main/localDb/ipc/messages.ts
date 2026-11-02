@@ -1299,6 +1299,7 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1324,6 +1325,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
@@ -1360,6 +1362,14 @@ export async function rewindPersistedUserMessageAfterClear(
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
 }
 
+export async function purgeRewoundSchedulerPrompts(
+  limit = 100,
+  cursor = 0,
+): Promise<{ deleted: number; sessionIds: string[]; cursor: number | null }> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return { deleted: 0, sessionIds: [], cursor: null };
+  return getDbClient().tx('message.purgeRewoundSchedulerPrompts', { limit, cursor });
+}
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,

@@ -26,6 +26,10 @@ import type {
   BotGroupPlanView,
 } from '../../../../shared/botGroupChat';
 
+vi.mock('@/components/chat/FileLightbox', () => ({
+  FileLightbox: ({ filePath }: { filePath: string }) => <div data-testid="group-pdf-preview" data-path={filePath} />,
+}));
+
 const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
@@ -916,8 +920,8 @@ describe('BotGroupChatView', () => {
       if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();
       else if (kind === 'text-body') {
         await user.click(screen.getByText('Preview note content'));
-        expect(document.activeElement).toBe(document.body);
-      } else expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+        expect(preview.contains(document.activeElement)).toBe(true);
+      } else expect(preview.contains(document.activeElement)).toBe(true);
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
@@ -944,10 +948,10 @@ describe('BotGroupChatView', () => {
     render(<MarkdownMermaidBlock raw="graph TD; A-->B" />, { container });
     const diagram = await within(container).findByRole('button', { name: 'chat.mermaid.clickToZoom' });
     await user.click(diagram);
-    await screen.findByRole('button', { name: 'chat.mermaidLightbox.close' });
-    expect(document.activeElement).toBe(diagram);
+    await screen.findByRole('button', { name: 'chat.lightbox.close' });
+    expect(document.querySelector('[data-lightbox-layer]')?.contains(document.activeElement)).toBe(true);
     await user.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'chat.mermaidLightbox.close' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'chat.lightbox.close' })).toBeNull());
     expect(screen.getByRole('complementary')).toBe(panel);
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent diagram reply');
     await user.keyboard('{Escape}');
@@ -3134,9 +3138,10 @@ describe('BotGroupChatView', () => {
       const bubble = image.closest('[data-testid="bot-group-self-bubble"]')!;
       const chip = screen.getByRole('button', { name: '报告.pdf' });
       expect(bubble.contains(chip)).toBe(true);
-      // A PDF is not text: it opens in the system app, as from a task's chip.
+      // PDF enters the same in-app attachment viewer as a task's chip.
       fireEvent.click(chip);
-      await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/Users/me/报告.pdf'));
+      expect((await screen.findByTestId('group-pdf-preview')).getAttribute('data-path')).toBe('/Users/me/报告.pdf');
+      expect(mocks.openPath).not.toHaveBeenCalled();
 
       const withText = screen.getByAltText('草图.png').closest('article')!;
       const textBubbles = withText.querySelectorAll('[data-testid="bot-group-self-bubble"]');

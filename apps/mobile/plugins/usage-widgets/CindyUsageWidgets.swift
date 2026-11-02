@@ -5,28 +5,37 @@ import WidgetKit
 struct UsageEntry: TimelineEntry {
   let date: Date
   let state: WidgetState
+  /// How many leading sources the edit sheet placed first (`QuotaWidgetView.pinnedCount`).
+  var pinnedCount = 0
 }
 
 /// Reads the state the app last wrote for the widget's computer. Entries every 15 minutes keep
 /// reset countdowns and the "updated" age current without new data; the app reloads timelines
 /// when data arrives.
-struct UsageProvider: AppIntentTimelineProvider {
+struct UsageProvider<Configuration: UsageWidgetConfiguration>: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> UsageEntry {
     UsageEntry(date: Date(), state: .sample)
   }
 
-  func snapshot(for configuration: SelectComputerIntent, in context: Context) async -> UsageEntry {
-    let state = WidgetState.load(computer: configuration.computer?.id)
-    if context.isPreview, case .empty = state { return UsageEntry(date: Date(), state: .sample) }
-    return UsageEntry(date: Date(), state: state)
+  func snapshot(for configuration: Configuration, in context: Context) async -> UsageEntry {
+    let entry = Self.entry(configuration, at: Date())
+    if context.isPreview, case .empty = entry.state { return UsageEntry(date: Date(), state: .sample) }
+    return entry
   }
 
-  func timeline(for configuration: SelectComputerIntent, in context: Context) async -> Timeline<UsageEntry> {
-    if let id = configuration.computer?.id, id != ComputerEntity.autoID { WidgetStore.recordPin(id) }
-    let state = WidgetState.load(computer: configuration.computer?.id)
+  func timeline(for configuration: Configuration, in context: Context) async -> Timeline<UsageEntry> {
+    if let id = configuration.computerID, id != ComputerEntity.autoID { WidgetStore.recordPin(id) }
     let now = Date()
-    let entries = (0..<24).map { UsageEntry(date: now.addingTimeInterval(Double($0) * 15 * 60), state: state) }
+    let entries = (0..<24).map { Self.entry(configuration, at: now.addingTimeInterval(Double($0) * 15 * 60)) }
     return Timeline(entries: entries, policy: .atEnd)
+  }
+
+  private static func entry(_ configuration: Configuration, at date: Date) -> UsageEntry {
+    let state = WidgetState.load(computer: configuration.computerID)
+    if let arranged = state.arranged(pinned: configuration.pinnedAccounts, hidden: configuration.hiddenAccounts) {
+      return UsageEntry(date: date, state: arranged.state, pinnedCount: arranged.pinnedCount)
+    }
+    return UsageEntry(date: date, state: state)
   }
 }
 
@@ -37,8 +46,8 @@ private func openAppURL() -> URL? {
 
 struct QuotaWidget: Widget {
   var body: some WidgetConfiguration {
-    AppIntentConfiguration(kind: "CindyQuotaWidget", intent: SelectComputerIntent.self, provider: UsageProvider()) { entry in
-      QuotaWidgetView(state: entry.state, now: entry.date)
+    AppIntentConfiguration(kind: "CindyQuotaWidget", intent: QuotaWidgetIntent.self, provider: UsageProvider()) { entry in
+      QuotaWidgetView(state: entry.state, now: entry.date, pinnedCount: entry.pinnedCount)
         .containerBackground(for: .widget) { WidgetBackdrop() }
         .widgetURL(openAppURL())
     }
