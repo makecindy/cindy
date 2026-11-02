@@ -530,12 +530,15 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
 
   it('closes a connecting prewarm without an unhandled WebSocket error after timeout', async () => {
     let pendingSocket: import('node:net').Socket | undefined;
+    let signalHandshake: () => void = () => undefined;
+    const handshake = new Promise<void>((resolve) => { signalHandshake = resolve; });
     const server = new WebSocketServer({
       port: 0,
       verifyClient(info, done) {
         // Keep the upgrade pending until the client's prewarm timer fires.
         pendingSocket = info.req.socket;
         void done;
+        signalHandshake();
       },
     });
 
@@ -544,23 +547,26 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
 
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
       const prewarm = prewarmRealtimeAsrWebSocketSession({
         accessTokenProvider: async () => 'test-key',
         realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
         model: 'gpt-realtime-whisper',
       });
 
-      await waitFor(() => pendingSocket !== undefined);
+      await handshake;
+      await vi.advanceTimersByTimeAsync(8_000);
       await prewarm;
       // ws emits the CONNECTING termination error on a later turn.
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(pendingSocket).toBeDefined();
     } finally {
+      vi.useRealTimers();
       pendingSocket?.destroy();
       invalidatePrewarmedRealtimeAsrWebSocketSession();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-  }, 12_000);
+  });
 
   it('closes a prewarmed socket when readiness fails after upgrade', async () => {
     const server = new WebSocketServer({ port: 0 });
