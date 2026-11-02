@@ -176,7 +176,7 @@ describe('manual PR management', () => {
   });
 
   it('ignores stale live and import candidates not visible in persisted history', async () => {
-    const msg = { id: 'gone', sessionId: 's', role: 'assistant',
+    const msg = { id: 'gone', sessionId: 's', role: 'assistant' as const,
       content: 'https://github.com/example/repo/pull/95', createdAt: 20 };
     await recordPrRefsForMessage(msg);
     db.insert(messages).values({ ...msg, clientId: msg.id, content: JSON.stringify(msg.content), rewindAt: 30 }).run();
