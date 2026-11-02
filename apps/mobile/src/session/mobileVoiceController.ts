@@ -36,6 +36,7 @@ import {
 import { startMobileRealtimeAudio, type MobileRealtimeAudioChunk } from '@/session/mobileRealtimeAudio';
 import { MobileVoiceAudioLevels } from '@/session/mobileVoiceAudioLevels';
 import { MobilePendingAudioGate } from '@/session/mobilePendingAudioGate';
+import { mobileVoiceFailureRecording } from './mobileVoiceFailureRecording';
 import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 import {
   classifyMobileVoiceFailure,
@@ -141,9 +142,11 @@ export function createMobileVoiceControllerSession(
   // abandoned mid-handshake tears the just-opened socket down instead of
   // leaking it. Without it, the default fallback provider silently drops every
   // chunk appended before its inner provider is chosen.
-  const asr = new BufferedAsrProvider(options.asr ?? createMobileAsrProvider(options.credential, {
+  const innerAsr = options.asr ?? createMobileAsrProvider(options.credential, {
     connectionProvider: options.connectionProvider,
-  }));
+  });
+  const failureRecording = mobileVoiceFailureRecording(innerAsr);
+  const asr = new BufferedAsrProvider(innerAsr);
   const refiner = options.refiner === undefined
     ? createMobileRefiner(options.credential, {
       refinementContext: options.refinementContext,
@@ -418,6 +421,11 @@ export function createMobileVoiceControllerSession(
       })
       : options.audioGate,
     logger: new VoiceTimelineLogger((event) => {
+      if (event.type === 'start_clicked') failureRecording?.begin(event.runId);
+      if (event.type === 'error') void failureRecording?.finish(event.code ?? classifyMobileVoiceFailure(event.message));
+      if (event.type === 'submitted' || event.type === 'cancelled') void failureRecording?.finish();
+      // Only event types; the timeline's text/message fields contain user content.
+      failureRecording?.event(event.type);
       recordTimeline(event);
       options.onTimelineEvent?.(event);
     }),
@@ -542,6 +550,7 @@ export function createMobileVoiceControllerSession(
             // early stop that waits for the in-flight handshake can't buffer and
             // later flush post-stop speech/noise.
             if (captureTornDown() && !(runPhase === 'stopping' && chunk.drained)) return false;
+            failureRecording?.captured(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
             audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
             if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
             if (runPhase === 'running') markCaptureLive(chunk.trace, chunk.timestampSource);
@@ -554,6 +563,7 @@ export function createMobileVoiceControllerSession(
         await audioOpening;
       } catch (error) {
         runPhase = 'failed';
+        void failureRecording?.finish('capture_start_failed');
         // Surface the mic failure immediately — do NOT wait for the in-flight
         // ASR handshake (a slow/hung connect would otherwise pin the startup
         // and delay the error). controller.cancel() tears the handshake down
@@ -584,6 +594,7 @@ export function createMobileVoiceControllerSession(
       }
       if (asrStartError) {
         runPhase = 'failed';
+        void failureRecording?.finish('asr_start_failed');
         if (stopAudio) {
           const stop = stopAudio;
           stopAudio = null;
@@ -633,6 +644,8 @@ export function createMobileVoiceControllerSession(
       if (!stopAudio && !audioStopping) await audioOpening?.catch(() => undefined);
       await stopNativeCapture();
       if (currentRunPhase() === 'stopping' && !soundDetected && !voiceInsertion) {
+        // Include silent/zero-byte captures: the experiment must detect a dead mic too.
+        void failureRecording?.finish('silent_empty');
         logMobileVoice('info', 'silent recording ended without ASR finalization', {
           runId: runTag(),
           elapsedMs: Date.now() - runStartedAt,
@@ -656,6 +669,7 @@ export function createMobileVoiceControllerSession(
       const handshakeWaitMs = Date.now() - handshakeWaitStartedAt;
       if (handshakeWaitMs > 50) logMobileVoice('debug', 'stop waited for ASR connection', { waitMs: handshakeWaitMs });
       if (asrStartError || audioFailureError) {
+        void failureRecording?.finish('startup_failed');
         // The run is dead — either the ASR handshake failed during an early stop,
         // or the mic failed while the handshake was still settling. Surface it
         // instead of returning a "successful" empty draft the caller shows as
@@ -676,9 +690,11 @@ export function createMobileVoiceControllerSession(
       if (state === 'submitting' || state === 'refining') await waitForDone(doneWaiters);
       if (runPhase === 'stopping') runPhase = 'idle';
       logMobileVoice('debug', 'stop finished', { runId: runTag(), stopToDoneMs: Date.now() - stopRequestedAt, state });
+      void failureRecording?.finish();
       return latestDraft;
     },
     async cancel() {
+      void failureRecording?.finish();
       cancelPendingDraftPublish();
       // 'cancelled' makes onChunk drop straggler capture, and tells a start()
       // that is still awaiting the handshake to return quietly. The ASR-side
@@ -709,6 +725,7 @@ export function createMobileVoiceControllerSession(
     if (runPhase !== 'running' && runPhase !== 'stopping') return;
     runPhase = 'failed';
     audioFailureError = error;
+    void failureRecording?.finish('capture_failed');
     logMobileVoiceFailure('capture failed', 'microphone', error);
     cancelPendingDraftPublish();
     state = 'error';
