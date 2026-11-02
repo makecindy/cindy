@@ -4582,7 +4582,7 @@ export function RemoteDesktopSession({
             setControlPage("controls");
             setOperations(true);
           }}
-          onExit={() => void back()}
+          onBack={() => void back()}
           insets={{
             top: insets.top,
             bottom: insets.bottom + (keyboard ? keyboardPanelHeight : 0),
@@ -4604,7 +4604,7 @@ export function RemoteDesktopSession({
             zoomDone: t("remoteDesktop.zoomDone"),
             volume: t("remoteDesktop.volume"),
             settings: t("remoteDesktop.settings"),
-            exit: t("remoteDesktop.exit"),
+            back: t("remoteDesktop.back"),
           }}
         />
       )}

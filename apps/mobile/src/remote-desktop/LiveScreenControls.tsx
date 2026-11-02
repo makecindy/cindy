@@ -5,7 +5,7 @@
  * The button rests against the nearer side and, left alone, tucks half of
  * itself past the edge; its touches never reach the device. The panel holds
  * the device's own buttons, how the picture is turned and sized, volume,
- * settings and leaving. Glass is never faded (UIGlassEffect hollows out when
+ * settings and going back. Glass is never faded (UIGlassEffect hollows out when
  * its opacity animates), so idle and opening use movement and scale only.
  *
  * With Liquid Glass the panel is laid out like Control Center: the screen
@@ -17,7 +17,7 @@
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import { GlassContainer, GlassView } from "expo-glass-effect";
 import {
-  LogOut,
+  ChevronLeft,
   Monitor,
   SlidersHorizontal,
   Smartphone,
@@ -98,7 +98,8 @@ export interface LiveScreenControlsProps {
   /** The device ignores input (view only, or not connected yet). */
   inputDisabled: boolean;
   onSettings(): void;
-  onExit(): void;
+  /** Leave the full screen for the page before it; the device keeps running. */
+  onBack(): void;
   insets: { top: number; bottom: number; left: number; right: number };
   /** Another panel is showing: step aside until it closes. */
   hidden?: boolean;
@@ -112,7 +113,7 @@ export interface LiveScreenControlsProps {
     zoomDone: string;
     volume: string;
     settings: string;
-    exit: string;
+    back: string;
   };
 }
 
@@ -333,7 +334,7 @@ function LiveScreenPanel({
   picture,
   inputDisabled,
   onSettings,
-  onExit,
+  onBack,
   labels,
   insets,
   anchor,
@@ -396,20 +397,18 @@ function LiveScreenPanel({
   const footerControls = (
     <View style={styles.footer}>
       <Tile
+        icon={ChevronLeft}
+        label={labels.back}
+        onPress={run(onBack)}
+        style={styles.footerTile}
+        testID="liveScreen.back"
+      />
+      <Tile
         icon={SlidersHorizontal}
         label={labels.settings}
-        color={colors.textPrimary}
         onPress={run(onSettings)}
         style={styles.footerTile}
         testID="liveScreen.settings"
-      />
-      <Tile
-        icon={LogOut}
-        label={labels.exit}
-        color={colors.destructive}
-        onPress={run(onExit)}
-        style={styles.footerTile}
-        testID="liveScreen.exit"
       />
     </View>
   );
