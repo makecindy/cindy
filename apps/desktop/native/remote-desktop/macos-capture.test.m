@@ -139,30 +139,55 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
     fprintf(stderr, "FAIL first display query: spawn failed (%d)\n", spawnErr);
     exit(1);
   }
-  int status = 0;
   // Event-driven bounded wait for the child's exit (kqueue NOTE_EXIT); no
   // fixed sleeps. The 5s budget is only consumed when the display query
-  // hangs, which is exactly the failure this test exists to catch.
+  // hangs, which is exactly the failure this test exists to catch. All exit
+  // orderings are covered: probe exiting before the registration below is
+  // refused with ESRCH on Darwin and reaped as the healthy fast path; a
+  // probe exiting after registration queues NOTE_EXIT immediately; only a
+  // probe that never exits reaches the budget timeout.
+  int status = 0;
   int kq = kqueue();
-  struct kevent change;
-  EV_SET(&change, pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
-  if (kq < 0 || kevent(kq, &change, 1, NULL, 0, NULL) != 0) {
-    fprintf(stderr, "FAIL first display query: kqueue setup failed\n");
+  if (kq < 0) {
+    fprintf(stderr, "FAIL first display query: kqueue create failed (%d)\n", errno);
     if (pid > 0) kill(pid, SIGKILL);
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     exit(1);
   }
-  struct timespec budget = {5, 0};
-  struct kevent event;
-  int ready;
-  do { // an EINTR retry may only relax the bound marginally; fine for a test.
-    ready = kevent(kq, NULL, 0, &event, 1, &budget);
-  } while (ready < 0 && errno == EINTR);
-  close(kq);
-  if (ready != 1) { // timeout: the display query hung.
+  struct kevent change;
+  EV_SET(&change, pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+  if (kevent(kq, &change, 1, NULL, 0, NULL) == 0) {
+    struct timespec budget = {5, 0};
+    struct kevent event;
+    int ready;
+    do { // an EINTR retry may only relax the bound marginally; fine for a test.
+      ready = kevent(kq, NULL, 0, &event, 1, &budget);
+    } while (ready < 0 && errno == EINTR);
+    close(kq);
+    if (ready == 0) { // timeout: the display query hung.
+      if (pid > 0) kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+      fprintf(stderr, "FAIL first display query: fresh process hung\n");
+      exit(1);
+    }
+    if (ready < 0) {
+      int saved = errno;
+      if (pid > 0) kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+      fprintf(stderr, "FAIL first display query: kevent wait failed (%d)\n", saved);
+      exit(1);
+    }
+  } else if (errno == ESRCH) {
+    // Darwin refuses EVFILT_PROC registration once the probe has already
+    // exited (even before it is reaped), so ESRCH means the healthy fast
+    // path won the race; fall through to reap and verify the exit status.
+    close(kq);
+  } else {
+    int saved = errno;
+    close(kq);
     if (pid > 0) kill(pid, SIGKILL);
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-    fprintf(stderr, "FAIL first display query: fresh process hung\n");
+    fprintf(stderr, "FAIL first display query: kqueue setup failed (%d)\n", saved);
     exit(1);
   }
   while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} // reap
