@@ -46,6 +46,7 @@ import {
   extractMobileDevRegionArgs,
   withLocalMobileRegionConfig,
 } from './lib/mobile-dev-region.mjs';
+import { metroLogEnv, prepareMetroLog } from './lib/sim-logcheck.mjs';
 import {
   classifySimMetroListener,
   extractSimMetroPortArgs,
@@ -180,6 +181,12 @@ const portArgIdx = args.indexOf('--port');
 if (portArgIdx >= 0) console.log(`  Metro 端口:${args[portArgIdx + 1]}(模拟器 build label 会显示 host:port,确认没连错分支)`);
 console.log('  注入 EXPO_PUBLIC_XDT_GIT_SOURCE / EXPO_PUBLIC_XDT_GIT_BRANCH / EXPO_PUBLIC_XDT_GIT_COMMIT 给 __DEV__ build label\n');
 
+// 只在真正启动时清空日志:复用已有 Metro 的分支在上面已退出,不能抹掉它的日志。
+const metroLog = prepareMetroLog(mobileDir, portArgs.port, { source: sourceIdentity, region });
+console.log(metroLog
+  ? `  Metro 日志:${metroLog}(验证后运行 pnpm mobile:sim:logcheck)\n`
+  : '  ⚠ 无法创建 Metro 日志,mobile:sim:logcheck 将无法判定\n');
+
 // 用 `pnpm exec expo`:pnpm 不在 apps/mobile/node_modules/.bin 放 expo bin,但 pnpm exec
 // 能按包依赖解析到 expo CLI(直接 node node_modules/.bin/expo 会 MODULE_NOT_FOUND)。
 const invocation = resolvePnpmInvocation(args, {
@@ -192,6 +199,7 @@ const child = spawn(invocation.command, invocation.args, {
     ...process.env,
     ...buildEnv,
     ...(invocation.env ?? {}),
+    ...(metroLog ? metroLogEnv(metroLog, process.env.NODE_OPTIONS) : {}),
     EXPO_PUBLIC_XDT_GIT_BRANCH: branch,
     EXPO_PUBLIC_XDT_GIT_COMMIT: commit,
     EXPO_PUBLIC_XDT_GIT_SOURCE: sourceIdentity,

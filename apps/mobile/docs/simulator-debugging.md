@@ -167,6 +167,8 @@ apply". Treat the following as a contract, not optional steps:
      not read the device's `RCT_jsLocation`, so the label is what proves which
      Metro the app actually used.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
+  4. After exercising the path, `pnpm mobile:sim:logcheck` passes or its findings
+     are reported. See [Logs](#logs).
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
@@ -178,6 +180,7 @@ pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild �
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
 pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
+pnpm mobile:sim:logcheck   # errors and new warnings since the latest bundle (--port for others)
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -466,6 +469,29 @@ errors, auth errors, and Expo runtime warnings:
 pnpm --filter mobile start -- --dev-client --host lan
 ```
 
+`mobile:sim:start` also writes Metro's output to
+`apps/mobile/logs/metro-<port>.log` in the current worktree, replacing the previous
+log each time it starts a Metro. Every simulator verification ends with:
+
+```bash
+pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
+```
+
+It reads only the output after the latest entry bundle, so reload the app and
+exercise the path first.
+
+| Exit | Meaning | Required action |
+| ---- | ------- | --------------- |
+| `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
+| `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
+| `2` | Cannot tell: no log, Metro belongs to another worktree or stopped, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+
+`scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
+each with a reason. Add an entry only with that reason, and remove it once the
+warning is fixed. Errors cannot be listed. One Metro's log mixes every device
+connected to it, so give each task its own device and port (see
+[Parallel devices](#parallel-devices-another-task-owns-8081)).
+
 Use the simulator system log for native crashes or native auth/session issues:
 
 ```bash
@@ -671,4 +697,5 @@ Run this checklist:
 - Run `pnpm --filter mobile typecheck` when TypeScript changed.
 - Run the narrow relevant test when there is one.
 - Manually touch the exact path that regressed in the simulator.
+- Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.

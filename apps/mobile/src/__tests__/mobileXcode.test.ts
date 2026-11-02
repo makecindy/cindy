@@ -65,6 +65,7 @@ describe('mobile simulator region 参数', () => {
       resolvePnpmInvocation: (args, options) => resolvePnpmInvocation(args, { ...options, platform: 'darwin', execPath: '/node' }),
       usablePnpmExecPath, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv, region,
+      prepareMetroLog: () => null, metroLogEnv: () => ({}),
       branch: 'test', commit: '123', sourceIdentity: 'test@123',
     });
     expect(spawn).toHaveBeenCalledWith('pnpm', ['exec', 'expo', 'start', '--dev-client', '--port', '8082'],

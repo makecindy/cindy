@@ -37,6 +37,7 @@ describe('Windows Android 模拟器参数', () => {
       usablePnpmExecPath, existsSync: (target) => present && target === npmExecPath,
       mobileDir: 'C:\\repo\\apps\\mobile', worktreeRoot: 'C:\\repo',
       buildEnv: { CINDY_USE_LOCAL_REGION_CONFIG: '1' }, region: 'global',
+      prepareMetroLog: () => null, metroLogEnv: () => ({}),
       branch: 'test', commit: '123', sourceIdentity: 'test@123',
     });
     expect(ensureAndroidTarget).toHaveBeenCalledOnce();

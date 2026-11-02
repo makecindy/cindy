@@ -39,6 +39,7 @@ describe('native e2e environment', () => {
     const clearMetroOwner = vi.fn();
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
+    const prepareMetroLog = vi.fn(() => '/repo/apps/mobile/logs/metro-8082.log');
     const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
       ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
@@ -47,6 +48,7 @@ describe('native e2e environment', () => {
       resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
       usablePnpmExecPath: () => undefined, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
+      prepareMetroLog, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
       branch: 'test', commit: 'test', sourceIdentity: 'test@123',
       loginScenario: 'providers:email-only', envFingerprint: 'fixture',
     });
@@ -54,11 +56,16 @@ describe('native e2e environment', () => {
       await expect(execution).rejects.toThrow('exit:1');
       expect(error).toHaveBeenCalledWith(expect.stringContaining('8082 is already in use'));
       expect(spawn).not.toHaveBeenCalled();
+      // A refused start must not wipe the running Metro's log.
+      expect(prepareMetroLog).not.toHaveBeenCalled();
       expect(writeMetroOwner).not.toHaveBeenCalled();
       expect(clearMetroOwner).not.toHaveBeenCalled();
     } else {
       await execution;
       expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+        env: expect.objectContaining({ CINDY_METRO_LOG_PATH: '/repo/apps/mobile/logs/metro-8082.log' }),
+      }));
       expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242 }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);

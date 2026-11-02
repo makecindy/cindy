@@ -1,0 +1,18 @@
+[
+  {
+    "pattern": "^Sending `\\w+` with no listeners registered\\.",
+    "reason": "RN 事件发出时没有 JS 监听者,目前未见用户可感知的影响。"
+  },
+  {
+    "pattern": "@noble/hashes/crypto\\.js.*not listed in the \"exports\"",
+    "reason": "第三方依赖的引用方式,Metro 会自动回退解析。"
+  },
+  {
+    "pattern": "^Require cycle: .*packages/model-providers/src/modelMetadataLayers\\.ts",
+    "reason": "待拆开 model-providers 的循环依赖,修复后删除本条。"
+  },
+  {
+    "pattern": "^\\[device-link\\] ",
+    "reason": "连接诊断日志,反映当时的网络状况。影响使用时单独排查。"
+  }
+]
