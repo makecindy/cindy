@@ -34,10 +34,11 @@ describe('PR summary', () => {
   // Bug: #8476's head reported failed=1 because a concurrency-cancelled duplicate of a job that
   // later passed stayed in GitHub's rollup counts; AI tools and automation read it as a CI failure.
   // Minimal input: the same workflow job cancelled, then rerun successfully (unit). Workflow display
-  // names are not unique, so a same-named job of another workflow (or one without an id) stays separate.
+  // names are not unique, so a same-named job of another workflow (or one without an id) stays separate;
+  // same-named jobs of one execution (one check suite, e.g. fixed-name matrix shards) all count.
   it('counts only the newest run of the same workflow job, and keeps counts when nodes are incomplete', () => {
-    const run = (databaseId: number, conclusion: string, workflowId: number | null = 7) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
-      status: 'COMPLETED', conclusion, checkSuite: { app: { slug: 'github-actions' }, workflowRun: { workflow: { databaseId: workflowId } } } });
+    const run = (databaseId: number, conclusion: string, workflowId: number | null = 7, suiteId = databaseId) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
+      status: 'COMPLETED', conclusion, checkSuite: { databaseId: suiteId, app: { slug: 'github-actions' }, workflowRun: { workflow: { databaseId: workflowId } } } });
     const rollup = (nodes: ReturnType<typeof run>[], hasNextPage = false) => ({
       totalCount: nodes.length + 1,
       checkRunCountsByState: ['SUCCESS', 'CANCELLED', 'FAILURE'].map(state => ({ state, count: nodes.filter(n => n.conclusion === state).length })),
@@ -55,6 +56,10 @@ describe('PR summary', () => {
       .toMatchObject({ total: 3, failed: 1 });
     expect(summarizeChecks(rollup([run(1, 'FAILURE', null), run(2, 'SUCCESS', null)])))
       .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7, 5), run(2, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'CANCELLED', 7, 4), run(2, 'FAILURE', 7, 5), run(3, 'SUCCESS', 7, 5)])))
+      .toMatchObject({ total: 3, passed: 2, failed: 1 });
   });
 
   it('keeps one GraphQL request and reports truncated reviews as unknown', async () => {

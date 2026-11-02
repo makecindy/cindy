@@ -13,6 +13,7 @@ interface RollupNode {
   status?: string | null;
   conclusion?: string | null;
   checkSuite?: {
+    databaseId?: number | null;
     app?: { slug?: string | null } | null;
     workflowRun?: { workflow?: { databaseId?: number | null } | null } | null;
   } | null;
@@ -41,27 +42,37 @@ interface RollupCounts {
 
 /**
  * GitHub's rollup counts every check run on the head, including runs superseded by a newer
- * run of the same job (e.g. a concurrency-cancelled duplicate workflow run). Like required-check
- * evaluation, only the newest run per app/workflow id/name counts. Without the complete node list
- * the GitHub counts are kept as-is, so a real failure is never hidden.
+ * execution of the same job (e.g. a concurrency-cancelled duplicate workflow run). Like
+ * required-check evaluation, for each app/workflow id/name only the newest check suite counts.
+ * Same-named runs inside one suite (e.g. matrix jobs with a fixed name) are independent and all
+ * count. Without the complete node list the GitHub counts are kept as-is, so a real failure is
+ * never hidden.
  */
 function withoutSupersededRuns(counts: RollupCounts): RollupCounts {
   const { nodes, checkRunCountsByState } = counts;
   if (!nodes || !checkRunCountsByState) return counts;
   if (counts.pageInfo?.hasNextPage !== false || nodes.length !== counts.totalCount) return counts;
-  const latest = new Map<string, RollupNode & { databaseId: number }>();
-  const superseded: RollupNode[] = [];
+  // key → suite id → runs of that suite and their newest run id.
+  const groups = new Map<string, Map<number, { newest: number; runs: RollupNode[] }>>();
   for (const node of nodes) {
     if (node.__typename !== 'CheckRun') continue;
     const id = node.databaseId;
+    const suiteId = node.checkSuite?.databaseId;
     const key = checkRunKey(node);
     if (key === null || typeof id !== 'number' || !Number.isSafeInteger(id)) continue;
-    const kept = latest.get(key);
-    if (kept && kept.databaseId > id) superseded.push(node);
-    else {
-      if (kept) superseded.push(kept);
-      latest.set(key, { ...node, databaseId: id });
-    }
+    if (typeof suiteId !== 'number' || !Number.isSafeInteger(suiteId)) continue;
+    const suites = groups.get(key) ?? new Map<number, { newest: number; runs: RollupNode[] }>();
+    const suite = suites.get(suiteId) ?? { newest: id, runs: [] };
+    suite.newest = Math.max(suite.newest, id);
+    suite.runs.push(node);
+    suites.set(suiteId, suite);
+    groups.set(key, suites);
+  }
+  const superseded: RollupNode[] = [];
+  for (const suites of groups.values()) {
+    if (suites.size < 2) continue;
+    const current = Math.max(...[...suites.values()].map((suite) => suite.newest));
+    for (const suite of suites.values()) if (suite.newest !== current) superseded.push(...suite.runs);
   }
   if (!superseded.length) return counts;
   const runCounts = checkRunCountsByState.map((entry) => ({ ...entry }));
@@ -126,7 +137,7 @@ const SUMMARY_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
         contexts(first: 100) {
           totalCount checkRunCountsByState { state count } statusContextCountsByState { state count }
           nodes { __typename ... on CheckRun { databaseId name status conclusion
-            checkSuite { app { slug } workflowRun { workflow { databaseId } } } } }
+            checkSuite { databaseId app { slug } workflowRun { workflow { databaseId } } } } }
           pageInfo { hasNextPage }
         }
       } } } }
