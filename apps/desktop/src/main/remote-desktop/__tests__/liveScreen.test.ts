@@ -223,6 +223,39 @@ describe('live screen session', () => {
     await expect(session.connect()).rejects.toThrow('DESKTOP_SCREEN_ENDED');
   });
 
+  it('keeps only the latest position of a moving finger while a send is in flight', async () => {
+    const url = await serve(() => {});
+    const plugin = source(url);
+    let unblock!: () => void;
+    vi.mocked(plugin.input).mockImplementationOnce(async (...args: unknown[]) => {
+      plugin.calls.push(['input', ...args]);
+      await new Promise<void>((resolve) => (unblock = resolve));
+    });
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      plugin,
+      vi.fn(),
+    );
+    const touch = (phase: string, x: number) =>
+      ({ kind: 'touch', touches: [{ id: 0, x, y: 0.5, phase }] }) as never;
+    session.input([touch('began', 0.1)]);
+    // A 120 Hz phone keeps sampling while the device takes the first batch.
+    for (let i = 1; i <= 50; i++) session.input([touch('moved', 0.1 + i / 100)]);
+    session.input([touch('ended', 0.6)]);
+    unblock();
+    await vi.waitFor(() => expect(plugin.input).toHaveBeenCalledTimes(2));
+    const sent = plugin.calls.map(
+      (call) => call[3] as { touches: { x: number; phase: string }[] }[],
+    );
+    expect(sent[1].map((event) => event.touches[0].phase)).toEqual(['moved', 'ended']);
+    expect(sent[1][0].touches[0].x).toBeCloseTo(0.6);
+    session.close();
+  });
+
   it('merges input that arrives during a send and drops typing the device cannot keep up with', async () => {
     const url = await serve(() => {});
     const plugin = source(url);

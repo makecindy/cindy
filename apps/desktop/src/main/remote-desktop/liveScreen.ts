@@ -318,6 +318,14 @@ export class LiveScreenSession {
         }
         this.waitingTyping++;
       }
+      // Only the latest position of a moving finger matters: a phone samples
+      // touches at up to 120 Hz, faster than a device takes them, and queued
+      // moves would replay seconds after the finger stopped.
+      const last = this.waiting.at(-1);
+      if (last && isTouchMove(event) && isTouchMove(last) && sameFingers(last, event)) {
+        this.waiting[this.waiting.length - 1] = event;
+        continue;
+      }
       this.waiting.push(event);
     }
     if (dropped) log.debug('Live screen typing ahead of the device; dropped', dropped);
@@ -384,4 +392,23 @@ function uprightShape(message: Uint8Array): { width: number; height: number } | 
   return turned
     ? { width: height as number, height: width as number }
     : { width: width as number, height: height as number };
+}
+
+/** A touch event in which every finger only moves (or holds still). */
+function isTouchMove(event: LiveScreenEvent): event is Extract<LiveScreenEvent, { kind: 'touch' }> {
+  return (
+    event.kind === 'touch' &&
+    !event.edge &&
+    event.touches.every((t) => t.phase === 'moved' || t.phase === 'stationary')
+  );
+}
+
+function sameFingers(
+  a: Extract<LiveScreenEvent, { kind: 'touch' }>,
+  b: Extract<LiveScreenEvent, { kind: 'touch' }>,
+): boolean {
+  return (
+    a.touches.length === b.touches.length &&
+    a.touches.every((t) => b.touches.some((u) => u.id === t.id))
+  );
 }
