@@ -1391,6 +1391,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const value = await readSnapshot(roomId);
     if (!isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
     verifiedGroups.add(roomId);
+    fenceReceipts(value);
     subscribe(roomId, value.cursor);
     return value;
   }
@@ -1555,6 +1556,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       attachmentRefreshes.delete(roomId);
       changed(roomId);
     }, ATTACHMENT_REFRESH_COALESCE_MS));
+  }
+  /**
+   * Takes the read positions of a snapshot as soon as it is in hand. A receipt that comes while the rest of a read is still
+   * awaited then lands on this snapshot's layer, not on the previous snapshot's, which the read would otherwise replace.
+   */
+  function fenceReceipts(s: Snapshot) {
+    if (supportsMessageReaders && isGroupRoom(s.room)) othersRead.positions(s.room.id, s.othersRead);
   }
   /** Where other members have read up to for this snapshot, or null when the server reports none. */
   function readPositions(roomId: string, s: Snapshot, extra: Message[] = []) {
@@ -1723,6 +1731,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const cache = history();
     try {
       const s = cache ? await cache.snapshot<Snapshot>(i.groupId) : await groupSnapshot(i.groupId);
+      fenceReceipts(s);
       if (!isGroupRoom(s.room)) throw new Error('NOT_A_GROUP');
       verifiedGroups.add(i.groupId);
       const revision = cache ? (s as Snapshot & { cacheGeneration: string }).cacheGeneration : undefined;
@@ -1796,6 +1805,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       cacheGeneration = value.cacheGeneration;
       if (direct ? value.room.kind !== 'direct' : !isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
       if (!direct) verifiedGroups.add(roomId);
+      fenceReceipts(value);
       subscribe(roomId, value.cursor);
       return value;
     })() : direct ? directSnapshot(roomId) : groupSnapshot(roomId);

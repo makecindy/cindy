@@ -755,6 +755,32 @@ describe('Chat Server result delivery and refresh', () => {
       await service.getGroup(roomId);
       expect(snapshotReads()).toBe(reads);
     });
+    it('keeps a receipt that arrives after a replacement snapshot is in hand while the rest of the read is awaited', async () => {
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      // A membership change replaces the cached snapshot (a new object, same positions) on the next read; that read waits on executions.
+      let release!: () => void;
+      const executions = new Promise<void>(resolve => { release = resolve; });
+      const original = fixture.handle.getMockImplementation()!;
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const served = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/executions') ? executions.then(() => ({ body: [] })) : (served ?? original)(route, method, body));
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '10', changes: [{ type: 'membership.changed', entityId: peer }] }));
+      await vi.advanceTimersByTimeAsync(50);
+      const reading = service.getGroup(roomId);
+      await vi.advanceTimersByTimeAsync(50);
+      // The receipt for my message 7 comes before the read finishes.
+      socket.emit('message', receipt({ readSeq: '8' }));
+      release();
+      await vi.advanceTimersByTimeAsync(300);
+      const group = await reading;
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', true], ['9', undefined]]);
+    });
     it('lets a newer snapshot replace positions received before it', async () => {
       const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
       serve(value);
