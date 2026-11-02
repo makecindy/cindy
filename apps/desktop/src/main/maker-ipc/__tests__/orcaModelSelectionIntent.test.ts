@@ -8,7 +8,7 @@ import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessi
 import { effectiveSourceIdForModel, findCatalogModel, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
-import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { applyScheduledModelSelection, createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
@@ -20,6 +20,7 @@ let applySelectionAdapter = '';
 let piWindowOverride = '';
 let directSendAdapter = '';
 let directSendEntry = '';
+let scheduledScopeBusyAdapter = '';
 let archivedAdmission = '';
 let terminalGuard = '';
 let stageAxisAdapter = '';
@@ -36,6 +37,15 @@ function visit(node: ts.Node) {
   }
   if (ts.isBinaryExpression(node) && node.left.getText(source) === 'pendingAgentSwitchApplyHolder') {
     directSendAdapter = node.right.getText(source);
+  }
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'scheduledModelScope'
+      && node.initializer && ts.isCallExpression(node.initializer)) {
+    const options = node.initializer.arguments[0];
+    if (options && ts.isObjectLiteralExpression(options)) {
+      const busy = options.properties.find(property => ts.isPropertyAssignment(property)
+        && property.name.getText(source) === 'isBusy');
+      if (busy && ts.isPropertyAssignment(busy)) scheduledScopeBusyAdapter = busy.initializer.getText(source);
+    }
   }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'canStageArchivedSelection') {
     archivedAdmission = node.initializer!.getText(source);
@@ -220,6 +230,73 @@ describe('complete selection commit boundaries', () => {
     expect(transitions).toEqual([route === 'ordinary' ? owner.model : automatic.model]);
     expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
     expect(baseline === null).toBe(route === 'ordinary');
+  });
+
+  // Test value
+  // - Production entry and observable result: the actual direct-send lease keeps an Agent-registered target route until the send consumer applies it.
+  // - Bug basis: #8263; automatic scheduled-baseline restoration can cross Harnesses before pending Agent intent is consumed.
+  // - Existing coverage gap: picker intent tests do not combine runtimeSource='agent' with a saved scheduled baseline.
+  // - Minimal failure input: one pending Agent Harness intent plus a baseline whose Harness differs from the current route.
+  // - Tier: unit; in-memory scope and send-lock dependencies, no Electron or external process.
+  // - Measured file runtime: 88.44s on Windows / Node 24.22.1; 87.12s was collection and test execution was 214ms.
+  it('consumes an Agent runtime intent before a scheduled baseline can overwrite it', async () => {
+    const sessionId = 'agent-with-scheduled-baseline';
+    const pending = createPendingAgentSwitchRegistry();
+    const intent: PendingAgentSwitchIntent = {
+      runtimeSource: 'agent', targetAgentKind: 'claude-code', model: 'agent-model', providerId: 'agent-provider',
+    };
+    pending.set(sessionId, intent);
+    let baseline: string | null = JSON.stringify({
+      agentKind: 'codex', model: 'owner-model', providerId: 'owner-provider',
+      effort: null, fastMode: false, scopeId: 'scheduled-run',
+    });
+    const isBusy = compile(scheduledScopeBusyAdapter, {
+      isSessionInTurn: () => false, maker: { getSession: () => undefined },
+      isUserPendingAgentSwitchIntent, agentSwitchPending: pending,
+    }) as (id: string) => boolean;
+    const restoreBaseline = vi.fn(async (_id: string, selection: ScheduledModelSelection) => {
+      // A cross-Harness baseline restore commits through the normal switch path;
+      // that path CAS-clears the pending registry entry it observed at start.
+      await applyScheduledModelSelection(selection, {
+        getTarget: async () => ({ agentKind: 'pi', status: 'active' }),
+        isBusy: () => false,
+        resolveSelection: async value => value,
+        switchHarness: async () => { pending.clear(sessionId); return { engineReady: true }; },
+        applyModel: async () => {},
+      });
+    });
+    const scope = createScheduledModelScope({
+      createId: () => 'unused', isBusy,
+      read: async () => ({ profile: {
+        agentKind: 'pi', model: 'scheduled-model', providerId: 'scheduled-provider', effort: null, fastMode: false,
+      }, baseline }),
+      write: async (_id, next) => { baseline = next ? JSON.stringify(next) : null; return true; },
+      apply: restoreBaseline,
+    });
+    let consumed: PendingAgentSwitchIntent | undefined;
+    const applyPending = vi.fn(async (_deps: unknown, id: string) => {
+      consumed = pending.get(id);
+      if (consumed) pending.clear(id);
+    });
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock, scheduledModelScope: scope,
+      agentSwitchPending: pending, isUserPendingAgentSwitchIntent,
+      restoreArchivedSessionForSend: vi.fn(), reconcileBotModelRoute: vi.fn(async () => {}),
+      applyPendingAgentSwitchIfIdle: applyPending, agentSwitchDeps: {},
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => {}),
+      contextOverflowRolloverHolder: null,
+    });
+    const directSend = compile(directSendEntry, { pendingAgentSwitchApplyHolder: adapter });
+    const lease = await directSend(sessionId);
+    try {
+      expect(restoreBaseline).not.toHaveBeenCalled();
+      expect(consumed).toEqual(intent);
+      expect(pending.get(sessionId)).toBeUndefined();
+      expect(baseline).not.toBeNull(); // The automation baseline remains available for the next ordinary send.
+    } finally {
+      if (typeof lease === 'function') lease();
+      else lease.release();
+    }
   });
 
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {

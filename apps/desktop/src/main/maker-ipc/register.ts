@@ -12050,8 +12050,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await broadcastSessionRuntimeProjection(sessionId);
       return true;
     },
+    // Consume any staged route before restoring an automation baseline: a cross-Harness restore
+    // can commit through the switch path and CAS-clear the pending intent it observed.
     isBusy: (sessionId) => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning() ||
-      isUserPendingAgentSwitchIntent(agentSwitchPending.get(sessionId)),
+      !!agentSwitchPending.get(sessionId),
     apply: async (sessionId, profile) => { await applyScheduledProfile(sessionId, profile); },
     recoverUnavailableBaseline: (sessionId, expectedBaseline) =>
       reconcileBotModelRoute.recoverUnavailableBaseline(sessionId, expectedBaseline),
