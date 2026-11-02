@@ -48,6 +48,53 @@ afterEach(() => {
 });
 
 describe('ErrorBanner — Cindy AI 余额不足导流', () => {
+  // #7180's reported LiteLLM/BigModel resource-package error is upstream quota,
+  // not proof of the user's Cindy balance. Exercise the real banner; unit tier,
+  // no account/network access. Existing cases only cover generic quota text.
+  it.each([true, false])(
+    'does not offer Cindy recharge for upstream resource exhaustion (billing visible: %s)',
+    (billingVisible) => {
+      const error =
+        '429 throttling_error provider_rate_limited: The upstream provider rate limit was exceeded. 余额不足或无可用资源包,请充值。';
+      const onRetry = vi.fn();
+      render(
+        createElement(ErrorBanner, {
+          error,
+          retryText: 'retry-token',
+          onRetry,
+          agentKind: 'pi',
+          errorSourceProviderId: 'xd',
+          onViewBalance: billingVisible ? vi.fn() : undefined,
+        }),
+      );
+      expect(screen.getByText('chat.errorBanner.gatewayUpstreamQuotaExhausted')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
+      expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+      fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+      expect(onRetry).toHaveBeenCalledWith('retry-token');
+      fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+      expect(screen.getByText(error)).toBeTruthy();
+    },
+  );
+
+  it.each([undefined, 'anthropic'])(
+    'does not infer upstream gateway ownership from the current provider (%s)',
+    (errorSourceProviderId) => {
+      render(
+        createElement(ErrorBanner, {
+          error: '余额不足或无可用资源包,请充值。',
+          onRetry: vi.fn(),
+          providerId: 'xd',
+          errorSourceProviderId,
+          onViewBalance: vi.fn(),
+        }),
+      );
+      expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.gatewayUpstreamQuotaExhausted')).toBeNull();
+      expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+    },
+  );
+
   it('来源是 xd 且计费面可见时换文案并给「查看余额」出口', () => {
     const onViewBalance = vi.fn();
 
