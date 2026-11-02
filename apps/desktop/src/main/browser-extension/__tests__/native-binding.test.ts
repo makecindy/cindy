@@ -48,6 +48,27 @@ async function fixture() {
 }
 
 describe('native-binding', () => {
+  // Contract: distinct installed instances cannot overwrite the same system host
+  // registration until the owner confirms. Existing cases covered only one shared instance.
+  it('requires explicit takeover and leaves the new registration intact when the old binding closes', async () => {
+    const { binaryDir, profile, root } = await fixture();
+    const options = { hostName: 'com.example.browser', binaryDir, root, profiles: [profile],
+      platform: 'darwin' as const, arch: 'arm64' };
+    const first = createNativeBinding(options);
+    expect(await first.install(18818, [EXT])).toEqual({ ok: true });
+    const confirmTakeover = vi.fn(async () => true);
+    const local = createNativeBinding({ ...options, registrationKey: 'a'.repeat(64), confirmTakeover });
+    expect(await local.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(confirmTakeover).not.toHaveBeenCalled();
+    confirmTakeover.mockResolvedValueOnce(false);
+    expect(await local.install(18819, [EXT], { takeover: true })).toMatchObject({ ok: false, reason: 'NATIVE_HOST_IN_USE' });
+    expect(await local.install(18819, [EXT], { takeover: true })).toEqual({ ok: true });
+    expect(confirmTakeover).toHaveBeenCalledTimes(2);
+    await first.close();
+    const file = path.join(profile, 'NativeMessagingHosts', 'com.example.browser.json');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).path).toBe(path.join(root, 'a'.repeat(64), 'cindy-browser-native'));
+    await local.close();
+  });
   it('registers only allowed origins; the private authority never enters the browser manifest', async () => {
     const { binaryDir, profile, root } = await fixture();
     const n = createNativeBinding({

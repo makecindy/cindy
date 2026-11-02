@@ -167,7 +167,7 @@ describe('market Ghost session boundary', () => {
     const fastPath = resolverBody.slice(fastPathStart, resolverBody.indexOf('\n  }', fastPathStart));
     expect(fastPath).toContain('if (isAppSessionBoundaryPending()) return null;');
     expect(fastPath.indexOf('isAppSessionBoundaryPending()')).toBeLessThan(fastPath.indexOf('findInstalledInstance(id)'));
-    expect(fastPath).toContain('isGhostAvailableForActiveSession(ghost.manifest.id) ? ghost : null');
+    expect(fastPath).toContain('isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) ? ghost : null');
     expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBe(0);
     expect(source.match(/getGhost: findGhostForInstanceId/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
     expect(resolverBody).toContain(

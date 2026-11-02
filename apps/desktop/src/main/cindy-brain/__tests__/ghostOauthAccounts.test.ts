@@ -33,7 +33,6 @@ const DECL: GhostOauthDecl = {
 /** §4.4: 特权不再随官方前缀默认放行，测试夹具显式授予。 */
 const FIRST_PARTY_HOST = {
   isTokenBrokerAuthorized: () => true,
-  isHostPrimitiveAuthorized: () => true,
 } as const;
 
 /** 把测试 fetch 适配成头像下载的受防护单跳通道(生产注入 guardedOutboundFetch)。 */
@@ -993,7 +992,7 @@ describe('connectAccount', () => {
     expect(mgr.listAccounts(GHOST, KEY)).toHaveLength(0);
   });
 
-  it('端口回收器只对第一方官方意识放行(第三方 redirectPort 不许借刀杀进程)', async () => {
+  it('所有插件都进入宿主端口确认流程，拒绝确认仍然 LISTEN_FAILED', async () => {
     const blocker = http.createServer();
     const heldPort = await new Promise<number>((resolve) => {
       blocker.listen(0, '127.0.0.1', () => {
@@ -1010,26 +1009,25 @@ describe('connectAccount', () => {
         redirectPort: heldPort,
       };
       const reclaimPort = vi.fn(async () => false);
-      const mkMgr = (hostPrimitive: boolean): GhostOauthAccountManager =>
+      const mkMgr = (): GhostOauthAccountManager =>
         new GhostOauthAccountManager({
           vault: memoryVault(),
           fetchImpl: vi.fn() as unknown as typeof fetch,
           openExternal: vi.fn(),
           reclaimPort,
-          isHostPrimitiveAuthorized: () => hostPrimitive,
         });
       // 第三方 id:门控挡住,占用直接报错,回收器(杀进程)绝不能被调用。
-      await expect(mkMgr(false).connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
-        ok: false,
-        error: 'LISTEN_FAILED',
-      });
-      expect(reclaimPort).not.toHaveBeenCalled();
-      // 经第一方宿主原语授权后才调用回收器(此处回收失败仍 LISTEN_FAILED,只验门控)。
-      await expect(mkMgr(true).connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
+      await expect(mkMgr().connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
         ok: false,
         error: 'LISTEN_FAILED',
       });
       expect(reclaimPort).toHaveBeenCalledTimes(1);
+      // 经第一方宿主原语授权后才调用回收器(此处回收失败仍 LISTEN_FAILED,只验门控)。
+      await expect(mkMgr().connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
+        ok: false,
+        error: 'LISTEN_FAILED',
+      });
+      expect(reclaimPort).toHaveBeenCalledTimes(2);
     } finally {
       await new Promise((r) => blocker.close(r));
     }

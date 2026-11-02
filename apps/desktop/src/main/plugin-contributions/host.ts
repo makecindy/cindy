@@ -440,10 +440,10 @@ function localPluginInstallation(value: wire.MyPluginSummary): MyPluginLocalInst
     const manager = getGhostManager();
     manager.assertContributionReadAvailable(value.ghostId);
     const related = manager.list().filter(ghost => ghost.manifest.id === value.ghostId &&
-      (ghost.namespace === value.namespace || ghost.namespaceState !== 'confirmed'));
+      (ghost.namespace === value.namespace || (ghost.namespace === 'local' && value.namespace === null && ghost.publishingSource?.kind === 'local') || ghost.namespaceState !== 'confirmed'));
     if (related.length === 0) return { state: 'missing' };
     const matches = related.filter(ghost => {
-      if (ghost.namespaceState !== 'confirmed' || ghost.namespace !== value.namespace ||
+      if (ghost.namespaceState !== 'confirmed' || (ghost.namespace !== value.namespace && !(ghost.namespace === 'local' && value.namespace === null && ghost.publishingSource?.kind === 'local')) ||
         ghost.approval.state !== 'approved' || !ghost.publishingSource ||
         ghost.publishingSource.kind === 'unavailable') return false;
       if (ghost.publishingSource.kind === 'local') return true;

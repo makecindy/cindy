@@ -263,7 +263,7 @@ export interface StartGhostOauthFlowOptions {
   brandName?: string;
   /**
    * 可选:钉死端口(redirectPort)被外部进程占用时的回收器。listen 失败时
-   * 引擎调它一次(生产注入 portReclaim:查占用 PID 并强杀,护栏见该模块),
+   * 引擎调它一次(生产注入 portReclaim:展示占用程序并经用户确认后结束,护栏见该模块),
    * 返回 true 表示值得重试 listen;未注入或回收失败按 LISTEN_FAILED 收场。
    * 自家上一单的僵尸监听不走这里——引擎在 listen 前就等它关完了。
    */

@@ -52,3 +52,10 @@ describe('workflow-owned author presentation', () => {
     expect(marketPresentationForInstalledGhost(installed, { ...newer, ghostId: 'other-plugin' })).toBeNull();
   });
 });
+
+
+it('labels the installed identity without granting source or author rights from its name', () => {
+  expect(toGhostPluginDetail({ ...installed, namespace: 'local' }).installationLabelKey).toBe('localDevelopment');
+  expect(toGhostPluginDetail({ ...installed, namespace: 'xd' })).toMatchObject({ installationLabelKey: 'organizationInstall', installationNamespace: 'xd' });
+  expect(toGhostPluginDetail({ ...installed, publishingSource: { kind: 'public-market', pluginId: 'public-1' } }).installationLabelKey).toBe('publicInstall');
+});

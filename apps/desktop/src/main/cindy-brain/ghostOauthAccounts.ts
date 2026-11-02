@@ -114,7 +114,7 @@ export interface GhostOauthAccountManagerDeps {
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
-  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并做第一方门控)。 */
+  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并核验企业绑定)。 */
   broker?: GhostOauthBrokerClient;
   /**
    * brokerBounce 声明的公网弹跳地址解析器:入参是声明的站内路径(如
@@ -126,7 +126,7 @@ export interface GhostOauthAccountManagerDeps {
   brandName?: string;
   logger?: GhostOauthLogger;
   /** 钉死端口被外部进程占用时的自动回收器(生产注入 portReclaim.reclaimLoopbackPort)。 */
-  reclaimPort?: (port: number) => Promise<boolean>;
+  reclaimPort?: (port: number, instanceKey: string, isCurrent: () => boolean) => Promise<boolean>;
   /**
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
@@ -167,8 +167,6 @@ export interface GhostOauthAccountManagerDeps {
    * 缺省拒绝。
    */
   isTokenBrokerAuthorized?: (instanceKey: string) => boolean;
-  /** Port reclaim. Missing = deny. */
-  isHostPrimitiveAuthorized?: (instanceKey: string) => boolean;
   /**
    * 头像下载的受防护单跳请求(生产注入 guardedOutboundFetch)。头像地址来自身份
    * 响应、对所有插件开放,只能经这条通道请求,缺省不下载头像。
@@ -988,11 +986,9 @@ export class GhostOauthAccountManager {
       broker: this.deps.broker,
       brandName: this.deps.brandName,
       logger: this.deps.logger,
-      // 端口回收器只对第一方官方意识放行:
-      // 回收 = 强杀占用进程,而"杀谁"由 redirectPort 决定——第三方 manifest
-      // 可声明任意端口(如 5432),放开等于让任意意识借「连接账号」之手
-      // 强杀用户本地服务(Postgres 等),故第三方一律回落"占用即报错"。
-      reclaimPort: this.deps.isHostPrimitiveAuthorized?.(instanceKey) ? this.deps.reclaimPort : undefined,
+      // Every plugin uses the same host confirmation, bound to this connection target.
+      reclaimPort: this.deps.reclaimPort ? port => isConnectTargetCurrent()
+        ? this.deps.reclaimPort!(port, instanceKey, isConnectTargetCurrent) : Promise.resolve(false) : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
     opts?.remote?.assertCurrent();

@@ -15,6 +15,8 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import net from 'node:net';
+import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 
 export interface NativeBindingOptions {
   /** 注册名(身份卡 browserExtension.nativeHost.name)。 */
@@ -27,6 +29,11 @@ export interface NativeBindingOptions {
   env?: NodeJS.ProcessEnv;
   /** 覆盖私有目录(测试用)。 */
   root?: string;
+  /** Stable owner + installed-instance partition; omitted for the historical binding layout. */
+  registrationKey?: string;
+  /** Only an explicit action in the trusted main window may replace another registration. */
+  confirmTakeover?(): Promise<boolean>;
+  assertCurrent?(): void;
   /** 覆盖浏览器 profile 目录清单(测试用)。 */
   profiles?: string[];
   run?: (
@@ -43,6 +50,7 @@ export interface NativeBinding {
   install(
     port: number,
     extensionIds: readonly string[],
+    options?: { takeover?: boolean },
   ): Promise<{ ok: true } | { ok: false; error: 'NATIVE_BINDING_UNAVAILABLE'; reason: string }>;
   close(): Promise<void>;
   status(): NativeBindingState;
@@ -67,7 +75,11 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
   const arch = options.arch ?? process.arch;
   const home = options.home ?? os.homedir();
   const env = options.env ?? process.env;
-  const root = options.root ?? nativeBindingRoot(platform, home, env);
+  const registrationRoot = options.root ?? nativeBindingRoot(platform, home, env);
+  if (options.registrationKey !== undefined && !/^[a-f0-9]{64}$/.test(options.registrationKey))
+    throw new Error('NATIVE_PATH_UNSAFE');
+  const root = options.registrationKey ? path.join(registrationRoot, options.registrationKey) : registrationRoot;
+  const registrationFile = path.join(registrationRoot, options.hostName + '.json');
   const token = crypto.randomBytes(32).toString('hex');
   const run = options.run ?? (promisify(execFile) as NativeBindingOptions['run']);
   let config: string | null = null;
@@ -81,13 +93,29 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
   }
 
   async function atomic(file: string, data: string | Buffer, mode = 0o600): Promise<void> {
+    options.assertCurrent?.();
     const tmp = file + '.' + crypto.randomUUID() + '.tmp';
     try {
       await fs.writeFile(tmp, data, { flag: 'wx', mode });
+      options.assertCurrent?.();
       await fs.rename(tmp, file);
     } finally {
       await fs.rm(tmp, { force: true });
     }
+  }
+
+  async function registeredBinary(): Promise<string | null> {
+    const files = [registrationFile, ...(platform === 'win32' ? [] : browserProfiles().map(profile =>
+      path.join(profile, 'NativeMessagingHosts', options.hostName + '.json')))];
+    for (const file of files) {
+      let text: string;
+      try { text = (await readBoundedFileNoFollow(file, 65536))?.toString('utf8') ?? ''; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      const target = (JSON.parse(text) as { path?: unknown }).path;
+      if (typeof target !== 'string') throw new Error('NATIVE_PATH_UNSAFE');
+      return target;
+    }
+    return null;
   }
 
   function browserProfiles(): string[] {
@@ -132,6 +160,9 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
    * cut that one off until it restarts.
    */
   async function unregisterIfUnused(): Promise<void> {
+    const ours = path.join(root, 'cindy-browser-native' + (platform === 'win32' ? '.exe' : ''));
+    const registered = await registeredBinary();
+    if (registered !== null && registered !== ours) return;
     const dir = path.join(root, 'connections');
     const names = await fs.readdir(dir).catch(() => null);
     if (names === null) return;
@@ -148,8 +179,6 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
       }
     }
     if (anyLive) return;
-    const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
-    const ours = path.join(root, binaryName);
     if (platform === 'win32') {
       const reg = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32', 'reg.exe');
       for (const vendor of ['Google\\Chrome', 'Microsoft\\Edge', 'BraveSoftware\\Brave-Browser']) {
@@ -163,7 +192,7 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
           { windowsHide: true, timeout: 10000 },
         ).catch(() => undefined);
       }
-      await fs.rm(path.join(root, options.hostName + '.json'), { force: true });
+      await fs.rm(registrationFile, { force: true });
       return;
     }
     for (const profile of browserProfiles()) {
@@ -178,6 +207,7 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
       }
       if (target === ours) await fs.rm(file, { force: true });
     }
+    await fs.rm(registrationFile, { force: true });
   }
 
   /**
@@ -207,17 +237,24 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     return [...ids];
   }
 
-  async function install(port: number, extensionIds: readonly string[]) {
+  async function installLocked(port: number, extensionIds: readonly string[], takeover: boolean) {
     try {
+      options.assertCurrent?.();
       await privateDirectory(root);
+      const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
+      const binary = path.join(root, binaryName);
+      const registered = await registeredBinary();
+      if (registered !== null && registered !== binary) {
+        if (!takeover || !await options.confirmTakeover?.())
+          return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_HOST_IN_USE' };
+        options.assertCurrent?.();
+      }
       await privateDirectory(path.join(root, 'connections'));
       // Claim the connection before touching the shared registration, so a binding closing at the
       // same time (plugin update, re-approval, account switch) still sees this one in use.
       config = path.join(root, 'connections', port + '.json');
       await atomic(config, JSON.stringify({ token, extensionIds: [...extensionIds] }));
-      const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
       const source = path.join(options.binaryDir, platform + '-' + arch, binaryName);
-      const binary = path.join(root, binaryName);
       // 内容相同时不替换正在运行的 Windows 映像。
       const content = await fs.readFile(source);
       const old = await fs.readFile(binary).catch(() => null);
@@ -231,9 +268,11 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
           (id) => 'chrome-extension://' + id + '/',
         ),
       };
+      // The same manifest is the system registration and the ownership fact. There is no
+      // separate permission database; all instances serialize replacement under one lock.
+      await atomic(registrationFile, JSON.stringify(manifest));
       if (platform === 'win32') {
-        const file = path.join(root, options.hostName + '.json');
-        await atomic(file, JSON.stringify(manifest));
+        const file = registrationFile;
         const reg = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32', 'reg.exe');
         for (const vendor of [
           'Google\\Chrome',
@@ -277,6 +316,23 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     }
   }
 
+  async function install(port: number, extensionIds: readonly string[], request?: { takeover?: boolean }) {
+    try {
+      await privateDirectory(registrationRoot);
+      return await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
+      { label: 'browser-native-registration' }, async lock => {
+        if (!lock.held) return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'REGISTRATION_BUSY' };
+        const result = await installLocked(port, extensionIds, request?.takeover === true);
+        if (!result.ok) state = 'unavailable';
+        return result;
+      });
+    } catch (error) {
+      state = 'unavailable';
+      return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const,
+        reason: (error as Error).message === 'NATIVE_PATH_UNSAFE' ? 'NATIVE_PATH_UNSAFE' : 'INSTALL_FAILED' };
+    }
+  }
+
   async function close(): Promise<void> {
     if (!config) return;
     const data = await fs.readFile(config, 'utf8').catch(() => '');
@@ -289,8 +345,20 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     }
     if (saved === token) await fs.rm(config, { force: true });
     config = null;
-    await unregisterIfUnused().catch(() => undefined);
+    await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
+      { label: 'browser-native-registration' }, async lock => {
+        if (lock.held) await unregisterIfUnused();
+      }).catch(() => undefined);
   }
 
-  return { token, install, close, status: () => state };
+  return { token, install, close, status: () => {
+    if (state === 'ready') {
+      try {
+        const registered = JSON.parse(readBoundedFileNoFollowSync(registrationFile, 65536)?.toString('utf8') ?? '') as { path?: unknown };
+        if (registered.path !== path.join(root, 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '')))
+          return 'unavailable';
+      } catch { return 'unavailable'; }
+    }
+    return state;
+  } };
 }

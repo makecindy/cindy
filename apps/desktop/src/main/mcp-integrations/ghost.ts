@@ -1853,7 +1853,12 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
     return {
       id: ghost.manifest.id,
       ...(ghost.namespaceState === 'pending' ? {} : deliveryNamespaceFields(ghost)),
-      name: ghost.manifest.name,
+      name: ghost.namespace === 'local'
+        ? `${ghost.manifest.name} (${t('settings.ghosts.detail.localDevelopment')})`
+        : typeof ghost.namespace === 'string'
+          ? `${ghost.manifest.name} (${ghost.namespace})`
+          : ghost.publishingSource?.kind === 'public-market'
+            ? `${ghost.manifest.name} (${t('settings.ghosts.detail.publicInstall')})` : ghost.manifest.name,
       ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
       ...(recall ? { recall } : {}),
     };

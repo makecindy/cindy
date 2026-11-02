@@ -2075,3 +2075,17 @@ it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.
     expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
   },
 );
+
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});
