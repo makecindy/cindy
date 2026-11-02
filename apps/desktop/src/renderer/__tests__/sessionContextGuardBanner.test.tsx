@@ -111,13 +111,14 @@ describe('SessionContextGuardBanner (ROADMAP 2.5b)', () => {
       providers,
       probes,
     })).toBe(65_536);
-    // An offline endpoint's stale list is not evidence of where the model runs.
+    // An offline endpoint's stale list is not evidence of where the model runs, and
+    // chat.default's limit is not either: unknown limit, no banner.
     expect(resolveSessionContextLength({
       sessionModel: discoveredModel,
       routing: ollamaDefault,
       providers,
       probes: [{ id: 'lmstudio-local', status: 'offline', models: [discoveredModel] }],
-    })).toBe(32_768);
+    })).toBeUndefined();
   });
 
   it('never measures the Hermes home model against a local route (ROADMAP 3.7b)', () => {
@@ -146,6 +147,40 @@ describe('SessionContextGuardBanner (ROADMAP 2.5b)', () => {
       routing: ollamaDefault,
       providers,
     })).toBe(32_768);
+  });
+
+  it('measures a routed API model against the footer window, never chat.default (Debt 2026-11-02)', () => {
+    // Owner repro 2026-11-02: Hermes on deepseek-v4-pro (not in providers.yaml) showed
+    // "Context is 368% full (0 tokens left)" while the footer read 60%: 120k tokens against
+    // the 32k chat.default route instead of the 200k window the footer uses.
+    const ollamaDefault: RoutingFile = { ...routing, rules: { ...routing.rules, 'chat.default': 'local-small' } };
+    const base = { sessionModel: 'deepseek-v4-pro', routing: ollamaDefault, providers };
+    const used = resolveSessionUsedTokens([], { contextTokens: 0, totalTokenUsage: 0 }, 120_000);
+    expect(used).toBe(120_000);
+    // Runtime window (what the footer ring shows) wins over a stale persisted one.
+    const limit = resolveSessionContextLength({ ...base, runtimeContextWindow: 200_000, sessionContextWindow: 0 });
+    expect(limit).toBe(200_000);
+    const guard = guardContext({ usedTokens: used, contextLength: limit, routing: ollamaDefault, providers, probes: [] });
+    expect(guard.context.level).toBe('ok');
+    // No window known yet (first turn, nothing persisted): no banner, not a borrowed 32k.
+    expect(resolveSessionContextLength({ ...base, sessionContextWindow: 0 })).toBeUndefined();
+  });
+
+  it('prefers the runtime context tokens the footer shows over turn totals', () => {
+    // A Hermes turn's input+output sums every model call in the tool loop; the footer
+    // shows the runtime prompt size instead.
+    const messages = [{
+      role: 'assistant' as const,
+      content: 'reply',
+      turnUsageDetails: buildTurnUsageDetails({
+        inputTokens: 700_000,
+        outputTokens: 36_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      })!,
+    }];
+    expect(resolveSessionUsedTokens(messages, null, 86_000)).toBe(86_000);
+    expect(resolveSessionUsedTokens(messages, null, 0)).toBe(736_000);
   });
 
   it('renders warning banner with "Summarise and continue" button when context is >= 80% and summary route is healthy', () => {

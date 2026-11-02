@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   guardContext,
-  resolveTaskRoute,
   type ContextGuardResult,
   type ProbeLike,
   type ProviderFileEntry,
@@ -23,13 +22,20 @@ export type MessageForSummariser = Pick<ChatMessage, 'role' | 'content' | 'turnU
 
 /**
  * Resolve the conversation's current used token count for context-guard checks
- * (ROADMAP 2.5b). Prefers the latest assistant turn's `inputTokens + outputTokens`
- * (or `totalTokens`), falling back to `session.contextTokens` or `session.totalTokenUsage`.
+ * (ROADMAP 2.5b). Prefers the runtime `agentStatus.contextTokens` the footer ring shows,
+ * then the latest assistant turn's `inputTokens + outputTokens` (or `totalTokens`), then
+ * `session.contextTokens` or `session.totalTokenUsage`.
  */
 export function resolveSessionUsedTokens(
   messages: readonly MessageForSummariser[],
   session?: Pick<Session, 'contextTokens' | 'totalTokenUsage'> | null,
+  runtimeContextTokens?: number | null,
 ): number {
+  // Same count as the footer. A Hermes turn total sums every model call in its tool loop,
+  // so it can be several times the real prompt size.
+  if (typeof runtimeContextTokens === 'number' && runtimeContextTokens > 0) {
+    return runtimeContextTokens;
+  }
   if (Array.isArray(messages)) {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
@@ -55,27 +61,31 @@ export function resolveSessionUsedTokens(
  * Resolve the active model's configured context length from `providers.yaml`
  * (`capabilities.contextLength`) via the session's provider, `routing.yaml`, or the
  * online endpoint whose discovered model list includes the session model, falling
- * back to `session.contextWindow` when positive.
+ * back to the runtime window the footer ring shows, then `session.contextWindow`.
+ * Never borrows the `chat.default` route's limit: unknown means no banner.
  */
 export function resolveSessionContextLength(params: {
   sessionModel?: string | null;
   sessionProviderId?: string | null;
   sessionContextWindow?: number | null;
+  /** `agentStatus.contextWindow`: the footer ring's window, live before it is persisted. */
+  runtimeContextWindow?: number | null;
   routing: RoutingFile;
   providers: readonly ProviderFileEntry[];
   /** Live endpoint probes; an online endpoint listing the model is where it runs. */
   probes?: readonly ProbeLike[];
 }): number | undefined {
-  const { sessionModel, sessionProviderId, sessionContextWindow, routing, providers, probes } = params;
+  const { sessionModel, sessionProviderId, routing, providers, probes } = params;
   const byId = new Map(providers.map((p) => [p.id, p]));
+  const reportedWindow = [params.runtimeContextWindow, params.sessionContextWindow].find(
+    (w): w is number => typeof w === 'number' && w > 0,
+  );
 
   // The Hermes home model is not a providers.yaml/routing.yaml endpoint: its limit is the
   // window Hermes reports, never a local route's. Without one, show no banner rather than
   // a wrong one (ROADMAP 3.7b: a DeepSeek lead read "174% full" against a 32k local route).
   if (!sessionModel?.trim() || sessionModel.trim() === 'hermes-default') {
-    return typeof sessionContextWindow === 'number' && sessionContextWindow > 0
-      ? sessionContextWindow
-      : undefined;
+    return reportedWindow;
   }
 
   if (sessionProviderId && byId.has(sessionProviderId)) {
@@ -101,17 +111,10 @@ export function resolveSessionContextLength(params: {
     if (typeof servingCap === 'number' && servingCap > 0) return servingCap;
   }
 
-  if (typeof sessionContextWindow === 'number' && sessionContextWindow > 0) {
-    return sessionContextWindow;
-  }
-
-  const defaultRoute = resolveTaskRoute(routing, 'chat.default');
-  if (defaultRoute.ok) {
-    const cap = byId.get(defaultRoute.target.provider)?.capabilities.contextLength;
-    if (typeof cap === 'number' && cap > 0) return cap;
-  }
-
-  return undefined;
+  // A model providers.yaml does not describe (e.g. a routed API model such as
+  // deepseek-v4-pro) is measured like the footer. The chat.default route's limit is not
+  // evidence of its window (Debt 2026-11-02: "368% full" while the footer read 60%).
+  return reportedWindow;
 }
 
 export const SUMMARISE_SYSTEM_PROMPT =
@@ -247,6 +250,12 @@ export function SessionContextGuardBannerView({
   );
 }
 
+type RuntimeContext = { contextTokens: number; contextWindow: number };
+
+function pickRuntimeContext(status: RuntimeContext): RuntimeContext {
+  return { contextTokens: status.contextTokens, contextWindow: status.contextWindow };
+}
+
 export function SessionContextGuardBanner({
   session,
   style,
@@ -261,6 +270,9 @@ export function SessionContextGuardBanner({
   const [storeMessages, setStoreMessages] = useState<readonly ChatMessage[]>(() =>
     session.id ? makerChatStore.getSnapshot(session.id).messages : [],
   );
+  const [runtimeContext, setRuntimeContext] = useState<RuntimeContext | null>(() =>
+    session.id ? pickRuntimeContext(makerChatStore.getSnapshot(session.id).agentStatus) : null,
+  );
   const [routing, setRouting] = useState<RoutingFile>({ routes: {}, rules: {} });
   const [providers, setProviders] = useState<ProviderFileEntry[]>([]);
   const [probes, setProbes] = useState<ProbeLike[]>([]);
@@ -269,13 +281,22 @@ export function SessionContextGuardBanner({
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (displaySnapshot) return undefined;
     if (!session.id) {
       setStoreMessages([]);
+      setRuntimeContext(null);
       return undefined;
     }
+    // The footer ring reads agentStatus from the live store, so the banner does too,
+    // even when the messages come from a display snapshot.
     const update = () => {
-      setStoreMessages(makerChatStore.getSnapshot(session.id).messages);
+      const snapshot = makerChatStore.getSnapshot(session.id);
+      if (!displaySnapshot) setStoreMessages(snapshot.messages);
+      const next = pickRuntimeContext(snapshot.agentStatus);
+      setRuntimeContext((prev) =>
+        prev?.contextTokens === next.contextTokens && prev?.contextWindow === next.contextWindow
+          ? prev
+          : next,
+      );
     };
     update();
     return makerChatStore.subscribe(session.id, update);
@@ -303,11 +324,12 @@ export function SessionContextGuardBanner({
 
   const guard = useMemo<ContextGuardResult | null>(() => {
     if (session.agentKind !== 'hermes') return null;
-    const usedTokens = resolveSessionUsedTokens(messages, session);
+    const usedTokens = resolveSessionUsedTokens(messages, session, runtimeContext?.contextTokens);
     const contextLength = resolveSessionContextLength({
       sessionModel: session.model,
       sessionProviderId: session.providerId,
       sessionContextWindow: session.contextWindow,
+      runtimeContextWindow: runtimeContext?.contextWindow,
       routing,
       providers,
       probes,
@@ -319,7 +341,7 @@ export function SessionContextGuardBanner({
       providers,
       probes,
     });
-  }, [messages, probes, providers, routing, session]);
+  }, [messages, probes, providers, routing, runtimeContext, session]);
 
   const handleSummariseAndContinue = useCallback(async () => {
     const api = window.electronAPI?.maker?.providers;

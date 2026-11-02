@@ -10,6 +10,18 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — Debt: context banner over-report for routed API models (`unit-tested`)
+
+- **Cause:** 368/60 ≈ 266/43 ≈ 6.1 = 200k / 32k. The footer ring measures `agentStatus.contextTokens` against `agentStatus.contextWindow` (200k for Hermes). The banner used the same tokens but, for a model providers.yaml does not describe (`deepseek-v4-pro`), fell back to the `chat.default` route's 32k whenever `session.contextWindow` was not yet persisted. Once it was persisted the two agreed (the owner's 88% vs 87%).
+- **Fix** (`apps/desktop/src/renderer/features/cc-agent/SessionContextGuardBanner.tsx`): removed the `chat.default` fallback (unknown limit → no banner, fail open); `resolveSessionContextLength` takes `runtimeContextWindow` (live `agentStatus.contextWindow`) ahead of the persisted window; `resolveSessionUsedTokens` takes the live `agentStatus.contextTokens` first (a Hermes turn total sums every model call in the tool loop). The component subscribes to the chat store for these two numbers, also when the messages come from a display snapshot, and skips re-renders when they do not change. providers.yaml-described models (session provider, routing.yaml, online probe) keep their configured limit.
+- **Tests** (`apps/desktop/src/renderer/__tests__/sessionContextGuardBanner.test.tsx`): +2 (routed API model at 120k against 200k is `ok`, no window → undefined; runtime tokens beat turn totals); the 2.2b-5 offline-endpoint assertion now expects `undefined` instead of the borrowed 32k. 3 failed before the fix. Mutations caught: restore a 32k fallback (2 fail), ignore runtime tokens (2 fail), ignore runtime window (1 fails).
+- **Summarise button:** `lmstudio-local/qwen3-8b` comes from the `summary` rule in `routing.yaml` (the 2.5 design: "routed summariser model"), not from the session route. No change.
+- **Gates** (Node 22.23.4): `pnpm typecheck` exit 0, `pnpm test:runner` exit 0, `pnpm check:test-hygiene` PASS; the touched test file 8/8. Not run here: `test:unit:related` / desktop unit 8 shards (left for the owner's Mac). A formatter hook reformatted the whole test file once; that sweep was reverted so the diff holds only the new tests.
+- **Worktree note:** a fresh worktree has no per-package `node_modules` links (`Cannot find package '@cindy/model-providers'`); `pnpm install --frozen-lockfile --offline --ignore-scripts` fixed it in 4 s.
+- **Open:** `live-proven` after the owner's check (Hermes task on `deepseek-v4-pro`, banner vs footer). The banner is unclamped while the footer ring caps at 100%, so above 100% they can still read differently.
+
+---
+
 ## 2026-11-02 — 3.8b `live-proven` (owner): switch-task check and Reject pass; 3.8 ✅
 
 - Setup: PR #8 was already merged by the owner (09:46, head `ebd8ea0a`). Dev app restarted with `pnpm dev:desktop:remote -- --isolated=dev`. Surprising: plain `pnpm dev:desktop` / `dev:desktop:remote` open the production `CindyGlobal` profile (empty 4 KB DB) and stop on "Local data can't be opened" (`MIGRATE_FAILED`, dev builds refuse to migrate the production profile). The owner's data lives in `CindyGlobal-dev2-dev`, reached only with `--isolated=dev`. Nothing was written to either profile.
