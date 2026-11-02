@@ -82,6 +82,7 @@ import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLla
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
+import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
@@ -11862,17 +11863,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     decide: (sessionId, memberKey, remember, clientId) => sessionGroupService.rebalanceDecision(sessionId, memberKey, remember, clientId),
   });
   // 这台电脑上每个供应商正在运行一轮的任务数：组里「本机」这台显示它，同账号电脑读目录时也带上(§5)。
-  const readLocalProviderLoad = () => countProviderRunningTurns({
+  const localTurnSources = {
     // Visible app tasks also live in Maker; the application registry counts them once.
     listTurnRunningSessions: () => maker.listActiveSessions().filter((s) => s.isTurnRunning() && !hasLocalAgentVisibleRuntime(s.id)).map((s) => s.id),
     readSessionRoutes: readProviderLocalLoadRoutes,
-    resolveImplicitProvider: resolveProviderGroupImplicitProvider,
     hostRunningProviders: remoteAgentHostRunningProviders,
     applicationRunningProviders: () => getProviderGroupApplicationLoad().runningProviders(),
-  });
-  setProviderGroupLocalLoad(readLocalProviderLoad);
-  // list_machines 报的负载按 Agent 实际运行的电脑算，与供应商组同一口径。
-  configureLocalMachineActivity(async () => [...(await readLocalProviderLoad()).values()].reduce((sum, count) => sum + count, 0));
+  };
+  setProviderGroupLocalLoad(() => countProviderRunningTurns({ ...localTurnSources, resolveImplicitProvider: resolveProviderGroupImplicitProvider }));
+  // list_machines 报的负载按 Agent 实际运行的电脑算，与供应商组同样的范围。
+  configureLocalMachineActivity(() => countMachineRunningTasks(localTurnSources));
   // 经另一台电脑上的组运行的任务：开始 / 结束一轮时报告给组所在电脑，让它的分配看到真实负载。
   providerGroupLeaseReporter?.dispose();
   providerGroupLeaseReporter = createProviderGroupLeaseReporter({

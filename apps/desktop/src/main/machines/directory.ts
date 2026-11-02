@@ -2,6 +2,7 @@
  * list_machines 的数据来源（docs/product-rules/cindy-machines.md）：账号下的电脑加这台电脑配置的 SSH 主机，都带实时资源。
  * 只暴露情况，不替 Agent 判断、排序或过滤；看不到的如实写明原因，不从结果里消失。
  */
+import type { ProviderLocalLoadDeps } from '../provider-group/localLoad.js';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { MACHINE_STATUS_CHANNEL, parseMachineStatus, type MachineStatus } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
@@ -123,6 +124,18 @@ async function probe(device: DeviceLinkDeviceView, deps: MachineDirectoryDeps): 
   } catch (error) {
     return { availability: message(error).includes('CHANNEL_NOT_ALLOWED') ? 'update_required' : 'unreachable', status: null };
   }
+}
+
+/**
+ * Turns running on this computer: Agents here plus those run for other computers. The same places
+ * as the provider count, but a task whose provider cannot be told is still a running task.
+ */
+export async function countMachineRunningTasks(deps: Pick<ProviderLocalLoadDeps,
+  'listTurnRunningSessions' | 'readSessionRoutes' | 'hostRunningProviders' | 'applicationRunningProviders'>): Promise<number> {
+  const running = deps.listTurnRunningSessions();
+  const routes = running.length ? await deps.readSessionRoutes(running) : [];
+  return deps.hostRunningProviders().length + (deps.applicationRunningProviders?.().length ?? 0)
+    + routes.filter(route => !route.agentDeviceId && !route.remoteHostId).length;
 }
 
 export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineDirectory> {

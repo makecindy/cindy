@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MachineStatus } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
-import { listMachines, type MachineDirectoryDeps } from '../directory.js';
+import { countMachineRunningTasks, listMachines, type MachineDirectoryDeps } from '../directory.js';
 
 const status: MachineStatus = {
   capturedAt: '2026-11-02T00:00:00.000Z',
@@ -113,5 +113,15 @@ describe('list_machines directory', () => {
     const result = await listMachines({ ...deps([], async () => status), listSsh: async () => { throw new Error('pool down'); } });
     expect(result.ssh).toEqual([]);
     expect(result.sshError).toBe('pool down');
+  });
+
+  it('counts running tasks where they run, even when their provider cannot be told', async () => {
+    const route = (id: string, over = {}) => ({ id, agentKind: 'claude-code' as const, model: 'native-model', providerId: null, agentDeviceId: null, remoteHostId: null, ...over });
+    expect(await countMachineRunningTasks({
+      listTurnRunningSessions: () => ['here', 'other-computer', 'ssh'],
+      readSessionRoutes: async () => [route('here'), route('other-computer', { agentDeviceId: 'b' }), route('ssh', { remoteHostId: 'nas' })],
+      hostRunningProviders: () => ['openai'],
+      applicationRunningProviders: () => [],
+    })).toBe(2);
   });
 });
