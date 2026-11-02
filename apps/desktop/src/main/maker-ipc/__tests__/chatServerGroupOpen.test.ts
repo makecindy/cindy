@@ -9,13 +9,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ handle: vi.fn(), latencyMs: 100, profiles: [] as unknown[], localGroupIds: [] as string[],
-  sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), page: [] as unknown[],
+  sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), cacheGeneration: 0, page: [] as unknown[],
   /** When the server reads its state and when the answer reaches the client, in ms after the request. */
   timing: null as null | ((route: string) => { serve: number; deliver: number }),
   offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void) }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
-vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download,
+  get cacheGeneration() { return fixture.cacheGeneration; } }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
@@ -112,7 +113,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 100;
-    fixture.timing = null; fixture.offline = false; fixture.onFrame = null;
+    fixture.timing = null; fixture.offline = false; fixture.onFrame = null; fixture.cacheGeneration = 0;
     fixture.page = [message];
     fixture.handle.mockImplementation(response);
     fixture.download.mockResolvedValue(null);
@@ -121,6 +122,191 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged } as unknown as BotGroupChatServiceDeps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+  // Unit: an open group's immutable kind was re-read in a full snapshot before
+  // every topic post. Keep current server write authorization even with warm UI context.
+  it('sends a reply in an already open group without another snapshot and preserves write refusals', async () => {
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+      : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    // HTTP fallback must reuse immutable room kind too, even without a live socket.
+    await warm(); await timed(() => service.getGroup(rooms[0]));
+    const input = { groupId: rooms[0], rootId: message.id, text: 'Timing regression', clientId: 'topic-timing-first',
+      mentions: { all: false, botIds: [] } };
+    const reply = await timed(() => service.chatServer!.reply(input));
+    expect(reply.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(reply.ms).toBeLessThanOrEqual(200);
+    expect(reply.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    await connected();
+    const afterReconnect = await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-after-reconnect' }));
+    expect(afterReconnect.value.ok).toBe(true);
+    expect(afterReconnect.ms).toBeLessThanOrEqual(200);
+    expect(afterReconnect.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith(`/messages/${message.id}`)
+      ? { body: { ...message, threadRootId: rooms[1] } }
+      : route.endsWith('/members') ? { body: [] }
+        : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    const share = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: message.id }));
+    expect(share.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(share.ms).toBeLessThanOrEqual(200);
+    expect(share.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+        : route.endsWith('/messages') && method === 'POST' ? { status: 403, body: { error: { code: 'FORBIDDEN' } } } : response(route));
+    expect((await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-timing-revoked' }))).value)
+      .toMatchObject({ ok: false, errorCode: 'FORBIDDEN' });
+  });
+
+  // Unit: a successful share used to wait for snapshots/executions before its
+  // first paint. A single-message server read must publish its authorized row in
+  // two 100ms rounds, independently of slow full-room reconciliation.
+  it('publishes a posted share directly from its server row before slow room metadata', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async key => structuredClone(disk.get(key)), write: async (key, state) => {
+      if (state) disk.set(key, structuredClone(state)); else disk.delete(key);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const source = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: message.id,
+      content: [{ type: 'text', text: 'Authorized topic reply' }] };
+    let posted = { ...message, id: '50000000-0000-4000-8000-000000000003', seq: '58' };
+    let sourceUnavailable = false;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [source, message], reads: [], cursor: '57' } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '57', changes: [] } };
+      if (route.endsWith(`/messages/${source.id}`)) return sourceUnavailable
+        ? { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } } : { body: source };
+      if (route.endsWith(`/messages/${posted.id}`)) return { body: posted };
+      if (route.endsWith('/messages') && method === 'POST') { posted = { ...posted, content: body.content }; return { body: { id: posted.id } }; }
+      return response(route);
+    });
+    await warm(); await timed(() => service.getGroup(rooms[0])); onChanged.mockClear();
+    fixture.timing = route => ({ serve: 100, deliver: route.endsWith('/snapshot') ? 5000 : 100 });
+    const start = Date.now();
+    const shared = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(shared.value.ok).toBe(true); expect(shared.ms).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(Date.now() - start).toBeLessThanOrEqual(200);
+    expect(onChanged.mock.calls.map(([payload]) => payload).find(payload => payload.messages?.length)).toMatchObject({
+      groupId: rooms[0], historyRevision: disk.get(rooms[0])!.generation,
+      messages: [{ id: posted.id, threadShare: { status: 'available', content: 'Authorized topic reply' } }],
+    });
+    expect(fixture.routes.slice(-3).some(route => route.endsWith('/members'))).toBe(false);
+    // Expiry still rechecks the source instead of treating a cached row as authority forever.
+    await vi.advanceTimersByTimeAsync(30_001);
+    const expired = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(expired.value.ok).toBe(true); expect(expired.ms).toBeLessThanOrEqual(200);
+    expect(expired.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    // Ready precedes replay: old cached text may have become invisible while disconnected.
+    sourceUnavailable = true;
+    await connected();
+    const revoked = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(revoked.value).toMatchObject({ ok: false, errorCode: 'SHARE_UNAVAILABLE' });
+    expect(revoked.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    expect(revoked.routes).not.toContain(`/conversations/${rooms[0]}/messages`);
+    sourceUnavailable = false;
+    const live = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(live.value.ok).toBe(true); expect(live.ms).toBeLessThanOrEqual(200);
+    expect(live.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+  });
+
+  // Unit: the production topic entry used to bypass persisted history on every open.
+  // Restart, old-page edits and a permission reset must all share the room projection.
+  it('reopens topics without downloading members, roots or covered pages and updates old replies', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    const open = () => withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const old = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', revision: 1, threadRootId: message.id };
+    const latest = { ...old, id: '50000000-0000-4000-8000-000000000003', seq: '3' };
+    let revoked = false;
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? revoked ? { status: 403, body: { error: { code: 'NOT_MEMBER' } } }
+        : { body: { cursor: '58', changes: [{ type: 'message.updated', data: { message: { ...old, revision: 2,
+          content: [{ type: 'text', text: 'old reply edited' }] } } }], hasMore: false } }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+      : route.endsWith('/members') ? { body: [] }
+      : revoked && route.includes('/execution-failures?') ? { status: 403, body: { error: { code: 'NOT_MEMBER' } } }
+      : route.includes('/messages?') ? { body: route.includes('before=3') ? [old] : [latest] } : response(route));
+    service.dispose(); service = open();
+    const input = { groupId: rooms[0], rootId: message.id };
+    const initial = await timed(() => service.chatServer!.thread(input));
+    expect(initial.value).toMatchObject({ ok: true, root: { id: message.id }, replies: [{ id: latest.id }] });
+    await timed(() => service.chatServer!.thread({ ...input, before: 3 }));
+    const warm = await timed(() => service.chatServer!.thread(input));
+    expect(warm.routes.filter(route => /\/(snapshot|members|messages)(\?|\/|$)/.test(route))).toEqual([]);
+    expect(warm.routes).toHaveLength(1); // Only execution failures; no changed read position in this scenario.
+    service.dispose(); service = open();
+    const restored = await timed(() => service.chatServer!.thread({ ...input, sourceMessageIds: [old.id] }));
+    expect(restored.value).toMatchObject({ ok: true, historyRevision: expect.any(String),
+      messageUpdates: [{ id: old.id, content: 'old reply edited' }] });
+    expect(restored.routes.filter(route => /\/(snapshot|members|messages)(\?|\/|$)/.test(route))).toEqual([]);
+    revoked = true;
+    expect((await timed(() => service.chatServer!.thread(input))).value).toMatchObject({ ok: false, errorCode: 'NOT_MEMBER' });
+    expect(disk.size).toBe(0);
+  });
+
+  // Unit, PR #7396: a missing root and a lost membership both use HTTP 404.
+  // Only the latter may discard another topic's durable history and page coverage.
+  it.each(['MESSAGE_NOT_FOUND', 'CONVERSATION_NOT_FOUND'])('scopes a topic HTTP 404 to its server error code (%s)', async code => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    const missingRoot = '50000000-0000-4000-8000-000000000099';
+    const reply = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: message.id };
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? { body: { cursor: '57', changes: [], hasMore: false } }
+      : route.endsWith(`/messages/${missingRoot}`) ? { status: 404, body: { error: { code } } }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+      : route.includes('/messages?') ? { body: route.includes(missingRoot) ? [] : [reply] } : response(route));
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const input = { groupId: rooms[0], rootId: message.id };
+    const initial = await timed(() => service.chatServer!.thread(input));
+    expect(initial.value).toMatchObject({ ok: true, replies: [{ id: reply.id }] });
+    expect((await timed(() => service.chatServer!.thread({ ...input, rootId: missingRoot }))).value)
+      .toMatchObject({ ok: false, errorCode: code });
+    if (code === 'CONVERSATION_NOT_FOUND') {
+      expect(disk.size).toBe(0);
+    } else {
+      expect(disk.size).toBe(1);
+      const resumed = await timed(() => service.chatServer!.thread(input));
+      expect(resumed.value).toMatchObject({ ok: true, replies: [{ id: reply.id }],
+        historyRevision: initial.value.ok && initial.value.historyRevision });
+      // The failed topic's parallel page may still finish; the surviving topic
+      // must not download its root/page or re-bootstrap the room.
+      expect(resumed.routes.filter(route => !route.includes(missingRoot) && /\/(snapshot|members|messages)(\?|\/|$)/.test(route))).toEqual([]);
+    }
+  });
+
+  // Unit: the topic composes independently awaited root, page and failure reads;
+  // a membership reset between them must retry, just like the group entry point.
+  it('retries a topic if membership resets while execution failures are loading', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
+      if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
+    } };
+    fixture.page = [{ ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: message.id }];
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? { body: { cursor: '57', changes: [], hasMore: false } }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message } : response(route));
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const input = { groupId: rooms[0], rootId: message.id };
+    const before = await timed(() => service.chatServer!.thread(input)); await connected();
+    fixture.timing = route => ({ serve: 100, deliver: route.includes('/execution-failures?') ? 500 : 100 });
+    const pending = service.chatServer!.thread(input);
+    await vi.advanceTimersByTimeAsync(120);
+    fixture.page = [];
+    fixture.sockets[0].emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${rooms[0]}`, cursor: '58',
+      changes: [{ type: 'membership.changed' }] }));
+    const after = await timed(() => pending);
+    expect(after.value).toMatchObject({ ok: true, replies: [] });
+    expect(after.value.ok && after.value.historyRevision).not.toBe(before.value.ok && before.value.historyRevision);
+  });
 
   // Unit: a membership reset while execution metadata is loading must not relabel old messages as the new history.
   it('retries a composed group view if its cached history resets during another HTTP read', async () => {
@@ -211,7 +397,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
 
   // Unit: all successful local /read writers must update the durable UI projection
   // even while WS is unavailable; existing HTTP tests had no persistent cache.
-  it.each(['main', 'thread', 'follow'] as const)('invalidates personal metadata after a local %s write without a socket notice', async action => {
+  it.each(['main', 'thread', 'follow'] as const)('refreshes personal metadata after a local %s write without a socket notice', async action => {
     const disk = new Map<string, ChatHistoryState>();
     const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
       if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
@@ -226,7 +412,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       if (route.endsWith('/read') && method === 'POST') {
         if (body.threadRootId) { threadRead = body.readSeq; following = body.following ?? following; }
         else mainRead = body.readSeq;
-        return { body: { following } };
+        return { body: { readSeq: body.readSeq, following, muted: false, markedUnread: false } };
       }
       if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [reply, root], cursor: '57',
         reads: [{ thread_key: 'main', read_seq: mainRead }, { thread_key: root.id, read_seq: threadRead, following }] } };
@@ -242,7 +428,8 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       : action === 'thread' ? service.chatServer!.thread({ groupId: rooms[0], rootId: root.id, markRead: true })
         : service.chatServer!.followThread({ groupId: rooms[0], rootId: root.id, following: true }));
     expect(result.value.ok).toBe(true);
-    await timed(() => service.getGroup(rooms[0]));
+    const refreshed = await timed(() => service.getGroup(rooms[0]));
+    if (action !== 'follow') expect(refreshed.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
     expect(disk.get(rooms[0])?.snapshot).toMatchObject({ reads: [
       { thread_key: 'main', read_seq: action === 'main' ? '1' : '0' },
       { thread_key: root.id, read_seq: action === 'thread' ? '2' : '0', following: action === 'follow' },
@@ -380,6 +567,85 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(onChanged.mock.calls.filter(([payload]) => payload.groupId === rooms[0])).toHaveLength(1);
     const reread = await timed(() => service.getGroup(rooms[0]));
     expect(reread.value.ok && reread.value.group.messages.every(item => item.attachments.length === 1)).toBe(true);
+  });
+
+  // Unit regression: getGroup kept an image's now-deleted local URL forever after manual
+  // cleanup. Existing attachment tests only retried failed transfers, not successful copies
+  // invalidated by cleanup. Minimum input: one image, one PDF and a cache-generation change.
+  it('reloads only image attachments after their dedicated cache is cleared', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    const fileId = '60000000-0000-4000-8000-000000000202';
+    const file = { id: fileId, name: 'report.pdf', category: 'file', path: '/test/report.pdf', url: null };
+    fixture.page = [{ ...message, content: [mediaId, fileId].map(mediaId => ({ type: 'media', mediaId })) }];
+    let hash = 'a';
+    fixture.download.mockImplementation(async (_room: string, id: string) => id === fileId ? file
+      : { id, name: 'image.png', category: 'image', path: null, url: `cindy-media://blobs/${hash.repeat(64)}.png` });
+    await timed(() => service.getGroup(rooms[0]));
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('a'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    fixture.cacheGeneration++;
+    hash = 'b';
+    await timed(() => service.getGroup(rooms[0]));
+    const reloaded = await timed(() => service.getGroup(rooms[0]));
+    expect(reloaded.value.ok && reloaded.value.group.messages[0].attachments[0].url).toContain('b'.repeat(64));
+    expect(reloaded.value.ok && reloaded.value.group.messages[0].attachments[1]).toEqual(file);
+    expect(fixture.download.mock.calls.map(([, id]) => id)).toEqual([mediaId, fileId, mediaId]);
+  });
+
+  // PR #7442: cleanup must not duplicate or discard a pending ordinary file transfer.
+  // Unit, minimum input: one PDF still downloading when the image generation changes.
+  it('keeps a pending ordinary attachment projection across image cleanup', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000202';
+    const file = { id: mediaId, name: 'report.pdf', category: 'file', path: '/test/report.pdf', url: null };
+    let complete!: (value: typeof file) => void;
+    fixture.download.mockReturnValue(new Promise<typeof file>(resolve => { complete = resolve; }));
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    await timed(() => service.getGroup(rooms[0]));
+    fixture.cacheGeneration++;
+    await timed(() => service.getGroup(rooms[0]));
+    expect(fixture.download).toHaveBeenCalledTimes(1);
+    complete(file);
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0]).toEqual(file);
+  });
+
+  // Unit timing regression: preserving pending files must not retain a late image URL.
+  // Existing settled-image coverage cannot exercise cleanup before download completion.
+  it('retries a pending image immediately when it completes after cleanup', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    const image = { id: mediaId, name: 'image.png', category: 'image', path: null,
+      url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    let complete!: (value: typeof image) => void;
+    fixture.download.mockReturnValueOnce(new Promise<typeof image>(resolve => { complete = resolve; }))
+      .mockResolvedValue({ ...image, url: `cindy-media://blobs/${'b'.repeat(64)}.png` });
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    await timed(() => service.getGroup(rooms[0]));
+    fixture.cacheGeneration++;
+    complete(image);
+    const retrying = await timed(() => service.getGroup(rooms[0]));
+    expect(retrying.value.ok && retrying.value.group.messages[0].attachments[0].url).not.toBe(image.url);
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('b'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit: cleanup-fenced reads must recover at cleanup completion, not wait 30s.
+  // Existing timing coverage only changes generation before a download settles.
+  it('retries an image rejected during cleanup as soon as its generation changes', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000201';
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    fixture.download.mockRejectedValueOnce(new Error('REMOTE_MEDIA_CACHE_CLEARED'))
+      .mockResolvedValue({ id: mediaId, name: 'image.png', category: 'image', path: null,
+        url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
+    await timed(() => service.getGroup(rooms[0]));
+    await timed(() => service.getGroup(rooms[0]));
+    expect(fixture.download).toHaveBeenCalledTimes(1);
+    fixture.cacheGeneration++;
+    await timed(() => service.getGroup(rooms[0]));
+    const loaded = await timed(() => service.getGroup(rooms[0]));
+    expect(loaded.value.ok && loaded.value.group.messages[0].attachments[0].url).toContain('a'.repeat(64));
+    expect(fixture.download).toHaveBeenCalledTimes(2);
   });
 
   it('keeps attachment order, failures and a later retry when completions share one re-read', async () => {

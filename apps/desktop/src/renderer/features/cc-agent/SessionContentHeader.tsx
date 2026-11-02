@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 /**
@@ -102,7 +103,7 @@ function AgentDeviceIndicator({
   // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
   const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
   const device = devices?.find((item) => item.deviceId === deviceId);
-  const name = device?.name || providerShareDeviceName(deviceId) || deviceId;
+  const name = deviceDisplayName(deviceId, device?.name || providerShareDeviceName(deviceId));
   const offline = device ? !device.online : false;
   const vendor = agentKindToVendor(agentKind);
   return (
@@ -620,7 +621,7 @@ export function SessionContentHeader({
       {!isEditing && remoteIconKind && (
         <Tip
           text={
-            session.deviceLinkDeviceName ?? session.deviceLinkDeviceId ?? session.remoteHostId ?? ''
+            session.deviceLinkDeviceId ? deviceDisplayName(session.deviceLinkDeviceId, session.deviceLinkDeviceName) : session.remoteHostId ?? ''
           }
         >
           <RemoteProjectIcon
@@ -757,9 +758,7 @@ export function SessionContentHeader({
               canMoveToProject && (
                 <SessionProjectMoveSubmenu
                   projectOptions={projectOptions}
-                  currentWorkingDir={
-                    session.workspaceKind === 'project' ? session.workingDir : null
-                  }
+                  currentSession={session}
                   isDialogue={session.workspaceKind === 'dialogue'}
                   onSelectProject={(workingDir) =>
                     void handleMoveSession({ kind: 'project', workingDir })

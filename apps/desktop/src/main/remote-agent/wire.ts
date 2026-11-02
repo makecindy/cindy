@@ -11,7 +11,9 @@
  *  - 消息里的图片 → 字节随载荷带过去，被控端写到本次任务的附件目录再引用。
  * 被控端解码时按最小合同校验类型，不认识的字段丢弃。
  */
+import { createHash } from 'node:crypto';
 import {
+  LOCAL_AGENT_CLIENT,
   AUTO_REVIEW_DELEGATED_CONTINUATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -98,6 +100,8 @@ export interface RemoteAgentWireFile {
 }
 
 export interface RemoteAgentWireStartOptions {
+  /** Negotiated external-application isolation. No controller URL, token or path. */
+  localApplication?: { mcpName: string; hostToolsOnly: boolean; storageKey: string };
   model: string;
   providerId?: string | null;
   effort?: string;
@@ -110,6 +114,8 @@ export interface RemoteAgentWireStartOptions {
   makerMemoryEnabled?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
+  /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
+  ghostRosterSnapshot?: string;
   permissionMode?: string;
   planMode?: boolean;
   displayReasoning?: string;
@@ -249,7 +255,8 @@ const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/comman
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
-  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'permissionMode', 'displayReasoning', 'resumeSessionId',
+  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
+  'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
   'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'planMode', 'codexHistoryHasProductPrompt',
@@ -261,6 +268,11 @@ const VENDOR_OPTION_KEYS = new Set(['source', 'resumeSessionAt', 'forkSession'])
 export function encodeStartOptions(opts: StartSessionOptions): RemoteAgentWireStartOptions {
   const record = opts as unknown as Record<string, unknown>;
   const wire: RemoteAgentWireStartOptions = { model: opts.model };
+  const client = opts[LOCAL_AGENT_CLIENT];
+  if (client) wire.localApplication = {
+    mcpName: client.mcpName ?? 'client', hostToolsOnly: client.hostToolsOnly,
+    storageKey: createHash('sha256').update(client.storageDirectory ?? opts.sessionId!).digest('hex'),
+  };
   if (opts.providerId !== undefined) wire.providerId = opts.providerId;
   for (const key of START_STRING_FIELDS) {
     const value = record[key];
@@ -286,6 +298,13 @@ export function decodeStartOptions(value: unknown): RemoteAgentWireStartOptions 
     throw new Error('REMOTE_AGENT_INVALID');
   }
   const wire: RemoteAgentWireStartOptions = { model: value.model };
+  if (value.localApplication !== undefined) {
+    const client = value.localApplication;
+    if (!isRecord(client) || typeof client.mcpName !== 'string' || !/^[a-z0-9_-]{1,64}$/i.test(client.mcpName)
+      || client.mcpName === 'cindy_exec' || typeof client.hostToolsOnly !== 'boolean'
+      || typeof client.storageKey !== 'string' || !/^[a-f0-9]{64}$/.test(client.storageKey)) throw new Error('REMOTE_AGENT_INVALID');
+    wire.localApplication = { mcpName: client.mcpName, hostToolsOnly: client.hostToolsOnly, storageKey: client.storageKey };
+  }
   if (value.providerId === null || typeof value.providerId === 'string') wire.providerId = value.providerId as string | null;
   for (const key of START_STRING_FIELDS) {
     const item = optString(value[key]);

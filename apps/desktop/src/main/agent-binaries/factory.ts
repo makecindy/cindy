@@ -31,6 +31,13 @@ import {
   normalizeBinaryVersion,
 } from './binary-version-probe.js';
 import { getVendorAsset, resolveVendorAssetUrl, type VendorAsset } from './manifest.js';
+import {
+  clearPreparedBinaryDownloads,
+  copyPreparedBinaryDownload,
+  hasPreparedBinaryDownload,
+  prefetchBinaryDownload,
+} from './download-cache.js';
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { download, DownloadError, type ProgressEvent } from '../downloader/index.js';
 import {
   fetchManifest,
@@ -233,6 +240,7 @@ async function extractTarGzDir(srcTarGz: string, destDir: string, binaryName: st
 
 export function createBinaryProvisioner(config: BinaryProvisionerConfig): BinaryProvisioner {
   let state: VendorRuntimeState = { status: 'not_installed' };
+  let preparing: ReturnType<BinaryProvisioner['prepare']> | undefined;
   const localVersionCache = new Map<string, { mtimeMs: number; size: number; version: string }>();
 
   async function resolveLocalVersion(
@@ -285,13 +293,67 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
       : findLatestVerifiedBinary(config.installSubdir, deriveBinaryName());
   }
 
+  function exclusivelyPrepare(
+    opts: Parameters<BinaryProvisioner['prepare']>[0],
+    install: () => ReturnType<BinaryProvisioner['prepare']>,
+  ): ReturnType<BinaryProvisioner['prepare']> {
+    if (preparing) return preparing;
+    // Startup retries and another Cindy sharing this profile cannot extract or
+    // clean each other's installation. Cache downloads use their own lock.
+    const task = withCrossProcessLock(
+      path.join(getInstallRoot(config.installSubdir), 'install.lock'),
+      { label: 'agent-binary-install', waitMs: 0 },
+      async status => {
+        if (status.held) return install();
+        const local = config.optionalAsset ? null : await findUsableLocalBinary(opts?.signal);
+        if (local) {
+          emit({ status: 'ready', installedVersion: local.version, binaryPath: local.binaryPath }, opts?.onProgress);
+          return { ready: true, binaryPath: local.binaryPath };
+        }
+        return { ready: false, binaryPath: '', error: 'install_busy' };
+      },
+      opts?.signal,
+    );
+    preparing = task;
+    const clear = () => { if (preparing === task) preparing = undefined; };
+    void task.then(clear, clear);
+    return task;
+  }
+
   return {
+    async prefetch(opts) {
+      try {
+        const manifest = opts?.manifest ?? getCachedManifest();
+        if (!manifest) return false;
+        const asset = getVendorAsset(manifest, config.manifestField);
+        if (!asset) {
+          await clearPreparedBinaryDownloads(config.vendorKey);
+          return false;
+        }
+        const assetPlatform = asset.file.match(/\/(linux-x64|linux-arm64|darwin-arm64|darwin-x64|win32-x64|win32-arm64)\//)?.[1];
+        if (assetPlatform && assetPlatform !== getPlatformKey()) return false;
+        const preferred = await findPreferredLocalBinary(
+          config.installSubdir, deriveBinaryName(), asset.version,
+          config.localVersionResolver ? resolveLocalVersion : undefined, opts?.signal,
+        );
+        if (preferred || (!config.localVersionResolver && isInstalled(config.installSubdir, asset.version, deriveBinaryName()))) {
+          await clearPreparedBinaryDownloads(config.vendorKey);
+          return true;
+        }
+        return await prefetchBinaryDownload(config.vendorKey, asset, opts?.signal);
+      } catch {
+        return false;
+      }
+    },
+
     async getState(): Promise<VendorRuntimeState> {
       return { ...state };
     },
 
-    async prepare(opts) {
+    prepare: (opts) => exclusivelyPrepare(opts, async () => {
       const onProgress = opts?.onProgress;
+      let failedInstallDirectory: string | undefined;
+      let preparedUpdateFallback: { version: string; binaryPath: string } | undefined;
       try {
         const binaryName = deriveBinaryName();
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
@@ -345,13 +407,14 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         }
         emit({ availableVersion: asset.version }, onProgress);
 
-        if (opts?.checkForUpdates === false) {
-          const local = await findUsableLocalBinary(opts.signal);
-          if (local) {
-            emit({ status: 'ready', installedVersion: local.version, binaryPath: local.binaryPath }, onProgress);
-            return { ready: true, binaryPath: local.binaryPath };
-          }
+        const usableLocal = opts?.checkForUpdates === false ? await findUsableLocalBinary(opts.signal) : null;
+        if (usableLocal && !hasPreparedBinaryDownload(config.vendorKey, asset)) {
+          emit({ status: 'ready', installedVersion: usableLocal.version, binaryPath: usableLocal.binaryPath }, onProgress);
+          return { ready: true, binaryPath: usableLocal.binaryPath };
         }
+        // The current manifest still permits this runtime. A bad optional update
+        // must not disable an otherwise usable Pi installation on the next start.
+        if (usableLocal) preparedUpdateFallback = usableLocal;
 
         // 3. 本地真实版本不低于 manifest:保留用户自更新结果,禁止降级与旧版清理。
         const preferredLocal = await findPreferredLocalBinary(
@@ -387,6 +450,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
 
         // 4. 准备目录
         const versionDir = getVersionDir(config.installSubdir, asset.version);
+        if (!fs.existsSync(getVerifiedMarker(config.installSubdir, asset.version))) failedInstallDirectory = versionDir;
         fs.mkdirSync(versionDir, { recursive: true });
 
         // 5. 计算下载目标路径（gz 中间文件加 .gz 后缀，tar-gz-dir 落整包归档，
@@ -406,7 +470,16 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         // 命中时会闪一次 0→100 的假进度。'downloading' 状态与进度广播完全由
         // 传输层真实的 onProgress 事件驱动（transport 在收到 HTTP response 后
         // 才发首个事件 = 下载真正开始）。
-        await download({
+        const prepared = await copyPreparedBinaryDownload(config.vendorKey, asset, downloadDest, opts?.signal);
+        if (!prepared && usableLocal) {
+          // Background prefetch is optional: a missing/corrupt/busy cache must
+          // never turn an application update into a blocking startup download.
+          emit({ status: 'ready', installedVersion: usableLocal.version, binaryPath: usableLocal.binaryPath }, onProgress);
+          if (failedInstallDirectory) fs.rmSync(failedInstallDirectory, { recursive: true, force: true });
+          return { ready: true, binaryPath: usableLocal.binaryPath };
+        }
+        if (!prepared && opts?.allowDownload === false) throw new Error('prepared_download_unavailable');
+        if (!prepared) await download({
           url,
           targetPath: downloadDest,
           sha256: asset.sha256.toLowerCase(),
@@ -449,6 +522,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           try { fs.chmodSync(finalBinPath, 0o755); } catch { /* ignore */ }
         }
         fs.writeFileSync(getVerifiedMarker(config.installSubdir, asset.version), '', 'utf-8');
+        failedInstallDirectory = undefined;
 
         // 9. cleanup 旧版本
         cleanupOldVersions(config.installSubdir, asset.version);
@@ -462,6 +536,9 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         return { ready: true, binaryPath: finalBinPath };
 
       } catch (err) {
+        if (failedInstallDirectory) {
+          try { fs.rmSync(failedInstallDirectory, { recursive: true, force: true }); } catch { /* retry on the next install */ }
+        }
         const message = err instanceof Error ? err.message : String(err);
         // NOT_IMPLEMENTED_* 必须 rethrow（让 Boss 4 / 未来消费者立即感知）
         if (message === 'NOT_IMPLEMENTED_BOSS_4' || message === 'NOT_IMPLEMENTED') {
@@ -476,9 +553,9 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         // A proxy that permits manifest URLs but blocks CDN binaries would
         // otherwise leave the user stuck even when a verified local version
         // exists.
-        const localFallback = config.optionalAsset
+        const localFallback = preparedUpdateFallback ?? (config.optionalAsset
           ? null
-          : findLatestVerifiedBinary(config.installSubdir, config.artifact.binaryName);
+          : findLatestVerifiedBinary(config.installSubdir, config.artifact.binaryName));
         if (localFallback) {
           emit({
             status: 'ready',
@@ -493,7 +570,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         }, opts?.onProgress);
         return { ready: false, binaryPath: '', error: code };
       }
-    },
+    }),
 
     async peekNeedsDownload(opts): Promise<boolean> {
       // 不发起任何下载——只读 manifest（cache 优先）+ 本地 isInstalled 检查。

@@ -16,6 +16,17 @@ describe('group failure notice', () => {
     expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('设置 → 个性化 → 视觉桥');
     expect(screen.getByText(/当前模型不支持图片/).textContent).toContain('重新发送');
   });
+  // #6835: unit render entry must show the limit and recovery, not an unavailable notice.
+  it.each([
+    ['REMOTE_DEVICE_LIMIT', '设备'],
+    ['REMOTE_TOTAL_LIMIT', '任务总数'],
+  ])('explains %s with a recovery action', (code, reason) => {
+    render(<BotGroupRuntimeFailureNotice name="Bot" code={code} />);
+    const text = screen.getByText(/已达上限/).textContent;
+    expect(text).toContain('Bot');
+    expect(text).toContain(reason);
+    expect(text).toContain('远程与分享');
+  });
   it('does not render an unknown or private diagnostic as group content', () => {
     const { container } = render(<BotGroupRuntimeFailureNotice name="m" code="private-token-and-path" />);
     expect(container.textContent).toBe('');

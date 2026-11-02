@@ -218,8 +218,10 @@ function renderSettings(overrides: Partial<BotProfile> = {}, initialSearch = 'se
   mocks.initialSearch = initialSearch;
   const onBack = vi.fn();
   const onOpenSession = vi.fn();
+  // The capability page asks before discarding an edited Skill, as in the app shell.
   const view = render(
     <BotSettings bot={bot(overrides)} onBack={onBack} onOpenSession={onOpenSession} />,
+    { wrapper: ConfirmDialogProvider },
   );
   return { ...view, onBack, onOpenSession };
 }
@@ -631,9 +633,6 @@ describe('Bot settings unified autosave', () => {
     vi.useFakeTimers();
     const route = capabilities().modelChain[0]!;
     const view = renderSettings({ capabilities: capabilities({ modelChainOverride: [route] }) });
-    const details = view.container.querySelector('[data-testid="bot-model-chain-editor"] details')!;
-    (details as HTMLDetailsElement).open = true;
-    fireEvent(details, new Event('toggle'));
     fireEvent.click(screen.getByText('bots.model.restoreDefault'));
     await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
     expect(mocks.updateBotProfile.mock.lastCall?.[1]).toMatchObject({

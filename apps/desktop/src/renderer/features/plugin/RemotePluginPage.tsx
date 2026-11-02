@@ -1,3 +1,4 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -116,6 +117,7 @@ export function RemotePluginPage({
     preparing = useRef(false);
   const [preparingUi, setPreparingUi] = useState(false);
   const dialog = useRef<AbortController | null>(null);
+  const answeredConsents = useRef(new Set<string>());
   const current = useCallback(
     () => scope.current.alive && isDataOwnerGenerationCurrent(scope.current.owner),
     [],
@@ -249,7 +251,7 @@ export function RemotePluginPage({
         setStatus(null);
         const message = t('settings.ghosts.remote.' + (
           next.phase === 'succeeded' ? 'success' : next.phase === 'cancelled' ? 'cancelled' :
-          next.errorCode === 'GHOST_ASLEEP' ? 'enableBeforeConfigure' : 'actionFailed'
+          next.errorCode === 'GHOST_ASLEEP' ? 'enableBeforeConfigure' : next.errorCode === 'NOT_FOUND' ? 'changed' : 'actionFailed'
         ));
         if (next.phase === 'succeeded') toast.success(message);
         else if (next.phase === 'cancelled') toast.info(message);
@@ -257,7 +259,7 @@ export function RemotePluginPage({
         if (next.phase === 'succeeded' || next.errorCode === 'GHOST_ASLEEP') void refresh();
         return;
       }
-      if (next.phase === 'confirmation' && next.consent && !dialog.current) {
+      if (next.phase === 'confirmation' && next.consent && !dialog.current && !answeredConsents.current.has(next.consent.requestId)) {
         const abort = new AbortController();
         dialog.current = abort;
         try {
@@ -269,9 +271,9 @@ export function RemotePluginPage({
                 name: consent.facts.name,
               }),
               description: `${device.name} · ${consent.facts.kind === 'install' ? t('settings.ghosts.installConsent.installMeta', { version: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) }) : t('settings.ghosts.installConsent.updateMeta', { from: consent.facts.previousVersion, to: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })}`,
-              content: <GhostInstallConsentContent facts={consent.facts} />,
+              content: <>{consent.purpose === 'ui-capability' && <p className="text-13 text-[var(--text-secondary)]">{t(`mcpApps.pluginTrust.${consent.trust ?? 'unverified'}`)}</p>}<GhostInstallConsentContent facts={consent.facts} capabilityOnly={consent.purpose === 'ui-capability'} /></>,
               confirmText: t(
-                consent.facts.kind === 'install'
+                consent.purpose === 'ui-capability' ? 'newChat.pluginUi.enable' : consent.facts.kind === 'install'
                   ? 'settings.ghosts.installConsent.confirmInstall'
                   : 'settings.ghosts.installConsent.confirmUpdate',
               ),
@@ -282,6 +284,7 @@ export function RemotePluginPage({
             abort.signal,
           );
           if (writable() && !abort.signal.aborted && operation.current === next.operationId) {
+            answeredConsents.current.add(consent.requestId);
             await invoke('answer', {
               operationId: next.operationId,
               requestId: consent.requestId,
@@ -341,6 +344,7 @@ export function RemotePluginPage({
       attachment?: string,
     ) => {
       if (!writable() || operation.current || unsupported) return;
+      if (['approve-ui', 'defer-ui'].includes(kind) && snapshot?.uiCapabilityApproval !== true) return;
       const scopedToggle = !!project && ['enable', 'disable'].includes(kind);
       if (
         scopedToggle &&
@@ -358,6 +362,7 @@ export function RemotePluginPage({
         const input = {
           operationId: id,
           kind,
+          ...(snapshot?.uiCapabilityApproval === true ? { uiConsentVersion: 1 } : {}),
           ...(ghost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(ghost.approval) }
             : {}),
@@ -407,6 +412,7 @@ export function RemotePluginPage({
       project,
       projectState,
       projectReadStatus,
+      snapshot?.uiCapabilityApproval,
     ],
   );
   const selectMarket = async (item: PluginMarketItem) => {
@@ -513,6 +519,13 @@ export function RemotePluginPage({
       (i) => marketItemMatchesInstalledGhost(i, ghost) && i.installState === 'update-available',
     );
   const configuration = ghost ? (
+    <>
+      {ghost.enabled && getPluginToolUi(ghost.manifest) && ghost.uiCapabilityApproved !== true && (
+        <div className="space-y-2 py-3 text-13 text-[var(--text-secondary)]">
+          <p>{t('newChat.pluginUi.title', { name: ghost.manifest.name })}</p>
+          {snapshot?.uiCapabilityApproval === true ? <Button size="sm" disabled={busy} onClick={() => void begin('approve-ui', ghost)}>{t('newChat.pluginUi.enable')}</Button> : <p>{t('newChat.pluginUi.updateHost')}</p>}
+        </div>
+      )}
     <RemotePluginConfiguration
       key={`${device.deviceId}:${installedGhostStoragePart(ghost)}:${ghostInstallApprovalToken(ghost.approval)}`}
       ghost={ghost}
@@ -523,6 +536,7 @@ export function RemotePluginPage({
       hostPreferences={snapshot?.hostPreferences === true}
       settingsPage={snapshot?.settingsPage === true}
     />
+    </>
   ) : null;
   const targetProblem = !online || unsupported || !snapshot;
   const notice = (

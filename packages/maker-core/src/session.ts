@@ -1,4 +1,3 @@
-import { HARNESS_BRIDGE_REVISION, type HarnessCapabilityCatalog, type HarnessHookHandler } from './types/harness-capabilities.js';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -11,7 +10,7 @@ import { HARNESS_BRIDGE_REVISION, type HarnessCapabilityCatalog, type HarnessHoo
  * 不持有 LLM client、不做决策、不存任何业务记忆 —— 这些是未来 MetaAgent 的事。
  */
 
-import type { AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
+import { appendAutoReviewUserIntent, type AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import { randomUUID } from 'node:crypto';
 import { ToolLoopGuard } from './agents/shared/loop-guard.js';
 import { AsyncUserQuestions } from './agents/shared/async-user-questions.js';
@@ -345,7 +344,9 @@ export interface SessionSendOptions extends SendOptions {
    * Session 在 active/running 守卫通过、turn reservation 建立后调用；
    * hook 完成后才启动 vendor handle。
    */
-  onAccepted?: () => void | Promise<void>;
+  // Reservation cancellation reaches host preparation (for example Git
+  // snapshots); returning from a cancelled hook never authorizes dispatch.
+  onAccepted?: (signal?: AbortSignal) => void | Promise<void>;
   /** Reservation 建立后立刻回调本轮 turn generation；host 必须用它绑定 leftover，不能等 send 返回后再读最新 generation。 */
   onTurnReserved?: (turnGeneration: number) => void;
   /**
@@ -468,6 +469,7 @@ export class Session {
   /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
   private readonly visionBridge: VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
+  private toolLoopUserIntent: AutoReviewUserIntent | undefined;
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
@@ -483,10 +485,6 @@ export class Session {
   private readonly runtimeRecoveryListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
-  private harnessHookHandler: HarnessHookHandler | null = null;
-  private harnessActionInFlight = false;
-  /** Invalidates plugin requests when an undispatched reservation reuses its turn number. */
-  private harnessRevision = 0;
   private turnLifecycleObserver: SessionTurnLifecycleObserver | null = null;
   /** Generation whose turn after the product terminal (no send) is currently open. */
   private unsolicitedTurnGeneration: number | null = null;
@@ -955,7 +953,7 @@ export class Session {
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
-      await onAccepted?.();
+      await onAccepted?.(reservation.abortController.signal);
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
@@ -1023,12 +1021,18 @@ export class Session {
           throw error;
         }
         this.insideProviderSendSync = true;
+        const previousLoopIntent = this.toolLoopUserIntent;
+        const loopIntent = appendAutoReviewUserIntent(previousLoopIntent, autoReviewSourceContent, handleOpts);
         try {
+          this.toolLoopUserIntent = loopIntent;
           await this.handle.send(msg, {
             ...handleOpts,
             [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
             signal: reservation.abortController.signal,
           });
+        } catch (error) {
+          if (this.toolLoopUserIntent === loopIntent) this.toolLoopUserIntent = previousLoopIntent;
+          throw error;
         } finally {
           this.insideProviderSendSync = false;
         }
@@ -1105,7 +1109,6 @@ export class Session {
       //     turn 的 done 会丢 origin → IM 转播收不到 done → 转播卡永不 finalize、残留
       //     state 污染下一轮(见 PR #129 review)。
       if (!turnDispatched) {
-        this.harnessRevision += 1;
         if (originInstalled) {
           this.currentTurnOrigin = previousTurnOrigin;
           this.currentTurnAttemptToken = previousTurnAttemptToken;
@@ -1213,7 +1216,7 @@ export class Session {
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
-    if (this.harnessActionInFlight || !this.handle.isTurnRunning?.()) {
+    if (!this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
@@ -1235,21 +1238,45 @@ export class Session {
     // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
     // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
     // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
-    if (this.harnessActionInFlight || this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
+    if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
     this.startEventLoopIfNeeded();
     // Mark before dispatch: the provider may start the steer's own turn as soon as it accepts it.
     const previousSteerGeneration = this.steerAcceptedGeneration;
     this.steerAcceptedGeneration = steerTurnGeneration;
+    const previousLoopIntent = this.toolLoopUserIntent;
+    const loopIntent = appendAutoReviewUserIntent(previousLoopIntent, autoReviewSourceContent, handleOpts);
     try {
+      this.toolLoopUserIntent = loopIntent;
       await this.handle.steer(msg, { ...handleOpts, [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent });
     } catch (error) {
+      if (this.getTurnGeneration() === steerTurnGeneration && this.toolLoopUserIntent === loopIntent) {
+        this.toolLoopUserIntent = previousLoopIntent;
+      }
       if (this.steerAcceptedGeneration === steerTurnGeneration) {
         this.steerAcceptedGeneration = previousSteerGeneration;
       }
       throw error;
     }
+  }
+
+  /**
+   * Cancel a send that is still in the pre-dispatch (`accepting`) phase without
+   * turning the whole session into `aborting`. Hosts that withdraw one queued
+   * routine send use this instead of abort(): abort is user-Stop semantics and
+   * arms the manual-abort recovery watchdog.
+   *
+   * Returns true when a pre-dispatch reservation was cancelled. False means there
+   * is no such reservation (the turn already crossed the vendor boundary, was
+   * accepted, or no send is pending), so callers that need to stop a running turn
+   * should use abort().
+   */
+  cancelPendingSend(): boolean {
+    const reservation = this.sendReservation;
+    if (!reservation || reservation.accepted || reservation.phase !== 'accepting') return false;
+    this.cancelSendReservation(reservation);
+    return true;
   }
 
   async abort(): Promise<void> {
@@ -1700,85 +1727,6 @@ export class Session {
     return this.handle.getCodexContextWindowInfo?.() ?? null;
   }
 
-  /** Host-only fence; provider turn numbers can be reused after a rejected send. */
-  getHarnessRevision(): number {
-    return this.harnessRevision;
-  }
-
-  /** Metadata bridge capabilities, separate from the Pi-native command catalog. */
-  getHarnessCapabilities(): HarnessCapabilityCatalog {
-    const hooks: HarnessCapabilityCatalog['hooks'] = [{ name: 'permission.request', source: 'host-permission',
-      connected: true, actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' }];
-    for (const name of ['tool.before', 'compaction.before'] as const) {
-      hooks.push({ name, source: 'native', connected: !!this.handle.setHarnessHookHandler && this.handle.harnessHooks?.includes(name) === true,
-        actions: ['continue', 'block'], timeoutMs: 1500, onFailure: 'continue-normal-permission-flow' });
-    }
-    const compactConnected = !!this.handle.requestHarnessCompaction;
-    return { revision: HARNESS_BRIDGE_REVISION, agent: this.agentKind, runtimeVersion: this.handle.runtimeVersion ?? null,
-      read: ['runtime', 'usage', 'status'],
-      events: ['tool', 'usage', 'compaction', 'task', 'status', 'message'], hooks,
-      actions: ['turn.interrupt', ...(compactConnected ? ['context.compact'] : [])],
-      availability: [...hooks.map(hook => ({ group: 'hooks' as const, name: hook.name, connected: hook.connected === true })),
-        { group: 'actions', name: 'turn.interrupt', connected: true },
-        { group: 'actions', name: 'context.compact', connected: compactConnected }],
-      backgroundCompaction: { supported: false, nativeEnabled: 'unknown', nativeRunning: 'unknown' } };
-  }
-
-  /** Synchronous reservation prevents user sends or another action racing dispatch. */
-  async runHarnessAction(name: 'context.compact' | 'turn.interrupt', expectedGeneration: number) {
-    this.ensureActive();
-    if (expectedGeneration !== this.turnGeneration) return { ok: false as const, errorCode: 'STALE_RUNTIME' as const };
-    if (this.harnessActionInFlight || this.permissionModeChangesInFlight > 0)
-      return { ok: false as const, errorCode: 'BUSY' as const };
-    if (name === 'context.compact' && (this.pendingInteractions > 0 || this.isTurnRunning() || this.hasUnsettledTurn()))
-      return { ok: false as const, errorCode: 'BUSY' as const };
-    if (!this.getHarnessCapabilities().actions.includes(name))
-      return { ok: false as const, errorCode: 'UNAVAILABLE' as const };
-    const origin = this.currentTurnOrigin;
-    if (origin?.kind && origin.kind !== 'user' || origin?.surface === 'im')
-      return { ok: false as const, errorCode: 'DENIED' as const };
-    const running = this.isTurnRunning();
-    this.harnessActionInFlight = true;
-    try {
-      if (name === 'context.compact') return { ok: true as const, value: await this.handle.requestHarnessCompaction!() };
-      if (running) await this.abort();
-      // An interrupt acknowledgement does not prove all native work has stopped.
-      return { ok: true as const, value: { state: running ? 'requested' : 'noop' } };
-    } finally {
-      this.harnessActionInFlight = false;
-    }
-  }
-
-  /** Host-only registration; never serialized to a model or remote control payload. */
-  setHarnessHookHandler(handler: HarnessHookHandler): () => void {
-    this.harnessHookHandler = handler;
-    const disposeNative = this.handle.setHarnessHookHandler?.(request => this.runHarnessHook(request));
-    return () => {
-      if (this.harnessHookHandler === handler) {
-        this.harnessHookHandler = null;
-        disposeNative?.();
-      }
-    };
-  }
-
-  private async runHarnessHook(request: Parameters<HarnessHookHandler>[0]) {
-    const handler = this.harnessHookHandler;
-    // Existing subscription scope: ordinary user turns only. No IM/automation expansion.
-    if (!handler || this.currentTurnOrigin?.kind && this.currentTurnOrigin.kind !== 'user'
-      || this.currentTurnOrigin?.surface === 'im') return { action: 'continue' as const };
-    const generation = this.turnGeneration;
-    const revision = this.harnessRevision;
-    const nativeId = this.handle.requestSessionId ?? this.handle.id;
-    let result: Awaited<ReturnType<HarnessHookHandler>>;
-    try { result = await handler(request); } catch { result = { action: 'continue' }; }
-    if (this.status !== 'active' || this.terminationStarted || this.turnGeneration !== generation
-      || this.harnessRevision !== revision
-      || (this.handle.requestSessionId ?? this.handle.id) !== nativeId) {
-      return { action: 'block' as const, reason: 'Harness request is no longer current' };
-    }
-    return result;
-  }
-
   getUsageSnapshot(): UsageSnapshot {
     return this.handle.getUsageSnapshot();
   }
@@ -2170,7 +2118,6 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
-    if (this.harnessActionInFlight) throw new Error('SESSION_RUNNING: Harness control action is in progress');
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2282,7 +2229,6 @@ export class Session {
   isTurnRunning(): boolean {
     return (
       this.sendReservation !== null ||
-      this.harnessActionInFlight ||
       this.hostTurnLeases.size > 0 ||
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
@@ -2382,11 +2328,6 @@ export class Session {
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
-      if (request.kind === 'permission' && this.harnessHookHandler) {
-        const result = await this.runHarnessHook({ name: 'permission.request', toolName: request.toolName,
-          ...(request.toolUseId ? { toolUseId: request.toolUseId } : {}) });
-        if (result.action === 'block') return { kind: 'permission', behavior: 'deny', reason: result.reason ?? 'Blocked by plugin' };
-      }
       return await resolve();
     } finally {
       if (isQuestion) this.pendingUserQuestions -= 1;
@@ -2465,7 +2406,10 @@ export class Session {
         ...(this.agentKind === 'codex' ? { burstRepeatGapMs: CODEX_BURST_REPEAT_GAP_MS } : {}),
       }), {
         reviewer: this.toolLoopReviewer,
-        context: () => ({ sessionId: this.id, agentKind: this.agentKind, model: this.handle.model }),
+        context: () => ({
+          sessionId: this.id, agentKind: this.agentKind, model: this.handle.model,
+          userIntent: this.toolLoopUserIntent,
+        }),
         onReviewedStop: (verdict) => this.interruptReviewedToolLoop(verdict, generation),
         logger: this.logger,
       }),
@@ -3120,7 +3064,7 @@ export class Session {
   }
 
   private observeToolLoop(event: AgentEvent, generation: number): void {
-    if (event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
+    if (event.type !== 'text' && event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
     if (event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId) return;
     const data = event.data && typeof event.data === 'object'
       ? event.data as Record<string, unknown> : {};
@@ -3129,6 +3073,10 @@ export class Session {
     this.trackToolResultSummaries(event, data, generation);
     const control = this.toolLoopControlFor(generation);
     if (!control?.toolLoopMonitor) return;
+    if (event.type === 'text') {
+      if (typeof data.text === 'string') control.toolLoopMonitor.onAssistantText(data.text, data.isFinal === true);
+      return;
+    }
     if (event.type === 'tool_result') {
       const pending = control.pendingToolLoop;
       if (!pending || !Array.isArray(data.toolUseIds) || !data.toolUseIds.includes(pending.toolUseId)) return;

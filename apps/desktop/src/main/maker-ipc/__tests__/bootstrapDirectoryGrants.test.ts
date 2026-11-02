@@ -255,7 +255,7 @@ describe('bootstrap directory-grant wiring', () => {
 
     expect(bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap')).toBeGreaterThanOrEqual(0);
     expect(bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap')).toBeLessThan(
-      bootstrap.indexOf('await maker.createSession(o)'),
+      bootstrap.indexOf('await maker.createSession(o, creationSignal)'),
     );
     expect(bootstrap).toContain('if (existing) await persistSessionFields(sessionId, patch);');
     expect(bootstrap).toContain('readPersistedWritableDirs: readSessionWritableDirsFromDb');

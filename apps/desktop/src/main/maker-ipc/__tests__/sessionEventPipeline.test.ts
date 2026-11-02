@@ -276,6 +276,7 @@ function harness() {
       gate: failureGate,
       isCurrentOwner,
       commitActivity: (sessionId) => listActivity.commit(sessionId),
+      settlePluginTasks: () => {},
       interrupt: async () => {},
     })),
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
@@ -328,6 +329,7 @@ function harness() {
       handleWorkerTurnStarted: effects.fn('worker-start'),
       captureWorkerText: vi.fn(),
       captureWorkerTerminalTurn: vi.fn(() => ({ owner: 'old-turn' })),
+      noteWorkerProductTerminal: vi.fn(),
       handleWorkerTerminalTurn: effects.fn('worker-terminal'),
     },
     turnModelPromiseBySession: new Map<string, Promise<string>>(),
@@ -678,6 +680,23 @@ describe('production Session event pipeline', () => {
     } finally { close(); await h.dispose(); }
   });
 
+  it('shows the accepted owner reply during a quiet run without changing scheduler attribution', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'owner-steer-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'owner-steer-run' };
+    const ownerAuthored = vi.fn(() => false);
+    Object.assign(h.deps.agentInputCoordinatorHolder, { isActiveInputOwnerAuthored: ownerAuthored });
+    try {
+      h.emit(event('text', { text: 'Background preamble' }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      ownerAuthored.mockReturnValue(true);
+      h.emit(event('text', { text: 'Here is the progress', isFinal: true }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('owner-steer-run');
+      expect(origin.kind).toBe('scheduler');
+    } finally { close(); await h.dispose(); }
+  });
+
   it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
     const h = harness();
     const close = beginQuietScheduledOutput('check', 'redaction-run');
@@ -736,7 +755,7 @@ describe('production Session event pipeline', () => {
     }
   });
 
-  it('retains accepted private-message visibility for independent Pi notices', async () => {
+  it('keeps independent model notices private after a peer message', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:private-input');
@@ -769,7 +788,7 @@ describe('production Session event pipeline', () => {
       await microtasks();
       expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
         instanceId: h.session.instanceId, generation: 0,
-      }, status, undefined);
+      }, status, undefined, undefined);
       if (status !== 'completed') {
         expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
           h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
@@ -805,13 +824,17 @@ describe('production Session event pipeline', () => {
         if (owner) gate.clear(owner);
         await successful();
       };
-      adapters.onUnsuccessfulProductTurn = async (sessionId, owner) => {
-        if (owner) {
-          gate.clear(owner);
-          h.deps.onPluginTaskTerminal(sessionId, owner.originalExecution ?? owner, 'failed');
-        }
-        await unsuccessful(sessionId, owner);
-      };
+      adapters.onUnsuccessfulProductTurn = createProductTurnFailureFinalizer({
+        gate,
+        isCurrentOwner: owner => owner.session === h.session,
+        commitActivity: () => {},
+        settlePluginTasks: (sessionId, execution, inputClientIds) =>
+          h.deps.onPluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+        interrupt: unsuccessful,
+      });
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([
+        'plugin-target:original', 'plugin-target:steered', 'human-steer',
+      ]);
       const settleFailure = (sessionId: string) => gate.settle(
         sessionId,
         owner => owner.session === h.session && owner.instanceId === h.session.instanceId
@@ -854,6 +877,10 @@ describe('production Session event pipeline', () => {
           return;
         }
         expect(h.deps.onPluginTaskTerminal.mock.calls.length).toBe(0);
+        // Queue ownership can change during recovery; retain the failed inputs.
+        if (!outcome.endsWith('continued')) {
+          h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+        }
         expect(unsuccessful).not.toHaveBeenCalled();
         expect(successful).not.toHaveBeenCalled();
         expect(deferOwner).toHaveBeenCalledOnce();
@@ -888,7 +915,7 @@ describe('production Session event pipeline', () => {
         await microtasks();
         expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
           instanceId: execution.sessionInstanceId, generation,
-        }), continued ? 'completed' : 'failed', ...(continued ? [undefined] : []));
+        }), continued ? 'completed' : 'failed', undefined, ['plugin-target:original', 'plugin-target:steered']);
         expect(successful).toHaveBeenCalledTimes(continued ? 1 : 0);
         expect(unsuccessful).toHaveBeenCalledTimes(continued ? 0 : 1);
         expect(gate.pending('task')).toBeUndefined();
@@ -969,6 +996,7 @@ describe('production Session event pipeline', () => {
     expect(effects.fn('resetTurnPersistState')).toHaveBeenCalledOnce();
     await microtasks();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
     effects.fn('recordTurnUsageOnMessage').mockClear();
     vi.setSystemTime(5000);
     h.emit(event('done', { total_cost_usd: 0, duration_ms: 20 }, { source }));
@@ -1293,6 +1321,7 @@ describe('production Session event pipeline', () => {
     expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
     expect(h.deps.autoResumeBookkeeping.stashOrcaSuppressedTerminal).toHaveBeenCalledOnce();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).not.toHaveBeenCalled();
     expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
     await h.dispose();
   });
@@ -1479,6 +1508,8 @@ describe('production Session event pipeline', () => {
     );
     expect(effects.fn('refreshSessionListPreview')).not.toHaveBeenCalled();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    // Seal A synchronously before the start barrier lets queued B report against A's debt.
+    expect(h.deps.orcaTeamServiceForEvents.noteWorkerProductTerminal).toHaveBeenCalledWith({ owner: 'old-turn' });
     h.deps.orcaTeamServiceForEvents.captureWorkerTerminalTurn.mockReturnValue({
       owner: 'new-turn',
     });
@@ -1550,7 +1581,11 @@ describe('provider turn observer on real Session.send', () => {
     } finally { unsubscribe(); dispose(); await h.dispose(); }
   });
 
-  it('announces a harness wake-up as a provider-wake channel turn before its first event', async () => {
+  it.each([
+    [undefined, 'provider-wake-local'],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake'],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake'],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource) => {
     const pushed: Array<AgentEvent | null> = [];
     let wake: (() => void) | null = null;
     let running = false;
@@ -1587,12 +1622,12 @@ describe('provider turn observer on real Session.send', () => {
     });
     const off = session.onEvent((value) => order.push(value.type));
     try {
-      await session.send('typed on desktop');
+      await session.send('launch background work', { origin });
       await emit(event('text', { text: 'launched agents' }));
       await emit(event('done'));
       await emit(event('text', { text: 'agent result' }));
       await emit(event('done'));
-      expect(order).toEqual(['starting:none', 'text', 'done', 'starting:provider-wake', 'text', 'done']);
+      expect(order).toEqual(['starting:none', 'text', 'done', `starting:${expectedSource}`, 'text', 'done']);
     } finally { off(); unsubscribe(); dispose(); await session.close(); }
   });
 
@@ -2232,7 +2267,7 @@ describe('Bot adapters in the shared event pipeline', () => {
     await h.dispose();
   });
 
-  it('preserves private input provenance in persistence and broadcast before done clears the active input', () => {
+  it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
     h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
@@ -2248,6 +2283,53 @@ describe('Bot adapters in the shared event pipeline', () => {
     expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
       event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
     }));
+  });
+
+  // B2B noise regression: accepted input owns visibility, including retry and human steering.
+  it.each([
+    ['bot-dm:thread:delivery', null, true],
+    ['retry-input', { clientId: 'retry-input', autoResume: true, retrySourceClientId: 'bot-dm:thread:delivery' }, true],
+    ['human-steer', { clientId: 'human-steer', autoResume: false }, false],
+    ['task-result:normal', null, false],
+  ] as const)('keeps B2B replies quiet without hiding owner or task replies (%s)', async (inputId, provenance, privateReply) => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(inputId);
+    h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue(provenance);
+    h.emit(event('text', { text: 'Result' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: privateReply }) }),
+    }));
+    await h.dispose();
+  });
+
+  it('keeps a B2B execution error visible', async () => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
+    h.emit(event('error', { message: 'Execution failed', isTerminal: true }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ type: 'error', agentMeta: expect.objectContaining({ botPrivateReply: false }) }),
+    }));
+    await h.dispose();
+  });
+
+  // Unit: target receipts must settle the accepted input even after the queue advances.
+  it.each([false, true])('attributes plugin terminal to the original accepted input (retry=%s)', async retry => {
+    const h = harness();
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue(retry ? 'retry-receipt' : 'plugin-target:original');
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:original', 'human-steer']);
+    if (retry) h.deps.agentInputCoordinatorHolder.getAcceptedInputProvenance.mockReturnValue({
+      clientId: 'retry-receipt', autoResume: true, retrySourceClientId: 'plugin-target:original',
+    });
+    h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('plugin-target:next');
+      h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
+    });
+    h.emit(event('done', { status:'completed' }, {sessionInstanceId:h.session.instanceId,sessionTurnGeneration:0}));
+    await microtasks();
+    expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledExactlyOnceWith('task', {
+      instanceId:h.session.instanceId,generation:0,
+    }, 'completed', undefined, ['plugin-target:original']);
+    await h.dispose();
   });
 
   it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {

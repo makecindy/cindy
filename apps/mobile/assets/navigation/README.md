@@ -22,3 +22,10 @@ archived tasks, ellipsis-attention-light.svg / ellipsis-attention-dark.svg. They
 share the same 26pt canvas and Lucide Ellipsis geometry as the Android header;
 the attention variants add the same 6pt dot at the upper right in statusAccent
 and are rendered as original images, so each theme has its own glyph color.
+
+`filter-reminder.png` (1x / 2x / 3x) carries that reminder into the native toolbar
+menu's Task status and selected Archived rows. It is a 6pt circle centered in a
+20pt transparent canvas, filled from `palettes.light.statusAccent` (the same value
+in Dark), rendered as an original image. Generate it with Sharp from an SVG circle
+at `(10, 10)`, radius `3`, scaling the canvas to 20 / 40 / 60 pixels. It is bundled
+by Metro and does not add a native asset catalog or change the runtime fingerprint.

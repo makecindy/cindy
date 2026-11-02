@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -35,6 +36,7 @@ import {
   CircleAlert,
   Clock3,
   Loader2,
+  Plug,
   PlugZap,
   Plus,
   RefreshCw,
@@ -63,7 +65,7 @@ import {
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
-import { XDIncMark } from '@/components/icons/XDIncMark';
+import { CindyMark } from '@/components/icons/CindyMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -73,6 +75,8 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
@@ -96,6 +100,7 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
 import {
@@ -156,6 +161,7 @@ import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 
 // 短刷新（尤其 auto-refresh cooldown 命中）不应让状态行参与 MorphPopover 的首帧量高：
 // 否则它在 220ms 开场内消失后，settle 补量会把面板再缩一次，形成“先变大再变小”。
@@ -346,6 +352,9 @@ function ModelOptionsFloatingPanel({
             data-state="open"
             data-side={placedSide}
             data-testid="model-options-floating-panel"
+            // 与统一面板同因:portal 在 body,模态对话框里滚轮会被 react-remove-scroll
+            // 拦掉;stopPropagation 放行原生滚动(见 stopWheelPropagation 注释)。
+            onWheel={stopWheelPropagation}
             onPointerEnter={onCancelClose}
             onPointerLeave={onScheduleClose}
             onFocusCapture={onCancelClose}
@@ -420,7 +429,7 @@ export function ProviderMark({
         logoKind={logoKind}
         size={markSize}
         className={
-          providerId === 'xd'
+          logoKind === 'xd'
             ? cn(dense ? 'h-[8.4px] w-[14.2px]' : 'h-[9px] w-[15px]', common)
             : common
         }
@@ -477,9 +486,9 @@ export function ModelIconMark({
     if (kind === 'claude') return <AnthropicMark size={markSize} className={common} />;
     if (kind === 'codex') return <OpenAIMark size={markSize} className={common} />;
     return (
-      <XDIncMark
+      <CindyMark
         size={markSize}
-        className={cn(dense ? 'h-[8.4px] w-[14.2px]' : 'h-[9px] w-[15px]', common)}
+        className={common}
       />
     );
   }
@@ -672,7 +681,7 @@ export interface RemoteAgentRelocation {
  */
 export interface RemoteAgentSelectorOptions {
   /** 可以运行 Agent 的其他电脑(已配对、在线);不含任务所在电脑。 */
-  devices: readonly { deviceId: string; name: string }[];
+  devices: readonly { deviceId: string; name: string; favoriteSource?: ControlledModelFavoriteSource }[];
   /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 任务所在电脑。 */
   selectedDeviceId: string | null;
   /**
@@ -680,6 +689,8 @@ export interface RemoteAgentSelectorOptions {
    * 不传 = 本机任务,用本机目录。
    */
   homeDeviceId?: string;
+  /** Read remote sources through the task computer, using its grants and connections. */
+  catalogHostDeviceId?: string;
   /** homeDeviceId 那台电脑的名字(供应商组那一项的悬停写任务在哪台运行时用)。 */
   homeDeviceName?: string;
   /** 本机的设备 id:供应商组里的组员就是本机时,按任务所在电脑比对任务在哪台运行。 */
@@ -706,6 +717,8 @@ export interface RemoteAgentSelectorOptions {
 }
 
 interface ModelSelectorProps {
+  /** 语义同 ModelSelectorContentProps.pluginModels。 */
+  pluginModels?: PluginModelsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
@@ -808,8 +821,8 @@ interface ModelSelectorProps {
   compactToolbar?: boolean;
   /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
   ultraCompactToolbar?: boolean;
-  /** Trigger presentation: toolbar keeps the compact chat pill; field renders a settings input-like control. */
-  triggerVariant?: 'toolbar' | 'field';
+  /** Toolbar/field stay compact; settings allows the complete model name to wrap. */
+  triggerVariant?: 'toolbar' | 'field' | 'settings';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
@@ -877,6 +890,8 @@ interface ModelSelectorProps {
    * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
    */
   unknownModelLabel?: (modelId: string) => string;
+  /** Optional separate status below an unknown model, retaining unknownModelLabel for accessible text. */
+  unknownModelDescription?: string;
   /**
    * 可及名上下文前缀(如「模型 · chat」)。多实例同屏(IM 目录偏好逐行一个)时前置到
    * trigger 的 aria-label,行与行才能被读屏区分 —— 与 VendorSegmentedSwitcher.ariaLabel
@@ -914,6 +929,8 @@ interface ModelSelectorProps {
 }
 
 interface ModelSelectorContentProps {
+  /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
+  pluginModels?: PluginModelsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   modelId: string;
@@ -934,6 +951,8 @@ interface ModelSelectorContentProps {
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
+  /** Request-owned preferences; edits never reach the user's saved defaults. */
+  preferenceStore?: ModelPickerPreferenceStore;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
@@ -1183,7 +1202,11 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
   );
 }
 
+/** 「让插件选」生效时不点亮任何模型行(空 modelId 不匹配任何条目)。 */
+const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
+
 function ModelSelectorContentView({
+  pluginModels,
   providersOverride,
   providersOverrideState,
   modelId,
@@ -1195,6 +1218,7 @@ function ModelSelectorContentView({
   thinkingEnabled = true,
   onThinkingChange,
   modelMemory: modelMemoryProp,
+  preferenceStore,
   vendorKey,
   deviceId: deviceIdProp,
   remoteAgent,
@@ -1266,6 +1290,7 @@ function ModelSelectorContentView({
   // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
   const homeDeviceId = remoteAgent?.homeDeviceId;
   const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
+  const catalogDeviceId = modelCatalogKey(deviceId, remoteAgent?.catalogHostDeviceId);
   /**
    * 「最近」记录没有设备字段:面板正在浏览**其他电脑**的目录时(远程 Agent 入口的模型格 /
    * device-link 被控电脑)选中不得写进本机历史 —— 两台电脑若存在同来源同模型 id,回到本机会把
@@ -1279,7 +1304,7 @@ function ModelSelectorContentView({
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
   const modelMemory =
     !remoteAgent || browsingSelectedCatalog
-      ? modelMemoryProp
+      ? (preferenceStore?.memory ?? modelMemoryProp)
       : remoteBrowse
         ? remoteAgent.deviceModelMemory?.(remoteBrowse.deviceId)
         : remoteAgent.localModelMemory;
@@ -1360,16 +1385,16 @@ function ModelSelectorContentView({
     void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
   };
   // 同时拉三个 agent —— vendorKey 不传时把三边模型一起展示。hooks 必须按固定顺序调用。
-  const cc = useAgentCapabilities('claude-code', deviceId);
-  const codex = useAgentCapabilities('codex', deviceId);
-  const pi = useAgentCapabilities('pi', deviceId);
+  const cc = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codex = useAgentCapabilities('codex', catalogDeviceId);
+  const pi = useAgentCapabilities('pi', catalogDeviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceId);
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
   // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
   // 浏览被控电脑自己的目录时也一样)。
   const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
@@ -1410,14 +1435,14 @@ function ModelSelectorContentView({
       ? t('providerShare.picker.hostOutdated')
       : undefined;
   const retryRemoteModels = useCallback(() => {
-    if (!deviceId) return;
-    evictDeviceCapabilities(deviceId);
-    evictDeviceProviders(deviceId);
+    if (!catalogDeviceId) return;
+    evictDeviceCapabilities(catalogDeviceId);
+    evictDeviceProviders(catalogDeviceId);
     void Promise.allSettled([
-      prefetchDeviceCapabilities(deviceId),
-      prefetchDeviceProviders(deviceId),
+      prefetchDeviceCapabilities(catalogDeviceId),
+      prefetchDeviceProviders(catalogDeviceId),
     ]);
-  }, [deviceId]);
+  }, [catalogDeviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();
   const [query, setQuery] = useState('');
@@ -1579,11 +1604,21 @@ function ModelSelectorContentView({
   // 栏位要同时列出本机与各台电脑的供应商,而列表此刻只装着其中一份目录:本机格与远程格
   // 各自按**自己的**目录与可见性派生,不借用正在浏览的那一份。
   const remoteAgentDevices = remoteAgent?.devices;
+  const routedFavoriteSources = useMemo(() => remoteAgent?.catalogHostDeviceId
+    ? new Map((remoteAgentDevices ?? []).flatMap(device => device.favoriteSource
+      ? [[device.deviceId, device.favoriteSource] as const] : []))
+    : undefined, [remoteAgentDevices, remoteAgent?.catalogHostDeviceId]);
   const remoteAgentDeviceIds = useMemo(
     () => (remoteAgentDevices ?? []).map((device) => device.deviceId),
     [remoteAgentDevices],
   );
-  const remoteDeviceCatalogs = useDevicesProviders(remoteAgentDeviceIds);
+  const remoteCatalogKeys = useMemo(
+    () => remoteAgentDeviceIds.map(id => modelCatalogKey(id, remoteAgent?.catalogHostDeviceId)!),
+    [remoteAgentDeviceIds, remoteAgent?.catalogHostDeviceId],
+  );
+  const scopedCatalogs = useDevicesProviders(remoteCatalogKeys);
+  const remoteDeviceCatalogs = useMemo(() => new Map(remoteAgentDeviceIds.map((id, index) =>
+    [id, scopedCatalogs.get(remoteCatalogKeys[index])!] as const)), [remoteAgentDeviceIds, remoteCatalogKeys, scopedCatalogs]);
   // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
   // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
   const homeDeviceProviders = useDeviceProviders(homeDeviceId);
@@ -1763,7 +1798,7 @@ function ModelSelectorContentView({
       const groupSize = groupMembers ? providerGroupDeviceCount(groupMembers) : readProviderShareGroupSize(provider);
       const values = {
         provider: provider ? providerDisplayName(provider, t) : providerId,
-        device: device?.name || targetDeviceId,
+        device: deviceDisplayName(targetDeviceId, device?.name),
       };
       return groupSize != null
         ? t('newChat.modelSelector.unified.railRemoteProviderGroup', {
@@ -1809,7 +1844,7 @@ function ModelSelectorContentView({
         );
         return {
           kind: 'running',
-          deviceName: homeDeviceId ? remoteAgent?.homeDeviceName || homeDeviceId : null,
+          deviceName: homeDeviceId ? deviceDisplayName(homeDeviceId, remoteAgent?.homeDeviceName) : null,
           usage: provider ? { provider, scope: { deviceId: homeDeviceId ?? null } } : null,
         };
       }
@@ -3407,7 +3442,7 @@ function ModelSelectorContentView({
       const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
       const agentDevice = {
         deviceId: targetDeviceId,
-        name: remoteAgentDevices?.find((device) => device.deviceId === targetDeviceId)?.name || targetDeviceId,
+        name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
       };
       const dismissIfApplied = (applied: boolean) => {
         if (applied) {
@@ -3531,6 +3566,10 @@ function ModelSelectorContentView({
           </div>
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
+            {...(pluginModels ? {
+              pinnedTop: <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />,
+              pinnedTopHasRows: matchPluginModels(pluginModels.models, query).length > 0,
+            } : {})}
             {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
                   catalogNotice: (
@@ -3562,8 +3601,9 @@ function ModelSelectorContentView({
             query={query}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
-            selected={panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog ? selectedFavoriteUid : null}
+            // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
+            selected={pluginModels?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
             }
@@ -3572,6 +3612,7 @@ function ModelSelectorContentView({
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? undefined : effort
             }
             {...(modelMemory ? { modelMemory } : {})}
+            {...(preferenceStore ? { preferenceStore } : {})}
             {...(remoteAgent && remoteAgentLocalRailItems
               ? {
                   remoteSources: {
@@ -3583,6 +3624,7 @@ function ModelSelectorContentView({
                     labelOf: remoteAgentLabelOf,
                     // 远程收藏按任务所在电脑共享(§1.5):被控电脑上的任务读写那台的收藏,本机任务读写本机。
                     ...(homeDeviceId ? { favoritesDeviceId: homeDeviceId } : {}),
+                    shareFavoriteSources: routedFavoriteSources,
                     homeDeviceId: homeDeviceId ?? selfDeviceId,
                     unavailableDeviceIds: remoteAgentUnavailableDeviceIds,
                     onSelectDeviceFavorite: selectDeviceFavorite,
@@ -3990,6 +4032,7 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  pluginModels,
   providersOverride,
   providersOverrideState,
   modelId,
@@ -4036,6 +4079,7 @@ export function ModelSelector({
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   unknownModelLabel,
+  unknownModelDescription,
   ariaContext,
   currentProviderId,
   sourceDisconnected = false,
@@ -4448,18 +4492,34 @@ export function ModelSelector({
     : null;
   const withAgentDeviceLabel = (label: string): string =>
     agentDeviceLabel ? `${label} · ${agentDeviceLabel}` : label;
-  const triggerTitle = withAgentDeviceLabel(pendingSelectionTitle
+  const activePluginModel = pluginModels?.active ?? null;
+  const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
+  const triggerTitle = activePluginModel
+    ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
+    : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const accessibleLabel = pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel);
+  const accessibleLabel = activePluginModel ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
+  const isSettingsTrigger = triggerVariant === 'settings';
+  const modelDescription = isSettingsTrigger && unknownLabel && !localizedName &&
+    !remoteModelLoading && !remoteModelLoadFailed && !fallbackOption?.active
+    ? unknownModelDescription : undefined;
+  const modelLabelContent = modelDescription ? (
+    <>
+      <span>{modelId}</span>
+      <span className="block text-12 leading-5 text-[var(--model-trigger-meta)]">
+        {modelDescription}
+      </span>
+    </>
+  ) : displayLabel;
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
-  const isCompactToolbar = compactToolbar && !isFieldTrigger;
+  const isCompactToolbar = compactToolbar && !isFieldTrigger && !isSettingsTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
   // ── composer pill 的引擎小标(model-selector-unified §1.1)─────────────────────
   // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
@@ -4513,7 +4573,7 @@ export function ModelSelector({
     ) : null;
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
-  const morphEnabled = useMorphPopover && !isFieldTrigger;
+  const morphEnabled = useMorphPopover && !isFieldTrigger && !isSettingsTrigger;
   const budgetGradientStyle: CSSProperties | undefined = isBudget
     ? {
         background: 'var(--model-budget-gradient)',
@@ -4547,9 +4607,12 @@ export function ModelSelector({
               'rounded-full',
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              'h-[30px] max-w-full shrink overflow-hidden px-2.5',
+              'max-w-full shrink px-2.5',
+              isSettingsTrigger ? 'min-h-[30px] items-baseline py-1 text-left leading-5' : 'h-[30px] overflow-hidden',
               // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'min-w-0'
+                : isUltraCompactToolbar
                 ? 'w-[64px] min-w-[64px]'
                 : isCompactToolbar
                   ? 'w-[148px] min-w-[72px]'
@@ -4565,7 +4628,14 @@ export function ModelSelector({
       {agentIdentity?.state === 'pending' && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
-      {noSource ? (
+      {activePluginModel ? (
+        <>
+          <PluginModelIcon model={activePluginModel} size={14} />
+          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
+            {activePluginModel.name}
+          </span>
+        </>
+      ) : noSource ? (
         <>
           <PlugZap
             size={isCreateAgentVariant ? 11 : 13}
@@ -4582,7 +4652,9 @@ export function ModelSelector({
               isCreateAgentVariant
                 ? 'text-[var(--create-agent-control-text)]'
                 : 'text-[var(--text-primary)]',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -4612,7 +4684,9 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -4624,7 +4698,7 @@ export function ModelSelector({
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
-            {displayLabel}
+            {modelLabelContent}
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}
@@ -4693,7 +4767,9 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -4710,7 +4786,7 @@ export function ModelSelector({
             )}
             style={budgetGradientStyle}
           >
-            {displayLabel}
+            {modelLabelContent}
           </span>
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
@@ -4747,7 +4823,9 @@ export function ModelSelector({
                   isCreateAgentVariant
                     ? 'text-[var(--create-agent-control-text)]'
                     : 'text-[var(--text-primary)]',
-                  engineMarkOption
+                  isSettingsTrigger
+                    ? 'max-w-[40%] shrink-0 whitespace-normal [overflow-wrap:anywhere]'
+                    : engineMarkOption
                     ? isCompactToolbar
                       ? 'min-w-0 shrink truncate'
                       : 'shrink-0 whitespace-nowrap'
@@ -4848,6 +4926,7 @@ export function ModelSelector({
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
+      {...(pluginModels ? { pluginModels } : {})}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}

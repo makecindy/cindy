@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
   logger: {
+    debug: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
   },
@@ -25,15 +26,41 @@ vi.mock('../authManager', () => ({
 vi.mock('../i18n.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
+vi.mock('../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'https://models.example.test',
+}));
 vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
 import { serverApiFetch } from '../serverApiClient';
+import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // Unit: exercise the real quota reader through the HTTP client. Previously its
+  // mocked client hid recurring warnings for a successful legacy fallback.
+  it.each([
+    { status: 404, code: 'NOT_FOUND', fallback: true },
+    { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: true },
+    { status: 501, code: 'OTHER_FAILURE', fallback: false },
+    { status: 503, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: false },
+    { status: 403, code: 'FORBIDDEN', fallback: false },
+    { status: 401, code: 'ACCOUNT_UNAVAILABLE', fallback: false },
+  ])('only downgrades expected quota fallback logs: $status $code', async ({ status, code, fallback }) => {
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code, message: 'private upstream message' },
+    }), { status }));
+    const result = await readOrganizationAccountUsage();
+    expect(result).toBe(fallback ? undefined : null);
+    expect(mocks.logger.warn).toHaveBeenCalledTimes(fallback ? 0 : 1);
+    expect(mocks.logger.debug).toHaveBeenCalledTimes(fallback ? 1 : 0);
+    expect(JSON.stringify([...mocks.logger.warn.mock.calls, ...mocks.logger.debug.mock.calls]))
+      .not.toContain('private upstream message');
+    if (status === 401) expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
   });
 
   it('keeps an unfamiliar original error and its cause while redacting secrets before logging', async () => {

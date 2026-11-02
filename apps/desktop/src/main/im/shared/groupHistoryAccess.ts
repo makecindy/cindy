@@ -16,6 +16,10 @@ export interface GroupHistoryAccessScope {
   provider: string;
   /** 当前群/topic lane；owner DM 轮次为 null。 */
   lane: GroupHistorySearchLane | null;
+  /** Bound to the current connection, never supplied by model arguments. */
+  readImage?: (fileId: string) => Promise<Buffer | null>;
+  /** Native history lookup, already bound to this exact chat/topic and bot connection. */
+  readMessageImages?: (messageId: string) => Promise<import('@cindy/im').IMAttachment[]>;
 }
 
 interface ActiveAccess {
@@ -47,7 +51,7 @@ export function beginGroupHistoryAccess(args: {
   activeBySession.set(args.sessionId, {
     sessionInstanceId: args.sessionInstanceId,
     token,
-    scope: args.scope,
+    scope: { ...args.scope },
   });
   return () => {
     const active = activeBySession.get(args.sessionId);

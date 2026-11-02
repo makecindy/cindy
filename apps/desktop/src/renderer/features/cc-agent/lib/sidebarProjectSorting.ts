@@ -8,7 +8,7 @@ import {
 } from './mainListModel';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import { sessionCreatedMs } from './dateSessionGrouping';
-import { projectKeyComparisonKey, type ProjectNode } from './projectGrouping';
+import { projectKeyComparisonKey, withProjectSessions, type ProjectNode } from './projectGrouping';
 
 /**
  * 有状态上下文的项目面板沿用主列表优先级；其它调用保留既有顺序。
@@ -36,10 +36,9 @@ export function sortProjectsForSidebar(
   localPlatform: string = '',
   priorityContext?: MainListPriorityContext,
 ): ProjectNode[] {
-  const withSortedSessions = projects.map((project) => ({
-    ...project,
-    sessions: sortSessionsForSidebar(project.sessions, sortBy, priorityContext),
-  }));
+  const withSortedSessions = projects.map((project) =>
+    withProjectSessions(project, sortSessionsForSidebar(project.sessions, sortBy, priorityContext)),
+  );
 
   if (projectOrder === 'custom') {
     const normalizedOrder = normalizeManualProjectOrder(

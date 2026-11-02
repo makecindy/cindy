@@ -60,7 +60,15 @@ function sameOptions(a: GroupSessionsOptions, b: GroupSessionsOptions): boolean 
   return (
     a.projectAliases === b.projectAliases &&
     a.remoteProjectAliases === b.remoteProjectAliases &&
-    a.projectAliasMembers === b.projectAliasMembers &&
+    // Complete alias members are rebuilt even for row-only patches. Reuse the
+    // same conservative structural comparison: identity/eligibility changes
+    // outside the visible filter must still invalidate the displayed name.
+    (a.projectAliasMembers === b.projectAliasMembers ||
+      (!!a.projectAliasMembers && !!b.projectAliasMembers &&
+        a.projectAliasMembers.length === b.projectAliasMembers.length &&
+        a.projectAliasMembers.every((member, i) =>
+          member === b.projectAliasMembers![i] || sameGroupingInput(member, b.projectAliasMembers![i]),
+        ))) &&
     a.includePinnedInProjects === b.includePinnedInProjects &&
     a.includeDraftsInProjects === b.includeDraftsInProjects &&
     a.provisionalDraftTaskId === b.provisionalDraftTaskId &&

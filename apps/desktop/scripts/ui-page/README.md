@@ -39,6 +39,12 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
   列出，可以直接比对。元素在某次截图时不存在会跳过，全程都不存在才给警告。
 - 截图按 2 倍像素密度渲染（与 Retina Mac 一致，不随外接显示器变化），整页截图按 CSS
   尺寸保存。
+- 后台检查使用无边框窗口，Windows 额外启用离屏渲染，避免原生边框的 DPI 取整和隐藏
+  窗口不刷新导致尺寸偏差或截图超时；仍严格核对实际视口与目标尺寸。`ui:preview` 保留
+  正常的可见窗口。
+- Electron 复用隔离进程，每个场景新建窗口，防止前一场景的 CDP 视口、全屏或失败状态
+  污染后续检查。测试源仅允许 HTML 全屏，后台运行不改变系统全屏状态，其它权限仍拒绝；
+  系统全屏切换需在完整 Desktop 验证。
 - 报告写到 stdout。环境里设置了 `NODE_DEBUG` 时 Node 会往 stderr 刷调试日志，用
   `env -u NODE_DEBUG pnpm ui:check …` 或丢弃 stderr。
 - `real` 是本页面真实加载的产品代码，`not covered` 是这些场景没有验证的行为，`replaced`
@@ -88,7 +94,7 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 ## 多语言、主题与尺寸
 
 `--locale` 取自 `src/shared/locale.ts` 的 `SUPPORTED_LOCALES`，`--theme` 为 `light`／`dark`，
-都可以写逗号列表或 `all`；`--viewport` 可以写多个尺寸。所有组合在同一个窗口里依次运行。
+都可以写逗号列表或 `all`；`--viewport` 可以写多个尺寸。所有组合在同一个隔离进程中依次运行。
 语言和主题按产品启动时的同一套偏好写入（`localStorage` 的 `theme` 与语言偏好），字体使用产品
 自带的 Inter、JetBrains Mono 与鸿蒙黑体子集。断言里不要写死某种语言的文字，用 `ui.t(key)`
 取当前语言的翻译。

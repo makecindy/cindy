@@ -17,6 +17,7 @@ import {
 import { AnthropicMark } from './AnthropicMark';
 import { OpenAIMark } from './OpenAIMark';
 import { XDIncMark } from './XDIncMark';
+import { CindyMark } from './CindyMark';
 
 export { hasProviderLogo, resolveProviderLogoKind };
 export type { ProviderLogoRouting };
@@ -44,6 +45,7 @@ export function ProviderLogoMark({
   if (!kind) return null;
   if (kind === 'anthropic') return <AnthropicMark size={size} className={className} />;
   if (kind === 'openai') return <OpenAIMark size={size} className={className} />;
+  if (kind === 'cindy') return <CindyMark size={size} className={className} />;
   if (kind === 'xd') return <XDIncMark size={size} className={className} />;
 
   return (

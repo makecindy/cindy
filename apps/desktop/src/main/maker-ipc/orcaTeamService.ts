@@ -266,6 +266,8 @@ export interface WorkerTerminalTurnCapture {
   manualInterrupt: OrcaManualInterruptSnapshot | null;
   /** Opaque identity of the auto-bridge state that belongs to the ending turn. */
   autoBridgeIdentity: object | null;
+  runtime?: { getTurnGeneration?(): number } | null;
+  turnGeneration?: number;
 }
 
 export interface OrcaDeliveryPermissionBaseline {
@@ -357,7 +359,7 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
   resumeWorkerSession(
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
@@ -370,14 +372,6 @@ export interface OrcaTeamServiceDeps {
     previousRole: string;
     previousLabel: string | null;
   }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
-  /**
-   * true = 这些 label 中被当前 lead 的插件 team plan 未结算条目引用，改名会破坏计划归属与委派自动授权。
-   * 非插件任务 / 无计划 / 已结算时不锁定。可选：未注入时不做计划锁。
-   */
-  isWorkerLabelLockedByPlan?: (params: {
-    leadSessionId: string;
-    labels: ReadonlyArray<string | null>;
-  }) => Promise<boolean>;
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
@@ -544,6 +538,8 @@ export interface OrcaTeamService {
   }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
+  captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void>;
+  /** Execution-device settlement retains its existing durable done semantics. */
   settleReportedWorker(
     capture: WorkerTerminalTurnCapture,
     commit?: (markWorkerDone: boolean) => Promise<boolean>,
@@ -553,15 +549,19 @@ export interface OrcaTeamService {
   restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
+  /** Synchronous product boundary; never call for a suppressed vendor terminal. */
+  noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
 }
 
-/** ready/inFlight/version 共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
+/** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
-  pending: true;
+  pending: boolean;
+  reportsInFlight: Set<Promise<void>>;
+  terminalObserved: boolean;
+  productTerminal?: Pick<WorkerTerminalTurnCapture, 'runtime' | 'turnGeneration'>;
   ready: boolean;
   inFlight: boolean;
-  version: number;
   workerId: string;
   leadSessionId: string;
   capturedText: string;
@@ -700,12 +700,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string,
     input: { workerId: string; leadSessionId: string },
   ): AutoBridgeState {
-    const previous = autoBridge.get(sessionId);
     const state: AutoBridgeState = {
       pending: true,
+      reportsInFlight: new Set(),
+      terminalObserved: false,
       ready: false,
       inFlight: false,
-      version: (previous?.version ?? 0) + 1,
       workerId: input.workerId,
       leadSessionId: input.leadSessionId,
       capturedText: '',
@@ -717,25 +717,32 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   function hasPendingWorkerReports(leadSessionId: string): boolean {
     for (const state of autoBridge.values()) {
-      if (state.leadSessionId === leadSessionId) return true;
+      if (state.pending && state.leadSessionId === leadSessionId) return true;
     }
     return false;
   }
 
-  /** Every pending-report removal goes through here so the Lead's completion can settle. */
+  function settlePendingReport(state: AutoBridgeState): void {
+    if (!state.pending) return;
+    state.pending = false;
+    state.deferred = undefined;
+    state.retryAfterRejectedDelivery = false;
+    if (hasPendingWorkerReports(state.leadSessionId)) return;
+    try {
+      deps.onLeadWorkerReportsSettled?.(state.leadSessionId);
+    } catch (err) {
+      deps.log.warn('orca lead report settle listener failed', {
+        leadSessionId: state.leadSessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   function deletePendingReport(sessionId: string): void {
     const removed = autoBridge.get(sessionId);
     if (!removed) return;
     autoBridge.delete(sessionId);
-    if (hasPendingWorkerReports(removed.leadSessionId)) return;
-    try {
-      deps.onLeadWorkerReportsSettled?.(removed.leadSessionId);
-    } catch (err) {
-      deps.log.warn('orca lead report settle listener failed', {
-        leadSessionId: removed.leadSessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
+    settlePendingReport(removed);
   }
 
   function clearRuntimeState(sessionId: string): void {
@@ -756,6 +763,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (autoBridge.get(sessionId) !== current) return false;
     if (previous) {
       autoBridge.set(sessionId, previous);
+      settlePendingReport(current);
     } else {
       deletePendingReport(sessionId);
     }
@@ -767,63 +775,83 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     current.ready = true;
     const deferred = current.deferred;
     current.deferred = undefined;
-    if (deferred) {
-      await bridgeWorkerCompletion(sessionId, deferred);
-    }
+    if (deferred) await bridgeWorkerCompletion(sessionId, deferred, current);
   }
 
   async function bridgeWorkerCompletion(
     sessionId: string,
     turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
-    const state = autoBridge.get(sessionId);
     if (!state) return 'skipped';
-    if (!state.ready) {
-      state.deferred = turn;
-      return 'deferred';
-    }
-    if (state.inFlight) return 'skipped';
-
-    state.inFlight = true;
-    state.retryAfterRejectedDelivery = false;
-    const version = state.version;
-    const finalText =
-      turn.finalText.trim() ||
-      state.capturedText.trim() ||
-      turn.diagnostic?.trim() ||
-      '(no output captured)';
-    const header =
-      turn.status === 'error'
-        ? '[Auto-bridged: worker 异常终止]'
-        : '[Auto-bridged: worker 已完成，系统自动回传结果]';
-    const bridgeText = `${header}\n\n${finalText}`;
-    try {
-      const result = await deps.sendAutoBridgeToLead(
-        state.leadSessionId,
-        bridgeText,
-        state.workerId,
-      );
-      const latest = autoBridge.get(sessionId);
-      if (latest !== state || latest.version !== version) return 'skipped';
-      if (result.accepted) {
-        deletePendingReport(sessionId);
-        return 'accepted';
-      }
-      latest.inFlight = false;
-      latest.retryAfterRejectedDelivery = true;
-      return 'rejected';
-    } catch (err) {
-      const latest = autoBridge.get(sessionId);
-      if (latest === state && latest.version === version) {
-        latest.inFlight = false;
-        latest.retryAfterRejectedDelivery = true;
-      }
-      deps.log.warn('orca auto-bridge failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
+    // A manual report may be awaiting host acceptance. Never hold the transition lock
+    // across delivery: Lead acceptance can immediately dispatch another Worker turn.
+    for (;;) {
+      while (state.reportsInFlight.size) await Promise.all([...state.reportsInFlight]);
+      const decision = await withWorkerTransition(state.workerId, async () => {
+        if (autoBridge.get(sessionId) !== state || !state.pending) return 'skipped' as const;
+        // A report can begin while this transition is queued behind another mutation.
+        if (state.reportsInFlight.size) return 'wait' as const;
+        if (!state.ready) {
+          state.deferred = turn;
+          return 'deferred' as const;
+        }
+        if (state.inFlight) return 'skipped' as const;
+        state.inFlight = true;
+        state.retryAfterRejectedDelivery = false;
+        return 'send' as const;
       });
-      return 'rejected';
+      if (decision === 'wait') continue;
+      if (decision !== 'send') return decision;
+      break;
     }
+    const finalText = turn.finalText.trim() || state.capturedText.trim()
+      || turn.diagnostic?.trim() || '(no output captured)';
+    const header = turn.status === 'error'
+      ? '[Auto-bridged: worker 异常终止]'
+      : '[Auto-bridged: worker 已完成，系统自动回传结果]';
+    let accepted = false;
+    try {
+      accepted = (await deps.sendAutoBridgeToLead(
+        state.leadSessionId, `${header}\n\n${finalText}`, state.workerId,
+      )).accepted;
+    } catch (err) {
+      deps.log.warn('orca auto-bridge failed', {
+        sessionId, err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return withWorkerTransition(state.workerId, async () => {
+      if (autoBridge.get(sessionId) !== state) return 'skipped';
+      state.inFlight = false;
+      if (accepted || !state.pending) {
+        deletePendingReport(sessionId);
+        return accepted ? 'accepted' : 'skipped';
+      }
+      state.retryAfterRejectedDelivery = true;
+      return 'rejected';
+    });
+  }
+
+  function captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture {
+    const runtime = deps.getLiveSession(sessionId);
+    return {
+      sessionId,
+      manualInterrupt: deps.getManualInterrupt(sessionId),
+      autoBridgeIdentity: autoBridge.get(sessionId) ?? null,
+      ...(runtime?.getTurnGeneration ? { runtime, turnGeneration: runtime.getTurnGeneration() } : {}),
+    };
+  }
+
+  function noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void {
+    if (!capture?.runtime) return;
+    const current = autoBridge.get(capture.sessionId);
+    const previous = provisionalDispatches.get(capture.sessionId)?.previousPendingIdentity;
+    const state = current === capture.autoBridgeIdentity ? current
+      : previous === capture.autoBridgeIdentity ? previous : undefined;
+    if (!state) return;
+    // Auto-resume can advance the vendor generation within one product turn. Only
+    // its unsuppressed terminal closes report ownership, before queued user B starts.
+    state.productTerminal ??= { runtime: capture.runtime, turnGeneration: capture.turnGeneration };
   }
 
   function uniqueWorkers(workers: OrcaWorkerRecordSnapshot[]): OrcaWorkerRecordSnapshot[] {
@@ -1174,8 +1202,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             provisionalDispatches.set(target.sessionId, currentProvisional);
             await deps.updateWorkerStatus(target.id, 'running');
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-            await markPendingReady(target.sessionId, currentPending);
           });
+          if (currentPending) await markPendingReady(target.sessionId, currentPending);
           await assertAcceptedCurrent?.();
         } catch (err) {
           try {
@@ -1608,23 +1636,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         return { ok: true as const, workerId: worker.id, role, label };
       }
 
-      // 插件 team plan 以 label 冻结 Worker 归属与委派自动授权且登记后不可变；
-      // 活动（未结算）计划引用到旧/新 label 时必须拒绝改 label，只放过 role 改名。
-      if (label !== worker.label && deps.isWorkerLabelLockedByPlan) {
-        const locked = await deps.isWorkerLabelLockedByPlan({
-          leadSessionId: link.leadSessionId,
-          labels: [worker.label, label],
-        });
-        if (locked) {
-          return {
-            ok: false as const,
-            errorCode: 'WORKER_STATE_CHANGED' as const,
-            message:
-              'worker label is referenced by the active plugin team plan and cannot be changed; change the role or release the worker first',
-          };
-        }
-      }
-
       const updated = await deps.updateWorkerIdentity({
         workerId: worker.id,
         role,
@@ -2042,7 +2053,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     moveWorkerQueuedMessage,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
-      if (!state || text.length === 0) return;
+      if (!state?.pending || text.length === 0) return;
       state.capturedText =
         opts?.isFinal === true
           ? text.slice(-MAX_CAPTURED_TEXT)
@@ -2050,6 +2061,38 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
+    },
+    captureLocalWorkerReport(sessionId) {
+      const state = autoBridge.get(sessionId);
+      // Direct user turns have no Lead obligation. In particular, a late callback must
+      // not look up and settle a new assignment that did not exist at capture time.
+      if (!state) return async () => {};
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== generation
+      )) return async () => {};
+      // Capture before delivery: an already-started final report may be accepted
+      // after terminal capture or B's start and still belongs to A.
+      let release!: () => void;
+      const settled = new Promise<void>(resolve => { release = resolve; });
+      state.reportsInFlight.add(settled);
+      let finished = false;
+      return async (accepted) => {
+        if (finished) return;
+        finished = true;
+        try {
+          await withWorkerTransition(state.workerId, async () => {
+            const provisional = provisionalDispatches.get(sessionId);
+            if (accepted && (autoBridge.get(sessionId) === state
+              || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
+          });
+        } finally {
+          state.reportsInFlight.delete(settled);
+          release();
+        }
+      };
     },
     async settleReportedWorker(capture, commit) {
       const link = await deps.getWorkerLinkBySessionId(capture.sessionId);
@@ -2077,13 +2120,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       // 重启前可能已经写入 done/error，但回报仍未被 Lead 接收。
       state.retryAfterRejectedDelivery = true;
     },
-    captureWorkerTerminalTurn(sessionId) {
-      return {
-        sessionId,
-        manualInterrupt: deps.getManualInterrupt(sessionId),
-        autoBridgeIdentity: autoBridge.get(sessionId) ?? null,
-      };
-    },
+    captureWorkerTerminalTurn,
+    noteWorkerProductTerminal,
     async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
@@ -2111,13 +2149,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const capture =
         params.capture?.sessionId === params.sessionId
           ? params.capture
-          : {
-              sessionId: params.sessionId,
-              manualInterrupt: deps.getManualInterrupt(params.sessionId),
-              autoBridgeIdentity: autoBridge.get(params.sessionId) ?? null,
-            };
+          : captureWorkerTerminalTurn(params.sessionId);
+      noteWorkerProductTerminal(capture);
       let manualInterruptOwnership = capture.manualInterrupt;
       const autoBridgeAtEntry = capture.autoBridgeIdentity;
+      const ownsRuntime = () => !capture.runtime || (
+        deps.getLiveSession(params.sessionId) === capture.runtime
+        && capture.runtime.getTurnGeneration?.() === capture.turnGeneration
+      );
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
       if (!link) return;
 
@@ -2128,6 +2167,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         const workers = await deps.listWorkersByLead(link.leadSessionId);
         const worker = workers.find((item) => item.id === link.workerId);
         let staleTerminal = false;
+        let completionState: AutoBridgeState | undefined;
         let provisionalWait:
           | {
               settlement: Promise<ProvisionalDispatchSettlement>;
@@ -2161,12 +2201,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             }
           }
 
-          // Every terminal branch is scoped to the identities captured before queue drain. A
-          // committed newer turn replaces either the auto-bridge object, the manual mark, or both.
-          if (
-            currentAutoBridge !== autoBridgeAtEntry ||
-            currentManualInterrupt !== manualInterruptOwnership
-          ) {
+          // A newer Lead assignment owns a different report identity; preserve that path.
+          if (currentAutoBridge !== autoBridgeAtEntry) {
+            staleTerminal = true;
+            return;
+          }
+          if (!ownsRuntime()) {
+            // Direct-user B can reuse A's report identity. Settle only A's obligation:
+            // its old terminal must not write B's status or clear B's Stop/provisional state.
+            const state = autoBridge.get(params.sessionId);
+            if (state?.pending && !manualInterruptOwnership) completionState = state;
+            else if (state) deletePendingReport(params.sessionId);
+            return;
+          }
+          if (currentManualInterrupt !== manualInterruptOwnership) {
             staleTerminal = true;
             return;
           }
@@ -2178,12 +2226,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
           const state = autoBridge.get(params.sessionId);
           if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
-            if (state?.retryAfterRejectedDelivery === true) {
-              await bridgeWorkerCompletion(params.sessionId, {
-                status: params.status,
-                finalText: params.finalText,
-                diagnostic: params.diagnostic,
-              });
+            if (state?.pending && (state.terminalObserved || state.retryAfterRejectedDelivery)) {
+              completionState = state;
               return;
             }
             // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done
@@ -2206,12 +2250,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           }
 
           await deps.updateWorkerStatus(link.workerId, params.status);
+          if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-          await bridgeWorkerCompletion(params.sessionId, {
-            status: params.status,
-            finalText: params.finalText,
-            diagnostic: params.diagnostic,
-          });
+          if (state && !state.pending) clearRuntimeState(params.sessionId);
+          else completionState = state;
         });
 
         if (provisionalWait) {
@@ -2234,6 +2276,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           return;
         }
         if (staleTerminal) return;
+        if (completionState) {
+          await bridgeWorkerCompletion(params.sessionId, params, completionState);
+          // Manual acceptance can win while terminal waits outside the lock.
+          await withWorkerTransition(link.workerId, async () => {
+            if (completionState && autoBridge.get(params.sessionId) === completionState && !completionState.pending) {
+              // A new direct-user turn may also start while delivery waits outside the lock.
+              if (ownsRuntime()) clearRuntimeState(params.sessionId);
+              else deletePendingReport(params.sessionId);
+            }
+          });
+        }
         break;
       }
 

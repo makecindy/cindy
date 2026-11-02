@@ -9,6 +9,7 @@ import {
 } from "@/session/remoteTaskSuggestionsModel";
 import type { MobileHomePresentation } from "@/session/mobileHome";
 import type { RemoteSessionListItem } from "@/session/sessionList";
+import { deviceDisplayName } from "@/device-link/deviceName";
 
 // Source-fragment assertions must also work with Windows CRLF checkouts.
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
@@ -145,7 +146,7 @@ describe("recommendation route target", () => {
     expect(suggestedBody).toBeTruthy();
     expect(source.match(/onSelect=\{openSuggestedSession\}/g)).toHaveLength(2);
     expect(source.match(/onNewSession=\{\(\) => openSuggestedSession\(\)\}/g)).toHaveLength(2);
-    const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", `
+    const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", "deviceDisplayName", `
       const newSessionTargetRef = { current: {
         primaryDevice: { deviceId: 'fallback', label: 'Fallback' },
         newSessionDeviceOptions: [{ deviceId: 'checked', name: 'Checked' }],
@@ -162,7 +163,7 @@ describe("recommendation route target", () => {
     for (const suggestion of [undefined, "findFile"]) {
       let route: { params: Record<string, string> } | undefined;
       suggested(suggestion, (project: unknown, id: unknown, deviceId: unknown) =>
-        open(project, id, deviceId, (value: typeof route) => { route = value; }), "checked");
+        open(project, id, deviceId, (value: typeof route) => { route = value; }, deviceDisplayName), "checked");
       expect(route?.params).toMatchObject({ deviceId: "checked", deviceName: "Checked", deviceExplicit: "1" });
       expect(route?.params.suggestion).toBe(suggestion);
     }

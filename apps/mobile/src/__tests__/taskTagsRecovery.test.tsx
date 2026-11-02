@@ -508,3 +508,69 @@ it("offers retry only for failed reads, not for failed writes", async () => {
   expect(state.message).toBe("taskTags.failed");
   expect(state.canRetry).toBe(false);
 });
+
+it("persists native reorder and confirmed deletion when the panel is reopened", async () => {
+  const second = { ...tag, id: "second", name: "Home" };
+  let catalog = [tag, second];
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "reorder") {
+      catalog = request.tagIds.map((id: string) =>
+        catalog.find((item) => item.id === id)!,
+      );
+    }
+    if (request.action === "delete") {
+      catalog = catalog.filter((item) => item.id !== request.tagId);
+    }
+    return {
+      tags: catalog,
+      sessions: [],
+      ...(request.action === "previewDelete"
+        ? {
+            deletion: { tagId: tag.id, revision: tag.revision, count: 2 },
+          }
+        : {}),
+    };
+  });
+  let state: any;
+  const open = async (key: string) =>
+    act(async () =>
+      root.render(
+        <TaskTagsPanel
+          key={key}
+          session={session}
+          expanded
+          onExpandedChange={onExpandedChange}
+          renderExpanded={(value) => {
+            state = value;
+            return null;
+          }}
+        />,
+      ),
+    );
+  await open("initial");
+  await act(async () => state.onMove(0, 1));
+  await open("reordered");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second", "tag"]);
+  await act(async () => state.onEdit("tag"));
+  await act(async () => state.form.onDelete());
+  expect(state.page).toBe("delete");
+  expect(catalog).toHaveLength(2);
+  expect(
+    h.invoke.mock.calls.some((call) => call[2][0].action === "delete"),
+  ).toBe(false);
+  await act(async () => state.deletion.onConfirm());
+  expect(h.invoke.mock.calls.at(-1)!.slice(0, 3)).toEqual([
+    "host",
+    "local-db:task-tags:execute",
+    [
+      {
+        action: "delete",
+        tagId: "tag",
+        revision: tag.revision,
+        expectedCount: 2,
+      },
+    ],
+  ]);
+  await open("deleted");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second"]);
+});

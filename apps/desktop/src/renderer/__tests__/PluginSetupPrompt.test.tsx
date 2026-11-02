@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '@/i18n';
 import i18n from '@/i18n';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
+import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { parsePendingPluginSetup, type PendingPluginSetup } from '@/lib/makerChatStore';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 
@@ -705,5 +706,38 @@ describe('teammate authorization card presentation', () => {
       commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={() => {}} />);
     expect(screen.getByText('Filo Google')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+// F23 regression: real local-only prompt (not the cross-device pending setup DTO).
+// Existing setup-card tests don't exercise consent or draft/live-task timing. Unit.
+describe('local interactive-page enable prompt', () => {
+  function host(granted = true) {
+    const api = { uiPrompts: vi.fn(async () => [{ id: 'demo', name: 'Demo', version: '1' }]),
+      onChanged: vi.fn(() => () => {}),
+      requestUiApproval: vi.fn(async () => ({ granted })),
+      deferUiPrompt: vi.fn(async () => {}) };
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { ghosts: api } });
+    return api;
+  }
+  it('enables pages for the next plugin call without replacing the task', async () => {
+    const api = host();
+    render(<PluginUiEnablePrompt />);
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('newChat.pluginUi.enable') }));
+    await screen.findByText(i18n.t('newChat.pluginUi.ready'));
+    expect(api.requestUiApproval).toHaveBeenCalledWith('demo');
+  });
+  it('defers only this plugin version without opening consent', async () => {
+    const api = host(); render(<PluginUiEnablePrompt />);
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('newChat.pluginUi.later') }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: i18n.t('newChat.pluginUi.enable') })).toBeNull());
+    expect(api.deferUiPrompt).toHaveBeenCalledWith('demo', '1');
+    expect(api.requestUiApproval).not.toHaveBeenCalled();
+  });
+  it('does not claim activation when consent was declined', async () => {
+    host(false); render(<PluginUiEnablePrompt />);
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('newChat.pluginUi.enable') }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: i18n.t('newChat.pluginUi.enable') })).toBeNull());
+    expect(screen.queryByText(i18n.t('newChat.pluginUi.ready'))).toBeNull();
   });
 });

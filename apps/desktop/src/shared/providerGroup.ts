@@ -155,7 +155,8 @@ export function readProviderGroupMemberQuota(value: unknown): ProviderGroupMembe
 
 /**
  * 任务进行中换号的提议(provider-groups.md §6.2「任务进行中换号」)：用户自己发下一条消息前问任务所在的电脑。
- * `ask` = 弹窗问；`auto` = 这个任务选过「以后自动换」，不再问，直接确认这个提议。`label` 是要换去的那台(带账号名)。
+ * `ask` = 弹窗问；`auto` = 同账号先尝试原生接续，或任务已有自动换号偏好。原生失败由宿主单独确认摘要回退。
+ * `label` 是要换去的那台(带账号名)。旧客户端已支持 auto，无需新增协议字段。
  */
 export type ProviderGroupRebalanceSuggestion =
   | { kind: 'ask' | 'auto'; memberKey: string; label: string; quota: ProviderGroupMemberQuota }

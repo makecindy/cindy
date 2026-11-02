@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { isProviderDisabled } from '@cindy/model-providers';
 
 import type { ModelAccessCredentialSource } from '../../shared/modelAccess.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { getModelAccessCredentialsStore } from './credentialsStore.js';
 
@@ -174,7 +176,8 @@ export function installCindyGatewayKeyRejectionReporter(
   }
   const log = createLogger('modelAccess');
   installedReporter = createGatewayKeyRejectionReporter({
-    canUseCindyGateway: () => getAppCapabilities().canUseCindyGateway,
+    canUseCindyGateway: () => getAppCapabilities().canUseCindyGateway
+      && !isProviderDisabled(readModelDisableOverrides(), 'xd'),
     isSessionBoundaryPending: isAppSessionBoundaryPending,
     getCredentialSource: () => getModelAccessCredentialsStore().getSource(),
     readCurrentKey: () => getProviderSecretStore().get('xd'),

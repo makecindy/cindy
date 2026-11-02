@@ -139,6 +139,31 @@ function boundaries(stubs, replaced, overlay) {
 
 const sourcePath = (file) => path.resolve(root, file.replace(/ with \{[^}]*\}$/, ''));
 
+// Bundle Vite's ?worker imports as real module workers, including --compare
+// sources. Keep their inputs in the page fingerprint and affected-page scan.
+function workerModules(definition, overlay, inputs, outputs) {
+  return {
+    name: 'ui-page-workers',
+    setup(build) {
+      build.onResolve({ filter: /\?worker$/ }, args => ({
+        path: path.resolve(args.resolveDir, args.path.slice(0, -7)), namespace: 'ui-worker',
+      }));
+      build.onLoad({ filter: /.*/, namespace: 'ui-worker' }, async args => {
+        const result = await esbuild.build({
+          ...common(definition, [boundaries(new Map(), {}, overlay)]),
+          entryPoints: [args.path], entryNames: 'worker-[hash]',
+        });
+        for (const file of Object.keys(result.metafile.inputs)) inputs.add(sourcePath(file));
+        outputs.push(...result.outputFiles);
+        const script = result.outputFiles.find(file => file.path.endsWith('.js'));
+        if (!script) throw new Error(`Worker did not emit JavaScript: ${args.path}`);
+        const url = `./${path.relative(outdir, script.path).split(path.sep).join('/')}`;
+        return { contents: `export default class extends Worker { constructor(options) { super(new URL(${JSON.stringify(url)}, import.meta.url), { ...options, type: 'module' }); } }`, loader: 'js' };
+      });
+    },
+  };
+}
+
 function entryContents(definition) {
   const entry = path.resolve(definition.dir, definition.entry);
   return {
@@ -206,17 +231,19 @@ async function sharedStyleInputs() {
 /** Everything a page is built from; used to decide which pages a changed file affects. */
 export async function scanPage(definition) {
   const replaced = {};
+  const workerInputs = new Set();
   const { contents } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [boundaries(stubTable(definition), replaced)]),
+    ...common(definition, [workerModules(definition, undefined, workerInputs, []), boundaries(stubTable(definition), replaced)]),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
   return {
     inputs: [
       ...Object.keys(result.metafile.inputs)
-        .filter((file) => !file.startsWith('ui-stub:') && file !== 'ui-page-entry.ts')
+        .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && file !== 'ui-page-entry.ts')
         .map(sourcePath),
+      ...workerInputs,
       ...(await sharedStyleInputs()),
     ],
     replaced,
@@ -230,15 +257,17 @@ export async function scanPage(definition) {
  */
 export async function buildPage(definition, overlay) {
   const replaced = {};
+  const workerInputs = new Set();
+  const workerOutputs = [];
   const { contents, entry } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [boundaries(stubTable(definition), replaced, overlay)]),
+    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)]),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
-  const inputs = Object.keys(result.metafile.inputs)
-    .filter((file) => !file.startsWith('ui-stub:') && file !== 'ui-page-entry.ts')
-    .map(sourcePath);
+  const inputs = [...new Set([...Object.keys(result.metafile.inputs)
+    .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && file !== 'ui-page-entry.ts')
+    .map(sourcePath), ...workerInputs])];
   // Tailwind scans exactly the imported source (and overlay text in compare mode).
   const config = loadConfig(configPath);
   const scanned = inputs.filter(
@@ -260,7 +289,7 @@ export async function buildPage(definition, overlay) {
     entryNames: 'styles',
   });
   const files = new Map();
-  for (const output of [...result.outputFiles, ...styles.outputFiles]) {
+  for (const output of [...result.outputFiles, ...styles.outputFiles, ...workerOutputs]) {
     const url = `/${path.relative(outdir, output.path).split(path.sep).join('/')}`;
     files.set(url, {
       contentType: CONTENT_TYPES[path.extname(output.path)] ?? 'application/octet-stream',

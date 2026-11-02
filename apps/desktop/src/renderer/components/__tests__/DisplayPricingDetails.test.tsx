@@ -82,6 +82,28 @@ describe('DisplayPricingDetails', () => {
   );
 
   describe.each(Object.keys(locales) as Array<keyof typeof locales>)('%s', locale => {
+    // Unit contract: the 13 published labels are localized; supplier text must not be guessed.
+    // Old cases only used custom labels. Render one item for each published label and two raw labels.
+    it('localizes published charge labels and preserves custom labels exactly', async () => {
+      const copy = locales[locale].newChat.modelSelector.displayPricing;
+      const labels = [
+        ['Text Input', copy.roles.text.input], ['Text Output', copy.roles.text.output],
+        ['Image Input', copy.roles.image.input], ['Image Output', copy.roles.image.output],
+        ['Audio Input', copy.roles.audio.input], ['Audio Output', copy.roles.audio.output],
+        ['Video Input', copy.roles.video.input], ['Video Output', copy.roles.video.output],
+        ['Text Cache Read', copy.roles.text.cacheRead], ['Text Cache Write', copy.roles.text.cacheWrite],
+        ['Image Cache Read', copy.roles.image.cacheRead],
+        ['Duration Input', copy.durationInput], ['Duration Output', copy.durationOutput],
+        ['Text input', 'Text input'], ['<b>Custom charge</b>', '<b>Custom charge</b>'],
+      ];
+      const { container } = await renderPricing({ currency: 'CNY', displayPricing: {
+        items: labels.map(([label]) => ({ ...item, label })),
+      } }, locale);
+      for (const [, expected] of labels) {
+        expect(screen.getAllByText(expected)).toHaveLength(labels.filter(([, text]) => text === expected).length);
+      }
+      expect(container.querySelector('b')).toBeNull();
+    });
     it.each([{ price: 0, discount: 0 }, { price: 0.5, discount: 1 }])(
       'shows neutral free wording for %j without implying a limited-time offer',
       async ({ price, discount }) => {

@@ -1,6 +1,10 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { claudeBehaviorFlagsForSpawn, claudeToolSearchMode } from '../claude-behavior-flags.js';
+import { readUserToolSearchOverride } from '../claude-user-tool-search.js';
 import { shouldCloseSessionForCredentialSwitch } from '../codex-credential-switch.js';
 
 describe('claudeBehaviorFlagsForSpawn', () => {
@@ -106,5 +110,35 @@ describe('claudeBehaviorFlagsForSpawn', () => {
       currentModel: 'x-ai/grok-4.6',
       nextModel: 'openai/gpt-5.4',
     })).toBe(false);
+  });
+
+  // issue #7524:自定义供应商默认 'false'(#2929 防线),但用户在 settings.json / 宿主环境
+  // 里显式写下的 ENABLE_TOOL_SEARCH 不能被静默覆盖;未显式配置时默认值不变。
+  it('lets an explicit user ENABLE_TOOL_SEARCH override the fail-closed default', () => {
+    const base = { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', oauthConnected: () => false } as const;
+    expect(claudeBehaviorFlagsForSpawn({ ...base, userToolSearch: () => 'true' }).ENABLE_TOOL_SEARCH).toBe('true');
+    expect(claudeBehaviorFlagsForSpawn({ ...base, userToolSearch: () => undefined }).ENABLE_TOOL_SEARCH).toBe('false');
+    expect(claudeBehaviorFlagsForSpawn(base).ENABLE_TOOL_SEARCH).toBe('false');
+  });
+
+  it('reads the user override from host env first, then ~/.claude/settings.json env; ignores junk', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-toolsearch-'));
+    try {
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+      fs.mkdirSync(path.join(home, '.claude'));
+      const write = (body: string) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), body);
+      write(JSON.stringify({ env: { ENABLE_TOOL_SEARCH: ' TRUE ' } }));
+      expect(readUserToolSearchOverride({}, home)).toBe('true');
+      expect(readUserToolSearchOverride({ ENABLE_TOOL_SEARCH: 'auto:10' }, home)).toBe('auto:10');
+      write(JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'banana' } }));
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+      // CLI 照常应用带 BOM / 注释 / 尾逗号的设置,这里也必须读到(否则显式 override 仍被覆盖)。
+      write(`\uFEFF{\n  // keep tool search on\n  "env": { /* note */ "ENABLE_TOOL_SEARCH": "true", },\n}`);
+      expect(readUserToolSearchOverride({}, home)).toBe('true');
+      write('{ not json');
+      expect(readUserToolSearchOverride({}, home)).toBeUndefined();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

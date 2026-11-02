@@ -1,6 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
-import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
+import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -51,11 +51,6 @@ import {
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
-
-/** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
-function isBotPrivateInput(clientId: string): boolean {
-  return clientId.startsWith('bot-dm:') || isBotGroupClientId(clientId);
-}
 
 interface DismissedInteraction {
   kind: InteractionRequest['kind'];
@@ -120,7 +115,7 @@ export interface PrepareSessionEventDeps {
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
     'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'getAcceptedInputProvenance' | 'isActiveTaskCoordination'
-  > | null;
+  > & Partial<Pick<AgentInputCoordinator, 'isActiveInputOwnerAuthored'>> | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
     doneAt: number,
@@ -184,6 +179,10 @@ export function prepareSessionEvent(
       },
     };
   }
+  if (event.turnScope !== 'background'
+    && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
+    revealScheduledOutput(event.turnOrigin);
+  }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
@@ -196,7 +195,12 @@ export function prepareSessionEvent(
     const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
     // Private-message visibility is still owned by the accepted input, even
     // though the notice is independent of the model's reply/usage state.
-    const privateReply = inputId ? isBotPrivateInput(inputId) : event.agentMeta?.botPrivateReply;
+    const inputProvenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
+    const replyInputId = inputId && inputProvenance?.clientId === inputId && inputProvenance.autoResume
+      ? inputProvenance.retrySourceClientId ?? inputId : inputId;
+    const privateReply = inputId
+      ? isBotGroupClientId(inputId) || (!!replyInputId?.startsWith('bot-dm:') && !event.runtimeRecovery)
+      : event.agentMeta?.botPrivateReply;
     if (typeof text === 'string') {
       onStandaloneTextEvent(session.id, text,
         typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
@@ -210,6 +214,9 @@ export function prepareSessionEvent(
     deps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
   }
   // Snapshot before onTurnEvent releases the active input and drains the next queue item.
+  const pluginTargetInputIds = event.turnScope !== 'background'
+    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
+      .filter(id => id.startsWith('plugin-target:')) : [];
   const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
     ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
       .filter(id => taskResultClientIdForInput(id) !== null) : [];
@@ -227,8 +234,11 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          // Coordination hides the incoming report, not the teammate's reply.
-          botPrivateReply: isBotPrivateInput(activeInputId),
+          // B2B is internal even when it carries a verified owner request: visibility
+          // must not change that request's authority. Errors/recovery still reach the owner.
+          // Task coordination retains its separate, visible reply contract.
+          botPrivateReply: isBotGroupClientId(activeInputId)
+            || (!!groupLaneInputClientId?.startsWith('bot-dm:') && event.type !== 'error' && !event.runtimeRecovery),
           // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // The user input this turn answers; companion chats can show it above the reply
@@ -610,6 +620,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    pluginTargetInputIds,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,

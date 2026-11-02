@@ -4,6 +4,7 @@ export const REMOTE_PLUGIN_SETTINGS_CLOSE = 'device-link:plugin-settings:close';
 export const REMOTE_PLUGIN_SETTINGS_DIRECTORY = 'device-link:plugin-settings:directory';
 export const REMOTE_PLUGIN_SETTINGS_DIRECTORY_ANSWER =
   'device-link:plugin-settings:answer-directory';
+export const REMOTE_PLUGIN_SETTINGS_MODEL_ANSWER = 'device-link:plugin-settings:answer-model-picker';
 
 export interface RemotePluginSettingsTarget {
   deviceId: string;

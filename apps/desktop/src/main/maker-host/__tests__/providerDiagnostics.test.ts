@@ -230,6 +230,8 @@ describe('buildProbeRequest', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/responses');
     const headers = init.headers as Record<string, string>;
     expect(headers['authorization']).toBe('Bearer sk-or');
+    expect(headers['HTTP-Referer']).toBe('https://cindy.app');
+    expect(headers['X-OpenRouter-Title']).toBe('Cindy');
     expect(headers['x-api-key']).toBeUndefined();
     const body = JSON.parse(String(init.body)) as { model: string; stream: boolean };
     expect(body.model).toBe('z-ai/glm-5.2');

@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3';
+import { mkdtemp, writeFile, rm, truncate } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
@@ -168,6 +171,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     writeModelPriceOverride: vi.fn(() => {}),
     clearModelPriceOverride: vi.fn(() => {}),
     stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
+    stageClearProviderModelCompaction: vi.fn(() => () => true),
     broadcastPricingChanged: vi.fn(() => {}),
     ...over,
   };
@@ -180,13 +184,132 @@ function createProviderImportId(payload: unknown): string {
   return importId;
 }
 
-afterEach(() => {
+let importDirectory: string | undefined;
+async function importFile(contents: string): Promise<string> {
+  importDirectory ??= await mkdtemp(join(tmpdir(), 'cindy-provider-import-'));
+  const path = join(importDirectory, 'provider.json');
+  await writeFile(path, contents, 'utf8');
+  return path;
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
   clearProviderImportDraftsForTest();
   if (client) clearCurrentDbClient(client);
   raw?.close();
   client = null;
   raw = null;
+  if (importDirectory) await rm(importDirectory, { recursive: true, force: true });
+  importDirectory = undefined;
+});
+
+// #7760, unit: invoke the real file IPC, reader, preview and confirmation handlers.
+// Existing import tests start from URL drafts and miss file I/O, owner races and
+// secret-safe parse errors. Minimal inputs: a >24 KiB catalog or one invalid file.
+// Measured standalone on Windows: 8.68s (244 tests, 2026-10-29); existing provider
+// integration setup collects in 4.59s, tests run in 3.84s. No per-case module resets.
+describe('provider file import IPC', () => {
+  const payload = (models: unknown[]) => ({ kind: 'custom', name: 'File provider',
+    auth: { method: 'apiKey', apiKey: 'FAKE-FILE-KEY' }, endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://import.example.test/v1', targets: ['pi'], models,
+      headers: { 'X-Secret': 'FAKE-FILE-HEADER' },
+    }],
+  });
+
+    it('previews a batch without writes and confirms only the selected provider through the existing handler', async () => {
+      mountDb();
+      const first = { ...payload(['model-a']), name: 'Batch A' };
+      const second = { ...payload(['model-b']), name: 'Batch B' };
+      const path = await importFile(JSON.stringify({ providers: [first, second] }));
+      const deps = makeDeps({ selectProviderImportFile: async () => path });
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, deps);
+      const ids = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE) as string[];
+      expect(ids).toHaveLength(2);
+      const previews = await Promise.all(ids.map(id => harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id))) as ProviderImportPreview[];
+      expect(previews.map(p => p.name)).toEqual(['Batch A', 'Batch B']);
+      expect(JSON.stringify(previews)).not.toContain('FAKE-FILE');
+      expect(await listCustomProviders()).toEqual([]);
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, ids[1]);
+      expect((await listCustomProviders()).map(p => p.name)).toEqual(['Batch B']);
+      expect(await getCustomProvider(previews[0].providerId)).toBeNull();
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CANCEL, ids[0]);
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, ids[0])).rejects.toThrow(/INVALID_PARAMS/);
+    });
+
+    it('previews a large file without writes, then saves every model and credential only on confirmation', async () => {
+    mountDb();
+    const models = Array.from({ length: 257 }, (_, i) => ({ id: `model-${i}`, name: `模型 ${i}`,
+      group: 'custom:file', maxOutputTokens: 32000, contextWindow: 200000 }));
+    const path = await importFile(JSON.stringify(payload(models)));
+    const deps = makeDeps({ selectProviderImportFile: async () => path });
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, deps);
+    const id = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE) as string;
+    expect(typeof id).toBe('string');
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id) as ProviderImportPreview;
+    expect(preview.runtimes).toMatchObject([{ modelCount: 257, hasApiKey: true }]);
+    expect(JSON.stringify(preview)).not.toContain('FAKE-FILE');
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, id)).toMatchObject({ ok: true });
+    const saved = await getCustomProvider(preview.providerId);
+    expect(saved?.runtimes.pi?.models).toEqual(models);
+    expect(JSON.stringify(saved)).not.toContain('FAKE-FILE');
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledWith(preview.providerId, 'pi', 'FAKE-FILE-KEY');
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'pi', { 'X-Secret': 'FAKE-FILE-HEADER' });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id)).rejects.toThrow(/INVALID_PARAMS/);
+  });
+
+  it.each(['syntax', 'schema', 'too-large', 'missing'] as const)(
+    'returns a safe actionable error for a %s file', async (scenario) => {
+      const path = await importFile(scenario === 'syntax' ? '{"FAKE-PRIVATE-SECRET":' :
+        JSON.stringify({ ...payload(['model']), 'FAKE-PRIVATE-SECRET': true }));
+      if (scenario === 'too-large') await truncate(path, 4 * 1024 * 1024 + 1);
+      if (scenario === 'missing') await rm(path);
+      const deps = makeDeps({ selectProviderImportFile: async () => path });
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, deps);
+      const error = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE).catch(value => value);
+      expect(extractIpcError(error)?.code).toBe(scenario === 'too-large' ? 'PROVIDER_IMPORT_FILE_TOO_LARGE'
+        : scenario === 'missing' ? 'PROVIDER_IMPORT_FILE_READ_FAILED' : 'PROVIDER_IMPORT_FILE_INVALID');
+      expect(String(error)).not.toContain('FAKE-PRIVATE-SECRET');
+      expect(String(error)).not.toContain(path);
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    },
+  );
+
+  it('cancels cleanly and rejects caller-supplied paths or untrusted senders before opening the picker', async () => {
+    const select = vi.fn(async () => null);
+    let trusted = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ selectProviderImportFile: select,
+      assertTrustedSender: () => { if (!trusted) throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE)).resolves.toBeNull();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE, 'arbitrary-path')).rejects.toThrow(/INVALID_PARAMS/);
+    trusted = false;
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE)).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a file selected after the account generation changed', async () => {
+    let finish!: (path: string) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      selectProviderImportFile: () => new Promise(resolve => { finish = resolve; }),
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+    });
+    registerProviderHandlers(harness, deps);
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE);
+    generation = 3; // A -> B -> A must still reject the earlier selection.
+    finish(join(tmpdir(), 'must-not-be-read.json'));
+    await expect(pending).rejects.toThrow(/active account changed/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
 });
 
 describe('provider:list IPC handler', () => {
@@ -2625,6 +2748,7 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect(deps.stageClearProviderDisableOverrides).toHaveBeenCalledWith('custom:xai');
     expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('custom:xai');
+    expect(deps.stageClearProviderModelCompaction).toHaveBeenCalledWith('custom:xai');
     expect(await listCustomProviders()).toEqual([]);
   });
 
@@ -3347,6 +3471,46 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.name).toBe('Second edit');
   });
 
+  // PR #7460 P1: the old delete transaction cleaned prices/disable flags only.
+  // Unit: delete + recreate must not revive a saved percentage; failed deletion
+  // must preserve it. Existing deletion tests never supplied compaction state.
+  it.each(['success', 'oauth-failed', 'cleanup-failed', 'restore-failed'] as const)(
+    'cleans model compaction inside the provider deletion transaction (%s)', async (outcome) => {
+      mountDb();
+      const harness = new IpcHarness();
+      let pct: number | null = 65;
+      const deps = makeDeps({
+        stageClearProviderModelCompaction: vi.fn(() => {
+          if (outcome === 'cleanup-failed') throw new Error('compaction cleanup failed');
+          const previous = pct;
+          pct = null;
+          return () => {
+            if (outcome === 'restore-failed') return false;
+            pct = previous;
+            return true;
+          };
+        }),
+        removeOAuthCredentials: vi.fn(() => outcome === 'success' ? () => true : null),
+      });
+      registerProviderHandlers(harness, deps);
+      await createCustomProvider(validConfig);
+      const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, validConfig.id);
+      if (outcome === 'success') {
+        await expect(deletion).resolves.toEqual({ ok: true });
+        expect(await getCustomProvider(validConfig.id)).toBeNull();
+        await createCustomProvider(validConfig);
+        expect(pct).toBeNull();
+      } else {
+        const message = outcome === 'cleanup-failed' ? 'compaction cleanup failed'
+          : outcome === 'restore-failed' ? 'could not be restored' : 'failed to remove existing OAuth';
+        await expect(deletion).rejects.toThrow(message);
+        expect(await getCustomProvider(validConfig.id)).not.toBeNull();
+        expect(pct).toBe(outcome === 'restore-failed' ? null : 65);
+        if (outcome === 'cleanup-failed') expect(deps.removeOAuthCredentials).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3415,6 +3579,7 @@ describe('provider:custom:* CRUD handlers', () => {
       const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id).catch(error => error);
       await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
       const writes = [deps.stageClearProviderDisableOverrides, deps.stageClearProviderModelPriceOverrides,
+        deps.stageClearProviderModelCompaction,
         deps.removeOAuthCredentials, deps.removeCustomProviderKey, deps.removeCustomProviderHeaders];
       for (const write of writes) expect(write).not.toHaveBeenCalled();
       if (outcome === 'switch-account') owner.generation++;
@@ -4593,6 +4758,53 @@ describe('model context limit IPC', () => {
   const primary = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-6' };
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+
+  // Unit: capability writes use the real IPC handler; no prior coverage of its owner/membership gate.
+  // A stale owner or unknown alias must not reach the persistent writer.
+  it('writes explicit false for all aliases and rejects stale owners, missing models and invalid values', async () => {
+    const harness = new IpcHarness();
+    const write = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelImageInputOverride: () => false,
+      writeModelImageInputOverride: write,
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, false, stamp))
+      .resolves.toEqual({ value: false, mixed: false });
+    expect(write).toHaveBeenCalledExactlyOnceWith([primary, related], false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, true, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...target, modelId: 'missing' }, true, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, 'false', stamp)).rejects.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+    // Reset remains possible after a model disappears from discovery.
+    await harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...primary, modelId: 'missing' }, null, stamp);
+    expect(write).toHaveBeenLastCalledWith([{ ...primary, modelId: 'missing' }], null);
+  });
+
+  it('saves model compaction for all aliases with owner and range validation', async () => {
+    const harness = new IpcHarness();
+    const writeModelCompaction = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      writeModelContextLimit: vi.fn(), writeModelCompaction,
+      readModelCompaction: () => ({ pct: 90, isCustomized: false }),
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, target)).resolves.toMatchObject({
+      compaction: { pct: 90, isCustomized: false },
+    });
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
+    expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
+    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+      await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
+    }
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+  });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
     const harness = new IpcHarness();

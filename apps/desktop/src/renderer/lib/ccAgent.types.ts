@@ -90,6 +90,17 @@ export type StoredMessageOrigin =
   | (MessageSessionOrigin & { displayText?: string })
   | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
 
+/** 新任务「让插件选」的结果记录(第一条消息下方的一行说明)。 */
+export interface PluginModelRouteNote {
+  pluginName: string;
+  outcome: 'routed' | 'kept';
+  /** routed：插件选的模型显示名与推理强度；kept：实际沿用的模型显示名。 */
+  modelName: string;
+  effort?: string;
+  reason?: string;
+  why?: 'no-opinion' | 'failed' | 'unavailable-route';
+}
+
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
  *
@@ -101,6 +112,8 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
+  pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
   modelChange?: { fromModel: string; toModel: string; modelOnly: true };
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
@@ -108,6 +121,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Native text item identity, used to reconcile streamed and imported history. */
+  agentMessageId?: string;
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
@@ -343,9 +358,11 @@ export interface Session {
   userId: string;
   title: string;
   workingDir: string | null;
+  /** Explicit project membership; old hosts/tasks fall back to workingDir. */
+  projectDir?: string | null;
   /**
    * 侧边栏/产品归属语义。
-   * - project: workingDir 是项目目录, 参与 Projects 分组。
+   * - project: projectDir 决定 Projects 分组，旧任务回落 workingDir。
    * - dialogue: workingDir 只是对话运行/文件目录, 不参与 Projects 分组。
    */
   workspaceKind: WorkspaceKind;
@@ -367,6 +384,8 @@ export interface Session {
   runtimeBaseline?: SessionRuntimeProfileProjection;
   runtimeEffective?: SessionRuntimeProfileProjection;
   runtimePending?: SessionRuntimePendingProjection | null;
+  /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
+  runtimeBaselineRecoveryPending?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -382,6 +401,11 @@ export interface Session {
    */
   hiddenAt?: string | null;
   /**
+   * 用户在该任务上开了「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息，
+   * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
+   */
+  notificationsMuted?: boolean;
+  /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
    * 与 updatedAt 解耦——改 model/effort/title 等字段不会动它。
@@ -393,6 +417,8 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** Host-owned teammate link, also used by the existing history API. Display only. */
+  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
@@ -531,6 +557,11 @@ export interface AgentSwitchContent {
   handoff: string;
   /** Phase 2:true = 目标引擎续接(resume)了自己的停泊原生会话,交接为增量模式。 */
   resumed?: boolean;
+  /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
+  nativeHistory?: 'restored' | 'fallback';
+  toAgentDeviceId?: string | null;
+  toAgentDeviceName?: string | null;
+  switchReason?: 'quota-rebalance';
 }
 
 export interface Message {

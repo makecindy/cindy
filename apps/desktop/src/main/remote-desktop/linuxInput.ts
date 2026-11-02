@@ -18,6 +18,7 @@ export function resolveLinuxInputBinary(): Promise<string> {
     const hash = createHash('sha256').update(process.arch);
     for (const name of [
       'main.c',
+      'x11.h',
       'build.mjs',
       'virtual-keyboard-unstable-v1.xml',
       'wlr-virtual-pointer-unstable-v1.xml',
@@ -47,17 +48,63 @@ export function resolveLinuxInputBinary(): Promise<string> {
   return building;
 }
 
+export function isX11Desktop(platform: string = process.platform): boolean {
+  return (
+    platform === 'linux' && Boolean(process.env.DISPLAY) && !isWaylandDesktop(platform, process.env)
+  );
+}
+
 /** Probe registry support without creating devices or injecting input. */
 export async function readLinuxDesktopInputSupport(): Promise<boolean> {
-  if (!isWaylandDesktop(process.platform, process.env) || !process.env.HYPRLAND_INSTANCE_SIGNATURE)
+  const x11 = isX11Desktop();
+  if (
+    !x11 &&
+    (!isWaylandDesktop(process.platform, process.env) || !process.env.HYPRLAND_INSTANCE_SIGNATURE)
+  )
     return false;
   try {
-    const { stdout } = await exec(await resolveLinuxInputBinary(), ['--check'], {
-      timeout: 3000,
-      maxBuffer: 1024,
-    });
+    const { stdout } = await exec(
+      await resolveLinuxInputBinary(),
+      x11 ? ['--x11', '--check'] : ['--check'],
+      {
+        timeout: 3000,
+        maxBuffer: 1024,
+      },
+    );
     return stdout.trim() === 'ready';
   } catch {
     return false;
   }
+}
+
+/** Electron exposes X11 bounds in DIP; XTest needs pixels relative to the root.
+ * Reject ambiguous mixed scaling instead of clicking the wrong monitor. */
+export function x11InputGeometry(
+  displays: readonly {
+    id: number;
+    scaleFactor: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  }[],
+  displayId: string,
+): string[] {
+  const display = displays.find((d) => String(d.id) === displayId);
+  if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
+  const scale = display.scaleFactor;
+  if (!Number.isFinite(scale) || scale <= 0 || displays.some((d) => d.scaleFactor !== scale))
+    throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+  const x = Math.min(...displays.map((d) => d.bounds.x));
+  const y = Math.min(...displays.map((d) => d.bounds.y));
+  const values = [
+    display.bounds.x - x,
+    display.bounds.y - y,
+    display.bounds.width,
+    display.bounds.height,
+  ].map((n) => Math.round(n * scale));
+  if (
+    values.some((n) => !Number.isSafeInteger(n) || n < 0 || n > 32767) ||
+    values[2] === 0 ||
+    values[3] === 0
+  )
+    throw new Error('DESKTOP_DISPLAY_MISSING');
+  return values.map(String);
 }

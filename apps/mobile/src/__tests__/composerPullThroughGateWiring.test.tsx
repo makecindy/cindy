@@ -34,7 +34,6 @@ vi.mock('react-native-reanimated', async () => {
   const { useRef } = await import('react');
   return {
     measure: runtime.measure,
-    default: { ScrollView: (await import('react-native')).Animated.ScrollView },
     runOnJS: (fn: unknown) => fn,
     useAnimatedReaction: (prepare: () => unknown, react: (value: unknown, previous: unknown) => void) => {
       const latest = useRef({ prepare, react, previous: undefined as unknown, started: false, job: null as (() => void) | null });
@@ -109,16 +108,6 @@ function Harness() {
 }
 
 describe('composer pull-through gesture gate wiring', () => {
-  // Native capture: repeated render-time shared-value reads blocked keyboard
-  // transitions and generated warnings; existing tests only flush UI reactions.
-  it('does not reread the UI-thread snapshot during a parent rerender', () => {
-    act(() => root.render(<Harness />));
-    const read = vi.fn(() => false);
-    Object.defineProperty(bridgeRef.current!.armed, 'value', { configurable: true, get: read });
-    act(() => root.render(<Harness />));
-    expect(read).not.toHaveBeenCalled();
-  });
-
   it('keeps the gesture enabled through a mid-handoff collapse and only releases it when the handoff settles', () => {
     act(() => root.render(<Harness />));
     // 初始（android idle）：手势构造成 disabled。

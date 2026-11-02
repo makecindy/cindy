@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { and, eq, sql } from 'drizzle-orm';
+import { sessions } from '../../localDb/schema.js';
 
 import {
   createPiIdleReleaseWatcher,
+  piIdleReleaseCandidateWhere,
+  piIdleReleaseIdleSince,
   type PiIdleReleaseCandidate,
   type PiIdleReleaseWatcherDeps,
 } from '../piIdleReleaseWatcher';
@@ -45,6 +51,52 @@ afterEach(() => {
 });
 
 describe('createPiIdleReleaseWatcher', () => {
+  // Unit regression: the real scan/recheck SQL excluded hidden plugin tasks.
+  // Existing tests injected preselected candidates and could not catch that leak.
+  // Minimal input: one idle hidden Pi plugin task; use in-memory SQLite, no user DB.
+  it.each(['active', 'archived'])('releases idle %s plugin runtimes through the database filter', async (status) => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(`CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, agent_kind TEXT, status TEXT, source TEXT, orca_role TEXT,
+        hidden_at INTEGER, remote_host_id TEXT, agent_device_id TEXT,
+        updated_at INTEGER, last_turn_ended_at INTEGER, user_send_at INTEGER
+      )`);
+      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      insert.run('plugin', 'pi', status, 'plugin', null, 1, null, null, 0, 0, 0);
+      insert.run('desktop', 'pi', status, 'desktop', null, null, null, null, 0, 0, 0);
+      insert.run('hidden-desktop', 'pi', status, 'desktop', null, 1, null, null, 0, 0, 0);
+      insert.run('worker', 'pi', status, 'plugin', 'worker', 1, null, null, 0, 0, 0);
+      insert.run('ssh', 'pi', status, 'plugin', null, 1, 'ssh', null, 0, 0, 0);
+      insert.run('device', 'pi', status, 'plugin', null, 1, null, 'device', 0, 0, 0);
+      insert.run('bot', 'pi', status, 'bot', null, null, null, null, 0, 0, 0);
+      insert.run('codex', 'codex', status, 'plugin', null, 1, null, null, 0, 0, 0);
+      insert.run('deleted', 'pi', 'deleted', 'plugin', null, 1, null, null, 0, 0, 0);
+      insert.run('recent', 'pi', status, 'plugin', null, 1, null, null, 0, 90_000, 0);
+      const db = drizzle(sqlite);
+      const idleSince = piIdleReleaseIdleSince();
+      const { deps, session, watcher } = createDeps({
+        listCandidates: async before => db.select({ id: sessions.id, idleSinceMs: idleSince }).from(sessions)
+          .where(and(piIdleReleaseCandidateWhere(), sql`${idleSince} < ${before}`)).all(),
+        readIdleSinceMs: async id => db.select({ idleSinceMs: idleSince }).from(sessions)
+          .where(and(eq(sessions.id, id), piIdleReleaseCandidateWhere())).get()?.idleSinceMs ?? null,
+      });
+      await watcher.scanNow();
+      expect(vi.mocked(deps.getSession).mock.calls.map(([id]) => id).sort()).toEqual(['desktop', 'plugin']);
+      expect(session.closeIfIdle).toHaveBeenCalledTimes(2);
+      // The lock recheck must also see plugin activity that arrived after selection.
+      vi.mocked(deps.withSessionLock).mockImplementation(async (id, task) => {
+        if (id === 'plugin') sqlite.prepare('UPDATE sessions SET user_send_at = 100000 WHERE id = ?').run(id);
+        return task();
+      });
+      session.closeIfIdle.mockClear();
+      await watcher.scanNow();
+      expect(session.closeIfIdle).toHaveBeenCalledOnce();
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it('does not scan when idle release is disabled', async () => {
     const { deps, watcher } = createDeps({
       readIdleReleaseMinutes: vi.fn(() => 0),

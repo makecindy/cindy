@@ -11,6 +11,9 @@ import { clearAllInteractionDrafts, readAskUserDraft, readPlanReviewDraft } from
 import { forwardNavigationLock } from '@/utils/navigationLock';
 import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/chatFilePathContext';
 import { QuestionReferenceText } from '@/session/QuestionReferenceText';
+import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
+import { classifyChatPathLinkTarget } from '@/session/chatPathCandidate';
+import { Text } from '@/components/AppText';
 import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import { i18n } from '@/i18n';
 import { AskCardAuthContext } from '@/session/askCardAuth';
@@ -54,9 +57,9 @@ vi.mock('react-native', async () => {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string; accessibilityState?: { busy?: boolean }; accessibilityLabel?: string; style?: unknown;
   }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID, 'data-native-style': JSON.stringify(style), 'aria-busy': accessibilityState?.busy, 'aria-label': accessibilityLabel }, children);
   // Text keeps its onTextLayout so a test can report how many lines a label took.
-  const Text = ({ children, onTextLayout, onPress, testID }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void; onPress?: () => void; testID?: string }) => {
+  const Text = ({ children, onTextLayout, onPress, onLongPress, testID }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void; onPress?: () => void; onLongPress?: () => void; testID?: string }) => {
     if (onTextLayout) textLayouts.set(String(children), onTextLayout);
-    return createElement('span', { onClick: onPress, 'data-testid': testID }, children);
+    return createElement('span', { onClick: onPress, onContextMenu: onLongPress, 'data-testid': testID }, children);
   };
   return { View: view('div'), Text, Pressable: view('button'), Linking: { openURL: evidence.openURL },
     ScrollView: view('div'), Image: () => null, ActivityIndicator: () => null,
@@ -76,7 +79,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('lucide-react-native', async () => {
   const { createElement } = await import('react');
   return { ShieldCheck: () => null, MessageCircle: () => null, ChevronDown: () => null, ChevronUp: () => null, Check: () => null, CornerDownLeft: () => null,
-    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Pencil: () => null, Plus: () => null };
+    Maximize2: () => null, Minimize2: () => null, Minus: () => null, Mic: ({ color }: { color: string }) => createElement('span', { 'data-mic-color': color }), Square: ({ color }: { color: string }) => createElement('span', { 'data-stop-color': color }), Pencil: () => null, Plus: () => null };
 });
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -133,7 +136,7 @@ async function type(id: string, value: string) {
 
 // #6778, unit: render the real card/hook and start/stop dictation. Earlier tests
 // only checked labels and clicks, missing the invisible inverse-colour mic.
-// Preserve the existing unfilled control; only startup replaces the mic.
+// Preserve the unfilled control; distinguish startup, recording and processing.
 // Minimal input: one question in each answer layout, in either theme.
 it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answer layouts', async (mode) => {
   theme.mode = mode;
@@ -167,7 +170,7 @@ it.each(['light', 'dark'] as const)('keeps the recording mic visible in %s answe
     expect(button().getAttribute('aria-label')).toBe('session.common.voiceStopRecording');
     expect(button().getAttribute('aria-busy')).toBe('false');
     expect(style()).toEqual(idleStyle);
-    expect(micColor()).toBe(colors.textSecondary);
+    expect(button().querySelector('[data-stop-color]')!.getAttribute('data-stop-color')).toBe(colors.textSecondary);
     await click('interaction.ask.voice');
     expect(button().getAttribute('aria-label')).toBe('session.screen.voiceStartInput');
     expect(style()).toEqual(idleStyle);
@@ -239,6 +242,38 @@ it('queues a submit before the voice handle exists without pretending to record'
   await act(async () => finish());
   expect(resolveInteraction).toHaveBeenCalledOnce();
   expect(JSON.stringify(resolveInteraction.mock.calls[0])).toContain('最终回答');
+});
+
+// Unit: real answer card/hook, fake microphone. Earlier fixtures never returned
+// the controller's caret with a transcript, so a second take inserted at the
+// stale selection instead of following the previous sentence.
+it('continues a second dictation after the first sentence and shows processing while stopping', async () => {
+  const selections: unknown[] = [];
+  let finish!: () => void;
+  voiceStarter.start.mockImplementation(async (input) => {
+    selections.push(input.getSelection());
+    input.onListening();
+    return {
+      stop: () => new Promise<void>((resolve) => {
+        finish = () => { input.setText('第一句', { start: 3, end: 3 }); resolve(); };
+      }),
+      cancel: async () => undefined,
+    };
+  });
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [{ question: 'Answer?' }],
+  } }]);
+  await act(async () => root.render(<AskCardAuthContext.Provider value={{
+    getAccessToken: async () => null, refreshAccessToken: async () => null, apiFetch: async () => null,
+  }}><Harness /></AskCardAuthContext.Provider>));
+  await click('interaction.ask.voice');
+  await click('interaction.ask.voice');
+  const button = host.querySelector('[data-testid="interaction.ask.voice"]')!;
+  expect(button.getAttribute('aria-busy')).toBe('true');
+  await act(async () => finish());
+  await click('interaction.ask.voice');
+  expect(selections).toEqual([{ start: 0, end: 0 }, { start: 3, end: 3 }]);
+  expect(resolveInteraction).not.toHaveBeenCalled();
 });
 
 it.each(['stop', 'live'] as const)('retains text and permits manual correction after a %s failure', async (failure) => {
@@ -409,7 +444,7 @@ it.each(['options', 'previous'])('protects the answer while submitting before th
 // Unit regression for PR #6306 review: a signed-out microphone tap used to
 // render hardcoded Chinese. Existing receipt tests never tapped this entry.
 // Exercise the real card and hook in each supported locale, without auth.
-it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])('localizes the signed-out voice error in %s', async (locale) => {
+it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('localizes the signed-out voice error in %s', async (locale) => {
   const previousLanguage = i18n.language;
   try {
     await i18n.changeLanguage(locale);
@@ -477,6 +512,72 @@ it('keeps a changed question reference unclickable until its own verification', 
   await act(async () => root.render(<ReferenceFrame text="missing.html" />));
   expect(changedFrame).toEqual([false]);
   expect(onOpenPath).not.toHaveBeenCalled();
+});
+
+// Unit regression: previous coverage only tested auto-detected references.
+// A missing authored file link must still reach the controlled device's preview
+// (which reports read failures), without lighting up the same bare reference.
+it.each([true, false])('keeps missing file links actionable only when authored: %s', async (explicitLink) => {
+  const onOpenPath = vi.fn();
+  const fileContext: ChatFilePathContextValue = {
+    deviceId: 'd1', sessionId: 's1', workdir: '/repo', onOpenPath,
+    statPath: vi.fn(async (absPath: string) => ({ kind: 'missing' as const, resolvedPath: absPath })),
+  };
+  await act(async () => root.render(
+    <ChatFilePathContext.Provider value={fileContext}>
+      <ChatPathChipSpan
+        candidate={classifyChatPathLinkTarget('/repo/missing.html')}
+        explicitLink={explicitLink}
+        display="查看报告" SpanText={Text} chipStyle={{ textDecorationLine: 'underline' }}
+        plainStyle={{}} usePathState={useState}
+      />
+    </ChatFilePathContext.Provider>,
+  ));
+  const link = host.querySelector<HTMLElement>('[data-testid="message.markdownPathChip"]');
+  expect(!!link).toBe(explicitLink);
+  if (link) {
+    await act(async () => link.click());
+    expect(onOpenPath).toHaveBeenCalledExactlyOnceWith({
+      kind: 'file', absPath: '/repo/missing.html', relPath: 'missing.html',
+    });
+  } else {
+    expect(onOpenPath).not.toHaveBeenCalled();
+  }
+});
+
+// #7303: an authored directory without a trailing slash can be tapped before
+// background stat completes. Wait for its actual kind before choosing a route.
+it.each(['open', 'menu', 'unmounted', 'outside'] as const)('waits for an authored directory kind before acting: %s', async (mode) => {
+  const onOpenPath = vi.fn();
+  const onLongPressPath = vi.fn();
+  let finishStat!: (value: { kind: 'dir'; resolvedPath: string }) => void;
+  const pending = new Promise<{ kind: 'dir'; resolvedPath: string }>((resolve) => { finishStat = resolve; });
+  const fileContext: ChatFilePathContextValue = {
+    deviceId: 'd1', sessionId: 's1', workdir: '/repo', onOpenPath, onLongPressPath,
+    statPath: vi.fn(() => pending),
+  };
+  await act(async () => root.render(
+    <ChatFilePathContext.Provider value={fileContext}>
+      <ChatPathChipSpan candidate={classifyChatPathLinkTarget(mode === 'outside' ? '/other/components' : 'src/components')} explicitLink
+        display="目录" SpanText={Text} chipStyle={{}} plainStyle={{}} usePathState={useState} />
+    </ChatFilePathContext.Provider>,
+  ));
+  const link = host.querySelector<HTMLElement>('[data-testid="message.markdownPathChip"]')!;
+  await act(async () => mode === 'menu'
+    ? link.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    : link.click());
+  expect(onOpenPath).not.toHaveBeenCalled();
+  expect(onLongPressPath).not.toHaveBeenCalled();
+  if (mode === 'unmounted') await act(async () => root.render(null));
+  await act(async () => finishStat({ kind: 'dir', resolvedPath: '/repo/src/components' }));
+  if (mode === 'unmounted' || mode === 'outside') {
+    expect(onOpenPath).not.toHaveBeenCalled();
+    expect(onLongPressPath).not.toHaveBeenCalled();
+    return;
+  }
+  expect(mode === 'menu' ? onLongPressPath : onOpenPath).toHaveBeenCalledExactlyOnceWith({
+    kind: 'directory', absPath: '/repo/src/components', relPath: 'src/components',
+  });
 });
 
 it.each(['push-first', 'receipt-first', 'lost-receipt', 'other-client'] as const)(
@@ -938,7 +1039,7 @@ it('opens only the target computer desktop without resolving or authorizing the 
   await click('interaction.pluginSetup.remoteDesktop');
   await click('interaction.pluginSetup.remoteDesktop');
   expect(push).toHaveBeenCalledTimes(1);
-  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'd1' } });
+  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'another computer' } });
   expect(resolveInteraction).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
   expect(host.querySelector('input')).toBeNull();
   forwardNavigationLock.reset();

@@ -10,6 +10,7 @@
 export * from "./protocol.js";
 export * from "./allowlist.js";
 export * from "./client.js";
+export * from "./routedClient.js";
 export * from "./directPath.js";
 export * from "./directNegotiation.js";
 export * from "./directRuntimeBridge.js";
@@ -62,6 +63,9 @@ export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
 export * from "./clipboardTransfer.js";
 
+export * from "./selfHostedRelay.js";
+export * from "./selfHostedRelayAuth.js";
+
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
 export * from "./pluginAuthorization.js";
@@ -75,4 +79,5 @@ export * from "./taskMigration.js";
 export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
+export * from "./machineStatus.js";
 export * from "./pluginPages.js";

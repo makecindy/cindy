@@ -244,7 +244,13 @@ export class RemoteViewerConnection {
             request.op === 'offer' && request.settings
               ? { ...request, settings: remoteDesktopVideoSettingsWire(request.settings) }
               : request.op === 'start' || request.op === 'heartbeat'
-                ? { ...request, lockOnExit: this.preferencesValue.lockOnExit }
+                ? {
+                    ...request,
+                    lockOnExit: this.preferencesValue.lockOnExit,
+                    ...(this.caps?.idleLock && !target.handoff
+                      ? { idleTimeoutMinutes: this.preferencesValue.idleTimeoutMinutes }
+                      : {}),
+                  }
                 : request;
           const result = await this.send(outgoing, check);
           if (request.op === 'capabilities') {
@@ -402,7 +408,10 @@ export class RemoteViewerConnection {
       const reset = value.clipboardSync !== this.preferencesValue.clipboardSync;
       this.preferencesValue = value;
       this.safetyState.invalidate(reset);
-      if (patch.lockOnExit !== undefined && this.lease) {
+      if (
+        (patch.lockOnExit !== undefined || patch.idleTimeoutMinutes !== undefined) &&
+        this.lease
+      ) {
         // Saving is local; a slow or failed sync must not leave the switch
         // showing the old value. Regular heartbeats also carry this policy.
         void this.request(generation, { op: 'heartbeat', lease: this.lease });
@@ -561,9 +570,12 @@ export class RemoteViewerConnection {
       },
     );
   }
-  close(generation: number): void {
+  close(generation: number, forceLock = false): void {
     this.check(generation);
-    const lockScreen = this.preferencesValue.lockOnExit && this.caps?.lockOnExit === true;
+    const lockScreen =
+      !this.target?.handoff &&
+      (forceLock || this.preferencesValue.lockOnExit) &&
+      this.caps?.lockOnExit === true;
     // A start reply may arrive after close. Its own cleanup must retain the
     // explicit exit policy even if this window has already opened a new target.
     if (this.starting) this.starting.lockScreen = lockScreen;

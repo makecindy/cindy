@@ -54,7 +54,10 @@ import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { createFileTransferProgressValues } from '@/lib/fileTransferProgress';
 
 import { Spinner } from '@/components/ui/spinner';
-import { acquireFindInPage } from '@/components/find-in-page/findInPageOwnership';
+import {
+  acquireFindInPage,
+  getTextPreviewSearchHost,
+} from '@/components/find-in-page/findInPageOwnership';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import {
   PlaintextEditor,
@@ -537,7 +540,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useAppShortcut(
     'find-in-page',
     () => {
-      if (mermaidModalOpen()) return false;
+      if (mermaidModalOpen() || getTextPreviewSearchHost()) return false;
       setBarVisible(true);
       queueMicrotask(() => {
         searchInputRef.current?.focus();
@@ -662,7 +665,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   useEffect(() => {
     if (!barVisible) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || getTextPreviewSearchHost()) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();

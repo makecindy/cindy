@@ -212,6 +212,20 @@ export function matchesPendingLegacyForge(
  * Pure first-party privilege conclusion from already-collected facts.
  * Does not read disk, ledger, or Electron.
  */
+/**
+ * Installed from the public market with the bytes the user approved (root namespace, not a Forge
+ * self-test). Unlike isTrustedPublicCindyResource it does not require the reserved `cindy-` prefix:
+ * the official Cindy Chrome plugin predates it. This is source evidence, not a privilege grant.
+ */
+export function isTrustedPublicMarketPackage(facts: GhostFirstPartyFacts): boolean {
+  const record = facts.marketRecord;
+  return facts.namespace === null && facts.installOrigin === 'manual' &&
+    record !== null && record.installed && record.source === 'market' &&
+    record.scope === 'public' && record.organizationId === null &&
+    record.approvedPackageSha256 !== null && PACKAGE_SHA256_RE.test(record.sha256) &&
+    record.sha256 === record.approvedPackageSha256;
+}
+
 export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): GhostFirstPartyPrivilege {
   if (facts.builtin && facts.trustedSource?.kind === 'builtin-official' &&
       hasTrustedFirstPartySource(facts)) {

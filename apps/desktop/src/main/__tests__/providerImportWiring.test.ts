@@ -20,7 +20,7 @@ describe('provider import wiring', () => {
   });
 
   it('consumes the main pending slot when an import wake-up reaches MainLayout', () => {
-    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{[\s\S]*?if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?void pullChatInvitations\(\);/);
+    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{[\s\S]*?if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin' && payload.type !== 'local-plugin-share'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?void pullChatInvitations\(\);/);
   });
   it('passes sanitized JS argv explicitly instead of replaying Electron native startup arguments', () => {
     for (const source of [bootstrap, updateService]) {

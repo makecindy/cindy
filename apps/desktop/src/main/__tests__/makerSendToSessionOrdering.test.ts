@@ -443,10 +443,10 @@ describe('sendToSession ordering', () => {
     );
     const block = extractSendToSessionSource();
 
-    expect(helperBlock).toContain('onAccepted: async () => {');
-    expect(helperBlock).toContain('await opts.onAccepted?.();');
+    expect(helperBlock).toContain('onAccepted: async (signal) => {');
+    expect(helperBlock).toContain('await opts.onAccepted?.(signal);');
     expect(helperBlock).toContain('await beginTurnChangeSetAtDispatch(session, anchorClientId);');
-    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id);');
+    expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id, signal);');
     expect(helperBlock).toContain('const pendingHandoff = await agentHandoffPending.peek(session.id);');
     expect(helperBlock).toContain('prependHandoffToUserMessage(');
     expect(helperBlock).toContain("{ type: 'user', content: message },");
@@ -472,13 +472,13 @@ describe('sendToSession ordering', () => {
     expect(begin).toBeGreaterThan(secondSeal);
     expectOrder(
       helperBlock,
-      'await opts.onAccepted?.();',
+      'await opts.onAccepted?.(signal);',
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
     );
     expectOrder(
       helperBlock,
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
-      'await gitSnapshotCoordinator.onTurnStart(session.id);',
+      'await gitSnapshotCoordinator.onTurnStart(session.id, signal);',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
     expect(block).not.toContain(
@@ -513,13 +513,20 @@ describe('sendToSession ordering', () => {
       'if (!targetSessionId) {',
       'const prev = sendToSessionLocks.get(targetSessionId);',
     );
-    const acceptedBlock = extractBetween(
+    // Verified relays use the durable queue (behavior-covered by
+    // sendToSessionLazyResumePermission); inspect the remaining direct-send
+    // contract without depending on its nesting indentation.
+    const sendCall = extractBetween(
       createBranch,
-      'onAccepted: async () => {',
-      '          },\n          onDispatching:',
+      'const sendResult = await sendUserMessageWithAwaitedGitBaseline(',
+      '}, directSource);',
     );
-    const sendCallEndNeedle =
-      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        }, directSource);';
+    const acceptedBlock = extractBetween(
+      sendCall,
+      'onAccepted: async () => {',
+      'onDispatching:',
+    );
+    const sendCallEndNeedle = '}, directSource);';
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
@@ -530,7 +537,7 @@ describe('sendToSession ordering', () => {
     expectOrder(acceptedBlock, 'notifyAgentIslandUserPrompt(session, persistedContent ?? message, {', 'await createDbMessage(session.id, {');
     expectOrder(acceptedBlock, 'await createDbMessage(session.id, {', 'broadcastSessionCreated(session.id);');
     expect(afterSendResolves).not.toContain('broadcastSessionCreated(session.id);');
-    expect(countOccurrences(createBranch, 'broadcastSessionCreated(session.id);')).toBe(1);
+    expect(countOccurrences(sendCall, 'broadcastSessionCreated(session.id);')).toBe(1);
   });
 
   it('routes ANY_SESSION_IN_TURN through maker active session state', () => {

@@ -17,6 +17,13 @@ beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
 });
 
+// #7631: phone history must identify the same application as Desktop and the model note.
+it('shows the local application name and app ID in visible task history', () => {
+  const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+  expect(sourcePluginLabel(sourcePlugin)).toBe('由本机应用「TapTap」发送');
+  expect(sourceIdText({ sourcePlugin })).toBe('应用 ID：com.taptap.pc');
+});
+
 const phone = {
   deviceId: "3f2a91c0-aaaa-bbbb",
   name: "快照名",
@@ -91,7 +98,7 @@ describe("device source label", () => {
 });
 
 describe("sender labels", () => {
-  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])(
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])(
     'keeps the MCP server name and ID visible in %s',
     async (language) => {
       await i18n.changeLanguage(language);

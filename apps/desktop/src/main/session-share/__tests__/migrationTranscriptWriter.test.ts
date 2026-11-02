@@ -34,6 +34,27 @@ const samples: Record<string, string> = {
 };
 
 describe('writeMigratedTranscript', () => {
+  it.each([1, 7, 65536])('relocates only the Pi header across %i-byte chunks', async (size) => {
+    const header = { type: 'session', version: 3, id: original, timestamp: '2026-10-28T00:00:00Z', cwd: '/source-only/project' };
+    const tail = '\n' + JSON.stringify({ type: 'message', id: 'entry', parentId: null,
+      message: { role: 'toolResult', content: [{ type: 'text', text: '雪 ☃ full tool output\n'.repeat(5000) }] } })
+      + '\n{"type":"compaction","id":"compact","parentId":"entry","firstKeptEntryId":"entry","summary":"kept"}\n';
+    const target = path.join(dir, 'pi.jsonl');
+    await writeMigratedTranscript(chunked(Buffer.from(JSON.stringify(header) + tail), size), target,
+      { agent: 'pi', sessionId: 'new-native-id', cwd: '/target/project' });
+    expect(fs.readFileSync(target, 'utf8')).toBe(JSON.stringify({ ...header, id: 'new-native-id', cwd: '/target/project' }) + tail);
+  });
+
+  it('retags only the Codex session header provider and keeps history bytes', async () => {
+    const header = { type: 'session_meta', payload: { id: 't1', model_provider: 'openai', cwd: '/x' } };
+    const tail = '\n{"type":"response_item","payload":{"type":"message","model_provider":"openai"}}\n';
+    const target = path.join(dir, 'codex.jsonl');
+    await writeMigratedTranscript(chunked(Buffer.from(JSON.stringify(header) + tail), 5), target,
+      { agent: 'codex-provider', modelProvider: 'cindy_gateway' });
+    expect(fs.readFileSync(target, 'utf8')).toBe(
+      JSON.stringify({ ...header, payload: { ...header.payload, model_provider: 'cindy_gateway' } }) + tail);
+  });
+
   for (const [name, text] of Object.entries(samples)) {
     it.each([
       ['cc', 1],

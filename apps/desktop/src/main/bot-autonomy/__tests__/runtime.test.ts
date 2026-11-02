@@ -65,6 +65,7 @@ async function setup(options: {
   const execute = vi.fn<RoutineEngineDeps['execute']>(async () => ({}));
   const remind = vi.fn();
   const push = vi.fn();
+  const ensureOwnBuiltins = vi.fn<(botId: string) => Promise<void>>(async () => {});
   const engineDeps: RoutineEngineDeps = {
     load: async () => structuredClone(saved),
     save: async (state) => { saved = structuredClone(state); },
@@ -82,6 +83,7 @@ async function setup(options: {
   ]);
   const create = (engine: AutonomyEngine) => new BotAutonomyRuntime({
       engine,
+      ensureOwnBuiltins,
       now: () => now,
       log,
       isCurrent: () => true,
@@ -93,6 +95,7 @@ async function setup(options: {
         log,
         onChange,
         getActivitySnapshots: () => [],
+        readSessionExecution: (id) => ({ instanceId: id, generation: 1 }),
         isToolCallInFlight: () => false,
         getPendingInteractions: () => [],
         readLocalSessions: async (ids) => ids.map(meta),
@@ -116,7 +119,7 @@ async function setup(options: {
     await created.start();
     return created;
   };
-  return { runtime, create, engine, execute, remind, push, bots, now: () => now, advance: (ms: number) => { now += ms; } };
+  return { runtime, create, engine, execute, remind, push, ensureOwnBuiltins, bots, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 describe('BotAutonomyRuntime with the routine engine', () => {
@@ -538,6 +541,38 @@ it('keeps opted-in tasks visible and reminds the owner when the scheduler teamma
   }
 });
 
+// Unit / cindy-bots-runtime.md §6「伙伴技能分层」: turning off a teammate's "follow" system Skill stops its background
+// follow-up with its prompt and tools. Before this, the scheduler teammate kept receiving waiting events and
+// its built-in follow-up rule was still installed. Nightly learning is not a system Skill and must still be
+// ensured; turning follow back on restores the stored scheduler choice without the owner redoing anything.
+it('never wakes a follow-off teammate, keeps the owner reminder and nightly learning, and restores on re-enable', async () => {
+  const t = await setup({ creators: { delegated: 'a' } });
+  for (const id of ['a', 'sched']) Object.assign(t.bots.get(id)!, { followOff: true });
+  const engine = await t.engine();
+  const runtime = await t.runtime(engine);
+  try {
+    expect([engine.list('a'), engine.list('sched')]).toEqual([[], []]);
+    expect(t.ensureOwnBuiltins.mock.calls.map(([id]) => id).sort()).toEqual(['a', 'sched']);
+    expect(runtime.watch.getSchedulerBotId()).toBeNull();
+    runtime.watch.applyActivity('delegated', waiting('delegated', t.now()));
+    await runtime.watch.settled();
+    expect(runtime.watch.get('delegated')?.followerBotId).toBeNull();
+    t.advance(AUTONOMY_THRESHOLDS.waitingAfterMs);
+    await runtime.evaluate();
+    expect(t.remind).toHaveBeenCalledOnce();
+    expect(t.execute).not.toHaveBeenCalled();
+
+    for (const id of ['a', 'sched']) Object.assign(t.bots.get(id)!, { followOff: false });
+    await runtime.refreshFollowers();
+    expect(runtime.watch.getSchedulerBotId()).toBe('sched');
+    expect(runtime.watch.get('delegated')?.followerBotId).toBe('a');
+    expect(engine.list('a').map((routine) => routine.id)).toEqual([builtinFollowUpRoutineId('a')]);
+  } finally {
+    runtime.stop();
+    await engine.stop();
+  }
+});
+
 // Unit / #6675: activity can run through completion before the debounced ownership
 // refresh. Previous recovery coverage kept the task active until ownership loaded.
 // Only a witnessed completion may publish/count; stopped, unrelated and stale
@@ -554,7 +589,10 @@ it.each([false, true])('keeps a fast delegation completion across delayed owners
   try {
     await runtime.start();
     options.creators.child = options.creators.stopped = options.creators.stale = 'a';
-    for (const id of ['child', 'unrelated', 'stopped']) runtime.watch.applyActivity(id, running(id));
+    for (const id of ['child', 'unrelated', 'stopped']) {
+      runtime.watch.applyActivity(id, running(id));
+      runtime.watch.reportDelivery(id, { instanceId: id, generation: 1 }, true);
+    }
     for (const id of ['child', 'unrelated', 'stale']) runtime.watch.applyActivity(id, completed(id));
     runtime.watch.applyActivity('stopped', null);
     await runtime.watch.settled();
@@ -601,6 +639,7 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     await runtime.start();
     runtime.watch.applyActivity('child', running('child'));
     await runtime.watch.settled();
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(true);
     runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
     await runtime.watch.settled();
     await vi.advanceTimersByTimeAsync(0);
@@ -620,6 +659,7 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     expect(publish).toHaveBeenCalledOnce();
     // The event ledger expires after 24h. A later settings/activity refresh must not replay it.
     t.advance(25 * 60 * 60_000);
+    expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, true)).toBe(false);
     runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed' } as SessionActivitySnapshot);
     await runtime.refreshFollowers();
     await vi.advanceTimersByTimeAsync(0);
@@ -628,4 +668,30 @@ it.each(['ensure', 'publish'] as const)('retries the last completion after %s fa
     runtime.stop();
     vi.useRealTimers();
   }
+});
+
+// Unit / #7253: the production runtime must wake only on an explicit delivery,
+// regardless of idle duration. Existing tests cover terminal delivery/retries, not
+// semantic intermediate turns. Minimal input: false/absent report + completed.
+it('publishes final delivery immediately and stays silent for intermediate or unreported ends', async () => {
+  const t = await setup({ schedulerOff: true, creators: { child: 'a' } });
+  const publish = vi.fn<AutonomyEngine['publish']>(async () => ({ accepted: 1, duplicate: false }));
+  const runtime = t.create({ registerSource: vi.fn(), publish, ensureBuiltin: vi.fn(async () => ({} as never)) });
+  await runtime.start({ timers: false });
+  try {
+    for (const final of [undefined, false, true]) {
+      runtime.watch.applyActivity('child', running('child'));
+      await runtime.watch.settled();
+      if (final !== undefined) expect(runtime.watch.reportDelivery('child', { instanceId: 'child', generation: 1 }, final)).toBe(true);
+      const ended = t.now();
+      runtime.watch.applyActivity('child', { ...running('child'), phase: 'completed', lastActivityAtMs: ended } as SessionActivitySnapshot);
+      await runtime.watch.settled();
+      await runtime.evaluate();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+      if (final) expect(publish.mock.calls[0][1]).toMatchObject({ type: 'finished', occurredAt: ended });
+      t.advance(3_600_000);
+      await runtime.sweep();
+      expect(publish).toHaveBeenCalledTimes(final ? 1 : 0);
+    }
+  } finally { runtime.stop(); }
 });

@@ -82,6 +82,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true,
 //   主机**自动**替这份卷续命,你不用做任何事;
 // - 自己经 network 能力轮询外部长任务时,期间定期(建议 ≤60s 一次)发心跳:
 //   cindy.send({ type: 'tool-progress', callId: msg.callId });
+// 可选 progress / total / message；页面可通过 SDK onprogress 接收。
+// cindy.send({ type: 'tool-progress', callId: msg.callId, progress: 1, total: 3, message: '处理中' });
 //   每次心跳把窗口重新续满一个 330s 档;callId 不是派给你的会被静默丢弃。
 // - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
 //   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
@@ -393,3 +395,6 @@ const r = await cindy.send({
   不会让你的 `await` 永久悬着;
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
+
+页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
+进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。

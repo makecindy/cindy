@@ -23,6 +23,7 @@ export { canonicalBotSession } from './botSessionOwners';
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
+import type { BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -67,6 +68,8 @@ export interface BotCapabilities {
    * 缺省 = false：别的伙伴开的任务，负责所有任务的伙伴默认只看不跟（shared/botAutonomy.ts）。
    */
   allowSchedulerFollow?: boolean;
+  /** System Skills this teammate has turned off (shared/botSystemSkills.ts). Missing = all on. */
+  systemSkillsOff?: BotSystemSkillId[];
 }
 
 export interface BotModelOverride {
@@ -156,10 +159,10 @@ export interface BotSessionProjection {
    * Telegram / Feishu group handed to the Bot); see botGroupLane.ts before
    * counting sessions.
    */
-  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread';
+  kind: 'chat' | 'worker' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread';
+  role?: 'canonical' | 'delegation' | 'history' | 'group' | 'channel' | 'thread' | 'routine';
   /** Group-lane only: the group whose chat owns this hidden Session. */
   groupId?: string;
   /** Private-chat topic only: the main-chat message the topic was opened on. */

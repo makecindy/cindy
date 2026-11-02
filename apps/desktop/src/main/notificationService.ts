@@ -30,11 +30,14 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-lin
 import { notificationPreview } from './notificationPreview';
 import { companionAvatarThumbnail } from './agent-island/companionIdentity';
 import { getDeepLinkMainWindow, openMainWindowChatMessage, openMainWindowSession } from './deepLink';
+import { isSessionNotificationsMutedSync } from './localDb/sessionFlagRegistry';
 import type { ChatMessageNotification } from './maker-ipc/chatMessageNotifications';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
+import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
 import { drainPersistQueue } from './messagePersistBroadcaster';
+import { getInputHandoffNoticeOwnership } from './im/shared/inputHandoffChannelNotice';
 import { createLogger } from './logger';
 import {
   getNotificationImageLabel,
@@ -117,6 +120,8 @@ interface ShowSessionEventPayload {
   sessionId: string;
   title: string;
   kind: SessionEventKind;
+  /** Local handoff event identity, verified against Main's request-scoped notice record. */
+  inputHandoffRequestId?: string;
   /**
    * 渠道偏好。renderer 侧 gate 后填入,缺省时按"仅桌面"兼容,防御漏传——
    * 当前唯一 invoke 调用方 CCAgentSidebarUpper.tsx 总是显式传 channels,
@@ -192,7 +197,12 @@ export function showDesktopSessionEvent(
   },
 ): boolean {
   const { sessionId, title, kind } = payload;
-  if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
+  const isLocalSession = !!sessionId && payload.markAttention !== false;
+  if (isLocalSession) markSessionNeedsAttention(sessionId);
+  // 「消息免打扰」门放在这个**公共出口**上：scheduler、伙伴自主跟进等 main 内
+  // 直接调用方都不经过 IPC handler 的那道判定，只挡 handler 会漏出系统 toast。
+  // 其它设备的任务（markAttention === false）不查本机静音标记。
+  if (isLocalSession && isSessionNotificationsMutedSync(sessionId)) return false;
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   const owner = captureDataOwnerBroadcastScope();
   return showDesktopToast(safeTitle, kind, () => {
@@ -245,7 +255,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 
   ipcMain.handle(
     'notification:show-session-event',
-    async (_event, payload: ShowSessionEventPayload): Promise<void> => {
+    async (event, payload: ShowSessionEventPayload): Promise<void> => {
+      // 这条 handler 的 channels / markAttention 全由 renderer 自报,先验来源:只认 Cindy
+      // 自有顶层 renderer(插件 webview 等其它 webContents 一律 PERMISSION_DENIED)。
+      assertTrustedAppRendererEvent(event);
       // renderer payload 不可信:mobile 通道会把 title/kind 送出本机(经 relay/APNs),
       // main 必须做运行时形状校验,TS 类型不算(electron-security 规则)。正文摘要
       // 不来自 renderer(main 侧读库),relay 有 per-user 频控、main 侧另有 5s
@@ -265,6 +278,12 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
+      // 「消息免打扰」任务不再走任何外向提醒通道（系统 toast / 灵动岛 / 手机 / 飞书）；
+      // 未读与角标已在上一行照常记账，任务内的提醒不受影响。静音标记属于本机那行任务，
+      // 其它设备的任务（markAttention === false）可能与本机有同 id 的无关任务行，不查。
+      // main 没有远端任务的权威映射（device-link 镜像在 renderer），这一位仍由 renderer 报，
+      // 来源边界靠上面那道 assertTrustedAppRendererEvent。
+      if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
 
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
@@ -362,6 +381,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           const afterHandoffSignal = getSessionNotificationTurnSignal(sessionId);
           if (afterHandoffSignal?.id !== signal?.id || (afterHandoffSignal && !afterHandoffSignal.ended)) return;
         }
+        // 取正文 / 等交接判定期间用户可能刚开了免打扰:真正发之前再确认一次。
+        // 手机通道在 sendMobileSessionNotify 内另有同一道门。
+        if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
         if (kind === 'done' && handledByTeammate) {
           // Consume this event in the existing per-channel ledger. Removing a
           // delegation later must not replay a completion already handed off.
@@ -393,6 +415,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
               ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
+              ...(markAttention ? {} : { muteExempt: true }),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
@@ -421,6 +444,17 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
       if (wantFeishu && kind !== 'done') {
+        if (payload.inputHandoffRequestId) {
+          const ownership = getInputHandoffNoticeOwnership(sessionId, payload.inputHandoffRequestId);
+          // Unknown/expired events cannot invent a new fallback. A known event
+          // keeps its actual routing decision even after the handoff ends.
+          if (!ownership || await ownership.catch(err => {
+            log.warn('[notification] handoff routing unavailable', err);
+            return true;
+          })) return;
+          if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || getWindow()?.isFocused()
+            || isSessionNotificationsMutedSync(sessionId)) return;
+        }
         await sendFeishuMessage(feishuIm, safeTitle, kind);
       }
     },
@@ -447,7 +481,11 @@ function assertValidSessionEventPayload(
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
     (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
-    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean')
+    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean') ||
+    (p.inputHandoffRequestId !== undefined && (
+      p.kind !== 'needs-reply' || typeof p.inputHandoffRequestId !== 'string'
+      || p.inputHandoffRequestId.length === 0 || p.inputHandoffRequestId.length > 256
+    ))
   ) {
     throw new TypeError('invalid session event payload');
   }

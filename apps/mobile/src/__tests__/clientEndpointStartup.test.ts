@@ -681,6 +681,28 @@ describe('applyResolvedClientEndpoints', () => {
     expect(env.AUTH_API_BASE_URL).toBe('');
   });
 
+  // 自建中转(docs/self-hosted-relay-plan.md §5.3):中转地址必须扛过之后的每一次区域写入,
+  // 而推送注册直接读的 realm 缓存要一直是官方地址(否则会把推送登记发到自建中转)。
+  it('自建中转地址覆盖在区域写入后仍生效,realm 缓存保持官方地址', async () => {
+    const { env, startup } = await freshModules();
+    await expect(
+      startup.runStartupEndpointResolve({ fetchManifest: okFetch(FULL_MANIFEST) }),
+    ).resolves.toEqual({ ok: true, source: 'cdn' });
+    env.setDeviceLinkApiBaseOverride('https://relay.home.example/');
+    expect(env.deviceLinkWsUrl()).toBe('wss://relay.home.example/api/device-link/ws');
+    env.applyResolvedClientEndpoints({
+      deviceLinkApiBaseUrl: 'https://device.override.example.com',
+    });
+    env.activateMobileSessionRealm(env.BUILD_AUTH_REGION);
+    env.resetMobileSessionRealm();
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://relay.home.example');
+    expect(
+      env.getMobileEndpointForRealm(env.BUILD_AUTH_REGION, 'deviceLinkApiBaseUrl'),
+    ).toBe('https://device.override.example.com');
+    env.setDeviceLinkApiBaseOverride(null);
+    expect(env.DEVICE_LINK_API_BASE_URL).toBe('https://device.override.example.com');
+  });
+
   it('组织会话切换 token 消费端点,退出后恢复构建区域且不改变更新端点', async () => {
     const { env, startup } = await freshModules();
     await expect(
