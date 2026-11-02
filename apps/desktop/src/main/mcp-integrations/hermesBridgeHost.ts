@@ -44,6 +44,14 @@ export const HERMES_BRIDGE_GATED_SERVERS: readonly string[] = [
   'cindy_ssh',
 ];
 
+/**
+ * Orca team tools (start_team, create_worker, send_to_worker, ...). Exposed only while
+ * collaboration is enabled (or the session is already a team member), same gate as Pi
+ * (piEnvironment.ts). ADR 0006, ROADMAP 3.7a. Creation and permission escalation stay
+ * checked by the Orca host handlers.
+ */
+export const HERMES_BRIDGE_COLLAB_SERVERS: readonly string[] = ['cindy_orca'];
+
 /** Marker used to recognise (and only ever touch) shim entries we wrote. */
 const SHIM_BUNDLE_BASENAME = 'hermes-bridge-shim.mjs';
 
@@ -55,12 +63,28 @@ export function defaultHermesBridgeRuntimeFile(): string {
 export function selectHermesBridgeServers(
   available: readonly string[],
   optedInGated: ReadonlySet<string> = new Set(),
+  collabEnabled = false,
 ): string[] {
   const running = new Set(available);
   return [
     ...HERMES_BRIDGE_SAFE_SERVERS,
     ...HERMES_BRIDGE_GATED_SERVERS.filter((name) => optedInGated.has(name)),
+    ...(collabEnabled ? HERMES_BRIDGE_COLLAB_SERVERS : []),
   ].filter((name) => running.has(name));
+}
+
+/**
+ * Same rule as Pi: collaboration on globally, or the session is already a team member
+ * (the global switch only affects new teams), and never when the project disabled it.
+ */
+export function isHermesCollabEnabled(
+  vendorOptions: Record<string, unknown> | undefined,
+  disabledPluginIds: readonly string[],
+  globalCollabEnabled: boolean,
+): boolean {
+  const role = vendorOptions?.orcaRole;
+  const activeTeamMember = role === 'lead' || role === 'worker';
+  return (globalCollabEnabled || activeTeamMember) && !disabledPluginIds.includes('collab');
 }
 
 export interface HermesShimServerConfig {
@@ -120,7 +144,7 @@ export async function syncHermesShimRegistrations(
     await deps.setServer(name, want);
     written.push(name);
   }
-  for (const name of [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_GATED_SERVERS]) {
+  for (const name of [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_GATED_SERVERS, ...HERMES_BRIDGE_COLLAB_SERVERS]) {
     if (exposed.includes(name)) continue;
     if (isOurShimEntry(current[name])) {
       await deps.removeServer(name);
@@ -136,6 +160,8 @@ export interface HermesBridgeHostDeps {
   runtimeFile?: string;
   /** Gated servers the owner has opted into; empty (default) exposes only SAFE ones. */
   optedInGatedServers?: () => ReadonlySet<string>;
+  /** Global collaboration switch (Settings); production: plugin registry `collab`. */
+  globalCollabEnabled?: () => boolean;
   /** Null when the bundle is not built/shipped → Hermes runs without Cindy tools. */
   resolveShimPath: () => string | null;
   registration: HermesShimRegistrationDeps;
@@ -146,6 +172,8 @@ type PrepareInfo = {
   sessionInstanceId?: string;
   workingDir: string;
   permissionMode?: string;
+  /** Session vendorOptions at start (Orca role when resuming a lead/worker). */
+  vendorOptions?: Record<string, unknown>;
 };
 
 /**
@@ -172,19 +200,27 @@ export function createHermesBridgePreparer(deps: HermesBridgeHostDeps) {
     const lease = await acquireCindyToolBridge(deps.providers(), log);
     if (!lease) return null;
     try {
+      const registry = createPluginRegistry();
+      const disabledPluginIds = registry.getDisabledRuntimePluginIds(info.workingDir);
       const exposed = selectHermesBridgeServers(
         lease.serverNames,
         deps.optedInGatedServers?.() ?? new Set(),
+        isHermesCollabEnabled(
+          info.vendorOptions,
+          disabledPluginIds,
+          deps.globalCollabEnabled?.() ?? registry.isEnabled('collab'),
+        ),
       );
       await syncHermesShimRegistrations(deps.registration, shimPath, exposed);
 
       // Freeze the per-project policy now (Pi does the same): later Settings
       // changes do not affect this running session; the bridge re-checks it on
-      // every tools/call against this frozen snapshot.
+      // every tools/call against this frozen snapshot. The session's own Orca
+      // identity (orcaRole, team ids) rides along and is updated in place by
+      // setVendorOptions below (ROADMAP 3.7a), as Pi does.
       const vendorOptions: Record<string, unknown> = {
-        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: createPluginRegistry().getDisabledRuntimePluginIds(
-          info.workingDir,
-        ),
+        ...(info.vendorOptions ?? {}),
+        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
       };
       // Servers the bridge mounts for this session: the same descriptor Pi
       // records, so a route for a non-exposed server answers "not mounted".
@@ -205,11 +241,26 @@ export function createHermesBridgePreparer(deps: HermesBridgeHostDeps) {
         info,
         vendorOptions,
       });
+      const frozenPolicyKeys = new Set([
+        CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+        CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+        RUNTIME_MCP_NAMES_KEY,
+      ]);
       return {
         env: session.env,
         dispose: () => {
           session.dispose();
           lease.release();
+        },
+        // Same object the bridge holds for this session's tool calls: an Orca
+        // start_team takes effect on the next call. The frozen tool policy cannot be
+        // patched from here.
+        setVendorOptions: (patch: Record<string, unknown>) => {
+          for (const [key, value] of Object.entries(patch)) {
+            if (frozenPolicyKeys.has(key)) continue;
+            if (value === null || value === undefined) delete vendorOptions[key];
+            else vendorOptions[key] = value;
+          }
         },
       };
     } catch (error) {

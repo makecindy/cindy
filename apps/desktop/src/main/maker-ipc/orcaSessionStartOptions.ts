@@ -144,6 +144,20 @@ export function applyOrcaInstructions(o: MakerSessionCreateOpts): boolean {
   return true;
 }
 
+/**
+ * The Orca lead/worker instructions for a session's current vendorOptions, or null when
+ * it is not in a team. Hermes has no system-prompt slot, so its adapter sends this text
+ * ahead of the next turn instead (ROADMAP 3.7a). Same text applyOrcaInstructions gives
+ * Claude Code / Codex / Pi.
+ */
+export function renderOrcaInstructionsFor(
+  sessionId: string,
+  vendorOptions: Record<string, unknown>,
+): string | null {
+  const probe = { id: sessionId, vendorOptions } as MakerSessionCreateOpts;
+  return applyOrcaInstructions(probe) ? probe.userPrompt ?? null : null;
+}
+
 export async function preparePersistedOrcaSessionStart(
   sessionId: string,
   o: MakerSessionCreateOpts,

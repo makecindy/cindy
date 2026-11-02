@@ -245,7 +245,11 @@ export class HermesAgent extends BaseAgent {
     const providerEnv = collectHermesProviderEnv();
     // Cindy tool bridge identity: failure degrades to a session without Cindy
     // tools (convenience), never blocks the chat (daily driver).
-    let bridgeSession: { env: Record<string, string>; dispose: () => void } | null = null;
+    let bridgeSession: {
+      env: Record<string, string>;
+      dispose: () => void;
+      setVendorOptions?: (patch: Record<string, unknown>) => void;
+    } | null = null;
     // No Cindy session id means no identity to register.
     if (this.deps.prepareHermesBridgeSession && opts.sessionId) {
       try {
@@ -254,6 +258,7 @@ export class HermesAgent extends BaseAgent {
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           permissionMode: requestedPermissionMode,
+          ...(opts.vendorOptions ? { vendorOptions: { ...opts.vendorOptions } } : {}),
         });
       } catch (error) {
         this.deps.logger.warn('hermes bridge session prep failed, continuing without cindy tools', {
@@ -304,6 +309,8 @@ export class HermesAgent extends BaseAgent {
         resumableSessionId,
         ...(opts.sessionId ? { cindySessionId: opts.sessionId } : {}),
         freshHermesSession: !requestedResumeId,
+        vendorOptions: { ...(opts.vendorOptions ?? {}) },
+        ...(bridgeSession?.setVendorOptions ? { setBridgeVendorOptions: bridgeSession.setVendorOptions } : {}),
         model: opts.model,
         permissionMode: requestedPermissionMode,
         transport,
@@ -344,6 +351,10 @@ export class HermesAgent extends BaseAgent {
     cindySessionId?: string;
     /** True when this handle started a new Hermes session (no `--resume`). */
     freshHermesSession?: boolean;
+    /** Live vendorOptions (Orca role/team), updated by setVendorOptions (ROADMAP 3.7a). */
+    vendorOptions?: Record<string, unknown>;
+    /** Pushes a vendorOptions patch into the Cindy tool bridge identity. */
+    setBridgeVendorOptions?: (patch: Record<string, unknown>) => void;
   }): AgentSessionHandle {
     const { sessionId, transport } = input;
     const logger = this.deps.logger;
@@ -363,6 +374,15 @@ export class HermesAgent extends BaseAgent {
     // A fresh Hermes session has not seen its expert instructions yet; they ride the
     // first accepted turn only (a resumed session already holds them in its history).
     let expertPreamblePending = input.freshHermesSession === true && Boolean(input.cindySessionId);
+    // Orca (ROADMAP 3.7a): the lead/worker instructions ride the next turn whenever they
+    // change (a session can become a lead mid-chat via start_team). A resumed session is
+    // assumed to already hold the instructions matching its persisted role.
+    const liveVendorOptions: Record<string, unknown> = { ...(input.vendorOptions ?? {}) };
+    const resolveOrcaPreamble = this.deps.resolveHermesOrcaPreamble;
+    const orcaPreambleFor = (): string | null => (input.cindySessionId && resolveOrcaPreamble
+      ? resolveOrcaPreamble({ sessionId: input.cindySessionId, vendorOptions: liveVendorOptions })
+      : null);
+    let lastSentOrcaPreamble: string | null = input.freshHermesSession === true ? null : orcaPreambleFor();
     // Monotonic per-send epoch. `session/closed` has no epoch on the wire, so
     // each result-settled turn leaves exactly one close to be consumed; any
     // other close belongs to the currently active epoch only.
@@ -708,8 +728,10 @@ export class HermesAgent extends BaseAgent {
         const expertPreamble = expertPreamblePending && input.cindySessionId && resolveExpertPreamble
           ? await resolveExpertPreamble({ sessionId: input.cindySessionId, model: currentModel })
           : null;
+        const orcaPreamble = orcaPreambleFor();
+        const orcaPreambleToSend = orcaPreamble && orcaPreamble !== lastSentOrcaPreamble ? orcaPreamble : null;
         const userText = await flattenUserMessage(message);
-        const text = expertPreamble ? `${expertPreamble}\n\n${userText}` : userText;
+        const text = [expertPreamble, orcaPreambleToSend, userText].filter(Boolean).join('\n\n');
         // Mark the turn before the RPC so a terminal notification arriving in
         // the same socket chunk cannot be cleared by the accepted-send path.
         const epoch = ++sendEpoch;
@@ -730,10 +752,17 @@ export class HermesAgent extends BaseAgent {
         try {
           await transport.request(HERMES_METHODS.QUERY_SEND, { sessionId, text });
           expertPreamblePending = false;
+          if (orcaPreambleToSend) lastSentOrcaPreamble = orcaPreambleToSend;
         } catch (error) {
           if (activeEpoch === epoch) activeEpoch = previousEpoch;
           throw error;
         }
+      },
+      async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+        // Orca start_team/end_team (ROADMAP 3.7a): update in place so the next turn's
+        // instructions and the bridge's tool-call identity both see the new role.
+        Object.assign(liveVendorOptions, patch);
+        input.setBridgeVendorOptions?.(patch);
       },
       async steer(): Promise<void> {
         throw new NotSupportedError('sameTurnSteer', {

@@ -381,6 +381,17 @@ describe('HermesAgent', () => {
       resumeSessionId,
     });
 
+  const orcaPreamble = ({ vendorOptions }: { vendorOptions: Record<string, unknown> }): string | null =>
+    vendorOptions.orcaRole === 'lead' ? `ORCA LEAD ${String(vendorOptions.orcaWorkflowId)}` : null;
+
+  const agentWithOrca = (deps: Partial<AgentDeps> = {}): Promise<AgentSessionHandle> =>
+    buildAgent({ deps: { resolveHermesOrcaPreamble: orcaPreamble, ...deps } }).startSession({
+      sessionId: 'business-1',
+      workingDir: workDir,
+      model: 'hermes-default',
+      vendorOptions: { seed: 'x' },
+    });
+
   it('refuses to start when the host has not provisioned a daemon socket', async () => {
     const agent = buildAgent({ socketPath: null });
     const failure = await start(agent).catch((error: unknown) => error);
@@ -708,6 +719,56 @@ describe('HermesAgent', () => {
       broken = false;
       await handle.send({ type: 'user', content: 'hi' });
       expect(daemon.sendTexts[0]).toBe('EXPERT\n\nhi');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('sends the Orca lead instructions on the turn after start_team, once, and tells the bridge (ROADMAP 3.7a)', async () => {
+    const daemon = await startDaemon();
+    const bridgePatches: Array<Record<string, unknown>> = [];
+    let bridgeStartVendorOptions: Record<string, unknown> | undefined;
+    const handle = await agentWithOrca({
+      prepareHermesBridgeSession: async (info) => {
+        bridgeStartVendorOptions = info.vendorOptions;
+        return { env: {}, dispose: () => undefined, setVendorOptions: (patch) => { bridgePatches.push(patch); } };
+      },
+    });
+    try {
+      expect(bridgeStartVendorOptions).toEqual({ seed: 'x' });
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(daemon.sendTexts[0]).toBe('hello');
+
+      // start_team marks this session as the lead (host calls session.setVendorOptions).
+      await handle.setVendorOptions!({ orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'business-1' });
+      expect(bridgePatches).toEqual([{ orcaRole: 'lead', orcaWorkflowId: 'team-1', orcaLeadSessionId: 'business-1' }]);
+      await handle.send({ type: 'user', content: 'ask a worker' });
+      expect(daemon.sendTexts[1]).toBe('ORCA LEAD team-1\n\nask a worker');
+      await handle.send({ type: 'user', content: 'again' });
+      expect(daemon.sendTexts[2]).toBe('again');
+
+      // end_team clears the role: no instructions while out of a team.
+      await handle.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null });
+      await handle.send({ type: 'user', content: 'solo' });
+      expect(daemon.sendTexts[3]).toBe('solo');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not resend the Orca instructions into a resumed lead session', async () => {
+    const daemon = await startDaemon();
+    const agent = buildAgent({ deps: { resolveHermesOrcaPreamble: orcaPreamble } });
+    const handle = await agent.startSession({
+      sessionId: 'business-1',
+      workingDir: workDir,
+      model: 'hermes-default',
+      resumeSessionId: 'hermes-old',
+      vendorOptions: { orcaRole: 'lead', orcaWorkflowId: 'team-1' },
+    });
+    try {
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(daemon.sendTexts[0]).toBe('continue');
     } finally {
       await handle.close();
     }

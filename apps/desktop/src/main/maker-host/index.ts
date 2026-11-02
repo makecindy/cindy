@@ -100,7 +100,7 @@ import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js'
 import { createRouteMatcher, getDesktopExpertSessionStore } from '../maker-ipc/expertSessions.js';
 import { resolveModelRoute } from '@cindy/maker-core/model-route-resolver';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
-import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
+import { preparePersistedOrcaSessionStart, renderOrcaInstructionsFor } from '../maker-ipc/orcaSessionStartOptions.js';
 import {
   hydrateBotProfileRuntime,
   markBotProfileRuntimeApplied,
@@ -2855,6 +2855,10 @@ export function getMaker(): Maker {
             input,
             createRouteMatcher((model) => resolveModelRoute(model)),
           ),
+        // Orca (ROADMAP 3.7a): Hermes has no system-prompt slot, so the lead/worker
+        // instructions Cindy gives Claude Code/Codex/Pi ride the next Hermes turn.
+        resolveHermesOrcaPreamble: ({ sessionId, vendorOptions }) =>
+          renderOrcaInstructionsFor(sessionId, vendorOptions),
         auth: HERMES_HOST_AUTH,
         runtimeConfig: { userDataPath: app.getPath('userData') },
         logger: desktopMakerLogger,

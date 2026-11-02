@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { knownNonOrcaSessionIds } from '../orcaMcpHydrationCache';
-import { preparePersistedOrcaSessionStart } from '../orcaSessionStartOptions';
+import { preparePersistedOrcaSessionStart, renderOrcaInstructionsFor } from '../orcaSessionStartOptions';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 
 function baseOpts(id: string): MakerSessionCreateOpts {
@@ -111,5 +111,24 @@ describe('persisted Orca session start options', () => {
 
     expect(opts.userPrompt).toBe(promptWithProjectContext);
     expect(deps.getSessionRole).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('renderOrcaInstructionsFor (Hermes, ROADMAP 3.7a)', () => {
+  it('returns the same lead/worker text Cindy gives other agents, and null outside a team', () => {
+    const lead = renderOrcaInstructionsFor('lead-1', { orcaRole: 'lead', orcaWorkflowId: 'team-1' });
+    expect(lead).toContain('You are the lead agent in an Orca multi-agent workflow');
+    const worker = renderOrcaInstructionsFor('worker-1', {
+      orcaRole: 'worker',
+      orcaWorkerId: 'w-1',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+    });
+    expect(worker).toBeTruthy();
+    expect(worker).not.toBe(lead);
+    expect(renderOrcaInstructionsFor('plain', {})).toBeNull();
+    expect(renderOrcaInstructionsFor('plain', { orcaRole: null })).toBeNull();
+    // A worker without its team ids gets nothing rather than half-filled instructions.
+    expect(renderOrcaInstructionsFor('worker-1', { orcaRole: 'worker' })).toBeNull();
   });
 });
