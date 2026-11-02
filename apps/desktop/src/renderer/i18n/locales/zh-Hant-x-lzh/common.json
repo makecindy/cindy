@@ -996,7 +996,7 @@
     "saveFileName": "截圖",
     "saveFailed": "不能存截圖",
     "prompt": {
-      "translate": "請辨此截圖中之文字，譯為繁體中文，保留原有段落與清單結構，唯輸出譯文。若原文已是中文，則譯為英文。",
+      "translate": "辨圖中文字之語，譯為{{language}}，仍其段落、條目與表格。已有目標語言者不改；諸語雜陳，僅譯其餘。若全文已是目標語言，簡言告之，勿另譯他語；否則僅出譯文。",
       "explain": "請釋此截圖之內容。若為錯誤訊息，述其原因與解法；若為圖表、程式碼或介面，述其所表何意、要點為何。",
       "extract": "請將此截圖中之文字照原樣擷出，保留原有換行、段落與清單；表格以 Markdown 表格輸出。唯輸出所擷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自動捲動已止，可於所選範圍內手動捲動",
       "autoPermission": "自動捲動須「輔助使用」權限。請於系統設定中許 Cindy 而後再試，亦可於所選範圍內手動捲動"
+    },
+    "translation": {
+      "action": "譯為{{language}}",
+      "targetLanguage": "譯文語言",
+      "followUi": "隨介面之語",
+      "saveFailed": "語言未存，請重選。"
     }
   },
   "privacyExit": {
@@ -3824,7 +3830,9 @@
           "modelsBusy": "請先畢方行之模型清單擷取或選擇，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支援今 Runtime 中可復用之欄位",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自獨立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，續設自定端點。",
+        "nameSearchUnavailable": "此供方今不可用，可續設自定端點，或重尋之。"
       },
       "models": {
         "search": "尋模型",
