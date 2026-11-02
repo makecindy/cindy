@@ -883,4 +883,25 @@ describe('quotes, complete edges and block headers', () => {
     expect(output).toContain('E --> F');
     expect(output).toContain('Z[label]');
   });
+  it('parses a repeated bracket inside metadata as nested flow sequences', () => {
+    // A metadata value is YAML, so [[on], off] is a sequence that holds a second
+    // one. Reading the [[ as a shape opener waits for ]], leaves the label stack
+    // open, and the arrow on the next statement stays unicode.
+    const source = ['flowchart TD', '  A@{shape: rect, constraint: [[on], off]}', '  E → F', '  Z[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('constraint: [[on], off]');
+    expect(output).toContain('E --> F');
+    expect(output).toContain('Z[label]');
+  });
+
+  it('ends a description block at the brace when a statement follows it', () => {
+    // The parser closes accDescr at the brace itself, so the rest of the line is
+    // graph syntax even without the separator; copying it as description would
+    // leave every later statement inside the block and unrepared.
+    const source = ['flowchart TD', '  accDescr {', '  foo } A --> B', '  E → F', '  Z[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('foo } A --> B');
+    expect(output).toContain('E --> F');
+    expect(output).toContain('Z[label]');
+  });
 });

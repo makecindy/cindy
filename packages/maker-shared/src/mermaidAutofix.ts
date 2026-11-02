@@ -531,8 +531,10 @@ function accessibilityStatementEnd(text: string, at: number): number {
     const brace = nextLine.indexOf('}');
     // The closing line may carry description text before the brace (`foo }; A --> B`),
     // so the block ends at the brace whenever only a separator follows it.
-    const rest = brace === -1 ? '' : nextLine.slice(brace + 1).trimStart();
-    if (brace !== -1 && (rest === '' || rest.startsWith(';'))) {
+    // The declaration ends at the first closing brace on the line, and whatever
+    // follows it is graph syntax again (`foo } A --> B`), with or without a
+    // separator, because the parser closes the description at the brace itself.
+    if (brace !== -1) {
       let after = lineStart + brace + 1;
       while (after < stop && /[ \t]/.test(text[after])) after += 1;
       // The separator is handed back for the same reason as on the opening line.
@@ -691,7 +693,12 @@ function mapOutsideQuotesAndLabels(text: string, fn: (segment: string) => string
       // nested body there. A leading `(` is a bare scalar (`label: (foo }`), and
       // treating it as a shape would keep the metadata open behind its own `}`.
       const scalarParen = labelInMetadata && candidate !== undefined && candidate[0][0] === '(';
-      const nested = candidate === undefined || scalarParen ? undefined : candidate;
+      // A metadata value is YAML, so `[[on], off]` is a flow sequence that holds a
+      // second one: the two '[' are separate openers, never a shape pair that waits
+      // for ']]'. Only the bracket form is ambiguous; a flow mapping never repeats.
+      const metadataFlow: readonly [string, string] | undefined =
+        labelInMetadata && candidate !== undefined && candidate[0][0] === '[' ? ['[', ']'] : undefined;
+      const nested = candidate === undefined || scalarParen ? undefined : (metadataFlow ?? candidate);
       if (nested) {
         outerBodyStarts.push(labelBodyStart);
         outerMetadataFlags.push(labelInMetadata ? 1 : 0);
