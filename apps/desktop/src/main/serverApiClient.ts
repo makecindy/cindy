@@ -10,6 +10,7 @@
  */
 
 import { net } from 'electron';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import * as authManager from './authManager';
 import { getResolvedMainLocale } from './i18n.js';
 
@@ -29,6 +30,7 @@ export class ServerApiError extends Error {
     public readonly code: string,
     public readonly statusCode: number,
     message: string,
+    public readonly retryAt?: number,
   ) {
     super(message);
     this.name = 'ServerApiError';
@@ -85,6 +87,7 @@ interface RawResponse<T> {
   ok: boolean;
   status: number;
   data: T | null;
+  retryAt?: number;
 }
 
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
@@ -125,7 +128,8 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data };
+    return { ok: response.ok, status: response.status, data,
+      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
   } catch (err) {
     if (opts.redactErrorDetails) {
       log.error(
@@ -213,6 +217,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       publicCode,
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
+      result.retryAt,
     );
   }
   if (result.data === null) {

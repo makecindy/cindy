@@ -33,12 +33,44 @@ vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
-import { serverApiFetch } from '../serverApiClient';
+import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // Unit: a real HTTP rejection must retain only its parsed retry deadline.
+  // Previously rawFetch discarded headers, so delegation checks could not obey 429.
+  it.each([
+    { retryAfter: '120', delay: 120_000 },
+    { retryAfter: 'Wed, 07 Oct 2026 06:02:00 GMT', date: 'Wed, 07 Oct 2026 06:00:00 GMT', delay: 120_000 },
+    { retryAfter: 'not-a-date', delay: undefined },
+  ])('exposes a safe retry deadline for 429: $retryAfter', async ({ retryAfter, date, delay }) => {
+    const now = Date.now();
+    const headers = new Headers({ 'Retry-After': retryAfter });
+    if (date) headers.set('Date', date);
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code: 'RATE_LIMITED', message: 'private upstream details' },
+    }), { status: 429, headers }));
+    try {
+      await serverApiFetch('/api/device-link/provider-shares/delegations/check', {
+        baseUrl: 'https://api.example.invalid', redactErrorDetails: true,
+      });
+      expect.fail('the verification must reject');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RATE_LIMITED', statusCode: 429 });
+      if (!(error instanceof ServerApiError)) throw error;
+      if (delay === undefined) expect(error.retryAt).toBeUndefined();
+      else {
+        expect(error).toHaveProperty('retryAt', expect.any(Number));
+        expect(error.retryAt).toBeGreaterThanOrEqual(now + delay);
+        expect(error.retryAt).toBeLessThanOrEqual(Date.now() + delay);
+      }
+    }
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private upstream details');
   });
 
   // Unit: exercise the real quota reader through the HTTP client. Previously its
