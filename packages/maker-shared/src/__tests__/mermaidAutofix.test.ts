@@ -808,4 +808,27 @@ describe('quotes, complete edges and block headers', () => {
       expect(output).toContain('C --> D');
     }
   });
+
+
+  it('reads a dotted edge tip that is glued to the id that ends with a dot', () => {
+    // Mobile Mermaid 11.16 parses `A.-.->B` as the id `A.` linked by `-.->`, so the
+    // whole tip has to be excluded here; otherwise the `>` opens a label that never
+    // closes and the rest of the graph keeps its unicode arrows.
+    const source = ['flowchart TD', '  A.-.->B; E → F; C[label]'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('A.-.->B');
+    expect(output).toContain('E --> F');
+  });
+
+  it('gives a single dash in front of the tip to the target id', () => {
+    // `S--o->go -> stop]` is an `arrow_circle` link to the id `-` whose label is
+    // `go -> stop]`, so rejecting the head here made the bare-edge scan rewrite the
+    // label itself. A run of two dashes is still the next link (`A--o-->B`).
+    for (const line of ['S--o->go → stop]', 'A--o---B']) {
+      const source = ['flowchart TD', `  ${line}; E → F`].join('\n');
+      const output = repairMermaidSource(source);
+      expect(output).toContain(line);
+      expect(output).toContain('E --> F');
+    }
+  });
 });

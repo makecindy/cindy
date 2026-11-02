@@ -225,6 +225,20 @@ function isAsymmetricOpener(
   if (start < i) {
     let tipStart = i;
     while (tipStart > start && (text[tipStart - 1] === '-' || text[tipStart - 1] === '=')) tipStart -= 1;
+    // Mobile Mermaid reads `A.-.->B` as the id `A.` linked by `-.->`, so a dotted tip
+    // reaches back over the dots as well; `A.-->B` keeps `-->` because that suffix
+    // already is a tip.
+    if (tipStart > start && tipStart < i && text[tipStart - 1] === '.') {
+      let dottedStart = tipStart;
+      while (dottedStart > start && text[dottedStart - 1] === '.') dottedStart -= 1;
+      if (
+        dottedStart > start &&
+        text[dottedStart - 1] === '-' &&
+        isEdgeTipRun(text, dottedStart - 1, i, prefixes)
+      ) {
+        tipStart = dottedStart - 1;
+      }
+    }
     if (tipStart > start && tipStart < i && isEdgeTipRun(text, tipStart, i, prefixes)) return false;
   }
   if (start === i) return !/[\s=<>|]/.test(text[i - 1]);
@@ -338,7 +352,10 @@ function completeEdgeTokenEnd(
       // Only a dash run that ends in a tip continues the edge (`A--o-->B`). A dot
       // run before a tip is a target id: `A--o.>go → stop]` points at the id `.`
       // and opens an asymmetric label, so the head ends before the dots.
-      return text[run] === '>' && after === '-' ? -1 : same + 1;
+      // A single dash in front of the tip is the target id of an asymmetric label
+      // (`S--o->go -> stop]`), not a continuation of the circle head; only a run of
+      // two or more dashes is the next link (`A--o-->B`).
+      return text[run] === '>' && after === '-' && run - (same + 1) > 1 ? -1 : same + 1;
     }
     return same + 1;
   }
