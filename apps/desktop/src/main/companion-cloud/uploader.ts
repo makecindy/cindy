@@ -4,12 +4,15 @@
  * are written; values that disappeared locally become `null` tombstones.
  */
 import { createHash } from 'node:crypto';
+import type { LocalBotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, type CompanionApi, type CompanionLog } from './types.js';
 
 export const COMPANION_PROFILE_KEY = 'companion.profile.v1';
 export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
 export const COMPANION_SKILL_PREFIX = 'companion.skill.v1:';
+/** Which room files hold what sits beside a skill's SKILL.md (skillFiles.ts). */
+export const COMPANION_SKILL_FILES_PREFIX = 'companion.skill-files.v1:';
 /** One open (or recently closed) todo per key; the whole file would not fit one value. */
 export const COMPANION_TODO_PREFIX = 'companion.todo.v1:';
 /** One routine definition per key (run history stays on the computer it ran on). */
@@ -18,7 +21,7 @@ export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';
 export const COMPANION_WORKBENCH_KEY = 'companion.workbench.v1';
 /** Capability setup that means the same on any computer (capabilities.ts); never the permission level. */
 export const COMPANION_CAPABILITIES_KEY = 'companion.capabilities.v1';
-const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX,
+const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY];
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
@@ -30,7 +33,13 @@ export const COMPANION_VALUE_TOO_LARGE = 'COMPANION_VALUE_TOO_LARGE';
  * routine engine is not ready): its server values stay as they are and nothing under it is
  * tombstoned; a hand-over, which needs everything, fails instead.
  */
-export interface CompanionPreferenceValue { key: string; value: unknown; unread?: boolean }
+export interface CompanionPreferenceValue {
+  key: string;
+  value: unknown;
+  unread?: boolean;
+  /** A skill's files as listed here; skillFiles.ts turns them into the value before upload. */
+  localFiles?: LocalBotSkillFile[];
+}
 /** A required part of the companion could not be read: the hand-over waits for the next try. */
 export const COMPANION_READ_INCOMPLETE = 'COMPANION_READ_INCOMPLETE';
 
@@ -66,7 +75,7 @@ export class CompanionLostHomeError extends Error {
 export function createCompanionUploader(deps: {
   api: CompanionApi;
   state: CompanionCloudState;
-  readValues: (botId: string) => Promise<CompanionPreferenceValue[]>;
+  readValues: (botId: string, actorId: string) => Promise<CompanionPreferenceValue[]>;
   /** Re-read the server: is this computer still the home? Asked before overwriting a conflicting value. */
   confirmHome?: (botId: string, actorId: string) => Promise<boolean>;
   /** The home moved away while uploading: re-read actors so this copy is demoted. */
@@ -123,7 +132,7 @@ export function createCompanionUploader(deps: {
    */
   async function syncBot(botId: string, actorId: string, budget = Number.POSITIVE_INFINITY,
     options: { requireAll?: boolean } = {}): Promise<number> {
-    const read = await deps.readValues(botId);
+    const read = await deps.readValues(botId, actorId);
     const unread = read.filter(entry => entry.unread).map(entry => entry.key);
     if (unread.length && options.requireAll) throw new Error(COMPANION_READ_INCOMPLETE);
     const values = read.filter(entry => !entry.unread);

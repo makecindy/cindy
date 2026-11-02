@@ -21,6 +21,7 @@ export const BOT_SETTINGS_OPS = [
   'caps',
   'profile.get',
   'profile.update',
+  'profile.acceptModelSelection',
   'profile.chooseAvatar',
   'profile.retryInvitation',
   'lifecycle.run',

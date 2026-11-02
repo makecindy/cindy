@@ -819,16 +819,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     // Agent 在另一台电脑运行的任务也可移动：那台按任务 id 定址 Agent 工作区，与本机路径无关。
     session.status !== 'archived';
 
-  // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在
-  // 被控端 —— 隐藏入口。Orca lead 可导出(整个协同随包);Worker 不进 sidebar,
-  // 无需在此排除。
+  // SSH 与 device-link 任务的数据在远端，隐藏入口。远程供应商任务的消息
+  // 属于本机，可按 db-only 分享；Orca lead 随包带整个协同，Worker 不单独导出。
   const canExportShare =
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
-    !session.deviceLinkDeviceId &&
-    // Agent 在另一台电脑运行：转录在那台，本机打包不全。
-    !session.agentDeviceId;
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>

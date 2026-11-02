@@ -5,6 +5,7 @@ import { isModelEnabled, getModelVisibilityVersion } from '@/state/modelVisibili
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { extractIpcError } from '../../utils/ipcError';
 import { getModel } from '@cindy/model-providers';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { pickConnectedModelForAgent } from '@/lib/draftModelCalibration';
@@ -1017,6 +1018,8 @@ export type BotProfileUpdatePatch = Partial<
   >
 > & {
   avatarUploadToken?: string;
+  /** Explicit picker action, including accepting an unchanged configured route. Never persisted. */
+  acceptModelSelection?: boolean;
   capabilities?: Partial<BotCapabilities>;
   capabilityBaseline?: BotCapabilityBaseline;
 };
@@ -1025,7 +1028,8 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, acceptModelSelection, ...profilePatch } = patch;
+  if (acceptModelSelection && !before.currentVersion) return Promise.reject(new Error('Bot profile version is unavailable'));
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -1046,6 +1050,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
     .update({
       id,
       ...profilePatch,
+      ...(acceptModelSelection ? { acceptSavedModelSelectionVersion: before.currentVersion } : {}),
       ...(capabilityBaseline ? { capabilityBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken
@@ -1064,7 +1069,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
       emit();
       return next;
     })
-    .catch((error) => {
+    .catch(async (error) => {
       /*
         只回滚**这一行**,而且只在自己仍是最新那次写的时候回滚。
 
@@ -1078,8 +1083,16 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
         有 hydrated 闸),所以数据库里是对的,界面上却一直显示被还原的旧值。
       */
       if (isLatestWrite()) {
-        profiles = profiles.map((bot) => (bot.id === id ? before : bot));
-        emit();
+        let rollback = before;
+        if (acceptModelSelection && extractIpcError(error)?.code === 'PRECONDITION_FAILED') {
+          const latest = normalizeDbProfile(await api.get(id).catch(() => null));
+          if (latest) rollback = latest;
+        }
+        // Reading can cross another write or an account switch.
+        if (isLatestWrite()) {
+          profiles = profiles.map((bot) => (bot.id === id ? rollback : bot));
+          emit();
+        }
       }
       throw error;
     });

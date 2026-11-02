@@ -225,10 +225,11 @@ export interface RemoteAgentHostDeps {
    *    null / 缺省时在已开放的供应商里按本机默认规则挑一个。返回 null = 没有开放的供应商可用。
    *  - isAllowed：进行中的任务每次发消息前复核(用户可能刚把它关掉)。
    * 两者都带上控制端：供应商分享的受邀者只能用分享给它的那个供应商。
+   * groupRouting 由宿主在分配或向已确认的组员转发时设定，不来自 wire；本机执行不带它重新 resolve。
    */
   providerAccess?: {
     resolve(kind: RemoteAgentKind, model: string, providerId: string | null | undefined, controller: string,
-      sessionId?: string): Promise<string | null>;
+      sessionId?: string, context?: { groupRouting?: boolean }): Promise<string | null>;
     isAllowed(providerId: string, controller: string, model?: string, sessionId?: string): boolean;
     models?(kind: RemoteAgentKind, providerId: string, controller: string, sessionId?: string): Promise<string[]>;
     restricted?(providerId: string, controller: string, sessionId?: string): boolean;
@@ -1407,6 +1408,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       forwarded: 0,
     };
     try {
+      if (run.trust === 'guest' && run.groupProviderId && deps.providerAccess) {
+        // Group preflight did not require O's login. Every local start, including a fallback from M,
+        // must resolve again against this computer's real connection state before starting an agent.
+        const provider = await deps.providerAccess.resolve(run.kind, payload.options.model,
+          run.providerId, run.controller, payload.sessionId);
+        if (provider !== run.providerId) failProviderNotAllowed();
+      }
       // 中转过来的任务按(控制端, relay)派生：不同受邀者即使任务 id 相同也不会共用本机侧任务。
       const hostSessionId = hostSessionIdFor(guestScopeOf(run.controller, run.relayKey), payload.sessionId);
       run.hostSessionId = hostSessionId;
@@ -2266,7 +2274,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 来源钉在分享的供应商上(本机按分享的那个供应商核对模型)，转给那台时换成那台上的这个供应商。
         const opts = args[1] && typeof args[1] === 'object' && !Array.isArray(args[1]) ? args[1] as Record<string, unknown> : {};
         if (access) {
-          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '', run.providerId ?? null, run.controller, run.sessionId);
+          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '',
+            run.providerId ?? null, run.controller, run.sessionId, { groupRouting: true });
           if (!resolved) failProviderNotAllowed();
         }
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
@@ -2933,8 +2942,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (guest && !(await guestOwnsSession(controller, request.relay, request.sourceSdkSessionId))) {
           fail('REMOTE_AGENT_INVALID', 'this conversation cannot be forked on this computer');
         }
+        // Only a recorded executor makes this a coordinator operation; local forks keep their login check.
+        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const providerId = await deps.providerAccess?.resolve(
           request.agentKind, request.model, request.providerId, controller, request.sourceSessionId,
+          { groupRouting: member !== null },
         );
         if (deps.providerAccess && !providerId) failProviderNotAllowed();
         const assertProvider = () => {
@@ -2942,7 +2954,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (providerId && !deps.providerAccess?.isAllowed(providerId, controller, request.model, request.sourceSessionId)) failProviderNotAllowed();
         };
         assertProvider();
-        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const hostSessionId = hostSessionIdFor(scope, request.sourceSessionId);
         const forkWorkspaceIds = [...new Set([...(await forkWorkspacesFor(scope, request.sourceSdkSessionId)), hostSessionId])];
         let result: RemoteAgentForkResult;
@@ -3189,6 +3200,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             fail('REMOTE_AGENT_INVALID', 'this conversation cannot be resumed on this computer');
           }
         }
+        // The host derives this scope before provider resolution: O's own login must not prevent
+        // its group from selecting M. Assigned, relayed and delegated executions keep local checks.
+        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
+          && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
+          && !!deps.groupRelay;
         // 供应商授权：来源落到本机已开放的供应商上，并以显式来源启动(核对的就是实际用的)。
         let providerId: string | undefined;
         if (deps.providerAccess) {
@@ -3198,6 +3214,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             payload.options.providerId,
             controller,
             payload.sessionId,
+            { groupRouting: groupRouted },
           );
           if (!resolved) failProviderNotAllowed();
           providerId = resolved;
@@ -3210,12 +3227,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         let avoid: string[] = [];
         /** 选电脑的同一步已计入那台(或本机这一台)的负载，交给任务；任务没建起来时放掉。 */
         let reserved: GroupRelayLoad | undefined;
-        // The guest-supplied groupAssigned hint cannot authorize M to route a
-        // delegated task into M's own group. Ordinary G→O guests have no local
-        // delegation and must retain O's group routing.
-        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
-          && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
-          && !!deps.groupRelay && !!providerId;
         if (groupRouted && deps.groupRelay && providerId) {
           const resumeId = payload.options.resumeSessionId;
           if (resumeId) {

@@ -1,26 +1,23 @@
 # Cindy Design System
 
-> Heritage note: this visual language was originally derived from an external
-> minimalist reference (2025). It has since evolved into Cindy's own system —
-> no external site or product is a reference for new design decisions.
-
 ## 1. Visual Theme & Atmosphere
 
-Cindy's interface is radical minimalism applied to an AI-agent workbench — a quiet, near-monochrome canvas where the user's content and the agent's output are the only things that demand attention. The design philosophy mirrors the product: strip away everything unnecessary until only the essential tool remains. This is the digital equivalent of a Dieter Rams object — every pixel earns its place, and the absence of decoration IS the design.
+设计以[产品原则](../product-rules/core-product-principles.md)的品质要求为前提：理解是否自然、
+操作是否顺手、反馈是否及时、工作能否连贯完成，每一处为用户省下的理解、等待与返工都值得投入。
 
-The default theme lives almost entirely in grayscale. Chromatic color is reserved for a small, explicitly sanctioned set of semantic signals (status, diff, focus — see §2); everything else is shades between near-black and near-white. Long working sessions stay calm, and color means something whenever it does appear.
+界面把注意力留给用户内容与 Agent 成果，围绕清楚的工作目的组织，强调状态、结果和下一步
+动作。视觉语言早期（2025）参考过外部极简设计，现已是 Cindy 自己的体系；新的视觉选择从
+工作需要出发，不以外部产品为依据。
 
-What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with a pill-first geometry (ordinary action frames default to pills; registered shapes and contained content are assigned separately under §5). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
+灰度构成安静的底色，彩色只表达已登记的语义（§2）。层次由背景差异与 1px 边界建立，基础
+语言不用阴影，窄例外由 §10 的 Token 约束。工作区不放吉祥物或装饰插画，品牌图像只出现在
+§15.7 / §16 允许的品牌界面。
 
-**Key Characteristics:**
+Inter 是标题与正文共用的唯一无衬线字体，配柔和几何让强大的工具容易接近。普通操作框默认
+胶囊，内容容器与已登记形状按角色处理，圆角分类统一见 §5。
 
-- Near-monochrome default theme; chromatic color only via the sanctioned semantic set (§2), always consumed through tokens (§10)
-- Inter as the single sans family, carrying both display headlines and body text
-- Tight border-radius system (§5): 0px / 2px (registered data marks) / 4px (keyboard keycaps) / 8px (inner controls) / 12px (containers) / 9999px (pill frames)
-- Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
-- Ordinary action frames default to pills; registered shapes (keycaps and data marks) and contained content are handled as separate visible layers. Apply §5 Step 1 before the Step 2 control tiers, including the inner-control tier for textareas.
-- No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
-- Extreme content restraint — each surface presents one clear idea
+颜色经语义 Token 表达，同一角色在 Light 与 Dark 下都成立。复用组件让一致的设计自然延续。
+排版、几何与状态的精确约定在后续章节。
 
 ### 1.1 New-task home content (user decision, 2026-09-06)
 
@@ -923,6 +920,8 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 *New tiers and new registered shapes both enter only through adjudication — neither is added by a reviewer's reading of this section.*
 
 *Governed corner-radius values are **0px and 2px** for registered data marks, **4px** for keycaps, **8px** for inner controls, **12px** for containers, and **9999px** for pill frames. No 3px / 6px / 10px, and no arbitrary values. A layer with no frame to round needs no assignment; "no assignment" is not an additional radius value. **Intrinsic content and mark geometry remain outside this corner-radius inventory** — a scatter dot's circle, a pie sector's arc, a map outline are shapes of the mark itself. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.*
+
+*Guard (2026-10-30): in Desktop renderer code, an added line whose radius resolves outside this inventory — `rounded-md` (6px), `rounded-2xl` / `rounded-3xl`, arbitrary values such as `rounded-[6px]` / `rounded-[10px]`, or a literal `border-radius` / `borderRadius` — fails `pnpm check:design-colors`. Intrinsic content geometry (an icon mask, an illustration shape) is declared with a `design: intrinsic-geometry — <reason>` comment on that line or just above and is then reported for review instead. Existing occurrences are debt, migrated page by page as visible changes; see [`design-governance.md` §8](./design-governance.md).*
 
 
 ## 6. Depth & Elevation
