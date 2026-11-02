@@ -321,6 +321,9 @@ import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelectio
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
+import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
+import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
+import { useSshCodexDraftSelection } from './useSshCodexDraftSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
 import { normalizeProjectKey } from './lib/projectGrouping';
@@ -850,7 +853,6 @@ export function NewMakerDraftRoute() {
   // 新建页彻底解除挂载,不迁移、不新增入口。
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
-  const chatPrefs = currentPrefs;
   /**
    * 统一模型选择器里选中的收藏锚点(规格 §1.5)。
    *
@@ -1396,7 +1398,41 @@ export function NewMakerDraftRoute() {
     error: deviceProvidersError,
     unsupported: deviceProvidersUnsupported,
   } = useDeviceProviders(catalogDeviceId);
-  const providers = catalogDeviceId ? deviceProviders : localProviders;
+  // SSH Codex 草稿:Codex 只走远端主机的原生连接,默认模型、来源与档位都按远端清单校准;
+  // 本机目录里的 Codex 来源(网关等)发到远端会被 main 拒绝(LAZY_CREATE_FAILED)。
+  const sshDraftHostId = !catalogDeviceId ? (effectiveRemoteHostId ?? null) : null;
+  const sshCodexDraftHostId = capabilityAgentKind === 'codex' ? sshDraftHostId : null;
+  const [sshCatalogRequestedHost, setSshCatalogRequestedHost] = useState<string | null>(null);
+  useEffect(() => {
+    if (sshCodexDraftHostId) setSshCatalogRequestedHost(sshCodexDraftHostId);
+  }, [sshCodexDraftHostId]);
+  const sshCatalogHostId = sshDraftHostId &&
+    (sshCodexDraftHostId || sshCatalogRequestedHost === sshDraftHostId) ? sshDraftHostId : null;
+  const sshCodexDraft = useSshCodexProviders(sshCatalogHostId);
+  const requestSshCatalog = useCallback(() => {
+    if (sshDraftHostId) setSshCatalogRequestedHost(sshDraftHostId);
+  }, [sshDraftHostId]);
+  const sshDraftCatalog: SshCodexCatalog | undefined = sshDraftHostId
+    ? sshCatalogHostId ? sshCodexDraft : { providers: [], status: 'idle', refresh: requestSshCatalog }
+    : undefined;
+  const { selection: sshDraftSelection, patch: patchSshDraftSelection } = useSshCodexDraftSelection(
+    sshDraftHostId,
+    sshCodexDraft.providers,
+  );
+  const chatPrefs = sshCodexDraftHostId ? {
+    ...currentPrefs,
+    model: sshDraftSelection?.model ?? '',
+    providerId: 'openai',
+    effort: sshDraftSelection?.effort ?? currentPrefs.effort,
+  } : currentPrefs;
+  const draftLocalProviders = useMemo(
+    () => sshCodexDraftHostId ? mergeSshCodexCatalog(localProviders, sshCodexDraft.providers) : localProviders,
+    [sshCodexDraftHostId, localProviders, sshCodexDraft.providers],
+  );
+  const draftLocalProvidersLoading =
+    localProvidersLoading || (!!sshCodexDraftHostId && sshCodexDraft.status === 'loading');
+  const draftPreferredProviderId = chatPrefs.providerId;
+  const providers = catalogDeviceId ? deviceProviders : draftLocalProviders;
   /**
    * 远程 Agent 只能用运行 Agent 那台电脑开放了「允许被远程调用」的供应商(那台是最终裁决方,
    * 显式指定未开放的来源会被拒):Agent 在另一台电脑运行时,默认来源解析、提交给被控电脑的来源
@@ -1439,7 +1475,7 @@ export function NewMakerDraftRoute() {
    */
   const calibrationProviders = useMemo(() => {
     const base = filterChatBridgedCodexProviders(
-      localProviders,
+      draftLocalProviders,
       capabilityAgentKind,
       !!effectiveRemoteHostId,
     );
@@ -1461,7 +1497,7 @@ export function NewMakerDraftRoute() {
         return { ...p, models: { ...p.models, [capabilityAgentKind]: kept } };
       })
       .filter((p) => (p.models[capabilityAgentKind] ?? []).length > 0);
-  }, [localProviders, capabilityAgentKind, effectiveRemoteHostId]);
+  }, [draftLocalProviders, capabilityAgentKind, effectiveRemoteHostId]);
   /**
    * **自动**选择用的候选:再剔掉清单发现失败的供应商。
    *
@@ -1474,31 +1510,34 @@ export function NewMakerDraftRoute() {
    * 也必须还能指到那个供应商。全部供应商都在失败态时同样退回完整候选 —— 那时没有更好的
    * 选择,给个陈旧清单也好过一个都挑不出来。
    */
-  const draftModelChosenByUser = draft.modelChosenByVendor[draft.vendor] === true;
+  const draftModelChosenByUser =
+    !!sshCodexDraftHostId || draft.modelChosenByVendor[draft.vendor] === true;
   const autoCalibrationProviders = useMemo(() => {
-    if (draftModelChosenByUser || chatPrefs.providerId) return calibrationProviders;
+    if (draftModelChosenByUser || draftPreferredProviderId) return calibrationProviders;
     const healthy = calibrationProviders.filter((p) => !p.modelDiscoveryFailure);
     return healthy.length > 0 ? healthy : calibrationProviders;
-  }, [calibrationProviders, draftModelChosenByUser, chatPrefs.providerId]);
+  }, [calibrationProviders, draftModelChosenByUser, draftPreferredProviderId]);
   const draftCalibration = useMemo<DraftModelCalibrationResult>(() => {
     if (usesDeviceCatalog) return { model: chatPrefs.model, providerId: null };
     return calibrateDraftModel({
       providers: autoCalibrationProviders,
-      isModelEnabled,
+      // 远端 model/list 已是可选清单,本机可见性偏好不适用于它。
+      ...(sshCodexDraftHostId ? {} : { isModelEnabled }),
       agent: capabilityAgentKind,
       model: chatPrefs.model,
       chosenByUser: draftModelChosenByUser,
-      preferredProviderId: chatPrefs.providerId,
-      providersLoading: localProvidersLoading,
+      preferredProviderId: draftPreferredProviderId,
+      providersLoading: draftLocalProvidersLoading,
     });
   }, [
     usesDeviceCatalog,
     autoCalibrationProviders,
+    sshCodexDraftHostId,
     capabilityAgentKind,
     chatPrefs.model,
-    chatPrefs.providerId,
+    draftPreferredProviderId,
     draftModelChosenByUser,
-    localProvidersLoading,
+    draftLocalProvidersLoading,
     defaultVisibilityVersion,
   ]);
   const calibratedDraftModel = draftCalibration.model;
@@ -1520,7 +1559,7 @@ export function NewMakerDraftRoute() {
     // 计费落网关而不是用户已付费的订阅额度,「订阅优先」在最后一步被推翻(PR #1076 review)。
     return effectiveSourceIdForModel(
       source,
-      chatPrefs.providerId ?? draftCalibration.providerId ?? null,
+      draftPreferredProviderId ?? draftCalibration.providerId ?? null,
       calibratedDraftModel,
       capabilityAgentKind,
     );
@@ -1529,7 +1568,7 @@ export function NewMakerDraftRoute() {
     providers,
     autoCalibrationProviders,
     capabilityAgentKind,
-    chatPrefs.providerId,
+    draftPreferredProviderId,
     draftCalibration.providerId,
     calibratedDraftModel,
   ]);
@@ -1538,6 +1577,7 @@ export function NewMakerDraftRoute() {
   // 的全局预设后,即使该模型正显示在首页 trigger 上,也应立即采用新 effort / fast。真实会话仍
   // 由 CCAgentSessionView 的 live DB/runtime props 保护,不会走这里。
   const localDraftEffort = useMemo<Effort | null>(() => {
+    if (sshCodexDraftHostId) return sshDraftSelection?.effort ?? null;
     if (usesDeviceCatalog || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
     // 按**校准后**的模型推导:effort 必须和最终提交的模型属于同一个能力集合。
@@ -1558,6 +1598,8 @@ export function NewMakerDraftRoute() {
       effortsUnknown: model ? model.effortsUnknown === true : true,
     });
   }, [
+    sshCodexDraftHostId,
+    sshDraftSelection?.effort,
     usesDeviceCatalog,
     effectiveSourceId,
     providers,
@@ -2041,7 +2083,7 @@ export function NewMakerDraftRoute() {
     return resolveFastSupported({
       deviceId: catalogDeviceId,
       deviceProviders,
-      localProviders,
+      localProviders: draftLocalProviders,
       capabilities,
       providerId,
       modelId,
@@ -2056,7 +2098,7 @@ export function NewMakerDraftRoute() {
     calibratedDraftModel,
     catalogDeviceId,
     deviceProviders,
-    localProviders,
+    draftLocalProviders,
     capabilities,
     capabilityAgentKind,
   ]);
@@ -2068,7 +2110,7 @@ export function NewMakerDraftRoute() {
       ? (deviceLinkInitial?.fastMode ?? false)
       : false
     : supportsFastMode
-      ? resolveDraftFast(calibratedDraftModel)
+      ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : resolveDraftFast(calibratedDraftModel)
       : false;
   // 远程开关仅属于这台设备的当前引擎，不读写控制端的本机偏好。
   const remotePlanKey = `${effectiveDeviceLinkDeviceId ?? ''}:${capabilityAgentKind}`;
@@ -2102,16 +2144,16 @@ export function NewMakerDraftRoute() {
   // 显式连接始终随草稿提交；未指定连接时才按 UI 与 main 的默认来源差异决定是否固化。
   const localProviderIdForDraft = useMemo<string | null>(() => {
     return resolveDraftSessionProviderId({
-      providers: localProviders,
+      providers: draftLocalProviders,
       agent: capabilityAgentKind,
       model: calibratedDraftModel,
-      explicitProviderId: chatPrefs.providerId,
+      explicitProviderId: draftPreferredProviderId,
       effectiveProviderId: effectiveSourceId,
     });
   }, [
-    chatPrefs.providerId,
+    draftPreferredProviderId,
     effectiveSourceId,
-    localProviders,
+    draftLocalProviders,
     calibratedDraftModel,
     capabilityAgentKind,
   ]);
@@ -2750,6 +2792,10 @@ export function NewMakerDraftRoute() {
 
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
+      if (sshCodexDraftHostId) {
+        patchSshDraftSelection({ model: newModelId, effort: undefined, fastMode: false });
+        return;
+      }
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         // 远程草稿:只改 dlSel,绝不写本地 newMakerDraft。capabilities 未就绪时退化为仅换 model。
@@ -2780,6 +2826,8 @@ export function NewMakerDraftRoute() {
       // 不再维护一份可能与其它对话更新脱节的本地 state。
     },
     [
+      sshCodexDraftHostId,
+      patchSshDraftSelection,
       usesDeviceCatalog,
       capabilities,
       deviceDraftDefaults,
@@ -2790,6 +2838,10 @@ export function NewMakerDraftRoute() {
   );
   const handleFastModeChange = useCallback(
     (enabled: boolean | 'ultrafast') => {
+      if (sshCodexDraftHostId) {
+        if (supportsFastMode) patchSshDraftSelection({ fastMode: enabled });
+        return;
+      }
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, fastMode: enabled } : prev));
@@ -2815,6 +2867,8 @@ export function NewMakerDraftRoute() {
       setFastModeForModel(calibratedDraftModel, enabled);
     },
     [
+      sshCodexDraftHostId,
+      patchSshDraftSelection,
       usesDeviceCatalog,
       draft.vendor,
       calibratedDraftModel,
@@ -2826,6 +2880,10 @@ export function NewMakerDraftRoute() {
   );
   const handleEffortDidChange = useCallback(
     (newEffort: Effort) => {
+      if (sshCodexDraftHostId) {
+        patchSshDraftSelection({ effort: newEffort });
+        return;
+      }
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, effort: newEffort } : prev));
@@ -2835,17 +2893,17 @@ export function NewMakerDraftRoute() {
       markDefaultTupleCustomized(false);
       patchActiveTuplePrefs({ effort: newEffort });
     },
-    [usesDeviceCatalog, patchActiveTuplePrefs, pushActiveDraftPref],
+    [sshCodexDraftHostId, patchSshDraftSelection, usesDeviceCatalog, patchActiveTuplePrefs, pushActiveDraftPref],
   );
   // ChatInput 内部决策完 newEffort 时回写这里, 让"每个 modelId 上次的 effort"
   // 跨 ChatInput 实例 / 跨重启保留 (修复: New Maker 先选 Haiku 发完, 再 New Maker
   // 切回 Opus 4.7 默认 Effort 退化成 Low 的问题)。device-link 不写本地 per-model 记忆。
   const handleRememberedEffortChange = useCallback(
     (modelId: string, effort: Effort) => {
-      if (usesDeviceCatalog) return;
+      if (usesDeviceCatalog || sshCodexDraftHostId) return;
       setEffortForModel(modelId, effort);
     },
-    [usesDeviceCatalog],
+    [usesDeviceCatalog, sshCodexDraftHostId],
   );
   const handlePermissionModeDidChange = useCallback(
     (newMode: PermissionMode) => {
@@ -2875,6 +2933,7 @@ export function NewMakerDraftRoute() {
   // device-link 远程草稿:只改 dlSel(临时),不写本地 prefs。
   const handleProviderDidChange = useCallback(
     (newProviderId: string | null) => {
+      if (sshCodexDraftHostId) return; // SSH Codex has only the host's native source.
       if (usesDeviceCatalog) {
         dlRuntimeTouchedRef.current = true;
         setDlSel((prev) => (prev ? { ...prev, providerId: newProviderId } : prev));
@@ -2883,7 +2942,7 @@ export function NewMakerDraftRoute() {
       markDefaultTupleCustomized();
       patchActiveTuplePrefs({ providerId: newProviderId });
     },
-    [usesDeviceCatalog, patchActiveTuplePrefs],
+    [sshCodexDraftHostId, usesDeviceCatalog, patchActiveTuplePrefs],
   );
 
   // ─── 统一模型选择器:一次选中 = 一次完整写入 ─────────────────────────────
@@ -3076,6 +3135,14 @@ export function NewMakerDraftRoute() {
         );
         return;
       }
+      if (effectiveRemoteHostId && !catalogDeviceId && selection.vendor === 'codex') {
+        patchSshDraftSelection({
+          model: selection.modelId,
+          effort: selection.effort,
+          fastMode: selection.fast,
+        });
+        return;
+      }
       const nextPrefs = {
         model: selection.modelId,
         providerId: selection.providerId,
@@ -3104,6 +3171,8 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       usesDeviceCatalog,
       catalogDeviceId,
+      effectiveRemoteHostId,
+      patchSshDraftSelection,
       isDeviceLinkDraft,
       effectiveDeviceLinkDeviceId,
       effectiveAgentDeviceId,
@@ -6054,6 +6123,7 @@ export function NewMakerDraftRoute() {
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
+                    sshCodexCatalogOverride={sshDraftCatalog}
                     deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
                     agentDeviceId={effectiveAgentDeviceId ?? null}
                     agentDeviceName={draft.agentDeviceName}
@@ -6179,7 +6249,7 @@ export function NewMakerDraftRoute() {
                       setNewGoalInitialObjective(text);
                       setNewGoalOpen(true);
                     }}
-                    rememberedEffortByModel={usesDeviceCatalog ? undefined : draft.effortByModel}
+                    rememberedEffortByModel={usesDeviceCatalog || sshCodexDraftHostId ? undefined : draft.effortByModel}
                     onRememberedEffortChange={
                       usesDeviceCatalog ? undefined : handleRememberedEffortChange
                     }
