@@ -38,8 +38,17 @@ describe('ui language error note', () => {
     const plain = buildUiLanguageErrorNote('zh-Hant-x-lzh', { classicalStyle: 'plain' });
     expect(plain).toContain('Ordinary replies still follow the user message');
     expect(plain).not.toContain('Classical Chinese (文言)');
-    // Switching back to another interface language sends a note without the style.
-    expect(buildUiLanguageErrorNote('zh-TW', { classicalStyle: 'tang-poetry' })).not.toContain('Classical Chinese');
+    // The modern Chinese editions offer the same styles while their interface stays modern.
+    const modernHans = buildUiLanguageErrorNote('zh-CN', { classicalStyle: 'tang-poetry' });
+    expect(modernHans).toContain('简体中文 (zh-CN)');
+    expect(modernHans).toContain('Classical Chinese (文言) with Simplified characters');
+    expect(modernHans).toContain('the manner of Tang poetry (唐詩)');
+    expect(buildUiLanguageErrorNote('zh-TW', { classicalStyle: 'song-ci' }))
+      .toContain('Classical Chinese (文言) with Traditional characters');
+    // Without a chosen style a modern interface answers ordinarily.
+    expect(buildUiLanguageErrorNote('zh-CN', { classicalStyle: 'plain' })).toBe(buildUiLanguageErrorNote('zh-CN'));
+    // A non-Chinese interface language never carries the style.
+    expect(buildUiLanguageErrorNote('ja', { classicalStyle: 'tang-poetry' })).not.toContain('Classical Chinese');
     const im = buildUiLanguageErrorNote('zh-Hant-x-lzh', { replyStyle: false, classicalStyle: 'song-ci' });
     expect(im).toContain('write that report in 文言（繁體）');
     expect(im).not.toContain('Song lyrics');
@@ -52,8 +61,10 @@ describe('ui language error note', () => {
     const base = { remote: true, claimed: 'zh-Hans-x-lzh' as const, fallback: 'zh-CN' as const, fallbackClassicalStyle: 'historian' as const };
     expect(stampTurnUiLanguage(item, { ...base, claimedClassicalStyle: 'yuan-qu' }))
       .toEqual({ clientId: 'a', uiLanguage: 'zh-Hans-x-lzh', classicalStyle: 'yuan-qu' });
-    // An older phone names its language but no style: the default, not this computer's choice.
+    // An older phone names its language but no style: that language's default, not this
+    // computer's choice.
     expect(stampTurnUiLanguage(item, base).classicalStyle).toBe('prose');
+    expect(stampTurnUiLanguage(item, { ...base, claimed: 'zh-CN' }).classicalStyle).toBe('plain');
     expect(stampTurnUiLanguage(item, { ...base, remote: false }).classicalStyle).toBe('historian');
     expect(turnClassicalStyleFromSendOpts({ classicalStyle: 'nope' }, 'prose')).toBe('prose');
   });
@@ -66,7 +77,7 @@ describe('ui language error note', () => {
       for (const { id } of CLASSICAL_REPLY_STYLES.lzh) {
         const im = buildUiLanguageErrorNote(locale, { replyStyle: false, classicalStyle: id });
         expect(im).toBe(buildUiLanguageErrorNote(locale, { classicalStyle: 'plain' }));
-        if (locale !== 'zh-Hans-x-lzh' && locale !== 'zh-Hant-x-lzh') {
+        if (locale !== 'zh-Hans-x-lzh' && locale !== 'zh-Hant-x-lzh' && locale !== 'zh-CN' && locale !== 'zh-TW') {
           expect(buildUiLanguageErrorNote(locale, { classicalStyle: id })).toBe(buildUiLanguageErrorNote(locale));
         }
       }
@@ -87,7 +98,7 @@ describe('ui language error note', () => {
       remote: true,
       claimed: 'ko',
       fallback: 'zh-CN',
-    })).toEqual({ clientId: 'a', uiLanguage: 'ko', classicalStyle: 'prose' });
+    })).toEqual({ clientId: 'a', uiLanguage: 'ko', classicalStyle: 'plain' });
   });
 
   it('uses a stamped supported locale and ignores anything else', () => {

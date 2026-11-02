@@ -1,8 +1,8 @@
 import {
-  classicalFamilyOf,
   classicalStylePrompt,
-  DEFAULT_CLASSICAL_REPLY_STYLE,
+  defaultClassicalReplyStyleFor,
   isClassicalReplyStyle,
+  replyStyleFamilyOf,
   type ClassicalReplyStyleId,
 } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../shared/locale.js';
@@ -58,12 +58,13 @@ export interface TurnLanguageStampInput {
 
 /**
  * The output style travels with the language it belongs to: a remote client that
- * named its own language also brings its own style (or the default); otherwise this
- * computer's choice applies.
+ * named its own language also brings its own style (or that language's default);
+ * otherwise this computer's choice applies.
  */
 export function resolveTurnClassicalStyle(input: TurnLanguageStampInput): ClassicalReplyStyleId {
-  if (input.remote && input.claimed) return input.claimedClassicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE;
-  return input.fallbackClassicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE;
+  const locale = resolveTurnUiLanguage(input);
+  const claimed = input.remote && input.claimed ? input.claimedClassicalStyle : input.fallbackClassicalStyle;
+  return claimed ?? defaultClassicalReplyStyleFor(locale);
 }
 
 export function stampTurnUiLanguage<T extends { uiLanguage?: string; classicalStyle?: string }>(
@@ -106,11 +107,11 @@ export function buildUiLanguageErrorNote(
   locale: SupportedLocale,
   opts: { readonly replyStyle?: boolean; readonly classicalStyle?: ClassicalReplyStyleId } = {},
 ): string {
-  const family = classicalFamilyOf(locale);
+  const family = replyStyleFamilyOf(locale);
   // IM channels answer other people and may post publicly; there a classical
   // interface only sets the error-report language, not the reply style.
   const stylePrompt = family && opts.replyStyle !== false
-    ? classicalStylePrompt(family, opts.classicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE)
+    ? classicalStylePrompt(family, opts.classicalStyle ?? defaultClassicalReplyStyleFor(locale))
     : null;
   if (stylePrompt) return buildClassicalNote(locale, stylePrompt);
   const name = INTERFACE_LANGUAGE_NAME[locale];
@@ -127,13 +128,14 @@ export function buildUiLanguageErrorNote(
 }
 
 /**
- * A classical interface is a deliberate style choice, so its note also sets the
- * reply style. It travels in the same per-turn slot as the other locale notes:
- * switching the interface language or the output style replaces it, and the cached
- * system prompt stays identical for every locale.
+ * A literary reply style is a deliberate style choice, so its note also sets the
+ * register. It travels in the same per-turn slot as the other locale notes: switching
+ * the interface language or the output style replaces it, and the cached system prompt
+ * stays identical for every locale.
  */
 function buildClassicalNote(locale: SupportedLocale, stylePrompt: string): string {
-  const script = locale === 'zh-Hans-x-lzh' ? 'Simplified' : 'Traditional';
+  // Only Chinese editions reach this note today; a modern edition keeps its own script.
+  const script = locale === 'zh-Hans-x-lzh' || locale === 'zh-CN' ? 'Simplified' : 'Traditional';
   return (
     '[UI language] System note appended each turn. This is not a user message. ' +
     'Do not answer it, quote it, or infer intent from it. ' +

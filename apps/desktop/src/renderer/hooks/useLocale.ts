@@ -26,7 +26,7 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { defaultClassicalReplyStyleFor, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import {
   readStoredClassicalStyle,
   readStoredLocale,
@@ -43,7 +43,7 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
   setLocale: (next: LocalePreference) => void;
-  /** 古典界面（文言）下 AI 作答的输出风格。 */
+  /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
   classicalStyle: ClassicalReplyStyleId;
   setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
@@ -89,10 +89,12 @@ export function bootstrapInitialLocale(): SupportedLocale {
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
-  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(readStoredClassicalStyle);
+  const [storedStyle, setStoredStyle] = useState<ClassicalReplyStyleId | null>(readStoredClassicalStyle);
+  // 未手动选过文风时，文言界面默认以文言作答，现代中文界面默认照常作答。
+  const classicalStyle = storedStyle ?? defaultClassicalReplyStyleFor(effectiveLocale);
 
   const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
-    setClassicalStyleState(next);
+    setStoredStyle(next);
     writeStoredClassicalStyle(next);
   }, []);
 

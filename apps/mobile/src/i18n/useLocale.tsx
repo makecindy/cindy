@@ -27,7 +27,7 @@ import { clearSessionListCollator } from '@cindy/maker-shared/session-list';
 import { setManualLocaleOverride } from './appLanguage';
 import { clearPresentationDateFormatters } from './dateFormatters';
 import { i18n, detectSystemLocale, type LocalePreference, type SupportedLocale } from './index';
-import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { defaultClassicalReplyStyleFor, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import {
   readLanguagePreference,
   saveLanguagePreference,
@@ -41,7 +41,7 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化 override、刷 i18next、同步手写 catalog 桥。 */
   setLocale: (next: LocalePreference) => void;
-  /** 文言等古典界面下 AI 作答的输出风格。 */
+  /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
   classicalStyle: ClassicalReplyStyleId;
   setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
@@ -75,22 +75,25 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(detectSystemLocale);
   // 用户已手动选择过语言时置位:挂载期的异步读回不得覆盖更晚的手动选择。
   const userChoseRef = useRef(false);
-  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(currentClassicalStyle);
+  const [storedStyle, setStoredStyle] = useState<ClassicalReplyStyleId | null>(currentClassicalStyle);
   const userChoseStyleRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     void readClassicalStyle().then((style) => {
-      if (!cancelled && !userChoseStyleRef.current) setClassicalStyleState(style);
+      if (!cancelled && !userChoseStyleRef.current) setStoredStyle(style);
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // 未手动选过文风时，文言界面默认文言作答，现代中文界面默认照常作答。
+  const classicalStyle = storedStyle ?? defaultClassicalReplyStyleFor(effectiveLocale);
+
   const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
     userChoseStyleRef.current = true;
-    setClassicalStyleState(next);
+    setStoredStyle(next);
     void saveClassicalStyle(next);
   }, []);
 

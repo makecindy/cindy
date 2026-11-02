@@ -12,8 +12,9 @@ import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSessio
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { i18n } from '@/i18n';
-import { isClassicalLocale, resolveSystemLocale } from '@/i18n/locale';
+import { resolveSystemLocale } from '@/i18n/locale';
 import { currentClassicalStyle } from '@/i18n/classicalStyleStore';
+import { defaultClassicalReplyStyleFor, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -171,7 +172,10 @@ export function buildQueuedTextMessage(
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
-  const classicalStyle = isClassicalLocale(uiLanguage) ? currentClassicalStyle() : undefined;
+  // 文言、简体中文、繁體中文界面都能选文言文风;没选过时按界面语言取默认。
+  const classicalStyle = replyStyleFamilyOf(uiLanguage)
+    ? currentClassicalStyle() ?? defaultClassicalReplyStyleFor(uiLanguage)
+    : undefined;
 
   return {
     clientId,

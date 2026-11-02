@@ -1,5 +1,4 @@
 import {
-  DEFAULT_CLASSICAL_REPLY_STYLE,
   isClassicalReplyStyle,
   type ClassicalReplyStyleId,
 } from '@cindy/maker-shared/classical-reply';
@@ -47,15 +46,18 @@ export function getEffectiveLocale(): SupportedLocale {
 
 const CLASSICAL_STYLE_STORAGE_KEY = 'classicalReplyStyle';
 
-/** Output style of AI replies while a classical edition (文言) is shown. */
-export function readStoredClassicalStyle(): ClassicalReplyStyleId {
+/**
+ * Output style of AI replies, or null when the user never chose one for this computer
+ * (the interface language then decides; see defaultClassicalReplyStyleFor).
+ */
+export function readStoredClassicalStyle(): ClassicalReplyStyleId | null {
   try {
     const raw = localStorage.getItem(CLASSICAL_STYLE_STORAGE_KEY);
     if (isClassicalReplyStyle(raw)) return raw;
   } catch {
     // Storage may be unavailable in sandboxed windows.
   }
-  return DEFAULT_CLASSICAL_REPLY_STYLE;
+  return null;
 }
 
 export function writeStoredClassicalStyle(style: ClassicalReplyStyleId): void {

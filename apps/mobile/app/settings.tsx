@@ -28,7 +28,7 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
-import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
@@ -116,6 +116,7 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
 // 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
 // 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+// 简体中文 / 繁體中文界面不占额外选项,只在下方多出一行「AI 作答文风」。
 const CLASSICAL_OPTION = 'classical';
 type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
 const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
@@ -150,6 +151,7 @@ export default function SettingsScreen() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
+  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
@@ -908,40 +910,40 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           {classical ? (
-            <>
-              <NativePullDownMenu
-                actions={CLASSICAL_SCRIPTS.map((script) => ({
-                  id: script.locale,
-                  state: script.locale === classical ? 'on' : 'off',
-                  title: t(`settings.language.classical.script.${script.key}`),
-                }))}
-                onAction={selectClassicalScript}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'script'}
-                  label={t('settings.language.classical.scriptAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
-                  testID="settings.language.classicalScript"
-                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
-                />
-              </NativePullDownMenu>
-              <NativePullDownMenu
-                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
-                  id: style.id,
-                  state: style.id === classicalStyle ? 'on' : 'off',
-                  title: t(`settings.language.classical.styles.${style.id}`),
-                }))}
-                onAction={selectClassicalStyle}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'style'}
-                  label={t('settings.language.classical.styleAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
-                  testID="settings.language.classicalStyle"
-                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
-                />
-              </NativePullDownMenu>
-            </>
+            <NativePullDownMenu
+              actions={CLASSICAL_SCRIPTS.map((script) => ({
+                id: script.locale,
+                state: script.locale === classical ? 'on' : 'off',
+                title: t(`settings.language.classical.script.${script.key}`),
+              }))}
+              onAction={selectClassicalScript}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'script'}
+                label={t('settings.language.classical.scriptAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                testID="settings.language.classicalScript"
+                value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+              />
+            </NativePullDownMenu>
+          ) : null}
+          {classical || replyStyleOnly ? (
+            <NativePullDownMenu
+              actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                id: style.id,
+                state: style.id === classicalStyle ? 'on' : 'off',
+                title: t(`settings.language.classical.styles.${style.id}`),
+              }))}
+              onAction={selectClassicalStyle}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'style'}
+                label={t('settings.language.classical.styleAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                testID="settings.language.classicalStyle"
+                value={t(`settings.language.classical.styles.${classicalStyle}`)}
+              />
+            </NativePullDownMenu>
           ) : null}
         </SettingsGroup>
 
