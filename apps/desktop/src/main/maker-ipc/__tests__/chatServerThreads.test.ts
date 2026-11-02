@@ -307,6 +307,12 @@ describe('reply summaries', () => {
     expect(threadPreviewText(files)).toBe('第一行 第二行');
     expect(threadPreviewAttachments(files, block => block.caption!)).toEqual([{ name: 'shot.PNG', category: 'image' }, { name: 'notes.pdf', category: 'file' }]);
     expect(threadPreviewText(reply('long', rootA, { content: [{ type: 'text', text: 'x'.repeat(400) }] }))).toHaveLength(280);
+    // The 280-unit cut must not split an emoji (a UTF-16 surrogate pair).
+    const emoji = reply('emoji', rootA, { content: [{ type: 'text', text: `${'x'.repeat(279)}😀 tail` }] });
+    expect(threadPreviewText(emoji)).toBe('x'.repeat(279));
+    // Sharing feeds this preview into the card fallback, which must stay well-formed too.
+    expect(buildBotGroupThreadShareCard({ messageId: 'm', threadRootId: rootA, authorName: 'A', text: threadPreviewText(emoji) }).fallback)
+      .not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(isShareableThreadReply(files)).toBe(true);
     expect(isShareableThreadReply(message({ id: 'root' }))).toBe(false);
     expect(isShareableThreadReply(reply('d', rootA, { deleted: true }))).toBe(false);
