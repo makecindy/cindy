@@ -89,6 +89,7 @@ import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatche
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
+import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 
 describe('splitChatMessageText', () => {
   it('breaks at the last line before the limit, else at the limit, never inside a surrogate pair', () => {
@@ -481,6 +482,48 @@ describe('Chat Server result delivery and refresh', () => {
     } else {
       expect(result).toEqual({ ok: false, errorCode: mode === 'left' ? 'MEMBER_NOT_FOUND' : 'HUMAN_OWNER_REQUIRED' });
       expect(writes).toEqual([]);
+    }
+  });
+  // Notification preferences use the same save/refresh path as existing personal settings.
+  it.each([['mentions', true], ['none', true], ['all', true], ['mentions', false]] as const)(
+    'saves %s as the human member through the existing preference flow with capability=%s', async (mode, supported) => {
+    const disk = new Map<string, ChatHistoryState>();
+    deps.chatHistoryStore = () => ({ read: async room => structuredClone(disk.get(room)),
+      write: async (room, state) => { if (state) disk.set(room, structuredClone(state)); else disk.delete(room); } });
+    const reads = [{ thread_key: 'main', read_seq: '7', following: false, muted: mode === 'all', notification_scope: mode === 'all' ? 'mentions' : null as string | null }];
+    const inputMessageId = '90000000-0000-4000-8000-000000000008';
+    const message = { id: inputMessageId, seq: '8', authorId: selfId, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'After setting' }], createdAt: new Date().toISOString(), threadRootId: null, deleted: false };
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupNotificationSettings: 1 } : {} } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '8', changes: [] } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role: 'member' },
+      ], messages: [message], reads, cursor: '8' } };
+      if (route.endsWith('/read') && method === 'POST') {
+        if (body.notificationMode) { if (body.notificationMode !== 'none') reads[0].notification_scope = body.notificationMode; reads[0].muted = body.notificationMode === 'none'; }
+        if (BigInt(body.readSeq) > BigInt(reads[0].read_seq)) reads[0].read_seq = body.readSeq;
+        return { body: { readSeq: reads[0].read_seq, following: false, muted: reads[0].muted, notificationScope: reads[0].notification_scope } };
+      }
+      return response(route);
+    });
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'notifications', mode } });
+    expect(result.ok).toBe(supported);
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/read') && method === 'POST');
+    expect(writes).toEqual(supported ? [[`/conversations/${roomId}/read`, 'POST', { operationId: expect.any(String), readSeq: '0', notificationMode: mode }]] : []);
+    expect(fixture.requests.filter(r => r.url.endsWith('/read')).every(r => !r.actor)).toBe(true);
+    const detail = await service.getGroup(roomId);
+    expect(detail.ok && detail.group.supportsNotificationSettings).toBe(supported);
+    if (supported) {
+      expect(detail.ok && detail.group.notificationMode).toBe(mode);
+      expect((await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: inputMessageId } })).ok).toBe(true);
+      // Without a live subscription the action may authorize with a snapshot;
+      // its acknowledged read must not make the following projection refetch it.
+      const snapshots = fixture.handle.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length;
+      const afterRead = await service.getGroup(roomId);
+      expect(afterRead.ok && afterRead.group.notificationMode).toBe(mode);
+      expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/snapshot'))).toHaveLength(snapshots);
     }
   });
   // Group avatar regression: exercise the production manage entry, real image
@@ -2733,14 +2776,19 @@ describe('Chat Server result delivery and refresh', () => {
       }
     });
 
-  it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {
+  it.each(['all', 'mentions', 'none'] as const)('keeps server plan steps in a grant-specific chat-only lane and applies %s to work reminders', async notificationMode => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     const planId = '70000000-0000-4000-8000-000000000001';
     const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Discuss the draft',
       organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
       steps: [{ position: 0, botId, botName: 'Bot', task: 'Discuss', status: 'running' }], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
-    fixture.handle.mockImplementation(route => {
+    deps.onStepSettled = vi.fn();
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete') plan.status = 'waiting';
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [], cursor: '1', reads: [
+        { thread_key: 'main', read_seq: '0', muted: notificationMode === 'none', notification_scope: notificationMode === 'mentions' ? 'mentions' : null },
+      ] } };
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
       if (route.includes('/plans')) return { body: [plan] };
       if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Discuss the draft' }], deleted: false, threadRootId: null } };
@@ -2750,6 +2798,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: '', sessionId: undefined } }));
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
+    await service.settleLaneTurn(terminal);
+    expect(deps.onStepSettled).toHaveBeenCalledTimes(notificationMode === 'none' ? 0 : 1);
   });
   it('projects which computer runs my companion, so a phone reaching the group through here reads its tasks there', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];

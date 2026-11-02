@@ -10889,7 +10889,18 @@
           "accessToolsTitle": "Tools und Informationen",
           "accessToolsHint": "Kann die vorhandenen Tools von {{name}} und deine privaten Informationen nutzen. Ergebnisse sind für alle sichtbar. Bisherige Freigaberegeln gelten weiter; ein Widerruf des Zugriffs macht bereits ausgeführte Aktionen nicht rückgängig.",
           "capabilitiesRow": "Tools und Zugriffsrechte von {{name}}",
-          "accessMenu": "Berechtigungen in dieser Gruppe"
+          "accessMenu": "Berechtigungen in dieser Gruppe",
+          "notifications": {
+            "title": "Nachrichtenbenachrichtigungen",
+            "all": "Alle Nachrichten",
+            "mentions": "Nur Erwähnungen",
+            "none": "Aus",
+            "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
+            "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+            "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
+            "saving": "Wird gespeichert…",
+            "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+          }
         }
       },
       "lifecycle": {
