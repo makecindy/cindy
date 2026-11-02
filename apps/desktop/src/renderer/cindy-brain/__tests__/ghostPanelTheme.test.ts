@@ -32,7 +32,9 @@ const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 // Regression: Sites' main-view document hid the wallpaper. Existing tests cover
 // theme strings, not the applied canvas or wallpaper-only updates. Unit tier:
 // exercise the production injector + observer with unchanged light/dark tokens,
-// and verify computed document/control backgrounds across off -> on -> off.
+// and verify document/control background overrides across off -> on -> off.
+// jsdom does not resolve CSS variables: concrete Light/Dark token colors and
+// restoration are covered by scripts/check-ghost-wallpaper-theme.mjs in Electron.
 it.each(['light', 'dark'])('main-view canvas follows wallpaper without fading controls (%s)', async (scheme) => {
   const frame = document.createElement('iframe');
   document.body.append(frame);
