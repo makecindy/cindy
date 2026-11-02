@@ -84,6 +84,30 @@ export function isPluginModelPickerRouteAvailable(
   );
 }
 
+/**
+ * 卡内模型下拉框选中的模型当前是否可用:本机的按本机目录;带运行位置(另一台电脑或分享来的供应商)的,
+ * 那个位置必须是现在可选的,模型也必须在那里允许远程调用的目录里。执行时那台电脑还会再校验一次。
+ */
+export async function isGhostCardModelRouteAvailable(
+  route: PluginTaskRoute & { agentDeviceId?: string },
+  sources: {
+    localViews(): Promise<ProviderView[]>;
+    localAgents(): readonly string[];
+    locations?: (() => Promise<{ locations: readonly { agentDeviceId: string }[] }>) | null;
+    remoteViews?: ((agentDeviceId: string) => Promise<ProviderView[]>) | null;
+  },
+): Promise<boolean> {
+  const { agentDeviceId, ...base } = route;
+  if (!agentDeviceId) return isPluginModelPickerRouteAvailable(base, await sources.localViews(), sources.localAgents());
+  if (!sources.locations || !sources.remoteViews) return false;
+  const { locations } = await sources.locations();
+  if (!locations.some((location) => location.agentDeviceId === agentDeviceId)) return false;
+  return isPluginModelPickerRouteAvailable(base, await sources.remoteViews(agentDeviceId), REMOTE_ROUTE_AGENTS);
+}
+
+/** 远程位置上的引擎是否就绪由那里的目录决定,这里不按本机安装情况过滤。 */
+const REMOTE_ROUTE_AGENTS = ['claude-code', 'codex', 'pi'] as const;
+
 interface Pending {
   request: PluginModelPickerRequest;
   target: PluginModelPickerTarget;

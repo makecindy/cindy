@@ -4,7 +4,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
-import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
+import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -7780,6 +7780,21 @@ export function isFullWidthGhostCardHtml(html: string): boolean {
 }
 
 /**
+ * 卡内模型下拉框的选择:Cindy 的模型组合,另可带 Agent 运行位置 `agentDeviceId`(同账号另一台
+ * 电脑的 deviceId,或分享来的供应商 `share:<id>`;省略 = 插件运行的这台电脑)。只用于卡片下拉框,
+ * 不改 `cindy.pickModel` / `tasks.create` 的路由形状。
+ */
+export type GhostCardModelSelection = PluginModelSelection & { agentDeviceId?: string };
+
+export function isGhostCardModelSelection(value: unknown): value is GhostCardModelSelection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { agentDeviceId, ...route } = value as Record<string, unknown>;
+  if (agentDeviceId !== undefined && (typeof agentDeviceId !== 'string' || !agentDeviceId.trim()
+    || agentDeviceId.length > 128 || agentDeviceId === 'local')) return false;
+  return isPluginModelSelection(route);
+}
+
+/**
  * 卡内模型下拉框:插件在动作按钮上标 `data-ghost-model-select`(值 = 当前模型的 JSON,可空),
  * 宿主点击时在按钮下方弹出模型选择器,选中结果随 card-action 的 modelSelection 回传。
  * 净化器把它紧跟在 data-ghost-action 之后输出,这里据此确认该动作确实声明了下拉框。
@@ -8940,7 +8955,7 @@ export type GhostPipeEventPush =
        * 用户在卡内模型下拉框(data-ghost-model-select)里选中的模型。宿主已核对该动作
        * 确实声明了下拉框、且这个模型当前可用;别的按钮永远没有此字段。
        */
-      modelSelection?: PluginModelSelection;
+      modelSelection?: GhostCardModelSelection;
       /**
        * 主机铸造的衍生卡位(`<根callId>::sp<序>`,见 GHOST_CARD_SPAWN_SEP)。
        * 对它 card-update = 原卡下方长出新卡(原卡保留,母卡按钮可反复点);

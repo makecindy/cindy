@@ -8,7 +8,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, chooseModelPickerWindow, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -185,6 +185,30 @@ it('validates effort and Fast against the exact connected model and available en
   expect(
     isPluginModelPickerRouteAvailable({ ...route, fastMode: false }, [provider], ['codex']),
   ).toBe(false);
+});
+
+// Rule: the card dropdown also offers other computers and shared providers. A remote pick must be a
+// location that is currently offered, and the model must be in that location's remotely callable catalog.
+it('checks a card model at its own location: local catalog, or the offered remote location', async () => {
+  const view = (models: string[]) => ({
+    id: 'mine', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: models.map((id) => ({ id, mode: 'chat', efforts: ['high'], supportsFastMode: true, supportsUltrafastMode: true })) },
+  }) as unknown as ProviderView;
+  const remoteViews = vi.fn(async (id: string) => [view(id === 'mac-mini' ? ['remote-model'] : [])]);
+  const sources = {
+    localViews: async () => [view(['model'])],
+    localAgents: () => ['codex'],
+    locations: async () => ({ locations: [{ agentDeviceId: 'mac-mini' }, { agentDeviceId: 'share:abc' }] }),
+    remoteViews,
+  };
+  expect(await isGhostCardModelRouteAvailable(route, sources)).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, sources)).toBe(true);
+  // Remote engines are judged by the remote catalog, not by what is installed here.
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'mac-mini' }, { ...sources, localAgents: () => [] })).toBe(true);
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, sources)).toBe(false);
+  expect(await isGhostCardModelRouteAvailable({ ...route, model: 'remote-model', agentDeviceId: 'offline-mac' }, sources)).toBe(false);
+  expect(remoteViews).not.toHaveBeenCalledWith('offline-mac');
+  expect(await isGhostCardModelRouteAvailable({ ...route, agentDeviceId: 'mac-mini' }, { ...sources, locations: null })).toBe(false);
 });
 
 // Unit: after a first successful pick, "choose a model" on a PR card stopped opening the picker.

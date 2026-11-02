@@ -45,8 +45,6 @@ import { mailCardFooterHtml, updateMailCardDocument } from './mailCardFooter';
 import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
 import { GhostCardModelSelect } from './GhostCardModelSelect';
-import { isPluginModelSelection } from '@cindy/device-link';
-import type { PluginTaskRoute } from '../../../shared/pluginTasks';
 import { toast } from '@/lib/toast';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -79,6 +77,8 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   isFullWidthGhostCardHtml,
   isGhostCardLinkAllowed,
+  isGhostCardModelSelection,
+  type GhostCardModelSelection,
 } from '@/../shared/ghost';
 
 /** 卡片画布宽度上限(与 tool-output 图卡同规格,设计稿按 460 出的)。 */
@@ -289,7 +289,7 @@ function GhostCardCanvas({
   // data-ghost-model-select 类动作的模型下拉框(锚在被点按钮下方,选中后随 card-action 回传)。
   const [modelAsk, setModelAsk] = useState<{
     actionId: string;
-    initial: PluginTaskRoute | null;
+    initial: GhostCardModelSelection | null;
     rect: { top: number; left: number; width: number; height: number };
   } | null>(null);
   // 弹面板那颗按钮的引用:发送时对它上锁(防连点),与普通按钮同一套锁。
@@ -611,10 +611,10 @@ function GhostCardCanvas({
           const o = anchor.getBoundingClientRect();
           const f = iframeEl.getBoundingClientRect();
           const r = el.getBoundingClientRect();
-          let initial: PluginTaskRoute | null = null;
+          let initial: GhostCardModelSelection | null = null;
           try {
             const value: unknown = JSON.parse(el.dataset.ghostModelSelect || 'null');
-            if (isPluginModelSelection(value)) initial = value;
+            if (isGhostCardModelSelection(value)) initial = value;
           } catch { /* 没有当前值:从空白选择开始 */ }
           setModelAsk({
             actionId,

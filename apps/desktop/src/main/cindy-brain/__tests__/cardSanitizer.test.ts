@@ -426,7 +426,10 @@ describe('sanitizeGhostCardHtml · 模型下拉框(data-ghost-model-select)', ()
     expect(html).toBe(`<button data-ghost-action="pick" data-ghost-model-select="${enc(route)}" type="button">x</button>`);
     expect(ghostCardDeclaresModelSelect(html, 'pick')).toBe(true);
     expect(ghostCardDeclaresModelSelect(html, 'pic')).toBe(false);
-    for (const bad of ['{bad', enc({ ...route, extra: 1 })]) {
+    const remote = { ...route, agentDeviceId: 'share:abc' };
+    expect(ok(`<button data-ghost-action="pick" data-ghost-model-select="${enc(remote)}">x</button>`))
+      .toBe(`<button data-ghost-action="pick" data-ghost-model-select="${enc(remote)}" type="button">x</button>`);
+    for (const bad of ['{bad', enc({ ...route, extra: 1 }), enc({ ...route, agentDeviceId: 'local' }), enc({ ...route, agentDeviceId: '' })]) {
       expect(ok(`<button data-ghost-action="a" data-ghost-model-select="${bad}">x</button>`))
         .toBe('<button data-ghost-action="a" data-ghost-model-select="" type="button">x</button>');
     }

@@ -1585,7 +1585,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
-      modelSelection?: PluginModelSelection,
+      modelSelection?: PluginModelSelection & { agentDeviceId?: string },
     ): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('ghosts:card:action', callId, actionId, prompt, formValues, formChange, modelSelection),
     resolvePanelMedia: (

@@ -54,8 +54,11 @@ cindy.onHostMessage(async function (msg) {
   旧版客户端会照常显示它;
 - **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
   (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
-  属性转义;没有当前值写空串)。新版电脑端点击时在按钮正下方弹出 Cindy 的模型列表,选中后
-  card-action 多带 `modelSelection`(主机已核对它当前可用)。手机和旧版客户端照常派发不带
+  属性转义;没有当前值写空串)。新版电脑端点击时在按钮正下方弹出 Cindy 的模型列表,也列出同账号
+  其他电脑和分享来的供应商;选中后 card-action 多带 `modelSelection`(主机已核对它当前可用)。
+  选的是远程模型时它多一个 `agentDeviceId`(运行位置),请原样存下并放回下拉框的值;要显示名字可用
+  `GET /agent-models?agent_device_id=…` 读那个位置的模型目录。`cindy.pickModel` 只认本机模型,
+  兜底时别把带 `agentDeviceId` 的值当 `initial` 传给它。手机和旧版客户端照常派发不带
   `modelSelection` 的动作,这时请自己调用 `cindy.pickModel({ initial, mobilePageId })` 兜底;
 - **可编辑文本表单**:一张卡至多声明一个 div，其 `data-ghost-form` 属性为经 HTML 属性转义的
   JSON 字段数组，每项 `{name,label,value,multiline?,row?,collapsed?,kind?}`；1–16 项、字段名唯一、label ≤128 字、value ≤16000 字。

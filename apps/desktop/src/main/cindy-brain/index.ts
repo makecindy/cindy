@@ -88,7 +88,7 @@ import {
   projectGhostAgentModels,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
-import { GhostModelPicker, chooseModelPickerWindow, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from './ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from './ghostModelPicker.js';
 import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
@@ -4078,9 +4078,13 @@ export function getGhostModelPicker(): GhostModelPicker {
   });
 }
 
-async function isPluginModelRouteAvailableNow(route: PluginTaskRoute): Promise<boolean> {
-  const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-  return isPluginModelPickerRouteAvailable(route, views, getPluginModelPickerAgents());
+async function isPluginModelRouteAvailableNow(route: PluginTaskRoute & { agentDeviceId?: string }): Promise<boolean> {
+  return isGhostCardModelRouteAvailable(route, {
+    localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+    localAgents: getPluginModelPickerAgents,
+    locations: listGhostAgentLocations,
+    remoteViews: readGhostAgentRemoteViews,
+  });
 }
 
 function createGhostFileTransferProgress(id: string, callId?: string) {

@@ -19,9 +19,9 @@ import {
   GHOST_CARD_HTML_MAX_BYTES,
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
   isGhostCardIconName,
+  isGhostCardModelSelection,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
-import { isPluginModelPickerRoute as isPluginModelSelection } from '../../shared/pluginModelPicker.js';
 
 /** 允许保留(含子树)的标签。仅结构/排版/图片 + 交互按钮(v2,零脚本:
  *  点击由宿主受信桥委托,见 GhostToolCard.attachClickBridge);无脚本载体。
@@ -155,9 +155,9 @@ function modelSelectValue(raw: string): string {
   if (!raw || raw.length > 1024) return '';
   try {
     const value: unknown = JSON.parse(raw);
-    if (!isPluginModelSelection(value)) return '';
-    const { agentKind, providerId, model, effort, fastMode } = value;
-    return JSON.stringify({ agentKind, providerId, model, effort, fastMode });
+    if (!isGhostCardModelSelection(value)) return '';
+    const { agentKind, providerId, model, effort, fastMode, agentDeviceId } = value;
+    return JSON.stringify({ agentKind, providerId, model, effort, fastMode, ...(agentDeviceId ? { agentDeviceId } : {}) });
   } catch {
     return '';
   }
