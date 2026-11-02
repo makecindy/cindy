@@ -12562,6 +12562,52 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it.each([
+      // 不重投: 等满 40s 也只有最初那一次 turn/start。
+      ['a file change', { id: 'patch-1', type: 'fileChange' }, 1, 40_000],
+      ['an item of unknown type', {}, 1, 40_000],
+      // 用户输入的回声不是产出: 首档退避 (1.5-2.5s) 内照常重投。
+      ['the userMessage echo', { id: 'item-echo', type: 'userMessage' }, 2, 3_000],
+    ])('counts %s dropped at the line limit as produced output only when it is model work', async (
+      _case,
+      item,
+      expectedTurnStarts,
+      advanceMs,
+    ) => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-omitted-item',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.itemOmitted) throw new Error('expected handlers');
+        handlers.turnStarted({ turn: { id: 'turn-1' } } as never);
+        // 宿主只留下「这一轮有个条目被丢了」的标记; 文件其实早已写入磁盘, 整轮重放会再写一遍。
+        handlers.itemOmitted({ threadId: 'start-thread-id', turnId: 'turn-1', phase: 'completed', item });
+        await vi.advanceTimersByTimeAsync(0);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(advanceMs);
+
+        expect(turnStartCount(host)).toBe(expectedTurnStarts);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('cancels a pending overload retry when the user stops the turn', async () => {
       vi.useFakeTimers();
       try {

@@ -524,7 +524,8 @@ describe('AppServerClient server requests', () => {
 
 describe('AppServerClient oversized lines', () => {
   const LIMIT = 256;
-  const bulk = 'x'.repeat(LIMIT * 2);
+  // 大字段要比信封读取窗口 (行首 / 行尾各 4 KiB) 更长, 才是真实超限行的形态。
+  const bulk = 'x'.repeat(8 * 1024);
 
   function setup(onOversizedNotification?: (notification: OversizedNotification) => boolean) {
     const transport = new FakeTransport();
@@ -610,7 +611,40 @@ describe('AppServerClient oversized lines', () => {
     expect(onTransportError).not.toHaveBeenCalled();
   });
 
-  it('only reads routing fields that precede the bulky value', () => {
+  it('reads item identity before the bulky value and its routing after it', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'fileChange',
+          id: 'patch-1',
+          // 大字段之后、item 内部的同名字段不能被当成路由。
+          changes: [{ path: 'data.json', diff: bulk, meta: { kind: 'add', threadId: 'nested-thread' } }],
+          status: 'completed',
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 5,
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'item/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'patch-1',
+      itemType: 'fileChange',
+      length: line.length,
+    });
+  });
+
+  it('leaves routing empty when it is neither before nor right after the bulky value', () => {
     const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
     const { transport, client } = setup(onOversizedNotification);
     client.onNotification('item/completed', vi.fn());
@@ -618,7 +652,7 @@ describe('AppServerClient oversized lines', () => {
 
     transport.emitLine({
       method: 'item/completed',
-      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1' },
+      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1', extra: { a: 1 } },
     });
 
     expect(onOversizedNotification).toHaveBeenCalledWith(

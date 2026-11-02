@@ -1898,6 +1898,7 @@ describe('AppServerHost oversized notifications', () => {
     const handlers = {
       turnDiffUpdated: vi.fn(),
       itemCompleted: vi.fn(),
+      itemOmitted: vi.fn(),
       turnCompleted: vi.fn(),
       hostForcedRetire: vi.fn(),
     };
@@ -1931,7 +1932,7 @@ describe('AppServerHost oversized notifications', () => {
     await host.shutdown();
   });
 
-  it('drops an oversized item notification and keeps serving the thread', async () => {
+  it('routes an oversized item as an omitted item instead of dropping it silently', async () => {
     const { transport, host, handlers, subscription } = await startWithSubscriber();
 
     transport.emit({
@@ -1947,12 +1948,31 @@ describe('AppServerHost oversized notifications', () => {
       params: { item: { type: 'agentMessage', id: 'msg-1', text: 'done' }, threadId: 'root-thread', turnId: 'turn-1' },
     });
 
+    expect(handlers.itemOmitted).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turnId: 'turn-1',
+      phase: 'completed',
+      item: { id: 'patch-1', type: 'fileChange' },
+    });
     expect(handlers.itemCompleted).toHaveBeenCalledTimes(1);
     expect(handlers.itemCompleted.mock.calls[0]?.[0]).toMatchObject({ item: { id: 'msg-1' } });
     expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
 
     await subscription.release();
     await host.shutdown();
+  });
+
+  it('still retires the host when an oversized item cannot be routed to its turn', async () => {
+    const { transport, handlers } = await startWithSubscriber();
+
+    // 没有可读的 threadId / turnId: 丢掉它就无法记下这一轮的产出, 宁可沿用退役。
+    transport.emit({
+      method: 'item/completed',
+      params: { item: { type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] } },
+    });
+
+    expect(handlers.itemOmitted).not.toHaveBeenCalled();
+    expect(handlers.hostForcedRetire).toHaveBeenCalledTimes(1);
   });
 
   it('still retires the host when an oversized notification drives the turn state machine', async () => {

@@ -39,7 +39,7 @@ import type { Transport } from './transport.js';
  * JSON.parse (避免主线程卡几百 ms), 只读开头的信封决定怎么处置这一条, 见 handleOversizedLine。
  */
 const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
-/** 识别超限行信封时最多读的前缀; diff / 文件内容这类大字段不会落在这里面。 */
+/** 识别超限行信封时, 行首和行尾各最多读这么多字符; diff / 文件内容这类大字段不在读取范围内。 */
 const OVERSIZED_ENVELOPE_PEEK_CHARS = 4_096;
 const MAX_STDERR_LOG_CHARS = 2_000;
 
@@ -55,11 +55,17 @@ export class AppServerMessageTooLargeError extends Error {
   }
 }
 
-/** 超限通知的信封, 正文已丢弃。threadId / turnId 只在它们排在大字段之前时可得。 */
+/**
+ * 超限通知的信封, 正文已丢弃。字段从行首或行尾读取, 读不到时为空: turn/diff/updated 的
+ * threadId / turnId 排在 diff 之前, item/* 的排在 item 之后; itemId / itemType 是 item 里
+ * 排在大字段之前的标量。
+ */
 export interface OversizedNotification {
   method: string;
   threadId?: string;
   turnId?: string;
+  itemId?: string;
+  itemType?: string;
   /** 原始行长度 (UTF-16 code unit)。 */
   length: number;
 }
@@ -69,60 +75,112 @@ interface OversizedEnvelope {
   method?: string;
   threadId?: string;
   turnId?: string;
+  itemId?: string;
+  itemType?: string;
 }
 
+/** 信封读取只进入 message → params → params.item 这一条路径。 */
+type EnvelopeScope = 'message' | 'params' | 'item';
+
+const JSON_STRING_SOURCE = String.raw`"(?:[^"\\]|\\.)*"`;
+const JSON_SCALAR_SOURCE = String.raw`(?:${JSON_STRING_SOURCE}|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)`;
+const JSON_SCALAR_MEMBER_SOURCE = String.raw`\s*${JSON_STRING_SOURCE}\s*:\s*${JSON_SCALAR_SOURCE}\s*`;
 const ENVELOPE_MEMBER_RE = /\s*"((?:[^"\\]|\\.)*)"\s*:\s*/y;
-const ENVELOPE_SCALAR_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+const ENVELOPE_SCALAR_RE = new RegExp(JSON_SCALAR_SOURCE, 'y');
 const ENVELOPE_SEPARATOR_RE = /\s*([,}])/y;
+/** params 收尾处连续的标量成员, 其后只剩 params 与整条消息的两个右括号。 */
+const TRAILING_PARAMS_RE = new RegExp(
+  String.raw`,(${JSON_SCALAR_MEMBER_SOURCE}(?:,${JSON_SCALAR_MEMBER_SOURCE})*)\}\s*\}\s*$`,
+);
+
+function recordEnvelopeMember(
+  envelope: OversizedEnvelope,
+  scope: EnvelopeScope,
+  key: string,
+  raw: string,
+): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (scope === 'message') {
+    if (key === 'id' && (typeof value === 'number' || typeof value === 'string')) envelope.id = value;
+    else if (key === 'method' && typeof value === 'string') envelope.method = value;
+    return;
+  }
+  if (typeof value !== 'string') return;
+  if (scope === 'params') {
+    if (key === 'threadId') envelope.threadId ??= value;
+    else if (key === 'turnId') envelope.turnId ??= value;
+  } else if (key === 'id') {
+    envelope.itemId = value;
+  } else if (key === 'type') {
+    envelope.itemType = value;
+  }
+}
 
 /**
- * 只读超限行开头的标量成员: 顶层 id / method, 以及 params 里排在前面的 threadId / turnId。
- * 遇到第一个对象、数组或读不完的长字符串就停, 不碰大字段本身。app-server 由 serde 按结构体
- * 声明顺序输出 (id / method 在最前, turn/diff/updated 的 threadId / turnId 在 diff 之前);
- * 顺序不符时字段缺失, 由调用方按「认不出」保守处理。
+ * 从 `{` 起顺序读标量成员; 遇到路径之外的对象、数组, 或读不完的长字符串 (大字段) 就停。
  */
-function peekOversizedEnvelope(line: string): OversizedEnvelope {
-  const head = line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS);
-  const envelope: OversizedEnvelope = {};
-  let pos = head.search(/\S/);
-  if (pos < 0 || head[pos] !== '{') return envelope;
+function readEnvelopeMembers(text: string, scope: EnvelopeScope, envelope: OversizedEnvelope): void {
+  let pos = text.search(/\S/);
+  if (pos < 0 || text[pos] !== '{') return;
   pos += 1;
-  let inParams = false;
+  const scopes: EnvelopeScope[] = [scope];
   for (;;) {
+    const current = scopes[scopes.length - 1]!;
     ENVELOPE_MEMBER_RE.lastIndex = pos;
-    const member = ENVELOPE_MEMBER_RE.exec(head);
-    if (!member) return envelope;
+    const member = ENVELOPE_MEMBER_RE.exec(text);
+    if (!member) return;
     pos = ENVELOPE_MEMBER_RE.lastIndex;
-    const key = member[1];
-    if (!inParams && key === 'params' && head[pos] === '{') {
-      inParams = true;
+    const key = member[1]!;
+    const nested = current === 'message' && key === 'params'
+      ? 'params'
+      : current === 'params' && key === 'item'
+        ? 'item'
+        : null;
+    if (nested && text[pos] === '{') {
+      scopes.push(nested);
       pos += 1;
       continue;
     }
     ENVELOPE_SCALAR_RE.lastIndex = pos;
-    const scalar = ENVELOPE_SCALAR_RE.exec(head);
-    if (!scalar) return envelope;
-    // 标量后面必须紧跟分隔符, 防止把截在前缀边界上的半个数字当成完整值。
+    const scalar = ENVELOPE_SCALAR_RE.exec(text);
+    if (!scalar) return;
+    // 标量后面必须紧跟分隔符, 防止把截在读取边界上的半个数字当成完整值。
     ENVELOPE_SEPARATOR_RE.lastIndex = ENVELOPE_SCALAR_RE.lastIndex;
-    const separator = ENVELOPE_SEPARATOR_RE.exec(head);
-    if (!separator) return envelope;
+    let separator = ENVELOPE_SEPARATOR_RE.exec(text);
+    if (!separator) return;
     pos = ENVELOPE_SEPARATOR_RE.lastIndex;
-    let value: unknown;
-    try {
-      value = JSON.parse(scalar[0]);
-    } catch {
-      return envelope;
+    recordEnvelopeMember(envelope, current, key, scalar[0]);
+    // `}` 关闭当前对象, 回到外层继续读; 外层同样必须紧跟分隔符。
+    while (separator[1] === '}') {
+      scopes.pop();
+      if (scopes.length === 0) return;
+      ENVELOPE_SEPARATOR_RE.lastIndex = pos;
+      separator = ENVELOPE_SEPARATOR_RE.exec(text);
+      if (!separator) return;
+      pos = ENVELOPE_SEPARATOR_RE.lastIndex;
     }
-    if (inParams) {
-      if (key === 'threadId' && typeof value === 'string') envelope.threadId = value;
-      else if (key === 'turnId' && typeof value === 'string') envelope.turnId = value;
-    } else if (key === 'id' && (typeof value === 'number' || typeof value === 'string')) {
-      envelope.id = value;
-    } else if (key === 'method' && typeof value === 'string') {
-      envelope.method = value;
-    }
-    if (separator[1] === '}') return envelope;
   }
+}
+
+/**
+ * 只读超限行两端的标量成员, 不碰中间的大字段。app-server 由 serde 按结构体声明顺序输出:
+ * id / method 在最前; turn/diff/updated 的 threadId / turnId 在 diff 之前, 从行首读到;
+ * item/* 的 threadId / turnId 在 item 之后, 从行尾读到, item 自身的 type / id 在大字段之前。
+ * 两端都读不到的字段留空, 由调用方按「认不出」保守处理。
+ */
+function peekOversizedEnvelope(line: string): OversizedEnvelope {
+  const envelope: OversizedEnvelope = {};
+  readEnvelopeMembers(line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS), 'message', envelope);
+  if (envelope.threadId === undefined || envelope.turnId === undefined) {
+    const trailing = TRAILING_PARAMS_RE.exec(line.slice(-OVERSIZED_ENVELOPE_PEEK_CHARS));
+    if (trailing) readEnvelopeMembers(`{${trailing[1]}}`, 'params', envelope);
+  }
+  return envelope;
 }
 
 export class AppServerRequestTimeoutError extends Error {
@@ -628,7 +686,7 @@ export class AppServerClient {
   private handleOversizedLine(line: string): void {
     const length = line.length;
     const limit = this.maxLineBytes;
-    const { id, method, threadId, turnId } = peekOversizedEnvelope(line);
+    const { id, method, ...scope } = peekOversizedEnvelope(line);
     if (id !== undefined && method !== undefined) {
       this.logger.warn('oversized server request rejected', { method, id, length, limit });
       this.sendErrorResponse(id, {
@@ -647,8 +705,8 @@ export class AppServerClient {
       pending.reject(new AppServerMessageTooLargeError(pending.method, length, limit));
       return;
     }
-    if (method !== undefined && this.dropOversizedNotification({ method, threadId, turnId, length })) {
-      this.logger.warn('oversized notification dropped', { method, threadId, turnId, length, limit });
+    if (method !== undefined && this.dropOversizedNotification({ method, ...scope, length })) {
+      this.logger.warn('oversized notification dropped', { method, ...scope, length, limit });
       return;
     }
     const err = new Error(`codex app-server NDJSON line exceeds maxLineBytes (${length} > ${limit})`);
