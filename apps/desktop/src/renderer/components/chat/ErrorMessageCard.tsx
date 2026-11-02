@@ -89,6 +89,7 @@ export function ErrorMessageCard({
   return (
     <ErrorNotice
       key={`${reason ?? ''}:${kind}`}
+      className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}

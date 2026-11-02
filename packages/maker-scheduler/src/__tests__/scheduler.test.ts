@@ -593,6 +593,7 @@ function makeHarness(opts?: {
   /** 默认 0(关闭挂起吸收):假时钟跳表与真实睡眠在壁钟上同形,见 SchedulerOptions.suspendGapMs。 */
   suspendGapMs?: number;
   logger?: Logger;
+  resolvePreRunPlugin?: (pluginId: string) => string;
 }): Harness {
   const storage = opts?.storage ?? new InMemoryStorage();
   const clock = opts?.clock ?? new FakeClock();
@@ -620,6 +621,7 @@ function makeHarness(opts?: {
     runStallAbortGraceMs: opts?.runStallAbortGraceMs,
     suspendGapMs: opts?.suspendGapMs ?? 0,
     logger: opts?.logger,
+    resolvePreRunPlugin: opts?.resolvePreRunPlugin,
     instanceId: 'test-scheduler',
     processId: 1234,
   });
@@ -1988,6 +1990,25 @@ describe('Scheduler', () => {
     await restarted.scheduler.stop();
   });
 
+  // Rule (plugin pre-run check, 2026-10-31): a newly chosen plugin is resolved to its instance id
+  // and rejected when unusable, but keeping the same plugin never re-validates, so a later-disabled
+  // plugin does not lock the user out of editing; null clears it. No prior case covers preRunPlugin.
+  it('resolves a newly chosen pre-run plugin and only re-checks it when the plugin changes', async () => {
+    const resolve = vi.fn((id: string) => {
+      if (id === 'gone') throw new Error('not installed');
+      return `${id}@inst`;
+    });
+    const p = makeHarness({ resolvePreRunPlugin: resolve });
+    const sch = await p.scheduler.create({ ...baseInput, preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } });
+    expect(sch.preRunPlugin).toEqual({ pluginId: 'jev@inst', onFailure: 'skip' });
+    const kept = await p.scheduler.update(sch.id, { preRunPlugin: { pluginId: 'jev@inst', onFailure: 'block' } });
+    expect(kept.preRunPlugin).toEqual({ pluginId: 'jev@inst', onFailure: 'block' });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    await expect(p.scheduler.update(sch.id, { preRunPlugin: { pluginId: 'gone', onFailure: 'block' } })).rejects.toThrow(/not installed/);
+    expect((await p.scheduler.update(sch.id, { preRunPlugin: null })).preRunPlugin).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } })).rejects.toThrow(/not available/);
+  });
+
   it('updateFromCurrent 把读取、生成 patch 与写入放在同一任务锁内', async () => {
     const sch = await h.scheduler.create({
       ...baseInput,
@@ -2480,7 +2501,8 @@ describe('Scheduler', () => {
     h.scheduler.on('session-bound', (e) => events.push(e));
     h.scheduler.on('silenced', (e) => events.push(e));
     h.scheduler.on('completed', (e) => events.push(e));
-    const { runId } = await h.scheduler.runNow(sch.id);
+    const { runId, silenced } = await h.scheduler.runNow(sch.id);
+    expect(silenced).toBe(true);
     const runs = await h.scheduler.listRuns(sch.id);
 
     expect(runs[0].id).toBe(runId);
@@ -2508,7 +2530,8 @@ describe('Scheduler', () => {
     const events: unknown[] = [];
     h.scheduler.on('notified', (e) => events.push(e));
     h.scheduler.on('completed', (e) => events.push(e));
-    const { runId } = await h.scheduler.runNow(sch.id);
+    const { runId, silenced } = await h.scheduler.runNow(sch.id);
+    expect(silenced).not.toBe(true);
     const runs = await h.scheduler.listRuns(sch.id);
 
     expect(runs[0].id).toBe(runId);
@@ -2823,6 +2846,7 @@ describe('Scheduler cross-instance dedupe', () => {
       silentWhenIdle: false,
       // CreateScheduleInput.preRunHook / scriptConfig 允许 null(JSON 边界),Schedule 只有两态
       preRunHook: undefined,
+      preRunPlugin: undefined,
       scriptConfig: undefined,
       workspaceKind: 'dialogue',
       status: 'active',

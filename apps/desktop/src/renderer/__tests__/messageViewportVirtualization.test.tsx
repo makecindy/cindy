@@ -3,6 +3,8 @@ import { act, useLayoutEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageViewport, type MessageViewportApi } from '../components/chat/MessageViewport';
+import { StreamFadeSpan, StreamFadeListItem } from '../components/chat/StreamFadeSpan';
+import { createWordFadeState } from '../components/chat/rehypeStreamWordFade';
 import { acquirePageTextAccess, isPageTextAccessActive } from '../lib/pageTextAccess';
 
 let host: HTMLDivElement;
@@ -20,10 +22,11 @@ let setFollowing: (value: boolean) => void;
 const entries = Array.from({ length: 80 }, (_, index) => ({ key: String(index), retain: index === 79 }));
 const rectangle = (top: number, height: number) => ({ top, bottom: top + height, height, width: 800,
   left: 0, right: 800, x: 0, y: top, toJSON() {} }) as DOMRect;
-function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll }: {
-  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void;
+function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll, fade = false }: {
+  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void; fade?: boolean;
 }) {
   parentRenders++;
+  const fadeState = useRef(createWordFadeState());
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(!restore);
@@ -41,7 +44,14 @@ function Fixture({ disabled = false, restore = false, restoreOffset, onProgramma
       syncViewport = () => apiRef.current!.syncViewport();
       reconcileViewport = () => apiRef.current!.reconcileViewport();
       return <div ref={itemsRef}>{entries.map(entry => viewport.shouldMount(entry)
-      ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button></div>
+      ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button>{fade && <ul><StreamFadeListItem
+          wordFadeState={fadeState.current} data-stream-marker
+          node={{ type: 'element', tagName: 'li', properties: { dataWfKey: entry.key }, children: [] }}>
+          <StreamFadeSpan wordFadeState={fadeState.current} className="stream-word"
+            node={{ type: 'element', tagName: 'span', properties: { dataWfKey: entry.key }, children: [] }}>
+            Streaming word
+          </StreamFadeSpan>
+        </StreamFadeListItem></ul>}</div>
       : <div key={entry.key} data-render-item-key={entry.key} data-message-placeholder=""
         style={{ height: viewport.placeholderHeight(entry.key) }} />)}</div>;
     }}</MessageViewport></div>;
@@ -96,6 +106,45 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  it.each(['observer', 'synchronous scroll'] as const)('does not remeasure rows for completed fades via %s', async delivery => {
+    await act(async () => root.render(<Fixture restore fade />));
+    await flushFrames();
+    const visible = row(40);
+    const top = visible.getBoundingClientRect().top;
+    rowMeasurements = 0;
+    await act(async () => {
+      for (const [selector, name] of [['span', 'stream-word-in'], ['li', 'stream-marker-in']]) {
+        const event = new Event('webkitAnimationEnd', { bubbles: true });
+        Object.defineProperty(event, 'animationName', { value: name });
+        visible.querySelector(selector)!.dispatchEvent(event);
+      }
+      if (delivery === 'synchronous scroll') syncViewport();
+    });
+    await flushFrames();
+    expect(visible.querySelector('.stream-word')).toBeNull();
+    expect(visible.querySelector('[data-stream-marker]')).toBeNull();
+    expect(rowMeasurements).toBe(0);
+    expect(visible.getBoundingClientRect().top).toBe(top);
+    // A real size change in the same row must still invalidate geometry.
+    rowMeasurements = 0;
+    await act(async () => { visible.style.height = '360px'; });
+    await flushFrames();
+    expect(rowMeasurements).toBeGreaterThan(0);
+    expect(visible.getBoundingClientRect().height).toBe(360);
+  });
+  it('still measures a class change batched with fade completion', async () => {
+    await act(async () => root.render(<Fixture restore fade />));
+    await flushFrames();
+    rowMeasurements = 0;
+    await act(async () => {
+      const word = row(40).querySelector('span')!;
+      word.classList.remove('stream-word');
+      word.classList.add('text-xl');
+    });
+    await flushFrames();
+    expect(rowMeasurements).toBeGreaterThan(0);
+  });
+
   it('initializes before the owner restores a precise reading offset', async () => {
     await act(async () => root.render(<Fixture restore restoreOffset={97} />));
     await flushFrames();

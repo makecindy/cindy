@@ -1,4 +1,5 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import { readPriorUserRoundCost } from '../localDb/ipc/messages.js';
 import {
   addCompatibleRegionalMoney,
@@ -7,6 +8,7 @@ import {
   normalizeRegionalMoney,
 } from '../../shared/regionalMoney.js';
 import type { MessageTurnCostPayload } from '../../shared/turnCostPayload.js';
+import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 const realUser = `m.role = 'user' AND CASE WHEN json_valid(m.agent_meta)
   THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1`;
@@ -71,14 +73,17 @@ export async function refreshMediaUserTurnCost(
       : null);
   const current = raw && meta.turnCostIsEstimate === true ? asValueEstimateMoney(raw) : raw;
   const money = addCompatibleRegionalMoney(
-    [...(prior.money ? [prior.money] : []), ...(current ? [current] : [])],
+    [...(prior.money ? [prior.money] : []), ...(current ? [current] : []), ...supplementalConversationEstimates(meta)],
     current?.currency,
   );
   if (!money) return null;
-  const isEstimate =
+  const isEstimate = money.kind === 'value-estimate' ||
+    supplementalConversationEstimates(meta).some(value => value.currency === money.currency) ||
     (prior.money?.currency === money.currency && prior.hasEstimatedValue) ||
     (current?.currency === money.currency && current.kind === 'value-estimate');
   const patch = {
+    turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(meta.turnUsageDetails),
+      additionalCosts: prior.additionalCosts }),
     userTurnCost: money,
     userTurnCostIsEstimate: isEstimate,
     // JSON merge patch removes a stale USD compatibility projection for CNY.
@@ -93,6 +98,7 @@ export async function refreshMediaUserTurnCost(
   return {
     sessionId,
     clientId: row.clientId,
+    ...(patch.turnUsageDetails ? { turnUsageDetails: patch.turnUsageDetails } : {}),
     userTurnMoney: money,
     userTurnCostIsEstimate: isEstimate,
     ...(money.currency === 'USD' ? { userTurnCostUsd: money.amount } : {}),

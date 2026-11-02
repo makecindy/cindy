@@ -102,6 +102,7 @@ prepare、上传、坏包、明确未提交审核不消费版本；未知结果�
 
 | 入口 | 返回/语义 |
 |---|---|
+| GET /changes | subject/queriedAt/changedAt/eventCount；与本人列表相同的候选与可见边界，无插件为 null/0 |
 | GET /plugins?query=&filter=&limit=&cursor= | subject/queriedAt/plugins/nextCursor；filter=all/pending/action_required/listed；服务端筛选分页 |
 | GET /plugins/:id | plugin、latestSubmissionContent、分页 history；市场与最近版本分开 |
 | GET /plugins/:id/releases?version=&limit=&cursor= | 每 Release 当前修订一项，不能用操作回执数量充当版本 |
@@ -113,6 +114,12 @@ submittedAt、approvedAt、cancelledAt、decidedAt、reason 和 actions.canCance
 真实时间取匹配修订的事件；旧资料无法核实时为 null，不能拿包创建/上传时间或当前状态补造。
 content 留存规范化 manifest/manifestView/icon；不是原始 manifest 字节。旧内容未知不借当前包补齐。
 市场状态独立为 pluginStatus/currentRelease/available/unavailableReason，approved 不等于已上架。
+可选 `market.reason:string|null` 只解释当前市场不可用：disabled/archived 取最近一条
+`plugin.status.update` 且 detail.after 等于当前状态的 detail.reason；无 currentRelease 的
+not_listed 取最近一条 detail.wasCurrent=true 的 release.revoke 原因。其余状态（含 available、
+release_unavailable）为 null；旧审计没有原因时也为 null，不从其他记录补造。
+归档处理记录沿用 `type:disabled`，仅归档事件增加 `pluginStatus:archived`，不新增 type 枚举；
+旧客户端忽略新增字段，仍能解析整页。各事件保留完整 reason，current_changed 的原因仅展示。
 
 `POST /plugins/:pluginId/releases/:releaseId/cancel-review`：
 
@@ -131,17 +138,30 @@ pending→cancelled 与 `plugin.review.cancel` 原子写入；重复不产生新
 进入插件后版本选择统领状态、提审/通过时间、说明、原因与操作，历史和技术资料默认收起。
 当前市场与所选版本相同则合并展示；查看旧版本可定位待审版本。
 上传问题附在所属插件，完整消息可读；不叫“本机发布记录”，不在列表上方铺流水。
-前台、进入页面、手动刷新或网络恢复时读取，无后台审核轮询或通知。
+云端个人和组织账号沿用每 60 秒及 focus/online/visibilitychange 触发的刷新频率。
+每次先读 `/changes`：changedAt 为候选插件 activity 最大值（与无筛选列表相同），eventCount 为
+同一可见规则下回执与审计条数之和；单条 SQL，不逐插件读取或开启长事务。
+同 owner 已有缓存且两项都未变时复用缓存，仍重新计算本机已读标记；否则完整读取并保存刷新前
+读到的 token，避免读取期间的新事件被跳过。changes 失败沿用错误路径保留旧结果，无 404 回退。
+每插件按时间取最新 approved/rejected/disabled（含 archived）/revoked/enabled 结果显示红点。
+退回、下架、归档、撤回用 error 色，通过、重新上架用 done 色。市场类事件在用户打开该插件详情，
+且详情 queriedAt 不早于事件时标记已读；审核类沿用精确版本修订的已读逻辑。
+current_changed 不触发红点；不增加邮件、系统推送、申诉或已安装用户下架提醒。
 撤权后只保留本人回执及匹配历史，不泄露他人的后续待审内容。
 
 ## 5. Platform 审核与来源
 
 管理读取 additive `release.contribution` 只标记真实匹配个人回执；内部 publishSource 仍为 console_upload，
 本人 API 派生 community_upload；无回执不推断来源，也不扩老来源 enum。
-旧邮箱路径不得用于个人版本，个人发布不新增任何通知。
+旧邮箱路径不得用于个人版本；个人发布结果与市场处置仅提供站内红点，不增加邮件通知。
 个人版本在原后台详情补充来源、提交身份和包内更新说明，不增加提交者管理或独立审核页面。
 Web / CLI 沿用原 approve/reject 请求及 `expectedReleaseUpdatedAt` 修订检查，复用原待审队列、审核、上架与驳回流程。
 不增加审核阅读令牌、发布基准或历史比较包门槛；个人接口没有额外启用开关。
+Platform enable/disable/archive/publish/revoke 必填 trim 后 1–500 字 reason，唯一事实源为审计
+`detail.reason`；revoke 同时记录 version。网页上下架/归档/切换版本确认框必填原因，不新增撤回按钮；
+撤回仅走接口和 CLI。CLI enable/disable 与 releases activate/revoke 必填 `--reason`。
+不新增表、迁移或作者自助下架。服务端先合入并部署全部生产副本、核验 changes 与原因契约后，
+客户端才可合并；旧 Platform 网页包/旧 CLI 升级前执行这些操作返回 400，已发布旧客户端继续原轮询。
 
 ## 6. 错误与恢复
 

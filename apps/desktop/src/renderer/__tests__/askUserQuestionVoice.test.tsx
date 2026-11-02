@@ -114,6 +114,29 @@ describe('AskUserQuestion voice entry', () => {
     expect(start).toHaveBeenCalledOnce();
   });
 
+  // #8232, unit: real card listener, with a foreground document and a busy
+  // dictation session. Existing Escape coverage had no covered-card case.
+  it('preserves answer dictation while a Markdown preview owns Escape', async () => {
+    const { view, onAnswer } = renderAsk([{ question: '回答？' }]);
+    const input = view.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '已有回答' } });
+    fireEvent.click(view.getByTestId('ask-user-voice'));
+    const preview = document.createElement('section');
+    preview.dataset.textLightboxSearchHost = '';
+    document.body.append(preview);
+    try {
+      await act(async () => { fireEvent.keyDown(preview, { key: 'Escape' }); });
+      expect(cancel).not.toHaveBeenCalled();
+      preview.remove();
+      await act(async () => { fireEvent.keyDown(input, { key: 'Escape' }); });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(onAnswer).not.toHaveBeenCalled();
+      expect((input as HTMLTextAreaElement).value).toBe('已有回答');
+    } finally {
+      preview.remove();
+    }
+  });
+
   it('Escape cancels dictation without skipping the question or discarding the typed answer', async () => {
     const { view, onAnswer } = renderAsk([{ question: '回答？' }]);
     const input = view.getByRole('textbox');

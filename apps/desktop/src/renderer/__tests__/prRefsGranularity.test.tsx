@@ -84,6 +84,32 @@ const wrapper = ({ children }: { children: ReactNode }) =>
   createElement(PrRefsProvider, null, children);
 
 describe('PrRefsProvider 订阅粒度(真实 Provider)', () => {
+  // Unit tier: observable IPC count verifies the agreed 90s foreground boundary.
+  // Existing focus dedup coverage did not exercise elapsed time or hidden windows.
+  it('refreshes once at 90 seconds, skips hidden windows, and resumes on focus', async () => {
+    vi.useFakeTimers();
+    const api = installElectronApi();
+    api.gitContext.listAllPrRefs.mockResolvedValue([makeRef('session-a', 7)]);
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const { result, unmount } = renderHook(() => usePrActions(), { wrapper });
+    try {
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { result.current.registerPrConsumer('session-a'); });
+      api.gitContext.getPrStatuses.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(89_999); });
+      expect(api.gitContext.getPrStatuses).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(false);
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(2);
+    } finally { unmount(); focus.mockRestore(); hidden.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('coalesces repeated focus and registration while remote PR reads are queued or running', async () => {
     const api = installElectronApi();
     let finishRefs!: (refs: SessionPrRef[]) => void;

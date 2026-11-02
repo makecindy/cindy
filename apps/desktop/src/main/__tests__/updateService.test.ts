@@ -1196,25 +1196,27 @@ describe('checkForUpdate Linux installer flow', () => {
     });
   });
 
-  it('allows the xd org beta default on Linux x64', async () => {
+  // Regression: ARM64 must use the existing org-default and trusted IPC paths;
+  // earlier cases explicitly rejected it. Mocked Electron, temporary files; unit.
+  it.each(['x64', 'arm64'])('allows the xd org beta default on Linux %s', async (arch) => {
     tryEnableUncustomizedBetaAtomic.mockReset();
     tryEnableUncustomizedBetaAtomic.mockResolvedValue(true);
-    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'x64');
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', arch);
 
     await expect(enableUncustomizedBetaChannel()).resolves.toBe(true);
     expect(tryEnableUncustomizedBetaAtomic).toHaveBeenCalledOnce();
   });
 
-  it('refuses the xd org beta default on Linux arm64 without writing to disk', async () => {
+  it('refuses the xd org beta default on unsupported Linux architectures without writing to disk', async () => {
     tryEnableUncustomizedBetaAtomic.mockReset();
-    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'arm64');
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'ia32');
 
     await expect(enableUncustomizedBetaChannel()).resolves.toBe(false);
     expect(tryEnableUncustomizedBetaAtomic).not.toHaveBeenCalled();
   });
 
-  it('allows the beta channel setting to be written on Linux x64', async () => {
-    const service = await freshUpdateService('linux', 'x64');
+  it.each(['x64', 'arm64'])('allows the beta channel setting to be written on Linux %s', async (arch) => {
+    const service = await freshUpdateService('linux', arch);
     service.initUpdateService();
     try {
       const setHandler = ipcHandlers.get('update-channel-settings-set');
@@ -1229,8 +1231,8 @@ describe('checkForUpdate Linux installer flow', () => {
     }
   });
 
-  it('rejects beta channel setting writes on Linux arm64', async () => {
-    const service = await freshUpdateService('linux', 'arm64');
+  it('rejects beta channel setting writes on unsupported Linux architectures', async () => {
+    const service = await freshUpdateService('linux', 'ia32');
     service.initUpdateService();
     try {
       const setHandler = ipcHandlers.get('update-channel-settings-set');
@@ -1247,7 +1249,8 @@ describe('checkForUpdate Linux installer flow', () => {
 
   it.each([
     { arch: 'x64', expected: true },
-    { arch: 'arm64', expected: false },
+    { arch: 'arm64', expected: true },
+    { arch: 'ia32', expected: false },
   ])('reports a persisted beta setting correctly on Linux $arch', async ({ arch, expected }) => {
     readUpdateChannelSettings.mockReturnValue({
       enableBeta: true,

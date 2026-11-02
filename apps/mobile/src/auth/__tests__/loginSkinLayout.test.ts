@@ -281,7 +281,7 @@ describe("loginSkin 60s 重发倒计时纯函数(Step 3a 契约)", () => {
     expect(formatResendCountdown("Resend available in {n}s", 7)).toBe(
       "Resend available in 7s",
     );
-    for (const locale of ["zh-CN", "zh-TW", "en", "ja", "ko"] as const) {
+    for (const locale of ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"] as const) {
       const template = loginMessages[locale].resendCountdown;
       expect(template, locale).toContain("{n}");
       expect(formatResendCountdown(template, 60), locale).toContain("60");
