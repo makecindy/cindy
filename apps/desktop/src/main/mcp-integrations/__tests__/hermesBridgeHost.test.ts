@@ -8,6 +8,7 @@ import type { Logger, McpProvider } from '@cindy/maker-core';
 import { withMcpRouteIdentity } from '../codexHttpBridge.js';
 import {
   HERMES_BRIDGE_COLLAB_SERVERS,
+  HERMES_BRIDGE_EXPERT_SERVERS,
   HERMES_BRIDGE_GATED_SERVERS,
   HERMES_BRIDGE_SAFE_SERVERS,
   buildHermesShimServerConfig,
@@ -20,7 +21,12 @@ import {
 } from '../hermesBridgeHost.js';
 import { readHermesBridgeRuntimeFile } from '../hermesBridgeRuntimeFile.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
-import { resetPiEnvironmentForTest, shutdownPiEnvironment } from '../piEnvironment.js';
+import {
+  getPiExtraSpawnConfig,
+  resetPiEnvironmentForTest,
+  setHermesOnlyBridgeProviders,
+  shutdownPiEnvironment,
+} from '../piEnvironment.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -67,6 +73,13 @@ describe('hermes bridge exposure policy', () => {
     // The worker-side bridge is not exposed to Hermes in 3.7a.
     expect(selectHermesBridgeServers([...all, 'orca_worker_bridge'], new Set(), true)).not.toContain('orca_worker_bridge');
     expect(selectHermesBridgeServers(['cindy_docs'], new Set(), true)).toEqual(['cindy_docs']);
+  });
+
+  it('adds the expert creator server only for an expert-creator session (3.8)', () => {
+    const all = [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_COLLAB_SERVERS, ...HERMES_BRIDGE_EXPERT_SERVERS];
+    expect(selectHermesBridgeServers(all, new Set(), true)).toEqual(['cindy_docs', 'cindy_orca']);
+    expect(selectHermesBridgeServers(all, new Set(), false, true)).toEqual(['cindy_docs', 'cindy_experts']);
+    expect(selectHermesBridgeServers(['cindy_docs'], new Set(), false, true)).toEqual(['cindy_docs']);
   });
 
   it('mirrors the Pi collab gate: global switch or active team member, never when the project disabled it', () => {
@@ -301,14 +314,63 @@ describe('createHermesBridgePreparer (real bridge, stub providers)', () => {
       });
       const orca = await callTool('cindy_orca', sessionId);
       session!.dispose();
-      return { written, orca: orca.body };
+      return { written, orca: orca.body, status: orca.status };
     };
     const plain = await run('sess-P');
-    expect(plain.written).toEqual(['cindy_docs']);
+    // Registered for every session (config.yaml is shared); refused at connect when not mounted.
+    expect(plain.written).toEqual(['cindy_docs', 'cindy_orca']);
+    expect(plain.status).toBe(403);
     expect(plain.orca).not.toContain('orca-ok');
     const lead = await run('sess-R', { orcaRole: 'lead', orcaLeadSessionId: 'sess-R' });
     expect(lead.written).toEqual(['cindy_docs', 'cindy_orca']);
     expect(lead.orca).toContain('orca-ok');
+  });
+
+  it('serves cindy_experts on the shared bridge to an expert-creator Hermes session only, never to Pi (3.8)', async () => {
+    setHermesOnlyBridgeProviders([stubProvider('cindy_experts', 'experts-ok')]);
+    // One shared config.yaml, as in production.
+    const config: Record<string, HermesShimServerConfig> = {};
+    const registration: HermesShimRegistrationDeps = {
+      listServers: async () => ({ ...config }),
+      setServer: async (name, server) => {
+        config[name] = server;
+      },
+      removeServer: async (name) => {
+        delete config[name];
+      },
+    };
+    const prepare = createHermesBridgePreparer({
+      providers: () => [stubProvider('cindy_docs', 'docs-ok')],
+      logger: noopLogger(),
+      runtimeFile,
+      resolveShimPath: () => SHIM,
+      globalCollabEnabled: () => false,
+      expertCreator: (id) => id === 'sess-C',
+      registration,
+    });
+    const creator = await prepare({ sessionId: 'sess-C', workingDir: dir, permissionMode: 'bypassPermissions' });
+    expect((await callTool('cindy_experts', 'sess-C')).body).toContain('experts-ok');
+
+    // Found live: another Hermes session starting must not drop the creator's tool from the
+    // shared config, and must itself be refused at connect.
+    const plain = await prepare({ sessionId: 'sess-N', workingDir: dir, permissionMode: 'bypassPermissions' });
+    expect(Object.keys(config).sort()).toEqual(['cindy_docs', 'cindy_experts']);
+    const refused = await callTool('cindy_experts', 'sess-N');
+    expect(refused.status).toBe(403);
+    expect(refused.body).not.toContain('experts-ok');
+    expect((await callTool('cindy_experts', 'sess-C')).body).toContain('experts-ok');
+    plain!.dispose();
+    creator!.dispose();
+
+    // Pi shares the bridge but never mounts the Hermes-only server.
+    const pi = await getPiExtraSpawnConfig([stubProvider('cindy_docs', 'docs-ok')], noopLogger(), {
+      sessionId: 'pi-1',
+      workingDir: dir,
+    } as Parameters<typeof getPiExtraSpawnConfig>[2]);
+    const piServers = pi?.mcpBridge?.servers.map((server) => server.name) ?? [];
+    expect(piServers).toContain('cindy_docs');
+    expect(piServers).not.toContain('cindy_experts');
+    pi?.disposeSessionCtx?.();
   });
 
   it('returns null and touches nothing unless the session is full access (1.5b-5d)', async () => {

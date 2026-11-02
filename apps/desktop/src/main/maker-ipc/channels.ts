@@ -28,6 +28,10 @@ export const MAKER_INVOKE = {
   EXPERTS_SET_PENDING: 'maker:experts:set-pending',
   /** ROADMAP 3.2a: the expert a session was started as, or null. */
   EXPERTS_SESSION_BINDING: 'maker:experts:session-binding',
+  /** ROADMAP 3.8: expert drafts waiting for the owner (optionally for one session). */
+  EXPERTS_DRAFT_LIST: 'maker:experts:draft-list',
+  /** ROADMAP 3.8: Approve / Reject an expert draft. */
+  EXPERTS_DRAFT_DECIDE: 'maker:experts:draft-decide',
   /** ROADMAP 2.1b: providers.yaml entries plus file issues (read-only). */
   PROVIDERS_LIST: 'maker:providers:list',
   /** ROADMAP 2.2b: probe each providers.yaml endpoint for online/offline and models. */
@@ -961,6 +965,8 @@ export const MAKER_PUSH = {
   EXPERTS_CHANGED: 'maker:experts:changed',
   /** ROADMAP 3.2a: pending pick changed, or a session was bound to an expert. */
   EXPERTS_SESSION_EVENT: 'maker:experts:session-event',
+  /** ROADMAP 3.8: an expert draft is waiting, or was approved / rejected / timed out. */
+  EXPERTS_DRAFT_EVENT: 'maker:experts:draft-event',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */

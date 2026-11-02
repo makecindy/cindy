@@ -52,6 +52,12 @@ export const HERMES_BRIDGE_GATED_SERVERS: readonly string[] = [
  */
 export const HERMES_BRIDGE_COLLAB_SERVERS: readonly string[] = ['cindy_orca'];
 
+/**
+ * The expert creator's draft tool (ROADMAP 3.8, ADR 0007). Exposed only to a session started
+ * as an expert whose expert.md lists `tools: [draft_expert]`; the tool re-checks on every call.
+ */
+export const HERMES_BRIDGE_EXPERT_SERVERS: readonly string[] = ['cindy_experts'];
+
 /** Marker used to recognise (and only ever touch) shim entries we wrote. */
 const SHIM_BUNDLE_BASENAME = 'hermes-bridge-shim.mjs';
 
@@ -64,12 +70,14 @@ export function selectHermesBridgeServers(
   available: readonly string[],
   optedInGated: ReadonlySet<string> = new Set(),
   collabEnabled = false,
+  expertCreator = false,
 ): string[] {
   const running = new Set(available);
   return [
     ...HERMES_BRIDGE_SAFE_SERVERS,
     ...HERMES_BRIDGE_GATED_SERVERS.filter((name) => optedInGated.has(name)),
     ...(collabEnabled ? HERMES_BRIDGE_COLLAB_SERVERS : []),
+    ...(expertCreator ? HERMES_BRIDGE_EXPERT_SERVERS : []),
   ].filter((name) => running.has(name));
 }
 
@@ -144,7 +152,12 @@ export async function syncHermesShimRegistrations(
     await deps.setServer(name, want);
     written.push(name);
   }
-  for (const name of [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_GATED_SERVERS, ...HERMES_BRIDGE_COLLAB_SERVERS]) {
+  for (const name of [
+    ...HERMES_BRIDGE_SAFE_SERVERS,
+    ...HERMES_BRIDGE_GATED_SERVERS,
+    ...HERMES_BRIDGE_COLLAB_SERVERS,
+    ...HERMES_BRIDGE_EXPERT_SERVERS,
+  ]) {
     if (exposed.includes(name)) continue;
     if (isOurShimEntry(current[name])) {
       await deps.removeServer(name);
@@ -162,6 +175,8 @@ export interface HermesBridgeHostDeps {
   optedInGatedServers?: () => ReadonlySet<string>;
   /** Global collaboration switch (Settings); production: plugin registry `collab`. */
   globalCollabEnabled?: () => boolean;
+  /** ROADMAP 3.8: the session (or the pending pick, for a fresh one) is an expert creator. */
+  expertCreator?: (sessionId: string) => boolean;
   /** Null when the bundle is not built/shipped → Hermes runs without Cindy tools. */
   resolveShimPath: () => string | null;
   registration: HermesShimRegistrationDeps;
@@ -210,8 +225,20 @@ export function createHermesBridgePreparer(deps: HermesBridgeHostDeps) {
           disabledPluginIds,
           deps.globalCollabEnabled?.() ?? registry.isEnabled('collab'),
         ),
+        deps.expertCreator?.(info.sessionId) ?? false,
       );
-      await syncHermesShimRegistrations(deps.registration, shimPath, exposed);
+      // config.yaml is shared by every Hermes session (each session home copies it per turn), so
+      // it lists every server any session may use: per-session lists here would let one session's
+      // start remove another running session's tools (found live in 3.8). Each session is limited
+      // by its mounts below instead: the bridge refuses an unmounted server at connect, the shim
+      // exits, and Hermes lists no tools for it.
+      const registered = selectHermesBridgeServers(
+        lease.serverNames,
+        deps.optedInGatedServers?.() ?? new Set(),
+        true,
+        true,
+      );
+      await syncHermesShimRegistrations(deps.registration, shimPath, registered);
 
       // Freeze the per-project policy now (Pi does the same): later Settings
       // changes do not affect this running session; the bridge re-checks it on

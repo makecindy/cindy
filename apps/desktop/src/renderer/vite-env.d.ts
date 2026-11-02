@@ -5536,6 +5536,14 @@ interface ElectronAPI {
       onSessionEvent: (
         cb: (event: import('../main/maker-ipc/expertSessions').ExpertSessionEvent) => void,
       ) => () => void;
+      /** ROADMAP 3.8: expert drafts waiting for the owner's Approve / Reject. */
+      listDrafts: (
+        sessionId?: string,
+      ) => Promise<import('../main/maker-ipc/expertDraftConfirm').ExpertDraftRequest[]>;
+      decideDraft: (requestId: string, decision: { approved: boolean; note?: string }) => Promise<boolean>;
+      onDraftEvent: (
+        cb: (event: import('../main/maker-ipc/expertDraftConfirm').ExpertDraftEvent) => void,
+      ) => () => void;
     };
     providers: {
       list: () => Promise<import('@cindy/maker-core/providers-file').ProviderFileResult>;

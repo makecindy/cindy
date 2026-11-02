@@ -84,6 +84,17 @@ const generations = new Set<StartedPiBridge>();
 // 轮 40-w4-t10 MEDIUM:关停门闩 —— shutdownPiEnvironment 期间 ensureBridge
 // 不得重启 bridge(否则「界面以为已关/旧会话收口, 实际又冒出新 bridge」)。
 let environmentShuttingDown = false;
+
+/**
+ * Providers served on the shared bridge for Hermes only (ROADMAP 3.8: cindy_experts). They are
+ * appended whoever starts the bridge, and never mounted for Pi (see capabilityGated); Pi's own
+ * provider array and its catalogs are unchanged.
+ */
+let hermesOnlyBridgeProviders: readonly McpProvider[] = [];
+
+export function setHermesOnlyBridgeProviders(providers: readonly McpProvider[]): void {
+  hermesOnlyBridgeProviders = [...providers];
+}
 // 轮 41 CRITICAL:session token 由「每次 randomBytes」改为「进程级 key + sessionId
 // 确定性派生」—— 修复"正常对话期间突然 kill"根因:旧实现每次重建 spawn env 都生成
 // 新 token → CINDY_PI_MCP_BRIDGE 变 → envHash 必变 → daemon ensure(restart:true)
@@ -218,6 +229,8 @@ export async function getPiExtraSpawnConfig(
         server.name === 'cindy_telegram_bot'
         && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
       ) return false;
+      // Hermes-only servers (ROADMAP 3.8, ADR 0007) share this bridge; Pi never mounts them.
+      if (hermesOnlyBridgeProviders.some((provider) => provider.name === server.name)) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
@@ -469,6 +482,7 @@ export function resetPiEnvironmentForTest(): void {
   nextGeneration = 0;
   generations.clear();
   environmentShuttingDown = false;
+  hermesOnlyBridgeProviders = [];
 }
 
 /** bridge 单例懒启动(首个会话触发,失败下次重试)。 */
@@ -581,7 +595,7 @@ async function doStart(
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
   const mcpEnv: Record<string, string> = Object.create(null);
   let nextRemoteSecret = 0;
-  for (const provider of providers) {
+  for (const provider of [...providers, ...hermesOnlyBridgeProviders]) {
     // 空 workdir 快照下,普通工具的项目级 gate 已在 mcp-providers 的 isEnabled 里对
     // pi 延迟(deferOrdinaryGate),此处 isEnabled 只剔掉结构性不可用(如未登录/无 source)
     // 的 provider;项目级启停改由 bridge 按会话 workdir 冻结策略在每次 tools/call 复核。

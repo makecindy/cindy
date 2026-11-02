@@ -184,3 +184,55 @@ describe('experts session IPC (ROADMAP 3.2a)', () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 });
+
+describe('expert creator gate (ROADMAP 3.8)', () => {
+  it('allows a tool only for a session bound to a Hermes expert that lists it', () => {
+    writeExpert('expert-creator', 'name: Expert Creator\ntools: [draft_expert]');
+    writeExpert('code-reviewer', 'name: Code Reviewer');
+    writeExpert('codex-creator', 'name: Codex Creator\nagent: codex\ntools: [draft_expert]');
+    const store = new ExpertSessionStore({ rootDir: root, bindingsFile });
+
+    store.setPending('expert-creator');
+    // Before the first send only the tool-list check may look at the pending pick.
+    expect(store.expertAllowsTool('s1', 'draft_expert')).toBe(false);
+    expect(store.expertAllowsTool('s1', 'draft_expert', { includePending: true })).toBe(true);
+    store.resolveFirstTurnPreamble({ sessionId: 's1', model: 'm' }, anyRoute);
+    expect(store.expertAllowsTool('s1', 'draft_expert')).toBe(true);
+    expect(store.expertAllowsTool('s1', 'other_tool')).toBe(false);
+
+    store.setPending('code-reviewer');
+    store.resolveFirstTurnPreamble({ sessionId: 's2', model: 'm' }, anyRoute);
+    expect(store.expertAllowsTool('s2', 'draft_expert')).toBe(false);
+
+    fs.writeFileSync(bindingsFile, JSON.stringify({ version: 1, sessions: { s3: { slug: 'codex-creator', boundAt: 'x' } } }));
+    expect(store.expertAllowsTool('s3', 'draft_expert')).toBe(false);
+    expect(store.expertAllowsTool('nobody', 'draft_expert', { includePending: true })).toBe(false);
+  });
+});
+
+describe('expert draft IPC (ROADMAP 3.8)', () => {
+  it('lists waiting drafts, settles them, and pushes draft events', async () => {
+    const { ExpertDraftConfirm } = await import('../expertDraftConfirm');
+    const drafts = new ExpertDraftConfirm({ timeoutMs: 60_000 });
+    const broadcast = vi.fn();
+    const assertTrusted = vi.fn();
+    const harness = new IpcHarness();
+    handle = registerExpertsHandlers(harness, { rootDir: root, assertTrusted, broadcast, drafts });
+
+    const wait = drafts.request({
+      sessionId: 's1',
+      draft: { slug: 'x-y', name: 'X', description: 'd', tags: [], memory: false, prompt: 'p' },
+      targetDir: path.join(root, 'x-y'),
+      markdown: 'md',
+    });
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.EXPERTS_DRAFT_EVENT, expect.objectContaining({ type: 'request' }));
+    const listed = (await harness.invoke(MAKER_INVOKE.EXPERTS_DRAFT_LIST, 's1')) as Array<{ requestId: string }>;
+    expect(listed).toHaveLength(1);
+    expect(await harness.invoke(MAKER_INVOKE.EXPERTS_DRAFT_LIST, 'other')).toEqual([]);
+    expect(await harness.invoke(MAKER_INVOKE.EXPERTS_DRAFT_DECIDE, 'nope', { approved: true })).toBe(false);
+    expect(await harness.invoke(MAKER_INVOKE.EXPERTS_DRAFT_DECIDE, listed[0].requestId, { approved: false, note: 'no' })).toBe(true);
+    await expect(wait).resolves.toEqual({ approved: false, reason: 'rejected', note: 'no' });
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.EXPERTS_DRAFT_EVENT, expect.objectContaining({ type: 'settled', outcome: 'rejected' }));
+    expect(assertTrusted).toHaveBeenCalledTimes(4);
+  });
+});

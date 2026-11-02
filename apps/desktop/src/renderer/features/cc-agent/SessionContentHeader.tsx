@@ -1,5 +1,6 @@
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
+import { HermesExpertDraftCard } from './HermesExpertDraftCard';
 import { HermesExpertLabel } from './HermesExpertLabel';
 import { HermesSessionModelLabel } from './HermesSessionModelLabel';
 import { SessionUsagePanel } from './SessionUsagePanel';
@@ -672,6 +673,7 @@ export function SessionContentHeader({
 
       {!isEditing && <HermesSessionModelLabel agentKind={session.agentKind} model={session.model} />}
       {!isEditing && <HermesExpertLabel agentKind={session.agentKind} sessionId={session.id} />}
+      <HermesExpertDraftCard agentKind={session.agentKind} sessionId={session.id} />
       {!isEditing && (
         <SessionUsagePanel
           sessionId={session.id}

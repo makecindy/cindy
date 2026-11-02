@@ -798,6 +798,7 @@ const fanOutMakerEvent = createIpcFanOut('maker:event');
 const fanOutMakerAgentsChanged = createIpcFanOut('maker:agents:changed');
 const fanOutMakerExpertsChanged = createIpcFanOut('maker:experts:changed');
 const fanOutMakerExpertsSessionEvent = createIpcFanOut('maker:experts:session-event');
+const fanOutMakerExpertsDraftEvent = createIpcFanOut('maker:experts:draft-event');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
@@ -6280,6 +6281,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ): Promise<import('../main/maker-ipc/expertSessions').ExpertSessionBindingView | null> =>
         ipcRenderer.invoke('maker:experts:session-binding', sessionId),
       onSessionEvent: fanOutMakerExpertsSessionEvent,
+      listDrafts: (
+        sessionId?: string,
+      ): Promise<import('../main/maker-ipc/expertDraftConfirm').ExpertDraftRequest[]> =>
+        ipcRenderer.invoke('maker:experts:draft-list', sessionId),
+      decideDraft: (
+        requestId: string,
+        decision: { approved: boolean; note?: string },
+      ): Promise<boolean> => ipcRenderer.invoke('maker:experts:draft-decide', requestId, decision),
+      onDraftEvent: fanOutMakerExpertsDraftEvent,
     },
     providers: {
       list: (): Promise<import('@cindy/maker-core/providers-file').ProviderFileResult> =>

@@ -296,7 +296,13 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
+import {
+  getPiExtraSpawnConfig,
+  invalidatePiEnvironment,
+  setHermesOnlyBridgeProviders,
+} from '../mcp-integrations/piEnvironment.js';
+import { createExpertsMcpProvider, DRAFT_EXPERT_TOOL } from '../mcp-integrations/expertsMcpServer.js';
+import { getDesktopExpertDraftConfirm } from '../maker-ipc/expertDraftConfirm.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 
@@ -2557,6 +2563,14 @@ export function getMaker(): Maker {
       cindyMakeProvider,
     ];
     _mcpProviders.pi = piMcpProviders;
+    // Expert creator (ROADMAP 3.8, ADR 0007): served on the shared bridge for Hermes only.
+    setHermesOnlyBridgeProviders([
+      createExpertsMcpProvider({
+        rootDir: () => getDesktopExpertSessionStore().rootDir,
+        sessionMayDraft: (sessionId) => getDesktopExpertSessionStore().expertAllowsTool(sessionId, DRAFT_EXPERT_TOOL),
+        confirm: (input) => getDesktopExpertDraftConfirm().request(input),
+      }),
+    ]);
     // 用户自定义 MCP:三个 agent 都必须注册其实际持有的数组引用，再统一做初始 refresh。
     // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
     // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
@@ -2841,6 +2855,9 @@ export function getMaker(): Maker {
         prepareHermesBridgeSession: createHermesBridgePreparer({
           providers: () => _mcpProviders.pi ?? [],
           logger: desktopMakerLogger,
+          // ROADMAP 3.8: draft_expert only for a session started as an expert creator.
+          expertCreator: (sessionId) =>
+            getDesktopExpertSessionStore().expertAllowsTool(sessionId, DRAFT_EXPERT_TOOL, { includePending: true }),
           resolveShimPath: resolveHermesBridgeShimPath,
           registration: {
             listServers: listHermesMcpServers,
