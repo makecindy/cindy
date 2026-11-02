@@ -106,9 +106,21 @@ const fsKnobs = vi.hoisted(() => ({
   /** Fails the next `remaining` unlinks with `code`, the shape of a file lock. */
   rmFailures: null as null | { remaining: number; code: string },
   rmAttempts: 0,
+  /** Receipt tests stub OS inventory; never mix it with the CI host's procfs. */
+  isolateProcfs: false,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]).startsWith('/proc/')) {
+      return Promise.reject(Object.assign(new Error('fixture process is absent'), { code: 'ENOENT' }));
+    }
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  const readdir = ((...args: Parameters<typeof actual.readdir>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]) === '/proc') return Promise.resolve([]);
+    return actual.readdir(...args);
+  }) as typeof actual.readdir;
   const writeFile: typeof actual.writeFile = async (...args) => {
     if (fsKnobs.failWriteFileOnce) {
       fsKnobs.failWriteFileOnce = false;
@@ -133,7 +145,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.rm(...args);
   };
-  return { ...actual, default: { ...actual, writeFile, rm }, writeFile, rm };
+  return { ...actual, default: { ...actual, readFile, readdir, writeFile, rm }, readFile, readdir, writeFile, rm };
 });
 
 const roots: string[] = [];
@@ -189,6 +201,7 @@ afterEach(async () => {
   fsKnobs.onRmHeld = null;
   fsKnobs.rmFailures = null;
   fsKnobs.rmAttempts = 0;
+  fsKnobs.isolateProcfs = false;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -1426,6 +1439,10 @@ describe('PI durable subagent run store', () => {
       async function terminalReceiptHome(write: (dir: string) => Promise<void>) {
         // An independently successful OS inventory, with unrelated processes.
         // Empty stdout is deliberately not evidence that the run has exited.
+        // Linux CI #41055150440 mixed mocked ps with real /proc. A transient
+        // unknown probe could emit a stop control before a later probe succeeded.
+        // Keep both sources in the same fixture; run artifacts still use real I/O.
+        fsKnobs.isolateProcfs = true;
         childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
         const agentHome = await homeWithUnreadableRun(write);
         const root = piSubagentRunRoot(agentHome, 'session-1');
@@ -1531,10 +1548,20 @@ describe('PI durable subagent run store', () => {
         await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 })).resolves.toBe(false);
       });
 
-      it.each([
+      const terminalReceiptCases = [
         ...cases,
         ['contains zero bytes', async (dir: string) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506))],
-      ] satisfies typeof cases)('accepts a matching terminal receipt when status %s, without changing history', async (_label, write) => {
+      ] satisfies typeof cases;
+      // Exercise Linux procfs and Windows inventory parsing on either host OS.
+      // Unit regression: both sweeps must preserve history and create no controls.
+      it.each(terminalReceiptCases.flatMap(([label, write]) =>
+        (['linux', 'win32'] as const).map(platform => [platform, label, write] as const),
+      ))('on %s accepts a matching terminal receipt when status %s, without changing history', async (platform, _label, write) => {
+        usePlatform(platform);
+        if (platform === 'linux' && process.geteuid === undefined) {
+          Object.defineProperty(process, 'geteuid', { configurable: true, value: () => 1000 });
+          restores.push(() => { Reflect.deleteProperty(process, 'geteuid'); });
+        }
         const { agentHome, root, dir } = await terminalReceiptHome(write);
         const files = ['config.json', 'status.json', 'result.json', 'transcript.jsonl'];
         const before = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));

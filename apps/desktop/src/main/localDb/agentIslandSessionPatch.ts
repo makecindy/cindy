@@ -3,6 +3,7 @@ export interface AgentIslandSessionPatch {
   status?: unknown;
   title?: unknown;
   workingDir?: unknown;
+  projectDir?: unknown;
   workspaceKind?: unknown;
   /** 插件后台隐藏时刻；非空 = 任务转入后台，灵动岛与菜单栏收起该任务。 */
   hiddenAt?: unknown;
@@ -36,11 +37,13 @@ export function notifyAgentIslandSessionPatch(
       const hasMetadataPatch =
         Object.prototype.hasOwnProperty.call(patch, 'title') ||
         Object.prototype.hasOwnProperty.call(patch, 'workingDir') ||
+        Object.prototype.hasOwnProperty.call(patch, 'projectDir') ||
         Object.prototype.hasOwnProperty.call(patch, 'workspaceKind');
       if (!hasMetadataPatch) return;
       service.handleSessionMetadataPatch(sessionId, {
         title: toNullableString(patch.title),
         workingDir: toNullableString(patch.workingDir),
+        projectDir: toNullableString(patch.projectDir),
         workspaceKind: toNullableString(patch.workspaceKind),
       });
     })

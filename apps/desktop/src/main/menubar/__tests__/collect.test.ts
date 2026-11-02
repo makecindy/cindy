@@ -11,7 +11,10 @@ import {
   paygSource,
   planLabel,
   type MenubarCollectDeps,
+  modelDisplayNames,
+  usageScope,
 } from '../collect';
+import { retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen } from '../remoteSubscriptions';
 import { topModels, type MenubarSubscriptionInput } from '../snapshot';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
 
@@ -330,6 +333,31 @@ describe('distinctRemoteSubscriptions', () => {
   it('leaves out other-computer accounts it could not read', () => {
     expect(distinctRemoteSubscriptions([], [remote('studio', { windows: [] })])).toEqual([]);
   });
+
+  // Regression: a computer going offline (or failing one read) made its accounts vanish from the panel and widgets.
+  it('keeps an unreachable computer’s accounts with their age until the retention runs out', () => {
+    const seenAtMs = NOW - 3 * 3_600_000;
+    const session = { kind: 'session' as const, usedPercent: 80, resetsAtMs: NOW - 60_000, windowMinutes: 300 };
+    const studio = remote('studio', { windows: [week(40), session] });
+    const laptop = remote('laptop');
+    const gone = remote('sold');
+    const previous = new Map<string, RemoteSeen>(
+      [studio, laptop, gone].map((source) => [source.id, { source, seenAtMs }]),
+    );
+    const read = { sources: [], unreachable: new Set(['studio']), failed: new Set(['remote:laptop']), incomplete: true };
+
+    const { sources, seen } = retainRemoteSubscriptions(previous, read, NOW);
+    expect(sources.map((source) => [source.id, source.lastSeenAtMs])).toEqual([
+      ['remote:studio', seenAtMs], ['remote:laptop', seenAtMs],
+    ]);
+    // A window that reset while the computer was away counts as refilled.
+    expect(sources[0]!.windows[1]).toMatchObject({ usedPercent: 0, resetsAtMs: null });
+    expect(retainRemoteSubscriptions(seen, read, seenAtMs + REMOTE_RETAIN_MS).sources).toEqual([]);
+
+    const fresh = remote('studio', { windows: [week(10)] });
+    const back = retainRemoteSubscriptions(seen, { sources: [fresh], unreachable: new Set(), failed: new Set(), incomplete: false }, NOW);
+    expect(back.sources).toEqual([fresh]);
+  });
 });
 
 describe('topModels', () => {
@@ -355,4 +383,40 @@ it('maps Kimi periods and removes expired or stale numbers from the menu bar', (
   expect(source.windows).toMatchObject([{ kind: 'session', usedPercent: 20, windowMinutes: 300 }, { kind: 'period', usedPercent: 30, windowMinutes: 0 }]);
   expect(kimiSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
   expect(kimiSource(account, { status: 'unavailable', error: 'auth' }, NOW).windows).toEqual([]);
+});
+
+// iPhone usage widgets split each day by model: the five with the most tokens in the last 30 days keep
+// their own series and everything else is summed last.
+it('splits daily value and tokens by the five busiest models and sums the rest', () => {
+  const money = (amount: number) => ({ amount, currency: 'USD', approximate: false, kind: 'actual-cost' }) as const;
+  const days = dayKeysEndingAt('2026-10-11', 2);
+  const row = (day: string, model: string, amount: number) =>
+    ({ day, agentKind: 'codex', model, tokens: amount * 1000, money: money(amount), apiMoney: money(0), subscriptionEstimateMoney: money(amount) });
+  const payload = { todayKey: '2026-10-11', modelDaily: [
+    ...['m1', 'm2', 'm3', 'm4', 'm5', 'm6'].map((model, i) => row('2026-10-11', model, 60 - i * 10)),
+    row('2026-10-10', 'm6', 4),
+  ] } as unknown as UsageHistoryPayload;
+  const series = usageScope(payload, days, []).modelSeries!;
+  expect(series.models.map((m) => m.name)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+  expect(series.daily).toEqual([[0, 0, 0, 0, 0, 4], [60, 50, 40, 30, 20, 10]]);
+  expect(series.tokens[1]).toEqual([60_000, 50_000, 40_000, 30_000, 20_000, 10_000]);
+});
+
+// Usage rows keep wire ids; the panel and widgets show catalog names and count one model once,
+// whichever route (Claude Code, Pi through a namespaced provider) it ran on.
+it('labels usage with catalog display names and folds route variants together', () => {
+  const money = (amount: number) => ({ amount, currency: 'USD', approximate: false, kind: 'actual-cost' }) as const;
+  const days = dayKeysEndingAt('2026-10-11', 1);
+  const row = (agentKind: string, model: string) =>
+    ({ day: '2026-10-11', agentKind, model, tokens: 100, money: money(1), apiMoney: money(0), subscriptionEstimateMoney: money(1) });
+  const names = modelDisplayNames([
+    { models: { codex: [{ id: 'codex/gpt-6-astra', name: 'Codex GPT-6 Astra' }] } },
+    { models: { 'claude-code': [{ id: 'claude-opus-5-5[1m]', name: 'Opus 5.5' }], codex: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra' }] } },
+  ] as never);
+  const payload = { todayKey: '2026-10-11', modelDaily: [
+    row('claude-code', 'claude-opus-5-5'), row('pi', 'anthropic/claude-opus-5-5'), row('codex', 'gpt-6-astra'), row('codex', 'mystery-1'),
+  ] } as unknown as UsageHistoryPayload;
+  const series = usageScope(payload, days, [], names).modelSeries!;
+  expect(series.models.map((m) => m.name)).toEqual(['Opus 5.5', 'GPT-6 Astra', 'mystery-1']);
+  expect(series.tokens[0]).toEqual([200, 100, 100, 0]);
 });

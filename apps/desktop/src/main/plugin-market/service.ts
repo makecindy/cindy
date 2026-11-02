@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import {
+  pluginHasToolUi,
   isValidPluginResourceId,
   isValidPluginNamespace,
   PLUGIN_PREFIX_PATTERN,
@@ -1059,6 +1060,24 @@ export class PluginMarketService {
     return { mode: 'exempt', reason: 'server-default-install' };
   }
 
+  /** Recover an old Host's missing UI fact through the same verified package transaction.
+   * A catalog manifest alone never grants pages; the bound receipt and market route
+   * select the candidate, then download/inspection and the commit checks revalidate it.
+   */
+  private needsDefaultUiRecovery(
+    plugin: VisiblePluginSummary,
+    binding: ReturnType<PluginMarketService['serverMarketBinding']>,
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+  ): boolean {
+    const ghost = binding.ghost;
+    return plugin.defaultInstall === true && binding.installState === 'installed' && binding.matchesUpdateRoute &&
+      ghost?.approval.state === 'approved' && ghost.uiCapabilityApproved !== true &&
+      pluginHasToolUi(ghost.manifest) && isGhostAvailableForActiveSession(plugin.ghostId) &&
+      getGhostManager().readApprovedInstallOriginStrict(installedGhostPhysicalRelId(ghost)) !== 'agent-forge' &&
+      this.serverDefaultInstallUpdateConsent(owner, ledger, plugin).mode === 'exempt';
+  }
+
   /** 给仍待用户确认新权限的更新打标记，插件页据此提示「需确认新权限」。 */
   private withUpdateConsentHolds(
     items: PluginMarketItem[],
@@ -2083,7 +2102,7 @@ export class PluginMarketService {
           'rejection' in packed.inspected
             ? { mode: 'unprompted' }
             : await obtainGhostInstallConsent(
-                consent,
+                consent.mode === 'prompt' ? { ...consent, trust: packed.inspected.trust.level } : consent,
                 installedGhostMatchingMarketPlugin(plugin),
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
@@ -2503,6 +2522,11 @@ export class PluginMarketService {
     }
     const assertInstallIdentityCurrent = (): void => {
       requireSameMarketOwner(owner);
+      if (options.consent.mode === 'exempt' &&
+          (this.serverDefaultInstallUpdateConsent(owner, ledger, serverPlugin).mode !== 'exempt' ||
+           !isGhostAvailableForActiveSession(plugin.ghostId))) {
+        throw new SilentDefaultInstallCancelledError('Default Plugin delivery is no longer eligible');
+      }
       if (namespaceFromLogin && trustedOrganizationNamespace(serverPlugin, owner) !== plugin.namespace) {
         throwIpcError('PRECONDITION_FAILED', 'Organization Plugin identity changed during the install');
       }
@@ -2582,7 +2606,7 @@ export class PluginMarketService {
     try {
       await downloadVerifiedPlugin(download.url, download, tempPath);
       requireSameMarketOwner(owner);
-      const inspected = await getGhostManager().inspect(tempPath);
+      const inspected = await getGhostManager().inspect(tempPath, 'stored-release');
       if (!('rejection' in inspected)) {
         if (
           inspected.canonicalManifest.id !== plugin.ghostId ||
@@ -2597,7 +2621,7 @@ export class PluginMarketService {
         'rejection' in inspected
           ? { mode: 'unprompted' }
           : await obtainGhostInstallConsent(
-              options.consent,
+              options.consent.mode === 'prompt' ? { ...options.consent, trust: inspected.trust.level } : options.consent,
               installedGhostMatchingMarketPlugin(plugin),
               inspected.manifest,
               inspected.packageSha256,
@@ -2637,7 +2661,12 @@ export class PluginMarketService {
                   options.beforeCommitInLock?.();
                 }
               : options.beforeCommitInLock,
-            assertCurrent: options.assertCurrent,
+            assertCurrent: options.consent.mode === 'exempt'
+              ? () => {
+                  assertInstallIdentityCurrent();
+                  options.assertCurrent?.();
+                }
+              : options.assertCurrent,
           },
           owner,
           ledger,
@@ -3769,12 +3798,19 @@ export class PluginMarketService {
     let local = await this.localInstallSnapshotAsync(owner, ledger, refresh);
     requireSameMarketOwner(owner);
     for (const summary of plugins) {
-      const { target, record, installState } = this.serverMarketBinding(summary, local);
+      const binding = this.serverMarketBinding(summary, local);
+      const { target, record, installState } = binding;
+      const recoverUi = this.needsDefaultUiRecovery(summary, binding, owner, ledger);
       const retryKey = this.automaticUpgradeRetryKey(owner, 'server', summary.id);
       const releaseKey = summary.currentRelease.id;
+      // A prior ordinary update may have awaited consent before this plugin
+      // became a default delivery. The current delivery authority supersedes it.
+      if (this.serverDefaultInstallUpdateConsent(owner, ledger, summary).mode === 'exempt') {
+        this.automaticUpgradeConsentHolds.delete(retryKey);
+      }
       if (
         (record?.source !== 'market' && record?.source !== 'legacy-adopted') ||
-        installState !== 'update-available' ||
+        (installState !== 'update-available' && !recoverUi) ||
         isGhostBusy(target, local.ghosts) ||
         this.shouldDeferAutomaticUpgrade(retryKey, releaseKey) ||
         this.isAutomaticUpgradeHeldForConsent(retryKey, releaseKey, releaseKey)
@@ -3791,7 +3827,7 @@ export class PluginMarketService {
           }
           if (
             (fresh.record?.source !== 'market' && fresh.record?.source !== 'legacy-adopted') ||
-            fresh.installState !== 'update-available'
+            (fresh.installState !== 'update-available' && !this.needsDefaultUiRecovery(summary, fresh, owner, ledger))
           ) {
             log.debug?.('Plugin update already reconciled', { pluginId: summary.id });
             return;
@@ -3816,12 +3852,16 @@ export class PluginMarketService {
           const detail = await this.api.detail(summary.id);
           requireSameMarketOwner(owner);
           assertDetailMatchesSummary(summary, detail);
+          const consent = this.serverDefaultInstallUpdateConsent(owner, ledger, detail);
+          // An opt-out may withdraw default entitlement while details are loading.
+          // Same-version recovery cannot fall back to a normal automatic grant.
+          if (fresh.installState === 'installed' && consent.mode !== 'exempt') return;
           await this.installDetail(
             detail,
             {
-              // 只有当前用户仍具备该插件的默认下发资格时才免确认：目录标
-              // defaultInstall 且没有仍生效的退订（显式重装与维护对账都会清掉）。
-              consent: this.serverDefaultInstallUpdateConsent(owner, ledger, detail),
+              // 只有当前用户仍具备默认下发资格时才免确认；显式重装和维护
+              // 对账会清除符合条件的退订记录，仍有退订时扩权必须确认。
+              consent,
               expectedInstalled: true,
               expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
               beforeCommitInLock: () => {

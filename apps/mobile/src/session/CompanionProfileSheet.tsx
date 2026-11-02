@@ -25,7 +25,7 @@ import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPor
 import { CompanionProfileNativeView } from './CompanionProfileNativeView';
 import { CompanionChannelTasks } from './CompanionChannelTasks';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
-import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -407,13 +407,24 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const editorView = panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
-  </> : editor ? <View style={styles.group}>{editor.panels.flatMap(item => item.entries?.length
-    ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} />)
-    : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
-      : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View> : null;
+  </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
+    // Same sections as iOS: a host block title heads its own group, subtitles sit under the row title.
+    const group = <View key={section.key} style={styles.group}>{section.panels.flatMap(item => item.entries?.length
+      ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)}
+        detail={entry.subtitle ? label(entry.subtitle) : undefined} detailLines={2} onPress={() => void openEditor(entry.resourceId)} />)
+      : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
+        : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View>;
+    return section.title ? <View key={section.key} style={styles.field}>
+      <Text accessibilityRole="header" style={styles.groupLabel}>{label(section.title)}</Text>{group}
+    </View> : group;
+  })}</> : null;
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
       preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}
+      trailingAction={page === 'models' && panel?.action && !editorLoading && !deleted && !confirmation ? {
+        label: t('devices.common.save'), busy, testID: 'companionProfile.models.save',
+        disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel),
+      } : undefined}
       onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
@@ -430,7 +441,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <MainWindowActionButton action={{ label: label(confirmation.action.confirmation.confirmLabel ?? confirmation.action.label), busy, disabled: !online || confirmation.id === 'delete' && values.confirmName !== name, tone: confirmation.action.tone === 'destructive' ? 'danger' : 'primary', onPress: () => void submit(confirmation, true) }} />
         <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: () => confirm(null) }} />
       </> : page === 'home' ? home : editorLoading ? spinner : page === 'editor' ? editorView
-        : page === 'models' ? panel?.action ? <>{models}{save(panel, false)}</> : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
+        : page === 'models' ? panel?.action ? models : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}

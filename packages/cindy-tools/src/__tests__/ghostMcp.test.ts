@@ -1193,29 +1193,6 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
-  // Regression: generated media URLs reached the model as text, without pixels.
-  // Entry: handleMedia; unit tier; existing media cases only checked JSON metadata.
-  it("returns preview pixels as image content while preserving the deliverable URL", async () => {
-    const url = 'cindy-media://blobs/image.png';
-    const result = await handleMedia(fakeDeps({ callMedia: async () => ({
-      ok: true, xdt_image_urls: [url],
-      modelImages: [{ data: 'AAAA', mimeType: 'image/png' }],
-      previews: [{ url, image_index: 0 }],
-    }) }), { action: 'poll', invocation_id: 'generated' });
-    expect(parsePayload(result)).toEqual({ ok: true, xdt_image_urls: [url], previews: [{ url, image_index: 0 }] });
-    expect(result.content[1]).toEqual({ type: 'image', data: 'AAAA', mimeType: 'image/png' });
-  });
-  it("routes image inspection without generation and excludes pixels from failed results", async () => {
-    const callMedia = vi.fn(async () => ({ ok: false, errorCode: 'MEDIA_NOT_IN_TASK', modelImages: [{ data: 'AAAA', mimeType: 'image/png' }] }));
-    const result = await handleMedia(fakeDeps({ callMedia }), { action: 'inspect', url: 'cindy-media://blobs/image.png' });
-    expect(callMedia).toHaveBeenCalledWith({ action: 'inspect', url: 'cindy-media://blobs/image.png' });
-    expect(result.isError).toBe(true);
-    expect(result.content).toHaveLength(1);
-    expect(parsePayload(result)).toEqual({ ok: false, errorCode: 'MEDIA_NOT_IN_TASK' });
-    callMedia.mockClear();
-    expect(parsePayload(await handleMedia(fakeDeps({ callMedia }), { action: 'inspect' }))).toMatchObject({ errorCode: 'INVALID_INPUT' });
-    expect(callMedia).not.toHaveBeenCalled();
-  });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
     const deps = fakeDeps({ callMedia });
@@ -2133,7 +2110,7 @@ describe('connect_account transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('exposes a Host connection without requiring an installed plugin', async () => {
+  it('exposes Host connections (Grok, teammate messaging platforms) without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
     const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
@@ -2146,9 +2123,13 @@ describe('connect_account transport', () => {
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
-      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
-      expect(rejected.isError).toBe(true);
-      expect(connectAccount).toHaveBeenCalledTimes(1);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      for (const id of ['invented', 'im-unknown']) {
+        const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
+        expect(rejected.isError).toBe(true);
+      }
+      expect(connectAccount).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
 

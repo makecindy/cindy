@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLocalModelCatalog } from "../localModelCatalog.js";
+import { localModelDescription, parseLocalModelCatalog } from "../localModelCatalog.js";
 import { parseModelRegistry } from "../modelAccessValidator.js";
 const catalog = {
   version: 1,
@@ -30,6 +30,16 @@ const catalog = {
   ],
 };
 describe("Registry V4 local model contract", () => {
+  // Unit: new-language descriptions used to reject the catalog; older servers still send five languages.
+  // Verify client fallback never replaces newer server copy with a stale translation.
+  it('accepts French metadata and translates only an unchanged reviewed English description', () => {
+    const localized = { ...catalog, models: [{ ...catalog.models[0], descriptions: { en: 'Local candidate', fr: 'Candidat local' } }] };
+    expect(parseLocalModelCatalog(localized)).toEqual(localized);
+    expect(localModelDescription(localized.models[0].descriptions, 'fr')).toBe('Candidat local');
+    expect(localModelDescription({ en: 'Low-memory candidate to compare with Gemma 4 12B.' }, 'fr')).toBe('Candidat peu gourmand en mémoire à comparer avec Gemma 4 12B.');
+    expect(localModelDescription({ en: 'New evaluation pending.' }, 'fr')).toBe('New evaluation pending.');
+    expect(localModelDescription(undefined, 'fr')).toBeUndefined();
+  });
   it.each([200, 201, 256, 257])(
     "matches public ID and local reference limits at %i characters",
     (length) => {

@@ -170,6 +170,7 @@ export type BotGroupErrorVariant =
   | 'memberLimit'
   | 'memberUnavailable'
   | 'mentionUnavailable'
+  | 'allBotsMentionDisabled'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -194,6 +195,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
+  ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],

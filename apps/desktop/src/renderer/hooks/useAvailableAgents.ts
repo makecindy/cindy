@@ -14,6 +14,8 @@
  * "未加载" 当作 "先别隐藏任何入口"(避免异步 fetch 期间误隐藏合法 agent)。
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_CHANGED, parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
@@ -78,7 +80,7 @@ async function fetchAvailableAgents(deviceId?: string | null): Promise<RuntimeAg
   if (deviceId) {
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    const raw = await dl.invoke(deviceId, 'maker:list-available-agents', []);
+    const raw = await invokeModelCatalog(dl, deviceId, 'maker:list-available-agents', []);
     return Array.isArray(raw) ? (raw.filter((v): v is RuntimeAgentKind =>
       v === 'claude-code' || v === 'codex' || v === 'pi') as RuntimeAgentKind[]) : [];
   }
@@ -145,6 +147,12 @@ function remoteRosterKeys(): Set<string> {
 }
 
 function notifyRosterChanged(deviceId?: string): void {
+  if (deviceId && !parseModelCatalogKey(deviceId)) {
+    for (const key of remoteRosterKeys()) {
+      const route = parseModelCatalogKey(key);
+      if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) notifyRosterChanged(key);
+    }
+  }
   // Presence includes controller-only phones. Query only devices whose agent
   // roster has actually been used; probing phones can reject the reverse link
   // and interrupt their incoming remote-control connection.
@@ -154,6 +162,13 @@ function notifyRosterChanged(deviceId?: string): void {
   if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
   else refreshLocalCapabilitiesOnce();
   for (const listener of rosterListeners.get(key) ?? []) listener();
+}
+
+/** Refresh only rosters routed through this task host, including locally owned sources. */
+export function refreshControlledAvailableAgents(taskDeviceId: string): void {
+  for (const key of remoteRosterKeys()) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) notifyRosterChanged(key);
+  }
 }
 
 function ensureRosterSource(key: string): void {
@@ -170,7 +185,7 @@ function ensureRosterSource(key: string): void {
   if (!dl) return;
   remoteRosterSourceInstalled = true;
   dl.onRemotePush?.((push) => {
-    if (push.channel === 'maker:agents:changed') notifyRosterChanged(push.deviceId);
+    if (push.channel === 'maker:agents:changed' || push.channel === CONTROLLED_MODEL_CATALOG_CHANGED) notifyRosterChanged(push.deviceId);
   });
   dl.onPresenceChanged?.((snapshot) => {
     const wasOnline = deviceOnline.get(snapshot.deviceId);

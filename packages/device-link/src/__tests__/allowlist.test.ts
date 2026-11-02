@@ -95,10 +95,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
-  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+  it('允许同账号远程任务读取 Git / GitHub 上下文并管理 PR 关联', () => {
     for (const ch of [
       'git-context:get-for-session',
       'git-context:pr-refs:list',
+      'git-context:pr-refs:manage',
       'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
