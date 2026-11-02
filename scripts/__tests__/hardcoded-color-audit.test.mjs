@@ -415,11 +415,11 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.equal(colors.run, 'pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"');
   assert.match(colors.env.DESIGN_BASE_REF, /github\.event\.pull_request\.base\.sha/);
   assert.match(colors.env.DESIGN_HEAD_REF, /github\.sha/);
-  for (const node of [checks, colors, checks.steps.find(s=>s.name==='Check design inventory freshness')]) {
+  for (const node of [checks, colors, checks.steps.find(s=>s.name==='Check design inventory registration')]) {
     assert.equal(node['continue-on-error'], undefined);
     assert.equal(node.if, undefined);
   }
-  assert.equal(checks.steps.find(s=>s.name==='Check design inventory freshness').run, 'pnpm check:design-inventory');
+  assert.equal(checks.steps.find(s=>s.name==='Check design inventory registration').run, 'pnpm check:design-inventory');
   assert.ok(checks.steps.some(s=>s.run==='pnpm test:runner'));
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
