@@ -10,6 +10,16 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.5b starter experts, live (owner): 1 pass, 2 open
+
+All on Hermes + `qwen3-8b (lmstudio-local)`, header chip correct in every case.
+- **Prompt Engineer ✅.** "Make me a prompt that plans my daily sales route from a list of postcodes" → improved prompt with input/output/method/constraints, two worked examples, an evaluation checklist and weaknesses-to-test, as `expert.md` asks.
+- **Research Analyst ❌ (prompt applied, output not trustworthy).** Followed the format (restated question, answer, sources, "Unverified" section) but the content is wrong for Node 22 (claims V8 13.9; Node 22.0 shipped V8 12.4; cites a CVE and "vm2" that are not Node 22 changes) and it claimed "no unverified claims". No web tool call was visible, so it likely answered from the small model's memory while presenting sources. The expert prompt says "using sources you actually opened"; qwen3-8b did not obey. Needs a run with web search confirmed available in Hermes and/or a stronger route before it counts.
+- **Repo Explainer ❌ (environment).** Opened as a Chat with no project folder, so there was no repo to read; it correctly said it had no files. Retry from a project task (a code folder as the working directory).
+- **Surprise:** Repo Explainer's reply mentioned a codeword "BLUEBIRD7". It is not in this repo or in the expert files; most likely an earlier owner test stored it in Hermes memory under `~/.hermes-cindy`. Owner to check with `grep -rl BLUEBIRD7 ~/.hermes-cindy`. Not an expert defect, but it shows Hermes memory leaks into every session, expert or not.
+
+---
+
 ## 2026-11-02 — 3.2a fail-closed route check `live-proven` (owner)
 
 - Throwaway expert `~/.cindy-harness/experts/route-test` (`model: lmstudio-local/google/gemma-4-26b-a4b-qat`), new Hermes task on `qwen3-8b (lmstudio-local)`, sent "hi".
