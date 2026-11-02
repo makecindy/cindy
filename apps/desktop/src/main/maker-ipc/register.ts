@@ -225,6 +225,7 @@ import {
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   storedCustomProviderId,
   isLocalOnlyProviderForAgent,
   isOrganizationManagedProvider,
@@ -23203,6 +23204,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const requestedModelId = model;
     const normalizedWireArgs =
       internalOptions.source === 'user'
         ? normalizeDeviceLinkSetModelWireArgs(
@@ -23290,6 +23292,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
     const applyLocked = async () => {
+      let model = requestedModelId;
       await assertReviewSettingsUnlocked(sessionId, true);
       if (supersededByOwnerBoundary()) {
         return { deferred: false, superseded: true };
@@ -23422,6 +23425,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         allowSideEffects: false,
         catalog: getActiveCatalog(),
       });
+      // Existing sessions may retain the old bare ID after the same provider
+      // publishes it with a bridge namespace. Only migrate an unchanged route
+      // when that provider and engine expose exactly one matching replacement.
+      if (model === runtimeStatus.model && currentProviderId &&
+          guardProviderId === currentProviderId && !sshCodexProviders) {
+        const sourceProvider = runtimeProviders.find(p => p.id === currentProviderId);
+        const replacement = uniqueRenamedSessionModelId(sourceProvider, model, currentAgentKind);
+        if (replacement) model = replacement;
+      }
       const currentSourceId = currentProviderId ?? actualSourceIdForModel(
         runtimeProviders, null, currentModelId, currentAgentKind,
       );
