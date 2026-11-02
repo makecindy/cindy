@@ -13,6 +13,7 @@ import {
   selectExecutableCoreMediaModels,
   type CindyMediaProviderSlice,
 } from '../cindyMediaCatalog';
+import { supportsMediaCapability } from '../../cindy-media/mediaCapabilities';
 
 const XD: CindyMediaProviderSlice = {
   id: 'xd',
@@ -50,6 +51,27 @@ describe('selectExecutableCoreMediaModels', () => {
     expect(
       selectExecutableCoreMediaModels(models, 'video', (model) => model.coreExecutable),
     ).toEqual([{ id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true }]);
+  });
+
+  it('only selects Core image models that support the requested edit action', () => {
+    const models = [
+      {
+        id: 'generate-only',
+        mode: 'image_generation',
+        modalities: { input: ['text'], output: ['image'] },
+      },
+      {
+        id: 'edit-capable',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ];
+
+    expect(
+      selectExecutableCoreMediaModels(models, 'image', (model) =>
+        supportsMediaCapability(model.modalities, 'image.edit'),
+      ).map((model) => model.id),
+    ).toEqual(['edit-capable']);
   });
 });
 

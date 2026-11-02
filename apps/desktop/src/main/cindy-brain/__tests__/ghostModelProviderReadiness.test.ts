@@ -94,6 +94,17 @@ describe('ghost model-provider readiness', () => {
     ).toBe(true);
   });
 
+  it('does not let generate-only providers satisfy an edit-only plugin', () => {
+    const editOnly: GhostManifest = {
+      ...ART_MANIFEST,
+      cindy: { image: ['edit'] },
+    };
+    expect(
+      isGhostModelProviderReady(editOnly, probes({ imageGenerate: () => true })),
+    ).toBe(false);
+    expect(isGhostModelProviderReady(editOnly, probes({ imageEdit: () => true }))).toBe(true);
+  });
+
   it('stays missing when every provider is unavailable, disabled, or needs reconnection', () => {
     expect(isGhostModelProviderReady(ART_MANIFEST, probes())).toBe(false);
     expect(

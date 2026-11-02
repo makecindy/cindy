@@ -6150,12 +6150,13 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const storeId = installedGhostStoragePart(ghost);
   const runtimeManifest = ghost.manifest;
   // Use the same executable media catalog as Core/Art. The former xd-only
-  // probe blocked valid OpenAI, xAI, Gemini, BYOK and custom image routes.
+  // probe blocked valid OpenAI, xAI, Gemini, BYOK and custom image routes;
+  // the legacy catalog also hid Core-only routes and unfiltered edit actions.
   const isModelProviderReady = isGhostModelProviderReady(runtimeManifest, {
-    imageGenerate: () => getCatalogImageConfig('generate').models.length > 0,
-    imageEdit: () => getCatalogImageConfig('edit').models.length > 0,
-    videoGenerate: () => getCatalogVideoConfig('generate').models.length > 0,
-    videoEdit: () => getCatalogVideoConfig('edit').models.length > 0,
+    imageGenerate: () => getMediaPreferenceConfig('image.generate').models.length > 0,
+    imageEdit: () => getMediaPreferenceConfig('image.edit').models.length > 0,
+    videoGenerate: () => getMediaPreferenceConfig('video.generate').models.length > 0,
+    videoEdit: () => getMediaPreferenceConfig('video.edit').models.length > 0,
     textOneshot: isModelAccessReady,
     embedText: () => getCatalogEmbedConfig().models.length > 0,
     webSearch: isModelAccessReady,
