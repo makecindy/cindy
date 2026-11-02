@@ -892,6 +892,10 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。
 
+### Terms of Service
+
+与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。
+
 ### Token Plan
 
 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
