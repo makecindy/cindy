@@ -640,7 +640,7 @@ describe('exportSessionShare', () => {
   // cases cannot detect accidentally bundling a stale local transcript with the same native id.
   // Production entry: exportSessionShare; minimal input: a remote agent + persisted messages.
   // Unit tier: mocked DB/stores and private temporary files, no remote connection required.
-  // Standalone file: 2.44s on Windows (26 passed, 2 existing platform skips).
+  // Standalone file: 2.27s on Windows (27 passed, 2 existing platform skips).
   it.each(['cc', 'codex', 'pi'] as const)(
     'exports a remote %s supplier task as message history without local native history',
     async (agentKind) => {
@@ -671,6 +671,28 @@ describe('exportSessionShare', () => {
       expect(JSON.parse(messages[1].agentMeta)).toEqual({ usage: { inputTokens: 7 } });
     },
   );
+
+  it('detaches parked native sessions in remote history while keeping the visible switch record', async () => {
+    sessionRowRef.row = { ...baseSession(), agentKind: 'codex', agentDeviceId: 'remote-device' };
+    const switchContent = {
+      fromAgentKind: 'cc', toAgentKind: 'codex', fromModel: 'claude-sonnet-4-6',
+      fromAgentDeviceId: null, fromSdkSessionId: 'sid-a', handoff: 'Continue the saved requirements.',
+    };
+    messagesRef.rows.push({
+      ...messagesRef.rows[1], id: 'switch-1', clientId: 'switch-client', role: 'agent_switch',
+      content: JSON.stringify(switchContent), agentMeta: null, createdAt: 1700000000300,
+    });
+    const target = path.join(tmpRoot, 'remote-parked-session.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    const zip = await unzipOf(target);
+    const messages = (await zip.file('messages.jsonl')!.async('string')).split('\n').map(line => JSON.parse(line));
+    const boundary = messages.find(message => message.role === 'agent_switch');
+    // Import keeps this content. A null binding prevents findParkedEngineSession and
+    // historical forks from resuming the source task's unbundled native session.
+    expect(JSON.parse(boundary.content)).toEqual({ ...switchContent, fromSdkSessionId: null });
+    expect(messages.slice(0, 2).map(message => message.content)).toEqual(baseMessages().map(message => message.content));
+  });
 
   it('rejects SSH / remote full migration / orca worker / deleted / empty sessions', async () => {
     sessionRowRef.row = { ...baseSession(), remoteHostId: 'host-1' };
@@ -722,7 +744,12 @@ describe('exportSessionShare', () => {
     workerSessionsById.set('worker-remote', {
       ...baseSession(), id: 'worker-remote', orcaRole: 'worker', agentDeviceId: 'remote-device',
     });
-    workerMessagesBySession.set('worker-remote', baseMessages());
+    const workerMessages = baseMessages();
+    workerMessages[1] = {
+      ...workerMessages[1], role: 'agent_switch',
+      content: JSON.stringify({ fromAgentKind: 'cc', fromSdkSessionId: 'sid-a' }),
+    };
+    workerMessagesBySession.set('worker-remote', workerMessages);
     const target = path.join(tmpRoot, 'remote-worker.cshare');
     const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
     expect(outcome.status).toBe('ok');
@@ -732,6 +759,9 @@ describe('exportSessionShare', () => {
     const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
     expect(manifest.orca!.workers[0].counts.messages).toBe(2);
     expect(manifest.orca!.workers[0].activeSdkSessionId).toBeNull();
+    const exportedWorkerMessages = (await zip.file('orca/workers/0/messages.jsonl')!.async('string'))
+      .split('\n').map(line => JSON.parse(line));
+    expect(JSON.parse(exportedWorkerMessages[1].content)).toEqual({ fromAgentKind: 'cc', fromSdkSessionId: null });
     expect(Object.keys(zip.files).some(name => name.startsWith('orca/workers/0/transcripts/'))).toBe(false);
     expect(zip.file('transcripts/claude/sid-b.jsonl')).toBeTruthy();
   });

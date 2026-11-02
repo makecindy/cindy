@@ -227,6 +227,17 @@ function rewriteAgentMetaForExport(
   }
 }
 
+/** 保留切换记录的展示内容，但不能让导入后的任务接回未随包提供的停泊会话。 */
+function detachAgentSwitchSessionForExport(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return content;
+    return JSON.stringify({ ...parsed, fromSdkSessionId: null });
+  } catch {
+    return content;
+  }
+}
+
 /** 阶段 A 的转录候选(只 stat 不读,pi 的 zipPath 留空到阶段 B 定)。 */
 interface TranscriptCandidate {
   sdkSessionId: string;
@@ -516,6 +527,9 @@ async function readSessionPhaseB(
       : null;
     bundleMessages = a.messages.map((message) => ({
       ...message,
+      content: session.agentDeviceId && message.role === 'agent_switch'
+        ? detachAgentSwitchSessionForExport(message.content)
+        : message.content,
       agentMeta: rewriteAgentMetaForExport(message.agentMeta, piPortableIds),
     }));
   }
