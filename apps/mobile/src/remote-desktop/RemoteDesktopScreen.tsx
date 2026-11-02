@@ -3366,28 +3366,49 @@ export function RemoteDesktopSession({
   const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
   const following = turn === null;
   const deviceLandscape = following ? landscape : turn % 2 === 1;
-  // After a turn, ask for the shape soon instead of waiting for a heartbeat.
-  const shapeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  useEffect(() => () => shapeTimers.current.forEach(clearTimeout), []);
-  const checkShapeSoon = () => {
-    shapeTimers.current.forEach(clearTimeout);
-    shapeTimers.current = [800, 1600, 3000].map((delay) =>
-      setTimeout(() => {
-        const current = active.current;
-        if (!current?.screen) return;
-        void request<{ shape?: unknown }>({
-          op: "heartbeat",
-          lease: current.lease,
-        })
-          .then((result) => {
-            const shape = liveScreenShape(result.shape);
-            if (shape && active.current === current)
-              setDeviceShape({ lease: current.lease, ...shape });
-          })
-          .catch(() => {});
-      }, delay),
-    );
-  };
+  // Follow the device's shape as it turns: the host answers a screenShape
+  // request once the shape differs from the one we know (or after a few
+  // seconds), so one request is always waiting. Older hosts refuse it; then
+  // heartbeats, or the guess, carry the shape instead.
+  const leaseId = lease?.lease;
+  const watchesShape = Boolean(lease?.screen) && frameReady;
+  useEffect(() => {
+    const current = active.current;
+    if (!watchesShape || !current?.screen) return;
+    let stopped = false;
+    let known: { width: number; height: number } | null = null;
+    void (async () => {
+      while (!stopped && active.current === current) {
+        try {
+          const result = await request<{ shape?: unknown }>({
+            op: "screenShape",
+            lease: current.lease,
+            ...(known ? { known } : {}),
+          });
+          const shape = liveScreenShape(result.shape);
+          if (stopped || active.current !== current) return;
+          if (
+            shape &&
+            (shape.width !== known?.width || shape.height !== known?.height)
+          ) {
+            known = shape;
+            setDeviceShape({ lease: current.lease, ...shape });
+          } else {
+            // Nothing new (a host that answers at once): never spin.
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        } catch (cause) {
+          const code = (cause as { code?: unknown })?.code;
+          if (code === "INVALID_REQUEST" || code === "DESKTOP_SCREEN_ONLY")
+            return;
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [watchesShape, leaseId, request]);
   useEffect(() => {
     if (!lease || !frameReady || !canInput) return;
     if (following) {
@@ -3406,7 +3427,6 @@ export function RemoteDesktopSession({
             },
           ],
         });
-        checkShapeSoon();
       }
     }
   }, [lease, turnable, following, frameReady, canInput, deviceLandscape, send]);
@@ -3443,7 +3463,6 @@ export function RemoteDesktopSession({
       events: [{ kind: "press", button: `rotate-${direction}` }],
     });
     setTurn((from + (direction === "right" ? 1 : 3)) % 4);
-    checkShapeSoon();
   };
   // Filling depends on both shapes: size it again whenever either one turns.
   // A free zoom does not survive a new shape; the picture fits again.
@@ -3468,6 +3487,8 @@ export function RemoteDesktopSession({
   };
   // Fingers on a live screen are device touches, except while zooming the
   // picture: then they pan and pinch it, and nothing reaches the device.
+  // A reloaded viewer and a new lease start without either setting (touches
+  // would become desktop pointers the host refuses), so send them again.
   const liveScreenTouches = lease?.screen ? lease.screen.maxTouches : null;
   useEffect(() => {
     if (!frameReady) return;
@@ -3476,13 +3497,23 @@ export function RemoteDesktopSession({
         ? { type: "deviceTouch", enabled: false }
         : { type: "deviceTouch", enabled: true, maxTouches: liveScreenTouches },
     );
-  }, [frameReady, liveScreenTouches, zoomEditing, send]);
+  }, [
+    frameReady,
+    liveScreenTouches,
+    zoomEditing,
+    leaseId,
+    viewerReadyRevision,
+    send,
+  ]);
+  const wasZooming = useRef(false);
   useEffect(() => {
     if (zoomEditing) send({ type: "mode", mode: "pan" });
-    else if (frameReady) send({ type: "mode", mode });
-    // The desktop mode effect already sends `mode` on its own changes.
+    // Done zooming: hand the fingers back. Otherwise the desktop mode effect
+    // and connect already own `mode`.
+    else if (wasZooming.current && frameReady) send({ type: "mode", mode });
+    wasZooming.current = zoomEditing;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoomEditing]);
+  }, [zoomEditing, leaseId, viewerReadyRevision]);
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
     heldKeys.current.clear();
@@ -4557,12 +4588,7 @@ export function RemoteDesktopSession({
             rotateLeft && rotateRight
               ? {
                   following,
-                  onFollow: turnable
-                    ? () => {
-                        setTurn(null);
-                        checkShapeSoon();
-                      }
-                    : undefined,
+                  onFollow: turnable ? () => setTurn(null) : undefined,
                   rotate: { left: rotateLeft, right: rotateRight },
                 }
               : undefined

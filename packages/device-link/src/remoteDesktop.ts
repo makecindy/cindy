@@ -127,9 +127,12 @@ export function isDesktopInput(value: unknown): value is DesktopInput {
     case "text":
       return typeof v.text === "string" && v.text.length <= 4096;
     case "press":
-      return typeof v.button === "string" && LIVE_SCREEN_BUTTON_ID.test(v.button);
+      return (
+        typeof v.button === "string" && LIVE_SCREEN_BUTTON_ID.test(v.button)
+      );
     case "touch": {
-      if (v.edge !== undefined && !EDGES.includes(v.edge as string)) return false;
+      if (v.edge !== undefined && !EDGES.includes(v.edge as string))
+        return false;
       if (
         !Array.isArray(v.touches) ||
         v.touches.length > LIVE_SCREEN_MAX_TOUCHES
@@ -147,7 +150,9 @@ export function isDesktopInput(value: unknown): value is DesktopInput {
         )
           return false;
         ids.add(t.id as number);
-        return unit(t.x) && unit(t.y) && TOUCH_PHASES.includes(t.phase as string);
+        return (
+          unit(t.x) && unit(t.y) && TOUCH_PHASES.includes(t.phase as string)
+        );
       });
     }
     default:
@@ -413,6 +418,15 @@ export type RemoteDesktopRequest =
       idleTimeoutMinutes?: number;
     }
   | { op: "stop"; lease: string; lockScreen?: boolean }
+  /**
+   * A live screen's upright size, answered once it differs from `known` (or
+   * after a few seconds), so the viewer follows a turn as it happens.
+   */
+  | {
+      op: "screenShape";
+      lease: string;
+      known?: { width: number; height: number };
+    }
   | { op: "frame"; lease: string; cursorOverlay?: boolean }
   | { op: "control" | "presentation"; lease: string; enabled: boolean }
   | { op: "input"; lease: string; sequence: number; events: DesktopInput[] }
@@ -513,7 +527,12 @@ export function parseRemoteDesktopRequest(
       displayId: v.displayId,
       ...(typeof v.handoff === "string" ? { handoff: v.handoff } : {}),
       ...(screen
-        ? { screen: { plugin: screen.plugin as string, id: screen.id as string } }
+        ? {
+            screen: {
+              plugin: screen.plugin as string,
+              id: screen.id as string,
+            },
+          }
         : {}),
       ...(v.takeover === true ? { takeover: true } : {}),
       ...(typeof v.resume === "boolean" ? { resume: v.resume } : {}),
@@ -608,6 +627,27 @@ export function parseRemoteDesktopRequest(
   }
   if (v.op === "heartbeat")
     return { op: v.op, lease, ...lockOnExit(), ...idleTimeout() };
+  if (v.op === "screenShape") {
+    if (v.known === undefined) return { op: v.op, lease };
+    const known = v.known as { width?: unknown; height?: unknown } | null;
+    if (
+      !known ||
+      typeof known !== "object" ||
+      ![known.width, known.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size > 0 &&
+          size <= 16384,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      known: { width: known.width as number, height: known.height as number },
+    };
+  }
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"
@@ -727,6 +767,7 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "displayModes",
   "clipboardSync",
   "clipboardVersion",
+  "screenShape",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */

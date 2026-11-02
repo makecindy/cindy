@@ -29,11 +29,21 @@ const screen = {
 function harness(screenRecording: 'granted' | 'missing' = 'granted') {
   let ended: (() => void) | null = null;
   let shape: { width: number; height: number } | null = null;
+  const watchers = new Set<(next: { width: number; height: number }) => void>();
   const liveScreens = {
     list: vi.fn(async () => [listed]),
     open: vi.fn(async (_plugin: string, _id: string, onEnded: () => void) => {
       ended = onEnded;
-      return { screen, width: 1179, height: 2556, shape: () => shape };
+      return {
+        screen,
+        width: 1179,
+        height: 2556,
+        shape: () => shape,
+        watchShape: (listener: (next: { width: number; height: number }) => void) => {
+          watchers.add(listener);
+          return () => watchers.delete(listener);
+        },
+      };
     }),
     close: vi.fn(),
   };
@@ -73,6 +83,7 @@ function harness(screenRecording: 'granted' | 'missing' = 'granted') {
     end: () => ended?.(),
     turn: (next: typeof shape) => {
       shape = next;
+      if (next) for (const watcher of [...watchers]) watcher(next);
     },
   };
 }
@@ -158,6 +169,24 @@ describe('live screen leases', () => {
     expect(h.deps.lockScreen).not.toHaveBeenCalled();
     expect(h.liveScreens.close).toHaveBeenCalledOnce();
     expect(h.controller.state).toBeNull();
+  });
+
+  it('answers a shape request as soon as the screen turns', async () => {
+    const h = harness();
+    const { lease } = await h.start({ control: true });
+    h.turn({ width: 1179, height: 2556 });
+    // A shape the viewer does not know yet comes back at once.
+    expect(await h.controller.request('phone', { op: 'screenShape', lease })).toEqual({
+      shape: { width: 1179, height: 2556 },
+    });
+    // The known one waits for the turn.
+    const pending = h.controller.request('phone', {
+      op: 'screenShape',
+      lease,
+      known: { width: 1179, height: 2556 },
+    });
+    h.turn({ width: 2556, height: 1179 });
+    expect(await pending).toEqual({ shape: { width: 2556, height: 1179 } });
   });
 
   it('keeps one remote lease per computer: busy without takeover, replaced with it', async () => {

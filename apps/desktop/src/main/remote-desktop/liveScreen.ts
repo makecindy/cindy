@@ -120,6 +120,7 @@ export class LiveScreenSession {
   private closed = false;
   /** Upright picture size from the plugin's last `screen` message. */
   private uprightShape: { width: number; height: number } | null = null;
+  private readonly shapeListeners = new Set<(shape: { width: number; height: number }) => void>();
   private inputChain = Promise.resolve();
   private waiting: LiveScreenEvent[] = [];
   private waitingTyping = 0;
@@ -203,9 +204,21 @@ export class LiveScreenSession {
     return this.uprightShape;
   }
 
+  /** Calls `listener` whenever the upright size changes; returns the unsubscribe. */
+  onShape(listener: (shape: { width: number; height: number }) => void): () => void {
+    this.shapeListeners.add(listener);
+    return () => this.shapeListeners.delete(listener);
+  }
+
   private enqueue(message: Uint8Array): void {
     const type = message[0];
-    if (type === LIVE_SCREEN_MESSAGE.screen) this.uprightShape = uprightShape(message);
+    if (type === LIVE_SCREEN_MESSAGE.screen) {
+      const shape = uprightShape(message);
+      const previous = this.uprightShape;
+      this.uprightShape = shape;
+      if (shape && (shape.width !== previous?.width || shape.height !== previous?.height))
+        for (const listener of [...this.shapeListeners]) listener(shape);
+    }
     if (type === LIVE_SCREEN_MESSAGE.key) this.awaitingKey = false;
     if (type === LIVE_SCREEN_MESSAGE.delta && this.awaitingKey) return;
     if (this.queuedBytes + message.length > MAX_QUEUED_BYTES) {

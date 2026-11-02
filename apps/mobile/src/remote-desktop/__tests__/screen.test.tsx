@@ -6375,6 +6375,7 @@ describe("live screen controls", () => {
       const op = args[2][0].op;
       if (op === "capabilities") return { ...result, liveScreens: true };
       if (op === "heartbeat" && shape) return { controlling: true, shape };
+      if (op === "screenShape") return shape ? { shape } : {};
       return op === "start" ? { ...result, screen } : result;
     });
     root = createRoot(host);
@@ -6398,6 +6399,25 @@ describe("live screen controls", () => {
         .click(),
     );
   };
+
+  it("tells a reloaded viewer again that fingers touch the device", async () => {
+    await open();
+    const before = sent().length;
+    // The viewer page reloads (a crash recovery or a code reload) mid-session.
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    act(() => {
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      });
+    });
+    expect(sent().slice(before)).toContainEqual({
+      type: "deviceTouch",
+      enabled: true,
+      maxTouches: 2,
+    });
+  });
 
   it("sizes the picture and pauses device touches while zooming", async () => {
     await open();
@@ -6479,8 +6499,9 @@ describe("live screen controls", () => {
     // The device refused the pose (an App that only stands upright): the
     // picture follows what it shows, not what was asked for.
     shape = { width: 1080, height: 1920 };
+    // The host answers the waiting shape request; no heartbeat needed.
     await act(async () => {
-      vi.advanceTimersByTime(900);
+      await vi.advanceTimersByTimeAsync(1100);
     });
     expect(geometry().at(-1)).toBe("1080x1920");
   });

@@ -71,7 +71,12 @@ export interface DesktopLiveScreen {
   height: number;
   /** The picture's upright size now, once the screen has described itself. */
   shape?(): { width: number; height: number } | null;
+  /** Calls `listener` when that size changes; returns the unsubscribe. */
+  watchShape?(listener: (shape: { width: number; height: number }) => void): () => void;
 }
+
+/** How long a `screenShape` request waits for a turn; under the viewer's channel timeout. */
+const SCREEN_SHAPE_WAIT_MS = 6000;
 
 /** What a live screen lease may do: nothing that reaches the desktop itself. */
 const LIVE_SCREEN_OPS = new Set([
@@ -83,6 +88,7 @@ const LIVE_SCREEN_OPS = new Set([
   'offer',
   'ice',
   'viewerHidden',
+  'screenShape',
 ]);
 
 /** What a window lease may do; everything else reaches past the window. */
@@ -218,6 +224,7 @@ export interface DesktopControllerDeps {
 export class RemoteDesktopController {
   /** The open live screen's current upright shape. */
   private liveShape: DesktopLiveScreen['shape'] = undefined;
+  private watchLiveShape: DesktopLiveScreen['watchShape'] = undefined;
   private active:
     | (RemoteDesktopLease & {
         peer: string;
@@ -1093,6 +1100,7 @@ export class RemoteDesktopController {
       }
       if (!request.resume) this.userStopped.delete(peer);
       this.liveShape = opened.shape;
+      this.watchLiveShape = opened.watchShape;
       const lease: RemoteDesktopLease = {
         lease: leaseId,
         display: {
@@ -1329,6 +1337,28 @@ export class RemoteDesktopController {
           'remote-stop',
         );
         return { ok: true };
+      }
+      case 'screenShape': {
+        if (!active.screen) throw new Error('INVALID_REQUEST');
+        const { known } = request;
+        const differs = (shape: { width: number; height: number } | null | undefined) =>
+          !!shape && (!known || shape.width !== known.width || shape.height !== known.height);
+        const now = this.liveShape?.();
+        if (differs(now) || !this.watchLiveShape) return { shape: now ?? null };
+        const watch = this.watchLiveShape;
+        return await new Promise<{ shape: { width: number; height: number } | null }>((resolve) => {
+          let unsubscribe = () => {};
+          const timer = setTimeout(() => {
+            unsubscribe();
+            resolve({ shape: this.liveShape?.() ?? null });
+          }, SCREEN_SHAPE_WAIT_MS);
+          unsubscribe = watch((shape) => {
+            if (!differs(shape)) return;
+            clearTimeout(timer);
+            unsubscribe();
+            resolve({ shape });
+          });
+        });
       }
       case 'heartbeat':
         if (
