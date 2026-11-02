@@ -423,7 +423,7 @@ it('keeps Registry engine exclusions through shared discovery and saving', async
   ] });
   renderWizard(preset.id);
   await screen.findByDisplayValue('DeepSeek');
-  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-registry-membership-fake' } });
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'registry-membership-test-value' } });
   fireEvent.click(screen.getByText('settings.providers.wizard.next'));
   const row = (await screen.findByText('Codex only')).closest('button')!;
   await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
