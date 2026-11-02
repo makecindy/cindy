@@ -163,7 +163,8 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   const found: Array<{ where: string; token: string }> = [];
   const resolve = makeColorResolver(source);
   const onText = namedStylesUsedOnText(source);
-  for (const block of source.matchAll(/(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
+  // Start at an identifier boundary: retrying every suffix of embedded asset data is quadratic.
+  for (const block of source.matchAll(/\b(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
     const [, key, body] = block;
     // 带排版属性、样式名像文字、或实际被 <Text> 引用的样式块,都算文字样式。
     if (!TEXT_STYLE_PROPS.test(body) && !/Text$|Label$|Title$|^text|^label|^title/i.test(key) && !onText.has(key)) continue;
