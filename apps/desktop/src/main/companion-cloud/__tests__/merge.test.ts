@@ -174,6 +174,12 @@ describe('merging copies of Cindy', () => {
       expect(applied[0]?.[0]).toBe('brew-macbook-pro');
     });
 
+    it('keeps its own copy when only the executable bit differs, so the kept script stays runnable', async () => {
+      const { run, applied } = await merge([{ path: 'run.sh', sha256: 'theirs', executable: true } as never]);
+      expect((await run).renamed).toContain('brew-macbook-pro');
+      expect(applied[0]?.[0]).toBe('brew-macbook-pro');
+    });
+
     it('fills in what an interrupted merge left out, without a second copy', async () => {
       const { run, applied } = await merge([]);
       const summary = await run;

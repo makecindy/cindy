@@ -78,8 +78,8 @@ export async function listSkillFolderFiles(skillDir: string): Promise<LocalBotSk
   return files;
 }
 
-/** Refuses to write through a link that would lead out of the skill folder. */
-async function assertRealParents(skillDir: string, target: string): Promise<void> {
+/** Never write through a link that would lead out of the skill folder. */
+async function hasRealParents(skillDir: string, target: string): Promise<boolean> {
   const parts = path.relative(skillDir, path.dirname(target)).split(path.sep).filter(Boolean);
   let current = skillDir;
   for (const part of parts) {
@@ -88,9 +88,10 @@ async function assertRealParents(skillDir: string, target: string): Promise<void
       if (error?.code === 'ENOENT') return null;
       throw error;
     });
-    if (!stat) return;
-    if (!stat.isDirectory()) throw new Error('SKILL_FILE_PATH_BLOCKED');
+    if (!stat) return true;
+    if (!stat.isDirectory()) return false;
   }
+  return true;
 }
 
 async function removeEmptyFolders(dir: string, root: string): Promise<void> {
@@ -127,7 +128,10 @@ export async function applySkillFolderFiles(skillDir: string, files: BotSkillFil
       const hash = createHash('sha256');
       if (source !== null) for await (const chunk of createReadStream(source)) hash.update(chunk as Buffer);
       if (hash.digest('hex') !== file.sha256) { missing.push(file.path); continue; }
-      await assertRealParents(skillDir, target);
+      // Something here that this list cannot replace counts as not arrived: it must not hold up a move.
+      if (!await hasRealParents(skillDir, target)) { missing.push(file.path); continue; }
+      const existing = await fs.lstat(target).catch(() => null);
+      if (existing?.isDirectory() && !await fs.rmdir(target).then(() => true, () => false)) { missing.push(file.path); continue; }
       await fs.mkdir(path.dirname(target), { recursive: true });
       const temporary = `${target}.${process.pid}.tmp`;
       try {

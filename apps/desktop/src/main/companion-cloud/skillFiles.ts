@@ -58,11 +58,14 @@ export async function resolveCompanionSkillFiles(values: CompanionPreferenceValu
   const resolved: CompanionPreferenceValue[] = [];
   const list = (key: string, slug: string, files: CompanionSkillFile[], omitted: string[], truncated: boolean): CompanionPreferenceValue => {
     // One value has to hold the list: what does not fit stays behind, like any other unsendable file.
-    const size = () => Buffer.byteLength(canonicalJson({ slug, files, omitted, truncated }));
-    while (size() > COMPANION_VALUE_MAX_BYTES) {
+    // Counted per entry: this runs every upload cycle on the main process, however long the list.
+    const bytes = (item: unknown) => Buffer.byteLength(canonicalJson(item)) + 1;
+    let size = bytes({ slug, files: [], omitted: [], truncated: true })
+      + files.reduce((sum, file) => sum + bytes(file), 0) + omitted.reduce((sum, path) => sum + bytes(path), 0);
+    while (size > COMPANION_VALUE_MAX_BYTES) {
       const dropped = files.pop();
-      if (dropped) omitted.push(dropped.path);
-      else { omitted.pop(); truncated = true; }
+      if (dropped) { omitted.push(dropped.path); size += bytes(dropped.path) - bytes(dropped); }
+      else { size -= bytes(omitted.pop()); truncated = true; }
     }
     if (omitted.length || truncated) gaps[slug] = { omitted: omitted.filter(path => !seen.has(`${slug}/${path}`)), ...(truncated ? { truncated } : {}) };
     return { key, value: { slug, files, ...(omitted.length ? { omitted } : {}), ...(truncated ? { truncated } : {}) } };

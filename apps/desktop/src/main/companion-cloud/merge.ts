@@ -150,7 +150,7 @@ export async function mergeCompanionsInto(input: {
         const current = await host.readSkill(keep.externalId, name);
         if (current !== content || !list || !host.readSkillFiles) return current;
         const local = await host.readSkillFiles(keep.externalId, name);
-        const clash = list.files.some(file => local.some(other => (other.path === file.path && other.sha256 !== file.sha256)
+        const clash = list.files.some(file => local.some(other => (other.path === file.path && (other.sha256 !== file.sha256 || !other.executable !== !file.executable))
           // A file where the other side has a folder: neither can take the other's place.
           || other.path.startsWith(`${file.path}/`) || file.path.startsWith(`${other.path}/`)));
         return clash ? `${current}\0different files` : current;

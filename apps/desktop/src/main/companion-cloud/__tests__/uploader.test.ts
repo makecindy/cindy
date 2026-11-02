@@ -248,6 +248,10 @@ describe('skill files', () => {
   });
 
   it('keeps the list inside one value', async () => {
+    // Also the cost: once per upload cycle on the main process.
+    const started = performance.now();
+    await run(Array.from({ length: 5000 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`)), async file => `media-${file.name}`);
+    expect(performance.now() - started).toBeLessThan(1000);
     const many = Array.from({ length: 800 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`));
     const { list } = await run(many, async file => `media-${file.name}`);
     const value = list.value as { files: unknown[]; omitted: string[]; truncated?: boolean };

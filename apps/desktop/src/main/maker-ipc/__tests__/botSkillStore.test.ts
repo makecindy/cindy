@@ -523,6 +523,15 @@ describe('skill files for cloud companions', () => {
     await expect(fs.access(path.join(skillDir(), 'stale.md'))).rejects.toThrow();
   });
 
+  it('replaces an empty folder with the file, and does not stall on one that holds something', async () => {
+    await fs.mkdir(path.join(skillDir(), 'data'));
+    await write('kept/.env', 'TOKEN=1');
+    const fetch = async (file: { sha256: string }) => source(file.sha256 === sha('d') ? 'd' : 'k');
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('data', 'd'), entry('kept', 'k')], fetch, { removeOthers: true })).toEqual(['kept']);
+    expect(await fs.readFile(path.join(skillDir(), 'data'), 'utf8')).toBe('d');
+    expect(await fs.readFile(path.join(skillDir(), 'kept/.env'), 'utf8')).toBe('TOKEN=1');
+  });
+
   it('never writes outside the skill folder', async () => {
     const outside = await fs.mkdtemp(path.join(userDataDir, 'outside-'));
     await fs.symlink(outside, path.join(skillDir(), 'linked'));
@@ -530,8 +539,7 @@ describe('skill files for cloud companions', () => {
     for (const unsafe of ['../escape.md', '/abs.md', 'a\\b.md', '.hidden/a.md', 'SKILL.md', 'Skill.MD', 'node_modules/a.js']) {
       await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(unsafe, 'x')], fetch, { removeOthers: false });
     }
-    await expect(applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('linked/a.md', 'x')], fetch, { removeOthers: false }))
-      .rejects.toThrow('SKILL_FILE_PATH_BLOCKED');
+    expect(await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('linked/a.md', 'x')], fetch, { removeOthers: false })).toEqual(['linked/a.md']);
     expect(await fs.readdir(outside)).toEqual([]);
     await expect(fs.access(path.join(botSkillsDir(userDataDir, 'bot_a'), 'escape.md'))).rejects.toThrow();
     expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toContain('steps');
