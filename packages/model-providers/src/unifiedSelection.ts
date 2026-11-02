@@ -910,3 +910,29 @@ export function sortEntriesForAgent(
   const { native, compatible } = partitionEntriesByNativeAgent(entries, targetAgent);
   return [...native, ...compatible];
 }
+
+/** Restore stored shortcuts only when the catalog proves their exact route.
+ * Legacy normalized gateway IDs may collide with a hidden sibling. */
+export function resolveStoredModelEntry(
+  entries: readonly UnifiedModelEntry[], providerId: string, modelId: string,
+): UnifiedModelEntry | undefined {
+  const candidates = entries.filter(entry => entry.providerId === providerId);
+  const explicit = candidates.find(entry => entry.enginePreferenceId === modelId);
+  if (explicit) return explicit;
+  const legacy = candidates.filter(entry => entry.enginePreferenceId
+    && unifiedModelKeyId(entry.modelId) === modelId);
+  if (legacy.length) return legacy.length === 1 && legacy[0].legacyEnginePreferenceId === modelId
+    ? legacy[0] : undefined;
+  return candidates.find(entry => entry.modelId === modelId)
+    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId));
+}
+
+/** Display an offline shortcut without exposing its storage namespace. */
+export function displayNameOfStoredModelId(modelId: string): string {
+  try {
+    const parts: unknown = JSON.parse(modelId);
+    if (Array.isArray(parts) && parts.length === 2 && parts[0] === 'magpie-route'
+      && typeof parts[1] === 'string' && parts[1]) return parts[1];
+  } catch { /* Ordinary model IDs are already displayable. */ }
+  return modelId;
+}

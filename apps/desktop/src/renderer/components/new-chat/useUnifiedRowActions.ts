@@ -447,7 +447,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
         recordRecentModel({
           providerId: entry.providerId,
-          modelId: entry.modelId,
+          modelId: entry.enginePreferenceId ?? entry.modelId,
           agent: config.engine,
           ...(config.effort ? { effort: config.effort } : {}),
           // 三态：`'ultrafast'` 必须原样存，写成 `true` 会让「最近」里再应用变成普通 Fast。
@@ -1092,7 +1092,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (interactionDisabled) return;
     const result = favorites.add({
       providerId: anchor.providerId,
-      modelId: anchor.modelId,
+      modelId: config.storedModelId ?? anchor.modelId,
       agent: config.engine,
       ...(config.effort ? { effort: config.effort } : {}),
       ...(config.fast ? { fast: config.fast } : {}),

@@ -266,6 +266,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";

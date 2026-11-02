@@ -3,7 +3,7 @@ import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import { modelSupplierLabel, validDiscoveredModelSource } from '../modelSource.js';
 import { buildUserProvider } from '../user-provider.js';
-import { unifiedModelEntries } from '../unifiedSelection.js';
+import { unifiedModelEntries, resolveStoredModelEntry } from '../unifiedSelection.js';
 
 const response = (id: string, source: string, label = `Model · ${source}`) => ({
   id, display_name: 'Model', owned_by: source, magpie_label: label,
@@ -50,6 +50,14 @@ describe('connection-owned Magpie model sources', () => {
     expect(entries.map(e => e.modelId)).toEqual([a, b]);
     expect(entries.every(entry => entry.legacyEnginePreferenceId === undefined)).toBe(true);
     expect(new Set(entries.map(entry => entry.enginePreferenceId)).size).toBe(2);
+    // #8485 unit: shared shortcut restoration must use full-catalog ambiguity,
+    // even when visibility hides the prefixed sibling. Never mutate old records.
+    expect(resolveStoredModelEntry(entries, provider.id, 'foo')).toBeUndefined();
+    expect(resolveStoredModelEntry([entries[1]], provider.id, 'foo')).toBeUndefined();
+    expect(resolveStoredModelEntry(entries, provider.id, a)).toBe(entries[0]);
+    for (const entry of entries) {
+      expect(resolveStoredModelEntry(entries, provider.id, entry.enginePreferenceId!)).toBe(entry);
+    }
     for (const entry of entries) for (const agent of entry.candidates) {
       expect(entry.capabilities[agent]?.wireModelId).toBe(entry.modelId);
       expect(entry.capabilities[agent]?.discoveredSource?.providerId).toBe(entry.modelId === a ? 'A' : 'B');
@@ -61,7 +69,9 @@ describe('connection-owned Magpie model sources', () => {
     const provider = { ...buildUserProvider({ id: 'unique', name: 'Gateway', runtimes: {
       codex: { baseUrl: 'http://127.0.0.1:3425/v1', models },
     } }), connected: true };
-    expect(unifiedModelEntries({ providers: [provider] })[0]).toMatchObject({
+    const entries = unifiedModelEntries({ providers: [provider] });
+    expect(resolveStoredModelEntry(entries, provider.id, 'foo')).toBe(entries[0]);
+    expect(entries[0]).toMatchObject({
       modelId: 'chatgpt/foo', enginePreferenceId: '["magpie-route","chatgpt/foo"]',
       legacyEnginePreferenceId: 'foo',
     });

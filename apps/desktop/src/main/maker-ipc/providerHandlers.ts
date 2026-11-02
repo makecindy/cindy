@@ -688,8 +688,10 @@ export function registerProviderHandlers(
             baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
             wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey',
             apiKey: keys[agent] ?? (typeof storedKey === 'string' ? storedKey : undefined),
-            headers: { ...runtime.headers, ...(typeof storedHeaders === 'object' ? storedHeaders : {}),
-              ...headers[agent as AgentKind] },
+            // Saving replaces the complete secret header map; omitted old keys
+            // must not authenticate a receipt for a different outbound identity.
+            headers: { ...runtime.headers, ...(headers[agent as AgentKind]
+              ?? (typeof storedHeaders === 'object' ? storedHeaders : {})) },
           });
           signature = modelSourceRequestSignature(request.url, request.init);
         } catch { /* A source without provable discovery context is omitted. */ }
@@ -697,7 +699,9 @@ export function registerProviderHandlers(
       return [agent, { ...runtime, models: runtime.models.map(model => {
         const old = sameContext ? prior?.models.find(m => m.id === model.id)?.discoveredSource : undefined;
         const source = model.discoveredSource;
-        const accepted = (!previous || sameContext) && (signature !== undefined || (!!previous && config.auth?.method === 'oauth'))
+        // A receipt proves the submitted context even when credentials changed.
+        // OAuth has no reconstructed signature, so retain its saved-context gate.
+        const accepted = (signature !== undefined || (sameContext && !!previous && config.auth?.method === 'oauth'))
           && acceptsModelSourceSnapshot(model.id, source, config.id, agent as AgentKind, signature, model.discoverySnapshotId ?? source?.snapshotId);
         const { discoveredSource: _source, ...rest } = model;
         // A stale renderer cannot restore a source invalidated by another edit/request.

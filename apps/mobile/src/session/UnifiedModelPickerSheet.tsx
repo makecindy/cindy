@@ -12,7 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
-import type { UnifiedModelEntry } from "@cindy/model-providers";
+import { resolveStoredModelEntry, type UnifiedModelEntry } from "@cindy/model-providers";
 import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import { buildMobileModelSections } from "./providerModelSections";
@@ -626,11 +626,7 @@ export function UnifiedModelPickerSheet(
         (value) =>
           value.catalog.deviceId === source.deviceId && !value.catalog.offline,
       );
-      const entry = directory?.entries.find(
-        (value) =>
-          value.providerId === source.providerId &&
-          matchesEntry(value, item.modelId),
-      );
+      const entry = directory && resolveStoredModelEntry(directory.entries, source.providerId, item.modelId);
       return directory && entry
         ? [
             makeRemoteRow(directory, entry, {
@@ -640,11 +636,7 @@ export function UnifiedModelPickerSheet(
           ]
         : [];
     }
-    const entry = entries.find(
-      (entry) =>
-        entry.providerId === item.providerId &&
-        matchesEntry(entry, item.modelId),
-    );
+    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
     return entry ? [makeRow(entry, item)] : [];
   });
   const rowProviderName = (row: UnifiedMobileRow) => {
@@ -775,13 +767,16 @@ export function UnifiedModelPickerSheet(
   const favoriteSource = row ? favoriteSourceOf(row) : null;
   // A source model can have several saved configurations. Match the complete
   // configuration without applying capability fallbacks to the saved values.
+  const favoriteEntries = row?.remoteDevice
+    ? remoteDirectories.find(directory => directory.catalog.deviceId === row.remoteDevice!.deviceId)?.entries ?? []
+    : entries;
   const matchingFavorite =
     row &&
     favoriteSource !== null &&
     prefs.value.favorites.find(
       (item) =>
         item.providerId === favoriteSource &&
-        matchesEntry(row.entry, item.modelId) &&
+        resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
         sameConfiguration(
           { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
           row.config,
@@ -1232,7 +1227,7 @@ export function UnifiedModelPickerSheet(
                         ? {
                             ...config,
                             providerId: item.providerId,
-                            modelId: row.entry.modelId,
+                            modelId: row.entry.enginePreferenceId ?? row.entry.modelId,
                             uid: item.uid,
                           }
                         : item,
@@ -1264,7 +1259,7 @@ export function UnifiedModelPickerSheet(
                         {
                           ...row.config,
                           providerId: favoriteSource,
-                          modelId: row.entry.modelId,
+                          modelId: row.entry.enginePreferenceId ?? row.entry.modelId,
                         },
                         createFavoriteUid(),
                       ),

@@ -5518,6 +5518,80 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
   const inputFor = (config: CustomProviderConfig) => ({ agent: 'pi', savedProviderId: config.id,
     baseUrl: config.runtimes.pi!.baseUrl, authMethod: 'none', wireProtocol: 'openai-chat' });
 
+  // #8485 unit: a discovery receipt authenticates the submitted replacement
+  // credentials, not the previous saved credentials. Earlier tests covered
+  // unsaved-key rejection but skipped fetching and saving the same new identity.
+  async function credentialDiscovery(kind: 'key' | 'header', extraHeader = false) {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let savedKey: string | null = kind === 'key' ? 'fixture-old-key' : null;
+    let savedHeaders: Record<string, string> | null = kind === 'header'
+      ? { 'X-Account': 'Old', ...(extraHeader ? { 'X-Old-Tenant': 'old-tenant' } : {}) } : null;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readCustomProviderKeyForMutation: () => savedKey,
+      storeCustomProviderKey: (_id, _agent, value) => { savedKey = value; return true; },
+      removeCustomProviderKey: () => { savedKey = null; return { success: true }; },
+      readCustomProviderHeadersForMutation: () => savedHeaders,
+      storeCustomProviderHeaders: (_id, _agent, value) => { savedHeaders = { ...value }; return true; },
+      removeCustomProviderHeaders: () => { savedHeaders = null; return { success: true }; },
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        const source = kind === 'key' ? (headers.get('authorization') === 'Bearer fixture-new-key' ? 'New' : 'Old')
+          : headers.has('x-old-tenant') ? 'Old tenant' : headers.get('x-account')!;
+        return new Response(JSON.stringify({ data: [{ id: 'a/gpt-5.5', display_name: 'GPT',
+          owned_by: source, magpie_label: `GPT · ${source}` }] }));
+      }),
+    }));
+    const keys = (identity: 'Old' | 'New') => kind === 'key' ? { pi: identity === 'New' ? 'fixture-new-key' : 'fixture-old-key' } : {};
+    const configWith = (identity: 'Old' | 'New', models = config.runtimes.pi!.models): CustomProviderConfig => ({
+      ...config, runtimes: { pi: { ...config.runtimes.pi!, models,
+        ...(kind === 'header' ? { headers: { 'X-Account': identity } } : {}) } },
+    });
+    const fetchNew = () => harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      ...inputFor(config), authMethod: 'apiKey', ...(kind === 'key'
+        ? { apiKey: 'fixture-new-key' } : { headers: { 'X-Account': 'New' } }),
+    }) as Promise<{ ok: boolean; models: DiscoveredModel[] }>;
+    const save = (identity: 'Old' | 'New', models = config.runtimes.pi!.models) =>
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, configWith(identity, models), keys(identity));
+    return { config, fetchNew, save, credentials: () => ({ key: savedKey, headers: savedHeaders }) };
+  }
+
+  it.each(['key', 'header'] as const)('accepts current discovery and its replacement %s credentials in the same save', async kind => {
+    const setup = await credentialDiscovery(kind);
+    const fetched = await setup.fetchNew();
+    expect(fetched.ok).toBe(true);
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('New');
+    const models = mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models);
+    await setup.save('New', models);
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('New');
+    expect(setup.credentials()).toEqual(kind === 'key'
+      ? { key: 'fixture-new-key', headers: null } : { key: null, headers: { 'X-Account': 'New' } });
+  });
+
+  it.each(['key', 'header'] as const)('rejects a once-matching %s receipt after credential edits including ABA', async kind => {
+    const setup = await credentialDiscovery(kind);
+    const fetched = await setup.fetchNew();
+    const models = mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models);
+    await setup.save('New');
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    await setup.save('Old');
+    await setup.save('New', models);
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('rejects a receipt whose old merged header is absent from the replacement header map', async () => {
+    const setup = await credentialDiscovery('header', true);
+    const fetched = await setup.fetchNew();
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('Old tenant');
+    await setup.save('New', mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models));
+    expect(setup.credentials().headers).toEqual({ 'X-Account': 'New' });
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
   it('keeps a source on unchanged-context failure but clears it on a key replacement', async () => {
     mountDb();
     const config = { ...configFor(), auth: { method: 'apiKey' as const } };
