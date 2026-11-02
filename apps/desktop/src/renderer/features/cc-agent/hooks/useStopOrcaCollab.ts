@@ -6,7 +6,8 @@
  *   - WorkdirBrowseRoute 内嵌 OrcaSplitView 的 Worker pane ×
  *
  * 流程:二次确认弹窗 → disableOrca IPC → sessionsStore 刷新 →
- * navigate 回单 session 路由(可选, navigateOnSuccess=false 时不跳, 让调用方自己决定)。
+ * navigate 回单 session 路由(可选, navigateOnSuccess=false 时不跳, 让调用方自己决定;
+ * 请求完成时用户已不在该 Lead 路由也不跳)。
  *
  * 失败:toast 提示, 不抛错(swallowed), busy 状态自动复位。
  */
@@ -19,6 +20,7 @@ import { sessionsStore } from '@/lib/sessionsStore';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { makerApiForSticky } from '@/lib/makerTransport';
+import { isSessionRemovalRouteCurrent } from '../lib/sessionRemovalNavigation';
 
 const log = createLogger('useStopOrcaCollab');
 
@@ -65,7 +67,10 @@ function useStopOrcaCollabCore(
       // 销毁一个不存在的 team、或撞上同 id 的本机会话,而远端的协同其实还开着。
       await makerApiForSticky(leadSessionId).disableOrca(leadSessionId);
       void sessionsStore.forceRefresh('active');
-      if (navigateOnSuccess && navigate) {
+      // disableOrca 要等 Worker 归档与 worktree 回收，可能持续数秒；用户这期间切走、新建或删除了
+      // Lead 时，不能把当前页面 replace 回 Lead。读 HashRouter 的实时地址，发起视图已卸载或
+      // 被复用到别的任务也成立。
+      if (navigateOnSuccess && navigate && isSessionRemovalRouteCurrent(leadSessionId)) {
         navigate(`/cc-agent/${leadSessionId}`, { replace: true });
       }
       return true;
