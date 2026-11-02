@@ -37,6 +37,14 @@ enum IncomingShareSlotTest {
       precondition(fd >= 0)
       precondition(flock(fd, LOCK_EX | LOCK_NB) == -1 && errno == EWOULDBLOCK)
       close(fd)
+      // The main-app synchronous operations fail immediately instead of
+      // blocking UI behind this process. The ordinary background writer waits.
+      do {
+        let entered = try IncomingShareSlot.withLock(at: lock, wait: false) { true }
+        precondition(!entered, "Contended nonblocking lock entered critical section")
+      } catch let error as POSIXError {
+        precondition(error.code == .EWOULDBLOCK)
+      }
       FileHandle.standardOutput.write(Data([1]))
       try IncomingShareSlot.withLock(at: lock) {
         let defaults = UserDefaults(suiteName: arguments[2])!
@@ -47,6 +55,12 @@ enum IncomingShareSlotTest {
       return
     }
 
+    let payload = Data("[{\"type\":\"text\",\"value\":\"same content\"}]".utf8)
+    let first = try JSONSerialization.jsonObject(with: IncomingShareSlot.makeSnapshot(payload)) as! [String: Any]
+    let second = try JSONSerialization.jsonObject(with: IncomingShareSlot.makeSnapshot(payload)) as! [String: Any]
+    precondition(first["id"] as? String != second["id"] as? String)
+    precondition(first["version"] as? Int == 1)
+    precondition((first["payloads"] as? [[String: String]])?.first?["value"] == "same content")
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -176,6 +190,6 @@ enum IncomingShareSlotTest {
     print("PASS: unreadable account-boundary fence survives process restart and recovery")
     print("PASS: failed rejection removal retains retry state until durable recovery")
     print("PASS: durable exact-snapshot rejection, retry and replacement")
-    print("PASS: cross-process exclusion, stale/current/duplicate acknowledgement, error unlock")
+    print("PASS: nonblocking main-app contention; cross-process exclusion, stale/current/duplicate acknowledgement, error unlock")
   }
 }

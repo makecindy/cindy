@@ -450,5 +450,32 @@
       "provider": "API プロバイダー",
       "unknown": "経路未記録"
     }
+  },
+  "attachmentPreview": {
+    "more": "その他の操作",
+    "retry": "再試行",
+    "image": "画像",
+    "video": "動画",
+    "file": "ファイル",
+    "close": "閉じる",
+    "reset": "表示をリセット",
+    "open": "プレビューを開く",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "fit": "ウィンドウに合わせる",
+    "actualSize": "実際のサイズ（1:1）",
+    "save": "元のファイルを保存",
+    "share": "共有",
+    "previous": "前の添付ファイル",
+    "next": "次の添付ファイル",
+    "password": "PDF のパスワードを入力",
+    "find": "文書内を検索",
+    "matches": "一致するページ：{{count}}",
+    "previousPage": "前のページ",
+    "nextPage": "次のページ",
+    "redo": "やり直す",
+    "wrap": "行の折り返し",
+    "lineNumbers": "行番号",
+    "rendered": "文書を表示"
   }
 }

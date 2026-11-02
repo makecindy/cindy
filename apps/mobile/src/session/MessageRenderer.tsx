@@ -1,3 +1,10 @@
+import { resolveAttachmentPreviewSource } from './messagePayload';
+import {
+  PreviewHeader,
+  PreviewFooter,
+  PreviewCollectionContext,
+} from "./PreviewChrome";
+import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
 import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { VideoSitePreview } from './VideoSitePreview';
@@ -153,11 +160,13 @@ import {
 } from '@/session/sentMessageAtoms';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
+// Passive formatting inside a selectable iOS block stays a raw UITextView child without the share-row gesture context.
+import { UITextView } from 'react-native-uitextview';
 import {
   MOBILE_COMPOSER_CONTROL_SIZE,
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
-import { Text } from '@/components/AppText';
+import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -200,6 +209,7 @@ import {
   galleryImageIndexForPayload,
   isLightboxMediaKind,
   lightboxImagesForPayload,
+  collectMobileMessageAttachmentPayloads,
   type MobileMessageGalleryImage,
 } from '@/session/messageGallery';
 import {
@@ -787,7 +797,8 @@ export function MessageRenderer({
   /** DEV-only:把内部列表控制器暴露给性能 harness 驱动自动滚动(临时,profiling/回归测量用)。 */
   devExposeList?: (api: {
     scrollTo: (y: number) => void;
-    getMetrics: () => { contentHeight: number; offsetY: number; viewportHeight: number };
+    getMetrics: () => { contentHeight: number; offsetY: number; viewportHeight: number;
+    };
     getWebViewMetrics: typeof getMobileMessageWebViewMetrics;
     getMarkdownMetrics: typeof getMobileMarkdownRenderMetrics;
   }) => void;
@@ -797,7 +808,7 @@ export function MessageRenderer({
   const styles = useThemedStyles(makeStyles);
   const historyActive = useMessageHistoryActive();
   const { accountGeneration } = useAuth();
-  const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null,
+  const richContent = useMemo(() => (Platform.OS === 'android' ? new RichContentRuntime() : null),
     [scrollResetKey, remoteDeviceId, accountGeneration]);
   useEffect(() => () => richContent?.clear(), [richContent]);
   // Match LegendList's key: a new list must never inherit old visibility.
@@ -911,7 +922,8 @@ export function MessageRenderer({
   // 实际定位完成就直接显示；UI 线程只负责 300ms 兜底，不让繁忙 JS 无限延长隐藏。
   // 揭示沿用唯一 tail follower 的位置校验，不再额外等待或对旧消息做淡入。
   const initialAnchorDoneRef = useRef(false);
-  const reopeningAnchorRef = useRef<{ anchor: MobileHistoryAnchor; expires: number; corrections: number } | null>(null);
+  const reopeningAnchorRef = useRef<{ anchor: MobileHistoryAnchor; expires: number; corrections: number;
+  } | null>(null);
   const reopeningFrameRef = useRef<number | null>(null);
   const initialRevealGenerationRef = useRef(0);
   const initialRevealAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -1030,7 +1042,7 @@ export function MessageRenderer({
   const acknowledgeCompanionReadRef = useRef(acknowledgeCompanionRead);
   acknowledgeCompanionReadRef.current = acknowledgeCompanionRead;
   const handleCompanionViewableItems = useCallback(({ viewableItems }: OnViewableItemsChangedInfo<MobileMessageRenderItem>) => {
-    visibleCompanionReplyKeysRef.current = new Set(viewableItems.filter(item => item.isViewable).map(item => item.key));
+    visibleCompanionReplyKeysRef.current = new Set(viewableItems.filter((item) => item.isViewable).map((item) => item.key));
     acknowledgeCompanionReadRef.current();
   }, []);
   const handleViewableItemsChanged = useCallback((info: OnViewableItemsChangedInfo<MobileMessageRenderItem>) => {
@@ -1042,17 +1054,52 @@ export function MessageRenderer({
     const frame = requestAnimationFrame(acknowledgeCompanionRead);
     return () => cancelAnimationFrame(frame);
   }, [acknowledgeCompanionRead, companion, onCompanionReadThrough, isAwayFromBottom]);
+  const chatFilePathContext = useContext(ChatFilePathContext);
+  const [attachmentPayloads, setAttachmentPayloads] = useState<
+    MessagePayload[]
+  >([]);
+  const [attachmentIndex, setAttachmentIndex] = useState(0);
   const [payload, setPayload] = useState<MessagePayload | null>(null);
   /** 当前 payload 的点击来源(顶层 render item key);看图器按它取同一条消息的图集。 */
   const [payloadSourceGroupKey, setPayloadSourceGroupKey] = useState<string | null>(null);
   const openPayload = useCallback((next: MessagePayload) => {
     setPayloadSourceGroupKey(null);
+    setAttachmentPayloads([]);
     setPayload(next);
   }, []);
   const openPayloadFromItem = useCallback((next: MessagePayload, sourceGroupKey: string) => {
     setPayloadSourceGroupKey(sourceGroupKey);
-    setPayload(next);
-  }, []);
+      const item = listDataRef.current.find(
+        (item) => item.key === sourceGroupKey,
+      );
+      const entries = item
+        ? collectMobileMessageAttachmentPayloads(
+            item,
+            chatFilePathContext?.workdir,
+            chatFilePathContext?.remoteHostId,
+            chatFilePathContext?.sessionId,
+          )
+        : [];
+      const at = entries.findIndex((entry) =>
+        entry.kind === "media" && next.kind === "media"
+          ? entry.media.url === next.media.url
+          : entry.kind === "file" &&
+            next.kind === "file" &&
+            entry.sourcePath === next.sourcePath,
+      );
+      setAttachmentPayloads(
+        at >= 0 &&
+          entries.some(
+            (entry) =>
+              entry.kind === "file" ||
+              (entry.kind === "media" && entry.media.kind === "audio"),
+          )
+          ? entries
+          : [],
+      );
+      setAttachmentIndex(Math.max(0, at));
+      setPayload(next);
+  }, [chatFilePathContext]);
   useEffect(() => {
     if (!historyActive) setPayload(null);
   }, [historyActive, payload]);
@@ -1099,11 +1146,10 @@ export function MessageRenderer({
     );
   }, []);
 
-  const isUserControllingScroll = useCallback(() => (
-    historyTouchStartYRef.current !== null
+  const isUserControllingScroll = useCallback(() =>
+      historyTouchStartYRef.current !== null
     || isDraggingRef.current
-    || isMomentumScrollingRef.current
-  ), []);
+    || isMomentumScrollingRef.current, []);
 
   const revealPositionedHistory = useCallback(() => {
     // The fallback handle also gates repeated settle notifications. Stop before
@@ -1216,9 +1262,9 @@ export function MessageRenderer({
       const state = listRef.current?.getState();
       if (!state || state.scrollLength <= 0) return;
       const key = pending.anchor.identityKey
-        ? mobileMessageHistoryRowKeyByIdentity(state.data, pending.anchor.identityKey) ?? pending.anchor.key
+        ? (mobileMessageHistoryRowKeyByIdentity(state.data, pending.anchor.identityKey) ?? pending.anchor.key)
         : pending.anchor.key;
-      const index = state.data.findIndex(item => item.key === key);
+      const index = state.data.findIndex((item) => item.key === key);
       if (index < 0 || !Number.isFinite(state.sizeAtIndex(index))) return;
       const target = resolveMobileMessageHistoryAnchorOffset(pending.anchor, state,
         getCurrentHistoryTopOffsetAdjustment());
@@ -1611,19 +1657,21 @@ export function MessageRenderer({
   // 本地缩略兜底映射版本:collect 内部对 cindy-oss-attach:// 附件读全局 store 做 overlay,
   // hydrate / 新注册后 gallery 需要重建,否则点开气泡本地图时 initialUrl 对不上图集条目。
   const sentThumbsVersion = useSentAttachmentThumbsVersion();
-  const chatFilePathContext = useContext(ChatFilePathContext);
   // 图片与视频都进全屏查看器,两者在同一图集里横滑互翻;音频等仍走通用查看器。
   const imageLightboxOpen = historyActive && payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind);
   const galleryImages = useMemo(
-    () => (imageLightboxOpen
+    () =>
+      imageLightboxOpen
       ? collectMobileMessageGalleryImages(
-          listData,
+            payloadSourceGroupKey
+              ? listData.filter((item) => item.key === payloadSourceGroupKey)
+              : [],
           chatFilePathContext?.workdir,
           chatFilePathContext?.remoteHostId,
           chatFilePathContext?.sessionId,
           getSentImagePreview,
         )
-      : null),
+      : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sentThumbsVersion 是 collect 内部读的全局 store 的失效信号
     [
       chatFilePathContext?.remoteHostId,
@@ -1631,6 +1679,7 @@ export function MessageRenderer({
       chatFilePathContext?.workdir,
       getSentImagePreview,
       imageLightboxOpen,
+      payloadSourceGroupKey,
       listData,
       sentThumbsVersion,
     ],
@@ -1650,12 +1699,14 @@ export function MessageRenderer({
     const next = lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey, prev, sourceGroupPresent, retainPendingSnapshot);
     if (prev && prev.length === next.length && prev.every((p, i) => {
       const n = next[i];
-      return p.key === n.key
+      return (
+          p.key === n.key
         && p.url === n.url
         && p.payload.media.url === n.payload.media.url
         && p.payload.media.previewable === n.payload.media.previewable
         && p.payload.galleryImageSlot === n.payload.galleryImageSlot
-        && p.previewUri === n.previewUri;
+        && p.previewUri === n.previewUri
+        );
     })) {
       return prev;
     }
@@ -1848,9 +1899,10 @@ export function MessageRenderer({
   const selectionQuoteEnabled = !!onQuoteSelection;
   const commitSelectionQuote = useCallback((text: string) => onQuoteSelection?.({ text }), [onQuoteSelection]);
   const selectionQuoteContextValue = useMemo(
-    () => (selectionQuoteEnabled
+    () =>
+      selectionQuoteEnabled
       ? { commitQuote: commitSelectionQuote, askInSideChat: onSideChatMessage }
-      : null),
+      : null,
     [onSideChatMessage, selectionQuoteEnabled, commitSelectionQuote],
   );
   const showJumpToLatest = isAwayFromBottom && !hasNewMessages;
@@ -2601,9 +2653,9 @@ export function MessageRenderer({
     // Seek once, then reconcile the bookmark as estimated row heights become measured.
     const saved = !focusedItemKeyRef.current ? reopeningPosition : undefined;
     const savedKey = saved?.anchor?.identityKey
-      ? mobileMessageHistoryRowKeyByIdentity(listData, saved.anchor.identityKey) ?? saved.anchor.key
+      ? (mobileMessageHistoryRowKeyByIdentity(listData, saved.anchor.identityKey) ?? saved.anchor.key)
       : saved?.anchor?.key;
-    const savedIndex = savedKey ? listData.findIndex(item => item.key === savedKey) : -1;
+    const savedIndex = savedKey ? listData.findIndex((item) => item.key === savedKey) : -1;
     if (focusedItemKeyRef.current) {
       // Explicit message navigation owns the first position, even if its row is
       // still being fetched. Do not seek the tail and then jump back to history.
@@ -2837,8 +2889,12 @@ export function MessageRenderer({
           viewportLayout.wideViewport && { maxWidth: viewportLayout.contentMaxWidth },
         ]}
         ListEmptyComponent={syncingWhileEmpty
-          ? <SyncingMessages />
-          : <EmptyMessages testID={emptyTestID} copy={emptyMessage} />}
+          ? (
+                        <SyncingMessages />
+                      ) : (
+                        <EmptyMessages testID={emptyTestID} copy={emptyMessage} />
+                      )
+                    }
         ListHeaderComponent={<>
           {conversationHeader}
           {loadEarlierAction.visible ? (
@@ -2901,14 +2957,47 @@ export function MessageRenderer({
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
         >
           <ChevronDown color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-          {hasNewMessages ? <View style={styles.scrollToBottomDot} testID="message.newMessageDot" /> : null}
+          {hasNewMessages ? (
+                      <View style={styles.scrollToBottomDot} testID="message.newMessageDot" />
+                    ) : null}
         </MessageListActionButton>
       ) : null}
-      {imageLightboxOpen && payload?.kind === 'media' && lightboxImages ? (
+                <PreviewCollectionContext.Provider
+                  value={
+                    attachmentPayloads.length > 1
+                      ? {
+                          index: attachmentIndex,
+                          names: attachmentPayloads.map((entry) => entry.title),
+                          onSelect: (index) => {
+                            if (attachmentPayloads[index]) {
+                              setAttachmentIndex(index);
+                              setPayload(attachmentPayloads[index]);
+                            }
+                          },
+                        }
+                      : undefined
+                  }
+                >
+                  {imageLightboxOpen && payload?.kind === 'media' && lightboxImages ? (
         // 图片 / 视频走 IM 级全屏查看器(手势缩放/下滑关闭/横滑翻页);其余 payload 走通用查看器。
         <ImageLightbox
           annotation={imageAnnotation}
-          images={lightboxImages}
+                      key={
+                        attachmentPayloads.length > 1
+                          ? attachmentIndex
+                          : undefined
+                      }
+                      images={
+                        attachmentPayloads.length > 1
+                          ? [
+                              {
+                                key: String(attachmentIndex),
+                                title: payload.title,
+                                url: payload.media.url,
+                                payload,
+                              },
+                            ]
+                          : lightboxImages}
           initialImageKey={initialLightboxImage?.key ?? payload.galleryImageKey}
           initialUrl={initialLightboxImage?.url ?? payload.media.url}
           onClose={closePayload}
@@ -2927,7 +3016,8 @@ export function MessageRenderer({
           payload={historyActive ? payload : null}
         />
       )}
-    </View>
+                </PreviewCollectionContext.Provider>
+              </View>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
@@ -2953,39 +3043,42 @@ const RenderItemView = memo(function RenderItemView({
   // 语义,review P2)。只是渲染拷贝,normalize 层 kind='user' 的 turn 边界不受影响;
   // useMemo 保引用稳定,不破坏 MessageBubble 的 memo。
   const systemCardUserItem = useMemo(
-    () => (
+    () =>
       item.type === 'message'
         && !item.message.orcaCard
         && item.message.kind === 'user'
         && item.message.systemCardType
         ? { ...item, message: { ...item.message, kind: 'system' as const } }
-        : null
-    ),
+        : null,
     [item],
   );
   // 旧 Hook(落库正文是拼好的 Agent prompt)降级为左对齐系统卡,不挂 fork / rewind /
   // delete 等用户操作;本机 IM 落库的是用户原文(userTextContent),保持 user kind 与普通
   // 用户消息的全部操作,只在 MessageBubble 里换成左对齐的「Cindy · 来自 X」卡片。
   const hookSourceUserItem = useMemo(
-    () => (
+    () =>
       item.type === 'message'
         && item.message.kind === 'user'
         && item.message.hookSource
         && !item.message.hookSource.userTextContent
         ? { ...item, message: { ...item.message, kind: 'system' as const, align: 'agent' as const } }
-        : null
-    ),
+        : null,
     [item],
   );
   let node: ReactNode;
   switch (item.type) {
     case 'message':
       node = item.message.authorization
-        ? <AuthorizationMessageCard message={item.message} />
-        : item.message.companion
-        ? <CompanionMessageCard message={item.message} deviceId={actions.remoteDeviceId ?? ''}
-            renderMarkdown={(text) => <CompanionCardMarkdown messageKey={item.key} text={text} actions={actions} />} />
-        : item.message.orcaCard
+        ? (
+        <AuthorizationMessageCard message={item.message} />
+      ) : item.message.companion
+        ? (
+        <CompanionMessageCard message={item.message} deviceId={actions.remoteDeviceId ?? ''}
+            renderMarkdown={(text) => (
+            <CompanionCardMarkdown messageKey={item.key} text={text} actions={actions} />
+          )}
+        />
+      ) : item.message.orcaCard
         ? (
           <>
             {item.message.sessionOrigin ? (
@@ -2995,7 +3088,9 @@ const RenderItemView = memo(function RenderItemView({
               blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
           </>
         )
-        : <MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />;
+        : (
+        <MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />
+      );
       break;
     case 'thinking':
       node = (
@@ -3025,7 +3120,11 @@ const RenderItemView = memo(function RenderItemView({
       node = <AgentTaskCard item={item} screenWidth={actions.screenWidth} />;
       break;
     case 'work_group':
-      node = item.teammateJournal ? <TeammateProcessCard item={item} actions={actions} /> : <WorkGroupCard item={item} actions={actions} />;
+      node = item.teammateJournal ? (
+        <TeammateProcessCard item={item} actions={actions} />
+      ) : (
+        <WorkGroupCard item={item} actions={actions} />
+      );
       break;
     case 'subagent_group':
       node = <SubagentCard item={item} actions={actions} />;
@@ -3090,21 +3189,31 @@ const RenderItemView = memo(function RenderItemView({
   // Cards and work groups share the reply text column, leaving the avatar slot empty.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
     && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
-  const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
+  const aligned = alignWithReplies ? (
+    <View style={styles.companionAvatarInset}>{node}</View>
+  ) : (
+    node
+  );
   // Your own send eases in once, as its local bubble (both chats). Its echo keeps the same key and
   // wrapper, so it neither remounts nor replays. Companion chats also ease in a new message or
   // finished reply (M4 / M5).
   const localSendAt = item.type === 'pending_send' || item.type === 'message'
     ? localSendStartedAt(item.key) : null;
   const entering = localSendAt !== null
-    ? <CompanionEntering key={item.key} id={item.key} createdAt={localSendAt} kind="send">{aligned}</CompanionEntering>
-    : actions.companion && item.type === 'message' && !item.message.systemCardType
+    ? (
+      <CompanionEntering key={item.key} id={item.key} createdAt={localSendAt} kind="send">{aligned}</CompanionEntering>
+    ) : actions.companion && item.type === 'message' && !item.message.systemCardType
     && (item.message.kind === 'user' || item.message.kind === 'assistant')
-    ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
-    : aligned;
+    ? (
+      <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
+    ) : (
+      aligned
+    );
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
-      {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
+      {groupTimestamp !== undefined ? (
+        <CompanionTimeGroupStamp timestamp={groupTimestamp} />
+      ) : null}
       {entering}
     </View>
   );
@@ -3124,9 +3233,10 @@ const RenderListItemView = memo(function RenderListItemView({
   // 本项(含 work_group / subagent 内层)点开的 payload 都带上顶层 key 作来源:
   // 看图器按它取「同一条消息」的图集,不靠 url 反查(同一 url 会再出现在后面的消息里)。
   const openPayloadFromItem = actions.onOpenPayloadFromItem;
-  const itemActions = useMemo(() => (openPayloadFromItem
+  const itemActions = useMemo(() =>
+      openPayloadFromItem
     ? { ...actions, onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) }
-    : actions), [actions, item.key, openPayloadFromItem]);
+    : actions, [actions, item.key, openPayloadFromItem]);
   return (
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
       <RenderItemView actions={itemActions} focused={focused} item={item} />
@@ -3275,7 +3385,8 @@ function SourceDeviceLabel({
 }
 
 /** 插件任务派发的消息:气泡外的来源标签;与气泡内的本轮插件调用头(PluginInvocationHeader)是两回事。 */
-function SourcePluginLabel({ align, plugin }: { align: 'user' | 'agent'; plugin: MessageSourcePlugin }) {
+function SourcePluginLabel({ align, plugin }: { align: 'user' | 'agent'; plugin: MessageSourcePlugin;
+}) {
   const { colors } = useTheme();
   const { i18n: i18nInstance } = useTranslation();
   const label = useMemo(() => sourcePluginLabel(plugin), [plugin, i18nInstance.language]);
@@ -3290,7 +3401,8 @@ function SourcePluginLabel({ align, plugin }: { align: 'user' | 'agent'; plugin:
   );
 }
 
-function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void }) {
+function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void;
+}) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -3428,12 +3540,13 @@ function MessageBubble({
   // ComposerDocument，无损恢复 quote、pasted-text 与 Slash。orca 协同消息已走
   // orcaCard 分支,不进本路径。
   const quoteSegments = useMemo(
-    () => (item.message.kind === 'user'
+    () =>
+      item.message.kind === 'user'
       && item.message.quotesEncoded === true
       && !item.message.systemCardType
       && item.message.body
       ? parseChatQuoteSegments(item.message.body)
-      : []),
+      : [],
     [
       item.message.body,
       item.message.kind,
@@ -3441,14 +3554,15 @@ function MessageBubble({
       item.message.systemCardType,
     ],
   );
-  const messageQuotes = quoteSegments.flatMap((segment) => (
+  const messageQuotes = quoteSegments.flatMap((segment) =>
     segment.kind === 'quote' ? [segment.quote] : []
-  ));
+  );
   const bubbleBody = messageQuotes.length > 0
     ? joinChatQuoteTextSegments(quoteSegments)
     : item.message.errorSummaryKey ? t(item.message.errorSummaryKey) : item.message.body;
   const sentInlineTokens = useMemo(
-    () => (item.message.kind === 'user'
+    () =>
+      item.message.kind === 'user'
       ? buildVisibleSentInlineTokens(
           item.message.body,
           quoteSegments.length > 0
@@ -3457,7 +3571,7 @@ function MessageBubble({
           item.message.pastedTextRanges,
           item.message.slashCommandRanges,
         )
-      : []),
+      : [],
     [
       item.message.body,
       item.message.kind,
@@ -3474,14 +3588,15 @@ function MessageBubble({
   const draftBody = item.message.draftBody ?? item.message.body;
   const draftText = item.message.draftBody ?? bubbleBody;
   const composerDraftDocument = useMemo(
-    () => (item.message.kind === 'user'
+    () =>
+      item.message.kind === 'user'
       ? composerDocumentFromSerializedMessage(draftBody, {
           quotesEncoded: item.message.quotesEncoded,
           agentReferences: item.message.agentReferences,
           pastedTextRanges: item.message.pastedTextRanges,
           slashCommandRanges: item.message.slashCommandRanges,
         })
-      : null),
+      : null,
     [
       draftBody,
       item.message.agentReferences,
@@ -3818,9 +3933,9 @@ function MessageBubble({
   const hasPluginInvocations = isUser && actions.showPluginInvocations !== false
     && Boolean(item.message.pluginInvocations?.length);
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations
+    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
-    || (companionQuote && (replyQuote || replyTarget))
+    (companionQuote && (replyQuote || replyTarget))
   );
   const bubbleShown = item.message.role !== 'error'
     && (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));
@@ -3854,8 +3969,11 @@ function MessageBubble({
       {hookSource ? (
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           {hookSource.im === 'telegram'
-            ? <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-            : <MessageSquare color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
+            ? (
+            <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          ) : (
+            <MessageSquare color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          )}
           <Text numberOfLines={1} style={styles.hookSourceTitle}>
             {imSourceHeaderTitle(hookSource.im)}
           </Text>
@@ -4072,24 +4190,33 @@ function MessageBubble({
       ) : null}
       {item.message.role === 'error' ? (
         <ErrorNotice message={displayBubbleBody}>
-          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError}
+          {item.message.rawError ? (
+            <AgentErrorDetails key={item.message.key} message={item.message.rawError}
             onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
               message: displayBubbleBody, details: item.message.rawError!,
-            }) : undefined} /> : null}
+            }) : undefined} />
+          ) : null}
         </ErrorNotice>
-      ) : bubbleShown ? bubble : null}
-      {threadEligible && actions.companionThreads ? <View style={styles.companionThreadSummary}>
+      ) : bubbleShown ? (
+        bubble
+      ) : null}
+      {threadEligible && actions.companionThreads ? (
+        <View style={styles.companionThreadSummary}>
         <CompanionThreadSummary message={item.message} topics={actions.companionThreads} />
-      </View> : null}
+      </View>
+      ) : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
           onOpenSettings={actions.onOpenCompanionSettings} />
       ) : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.turnCompleted === true
-        && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(meta => (
+        && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(
+            (meta) => (
           <CompanionTaskResultCard key={botTaskResultKey(meta)} meta={meta} attached
             deviceId={actions.remoteDeviceId ?? ''} parentSessionId={item.message.source.sessionId}
-            renderMarkdown={text => <CompanionCardMarkdown messageKey={`${item.key}:${botTaskResultKey(meta)}`} text={text} actions={actions} />} />
+            renderMarkdown={(text) => (
+                  <CompanionCardMarkdown messageKey={`${item.key}:${botTaskResultKey(meta)}`} text={text} actions={actions} />
+                )} />
         )) : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
         // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
@@ -4104,25 +4231,27 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
-      {hasActions && actions.companion ? <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
+      {hasActions && actions.companion ? (
+        <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[
           ...(threadEligible ? [{ id: 'thread', title: t(actions.companionThreads?.threads.has(clientId) ? 'groupChat.thread.open' : 'groupChat.thread.create'), image: 'bubble.left.and.bubble.right', disabled: actions.companionThreads?.busy }] : []),
           ...(canCopy ? [{ id: 'copy', title: copyActionLabel(copyState), image: 'doc.on.doc', disabled: copyState === 'copying' }] : []),
           ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
           // Desktop's teammate action bar omits fork and per-turn cost/tokens: the Bot owns its one timeline.
-          ...messageMenu.map(item => ({ id: item.id, title: item.label, image: item.image, destructive: item.destructive, disabled: actionBusy })),
+          ...messageMenu.map((item) => ({ id: item.id, title: item.label, image: item.image, destructive: item.destructive, disabled: actionBusy })),
           ...(absoluteTime ? [{ id: 'time', title: absoluteTime.slice(0, 16), disabled: true }] : []),
         ]}
-        onAction={id => {
+        onAction={(id) => {
           // Reply quotes what can be quoted; other rows (errors, system cards) keep inserting their link.
           const quote = id === 'add-to-chat' && companionQuote ? companionReplyQuoteFor(item.message) : null;
           if (id === 'thread') actions.companionThreads?.open(item.message);
           else if (quote) companionQuote?.onQuote(quote);
           else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
-          else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
-        }} /> : hasActions || reserveActionSlot ? (
+          else if (messageMenu.some((item) => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
+        }} />
+      ) : hasActions || reserveActionSlot ? (
         <View
           style={[
             styles.messageActionBar,
@@ -4211,7 +4340,9 @@ function MessageBubble({
       <View style={styles.companionAvatarSlot}>{companionAvatar}</View>
       <View style={styles.companionAvatarContent}>{messageNode}</View>
     </View>
-  ) : messageNode;
+  ) : (
+    messageNode
+  );
   if (!shareSelectionActive) return rowNode;
   return (
     <ShareMessageCheckbox
@@ -4270,10 +4401,14 @@ function ThinkingInlineText({ content }: { content: string }) {
     <>
       {tokens.map((token, index) => {
         if (token.kind === 'strong') {
-          return <Text key={`strong-${index}`} style={styles.thinkingStrong}>{token.value}</Text>;
+          return (
+            <Text key={`strong-${index}`} style={styles.thinkingStrong}>{token.value}</Text>
+          );
         }
         if (token.kind === 'code') {
-          return <Text key={`code-${index}`} style={styles.thinkingCode}>{token.value}</Text>;
+          return (
+            <Text key={`code-${index}`} style={styles.thinkingCode}>{token.value}</Text>
+          );
         }
         return token.value;
       })}
@@ -4320,8 +4455,11 @@ function ThinkingCard({
       <Rail layout={layout}>
         <Text style={[styles.detailText, styles.italicText]}>
           {item.redacted
-            ? t('message.renderer.thinkingEmpty')
-            : <ThinkingInlineText content={item.message.body || t('message.renderer.thinkingNoContent')} />}
+            ? (
+            t('message.renderer.thinkingEmpty')
+          ) : (
+            <ThinkingInlineText content={item.message.body || t('message.renderer.thinkingNoContent')} />
+          )}
         </Text>
       </Rail>
     </FoldablePanel>
@@ -4368,8 +4506,12 @@ function ToolGroupCard({
       title={header.title}
       subtitle={header.subtitle ?? undefined}
       leadingIcon={presentation.hasRunning
-        ? <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
-        : <Bot color={colors.textTertiary} size={header.iconSize} strokeWidth={iconStroke.regular} />}
+        ? (
+          <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
+        ) : (
+          <Bot color={colors.textTertiary} size={header.iconSize} strokeWidth={iconStroke.regular} />
+        )
+      }
       layout={layout}
       testID="message.toolGroupToggle"
       variant={header.variant}
@@ -4397,7 +4539,8 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
-type ToolDetailActions = Pick<MessageActions, 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
+type ToolDetailActions = Pick<MessageActions,
+  | 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
 
 function ToolActionRow({
   actions,
@@ -4421,8 +4564,12 @@ function ToolActionRow({
   const showDetails = expanded && hasDetails;
   const chevronNode = hasDetails
     ? (expanded
-      ? <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      : <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />)
+      ? (
+      <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+    ) : (
+      <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+    )
+  )
     : null;
   return (
     <View style={styles.toolRow} testID="message.toolRow">
@@ -4464,8 +4611,12 @@ function ToolActionRow({
               projection={tool.toolInputProjection}
             />
           ) : null}
-          {tool.diff ? <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} /> : null}
-          {tool.secondaryBody ? <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} /> : null}
+          {tool.diff ? (
+            <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
+          ) : null}
+          {tool.secondaryBody ? (
+            <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -4617,7 +4768,8 @@ function TodoRow({
 
 /** 桌面同款紧凑 spinner：LoaderCircle 弧形图标、1 秒一圈。
  * 固定外框避免运行态/完成态切换时发生布局位移。 */
-function CompactActivityIndicator({ color, size }: { color: string; size: number }) {
+function CompactActivityIndicator({ color, size }: { color: string; size: number;
+}) {
   const [reduceMotionEnabled, setReduceMotionEnabled] = useState<boolean | null>(null);
   const rotation = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -4682,10 +4834,13 @@ function ToolRowStatusIcon({
   return (
     <View style={stylesStatic.workActivityIconSlot}>
       {status === 'running'
-        ? <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
-        : hasError
-          ? <CircleAlert color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          : <Check color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
+        ? (
+        <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
+      ) : hasError ? (
+        <CircleAlert color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      ) : (
+        <Check color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      )}
     </View>
   );
 }
@@ -4699,15 +4854,23 @@ function TodoStatusIcon({
 }) {
   const { colors } = useTheme();
   if (status === 'completed') {
-    return <CircleCheck color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.thin} />;
+    return (
+      <CircleCheck color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+    );
   }
   if (status === 'in_progress' && animated) {
-    return <CompactActivityIndicator color={colors.textPrimary} size={iconSize.lg} />;
+    return (
+      <CompactActivityIndicator color={colors.textPrimary} size={iconSize.lg} />
+    );
   }
   if (status === 'in_progress') {
-    return <CircleDashed color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.thin} />;
+    return (
+      <CircleDashed color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+    );
   }
-  return <Circle color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />;
+  return (
+    <Circle color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+  );
 }
 
 // 在调用点求值,避免模块顶层把 i18n.t 结果冻结成常量(冻结语言)。
@@ -4730,14 +4893,23 @@ const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> 
   pi: 'Pi',
 };
 
-function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number }) {
+function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number;
+}) {
   const { colors } = useTheme();
   // Black/white reverse design: status reads from the icon SHAPE, not colour (no reds).
-  if (status === 'completed') return <CircleCheck color={colors.textPrimary} size={size} strokeWidth={iconStroke.regular} />;
-  if (status === 'failed') return <CircleAlert color={colors.errorText} size={size} strokeWidth={iconStroke.regular} />;
-  if (status === 'stopped') return <CircleStop color={colors.textTertiary} size={size} strokeWidth={iconStroke.regular} />;
+  if (status === 'completed') return (
+      <CircleCheck color={colors.textPrimary} size={size} strokeWidth={iconStroke.regular} />
+    );
+  if (status === 'failed') return (
+      <CircleAlert color={colors.errorText} size={size} strokeWidth={iconStroke.regular} />
+    );
+  if (status === 'stopped') return (
+      <CircleStop color={colors.textTertiary} size={size} strokeWidth={iconStroke.regular} />
+    );
   if (status === 'running') return <CompactActivityIndicator color={colors.textTertiary} size={size} />;
-  return <CircleDashed color={colors.textTertiary} size={size} strokeWidth={iconStroke.regular} />;
+  return (
+    <CircleDashed color={colors.textTertiary} size={size} strokeWidth={iconStroke.regular} />
+  );
 }
 
 function buildAgentTaskMeta(model: AgentTaskCardModel): string[] {
@@ -4808,16 +4980,24 @@ function AgentTaskCard({
     >
       {hasDetails ? (
         <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
-          {model.description ? <Text style={styles.detailText}>{model.description}</Text> : null}
+          {model.description ? (
+            <Text style={styles.detailText}>{model.description}</Text>
+          ) : null}
           {/* codex spawn 启动回执:shared model 只给结构化名字,句子按 locale 组装。 */}
           {model.spawnedAgentName ? (
             <Text style={styles.detailText}>
               {t('message.renderer.subagentStarted', { name: model.spawnedAgentName })}
             </Text>
           ) : null}
-          {model.summary ? <Text style={styles.detailText}>{model.summary}</Text> : null}
-          {model.lastToolName ? <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text> : null}
-          {model.outputFile ? <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text> : null}
+          {model.summary ? (
+            <Text style={styles.detailText}>{model.summary}</Text>
+          ) : null}
+          {model.lastToolName ? (
+            <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text>
+          ) : null}
+          {model.outputFile ? (
+            <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text>
+          ) : null}
         </View>
       ) : (
         <Text style={styles.detailText}>{t('message.renderer.noMoreDetail')}</Text>
@@ -4827,14 +5007,18 @@ function AgentTaskCard({
 }
 
 /** Teammate-specific presentation; ordinary task folds keep their existing contract. */
-function TeammateProcessCard({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+function TeammateProcessCard({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions;
+}) {
   const title = useTeammateElapsedTitle(item.isStreaming === true, item.startedAtMs, item.durationMs);
-  return <TeammateProcess id={item.key} running={item.isStreaming} title={item.isStreaming && actions.companionAttentionLabel || title}>
+  return (
+    <TeammateProcess id={item.key} running={item.isStreaming} title={(item.isStreaming && actions.companionAttentionLabel) || title}>
     <TeammateProcessContents item={item} actions={actions} />
-  </TeammateProcess>;
+  </TeammateProcess>
+  );
 }
 
-function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions;
+}) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const flattened = useMemo(() => {
@@ -4842,36 +5026,47 @@ function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem;
     const loaders: NonNullable<MobileWorkGroupItem['deferred']>[] = [];
     const walk = (group: MobileWorkGroupItem) => {
       if (group.deferred) loaders.push(group.deferred);
-      group.children.forEach(child => child.type === 'work_group' ? walk(child) : leaves.push(child));
+      group.children.forEach((child) => child.type === 'work_group' ? walk(child) : leaves.push(child));
     };
     walk(item);
     return { leaves, loaders };
   }, [item]);
   const loadersRef = useRef(flattened.loaders);
   loadersRef.current = flattened.loaders;
-  const loaderKey = flattened.loaders.map(loader => `${loader.owner}:${loader.key}`).join('|');
+  const loaderKey = flattened.loaders.map((loader) => `${loader.owner}:${loader.key}`).join('|');
   useLayoutEffect(() => {
     const loaders = loadersRef.current;
-    const releases = loaders.map(loader => {
+    const releases = loaders.map((loader) => {
       if (loader.setVisible) return loader.setVisible(true, false);
       if (!loader.expanded) loader.toggle();
       return undefined;
     });
-    return () => releases.forEach(release => release?.());
+    return () => releases.forEach((release) => release?.());
   }, [loaderKey]);
   const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined, intermediateProcess: true }), [actions]);
-  const segments = useMemo(() => segmentTeammateWork(flattened.leaves, child => child.type === 'thinking' || child.type === 'tool_group'), [flattened.leaves]);
-  return <>
+  const segments = useMemo(() => segmentTeammateWork(flattened.leaves,
+        (child) => child.type === 'thinking' || child.type === 'tool_group'), [flattened.leaves]);
+  return (
+    <>
     {segments.map((segment, index) => segment.kind === 'content'
-      ? <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
-      : <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
-          streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />)}
+      ? (
+          <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
+        ) : (
+          <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
+          streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />),
+      )}
     {/* Live turns already spin in the header; a detail-read row would come and go and shift the list. */}
-    {!item.isStreaming && flattened.loaders.some(loader => loader.loading) && <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />}
-    {flattened.loaders.filter(loader => loader.failed).map(loader => <Pressable key={loader.key} accessibilityRole="button"
-      onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>)}
-    {item.isStreaming && segments.at(-1)?.kind === 'content' && <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} />}
-  </>;
+    {!item.isStreaming && flattened.loaders.some((loader) => loader.loading) && (
+          <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />
+        )}
+    {flattened.loaders.filter((loader) => loader.failed).map((loader) => (
+          <Pressable key={loader.key} accessibilityRole="button"
+      onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>))}
+    {item.isStreaming && segments.at(-1)?.kind === 'content' && (
+        <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} />
+      )}
+  </>
+  );
 }
 function TeammateProcessActivities({ id, items, actions, streaming, last }: {
   id: string; items: MobileWorkGroupItem['children']; actions: MessageActions; streaming: boolean; last: boolean;
@@ -4907,7 +5102,7 @@ function WorkGroupCard({
   const header = presentation.header;
   const isStreaming = item.isStreaming === true;
   const [rememberedExpanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
-  const expanded = item.deferred?.setVisible ? rememberedExpanded : item.deferred?.expanded ?? rememberedExpanded;
+  const expanded = item.deferred?.setVisible ? rememberedExpanded : (item.deferred?.expanded ?? rememberedExpanded);
   const lines = isStreaming ? item.deferred?.lines : undefined;
   const lineMode = lines !== undefined;
   const deferredRef = useRef(item.deferred);
@@ -4929,9 +5124,10 @@ function WorkGroupCard({
   const childActions = useMemo(() => actions.companion && actions.companionAvatar
     ? { ...actions, companionAvatar: undefined } : actions, [actions]);
   const activityProjection = useMemo(
-    () => (expanded
+    () =>
+      expanded
       ? projectMobileWorkActivities(item.children, isStreaming)
-      : null),
+      : null,
     [expanded, isStreaming, item.children],
   );
   // Tool detail rows do not consume message action/queue/share busy state.
@@ -4962,7 +5158,7 @@ function WorkGroupCard({
     actions.companion && isStreaming && actions.companionWorkingLabel ? actions.companionWorkingLabel : presentation.title,
     explorationSummary,
   ].filter(Boolean).join(' · ');
-  const onToggle = item.deferred?.setVisible ? toggleExpanded : item.deferred?.toggle ?? toggleExpanded;
+  const onToggle = item.deferred?.setVisible ? toggleExpanded : (item.deferred?.toggle ?? toggleExpanded);
   const pluginWork = actions.companionPluginWork?.get(item.key);
   // The Host projects running lines for this view; folded groups render them as they are,
   // without building the hidden activity tree or reading any work details.
@@ -4970,20 +5166,27 @@ function WorkGroupCard({
   const holdLines = expanded && item.deferred?.awaitingDetails === true && !!lines?.length;
   const lineRows = lines?.length ? (
     <View style={styles.workActivityStack}>
-      {lines.map((line) => <WorkLineRow key={line.key} line={line} onPress={onToggle} />)}
+      {lines.map((line) => (
+        <WorkLineRow key={line.key} line={line} onPress={onToggle} />
+      ))}
     </View>
   ) : !lineMode && liveActivities.length ? (
     <View style={styles.workActivityStack}>
       {liveActivities.map((activity) => activity.kind === 'tool'
-        ? <WorkToolActivityRow key={activity.key} activity={activity} actions={toolActions} contentLayout={contentLayout} />
-        : <WorkLineRow key={activity.key} line={{ kind: 'thinking', key: activity.key, text: activity.content }} onPress={onToggle} />)}
+        ? (
+          <WorkToolActivityRow key={activity.key} activity={activity} actions={toolActions} contentLayout={contentLayout} />
+        ) : (
+          <WorkLineRow key={activity.key} line={{ kind: 'thinking', key: activity.key, text: activity.content }} onPress={onToggle} />),
+      )}
     </View>
   ) : null;
   return (
     <>
-    {pluginWork ? <PluginInvocationHeader plugins={pluginWork.plugins} running={pluginWork.running}
+    {pluginWork ? (
+        <PluginInvocationHeader plugins={pluginWork.plugins} running={pluginWork.running}
       showCompletionBadge={false}
-      deviceId={actions.remoteDeviceId} sessionId={pluginWork.sessionId} /> : null}
+      deviceId={actions.remoteDeviceId} sessionId={pluginWork.sessionId} />
+      ) : null}
     <FoldablePanel
       chevronPosition={header.chevronPosition}
       chevronSize={header.chevronSize}
@@ -4996,8 +5199,12 @@ function WorkGroupCard({
         ? <WorkGroupElapsed sinceIso={startedAtIso} />
         : undefined}
       leadingIcon={isStreaming
-        ? <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
-        : <Layers color={colors.textTertiary} size={header.iconSize} strokeWidth={iconStroke.regular} />}
+        ? (
+            <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
+          ) : (
+            <Layers color={colors.textTertiary} size={header.iconSize} strokeWidth={iconStroke.regular} />
+          )
+        }
       layout={layout}
       testID="message.workGroupToggle"
       variant={header.variant}
@@ -5006,7 +5213,9 @@ function WorkGroupCard({
         <Rail layout={layout}>
           <View style={styles.workGroupStack}>
             {holdLines && lineRows}
-            {item.deferred?.loading && <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />}
+            {item.deferred?.loading && (
+                <CompactActivityIndicator color={colors.textTertiary} size={header.iconSize} />
+              )}
             {item.deferred?.failed && (
               <MessageListActionButton
                 accessibilityLabel={t('message.renderer.retryPreview')}
@@ -5020,7 +5229,9 @@ function WorkGroupCard({
             )}
             {!holdLines && item.children.map((child) => {
               if (child.type === 'thinking') {
-                return <ExpandedWorkThinkingRow key={child.key} item={child} />;
+                return (
+                      <ExpandedWorkThinkingRow key={child.key} item={child} />
+                    );
               }
               if (child.type === 'tool_group') {
                 return (
@@ -5036,7 +5247,9 @@ function WorkGroupCard({
                   </View>
                 );
               }
-              return <RenderItemView key={child.key} item={child} actions={childActions} />;
+              return (
+                    <RenderItemView key={child.key} item={child} actions={childActions} />
+                  );
             })}
           </View>
         </Rail>
@@ -5058,7 +5271,8 @@ const WorkLineRow = memo(function WorkLineRow({
   const { i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const label = useMemo(
-    () => (line.kind === 'tool' ? formatToolRowText(line.descriptor, mobileToolRowWording).label || line.toolName : line.text),
+    () =>
+      line.kind === 'tool' ? formatToolRowText(line.descriptor, mobileToolRowWording).label || line.toolName : line.text,
     [i18n.language, line],
   );
   return (
@@ -5094,7 +5308,9 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   const elapsedMs = useLiveElapsedMs(true, sinceIso);
   return elapsedMs === null
     ? null
-    : <Text style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>;
+    : (
+    <Text style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>
+  );
 }
 
 const WorkToolActivityRow = memo(function WorkToolActivityRow({
@@ -5123,11 +5339,10 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
       tool={tool}
     />
   );
-}, (previous, next) => (
-  previous.actions === next.actions
+}, (previous, next) =>
+    previous.actions === next.actions
   && previous.contentLayout === next.contentLayout
-  && sameMobileWorkToolActivity(previous.activity, next.activity)
-));
+  && sameMobileWorkToolActivity(previous.activity, next.activity));
 
 const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
   item,
@@ -5184,10 +5399,13 @@ const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
         ) : null}
       </View>
       {canExpand
-        ? expanded
-          ? <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          : <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-        : null}
+        ? (
+        expanded ? (
+          <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        ) : (
+          <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        )
+      ) : null}
     </Pressable>
   );
 });
@@ -5228,7 +5446,9 @@ function SubagentCard({
     >
       {(layout) => (
         <View style={[styles.stack, { gap: layout.stackGap }]}>
-          {deferred?.loading ? <CompactActivityIndicator color={colors.textTertiary} size={iconSize.md} /> : null}
+          {deferred?.loading ? (
+            <CompactActivityIndicator color={colors.textTertiary} size={iconSize.md} />
+          ) : null}
           {deferred?.failed ? (
             <MessageListActionButton
               accessibilityLabel={t('message.renderer.retryPreview')}
@@ -5352,7 +5572,9 @@ function FoldablePanel({
           >
             {title}
           </Text>
-          {subtitle ? <Text style={styles.foldSubtitle} numberOfLines={1}>{subtitle}</Text> : null}
+          {subtitle ? (
+            <Text style={styles.foldSubtitle} numberOfLines={1}>{subtitle}</Text>
+          ) : null}
         </View>
         {trailingMeta}
         {chevronPosition === 'trailing' ? chevron : null}
@@ -5424,9 +5646,12 @@ function FoldableHeaderButton({
   );
 }
 
-function Rail({ children, layout }: { children: ReactNode; layout: MessageHierarchyLayout }) {
+function Rail({ children, layout }: { children: ReactNode; layout: MessageHierarchyLayout;
+}) {
   const styles = useThemedStyles(makeStyles);
-  return <View style={[styles.rail, { paddingLeft: layout.railPaddingLeft }]}>{children}</View>;
+  return (
+    <View style={[styles.rail, { paddingLeft: layout.railPaddingLeft }]}>{children}</View>
+  );
 }
 
 // 协同卡片统一外壳:FoldablePanel(card 变体)+ leadingIcon + title + 可折叠 body(经 Rail 缩进)。
@@ -5509,8 +5734,8 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
   const modelOnly = data?.modelOnly === true;
-  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
-    ?? t('message.renderer.agentSwitchLabel', { from, to });
+  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
+    ?? t('message.renderer.agentSwitchLabel', { from, to }));
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -5539,8 +5764,11 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           ) : null}
           {handoff ? (
             expanded
-              ? <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-              : <ChevronRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+              ? (
+              <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+            ) : (
+              <ChevronRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+            )
           ) : null}
         </Pressable>
         <View style={styles.agentSwitchDivider} />
@@ -5583,14 +5811,20 @@ function MobileSystemCard({
   // auto-resume 复用桌面 AgentActionRow 的单行状态布局:默认只显示当前状态和压缩后的
   // 中断原因,完整诊断按需展开,避免底层错误全文把手机消息流撑成一张大卡片。
   if (type === 'auto-resume') {
-    return <MobileAutoResumeActionRow data={data} inFlight={autoResumeInFlight === true} />;
+    return (
+      <MobileAutoResumeActionRow data={data} inFlight={autoResumeInFlight === true} />
+    );
   }
   const card = formatMobileSystemCard(type, data);
   return (
     <View style={styles.systemCard} testID={`message.systemCard.${type}`}>
       <Text style={styles.systemCardTitle}>{card.title}</Text>
-      {card.subtitle ? <Text style={styles.systemCardBody}>{card.subtitle}</Text> : null}
-      {card.body ? <Text style={styles.systemCardBody}>{card.body}</Text> : null}
+      {card.subtitle ? (
+        <Text style={styles.systemCardBody}>{card.subtitle}</Text>
+      ) : null}
+      {card.body ? (
+        <Text style={styles.systemCardBody}>{card.body}</Text>
+      ) : null}
       {card.rows.length > 0 ? (
         <View style={styles.systemCardRows}>
           {card.rows.map((row, index) => (
@@ -5714,7 +5948,7 @@ function MobileAutoResumeActionRow({
               <Text selectable style={styles.autoResumeDetailText}>{info.error}</Text>
             </>
           ) : null}
-          {(hasProgress || info.sessionTotal !== undefined) ? (
+          {hasProgress || info.sessionTotal !== undefined ? (
             <View style={[styles.autoResumeDetailMeta, info.error && styles.autoResumeDetailMetaWithReason]}>
               {hasProgress ? (
                 <Text style={styles.autoResumeDetailMetaText}>
@@ -5828,10 +6062,13 @@ const ViewabilityGatedMathFormula = memo(function ViewabilityGatedMathFormula({
 });
 
 /** A frozen task result reads like a reply: same Markdown, links and file chips (Desktop MarkdownRenderer). */
-function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; actions: MessageActions; messageKey: string }) {
+function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; actions: MessageActions; messageKey: string;
+}) {
   const layout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
-  return <MarkdownBody renderRichAnswers markdownImageCacheKey={messageKey} layout={layout} text={text} selectable
-    onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
+  return (
+    <MarkdownBody renderRichAnswers markdownImageCacheKey={messageKey} layout={layout} text={text} selectable
+    onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+  );
 }
 
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
@@ -5923,12 +6160,11 @@ function MarkdownBodyBase({
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
       chatFilePathContext?.remoteHostId, chatFilePathContext?.sessionId,
     ) : null, [chatFilePathContext, markdownImageCacheKey, resolveMarkdownMedia]);
-  const imageRendersPreview = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) => (
-    isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null
-  ), [managedImagePreviewUrl]);
+  const imageRendersPreview = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) =>
+      isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null, [managedImagePreviewUrl]);
   // 图片预览内嵌 View，不能放进 Android selectable Text 或 iOS UITextView。
   const inlinesSelectable = useCallback((inlines: readonly MobileMarkdownInline[]) => (
-    selectable === true
+      selectable === true
     && !inlines.some((inline) => inline.type === 'image' && imageRendersPreview(inline))
   ), [imageRendersPreview, selectable]);
   // 正文 Markdown 图片(![](url) / 安全 <img>)点击后走既有媒体 payload 查看器,与附件图片同一条链路。
@@ -5990,7 +6226,7 @@ function MarkdownBodyBase({
       SpanText?: typeof Text,
       baseStyle?: StyleProp<TextStyle>,
       keyPrefix?: string,
-    ) => (
+    ) =>
       inlines.map((inline, index) => renderInline(inline, index, styles, {
         baseStyle,
         keyPrefix,
@@ -6001,7 +6237,7 @@ function MarkdownBodyBase({
         sessionLinkTitles,
         SpanText,
         streaming,
-      }))
+      })
     ),
     // renderInline also reads translated fallback labels. Invalidate completed
     // memoized text blocks when useTranslation refreshes its bound translator.
@@ -6020,11 +6256,10 @@ function MarkdownBodyBase({
     [blocks, textRunGroupingOptions],
   );
   // 块可选中且 iOS → 嵌套 span 必须是 UITextView 家族;其余场景缺省 RN Text。
-  const spanFor = useCallback((blockSelectable: boolean) => (
-    blockSelectable && allowIosUITextView && Platform.OS === 'ios'
+  const spanFor = useCallback((blockSelectable: boolean) =>
+      blockSelectable && allowIosUITextView && Platform.OS === 'ios'
       ? MarkdownSelectableSpan
-      : undefined
-  ), [allowIosUITextView]);
+      : undefined, [allowIosUITextView]);
   // 文本运行组:连续纯文本块(段落/标题/列表项)合进同一个原生文本视图,
   // 原生选择手柄即可横跨段落(单个 text view 是 iOS/Android 原生选择的天然边界)。
   // 段间距用「lineHeight = markdownBodyGap 的空行 span」还原:原生文本树内没有块级 gap 可用,
@@ -6050,7 +6285,8 @@ function MarkdownBodyBase({
       const task = typeof block.checked === 'boolean';
       spans.push(
         <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
-          {task ? (block.checked ? '☑ ' : '☐ ') : block.ordered ? `${block.marker} ` : '• '}
+          {task ? block.checked ? '☑ ' : '☐ '
+              : block.ordered ? `${block.marker} ` : '• '}
         </RunSpan>,
       );
     }
@@ -6144,7 +6380,9 @@ function MarkdownBodyBase({
               text={block.text}
             />
           </View>
-          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
+          {showCodeCopyButton ? (
+              <MarkdownCodeCopyButton text={block.text} />
+            ) : null}
         </View>
       );
     }
@@ -6192,7 +6430,8 @@ function MarkdownBodyBase({
             { width: layout.markdownListMarkerWidth },
             task && styles.markdownTaskMarker,
           ]}>
-            {task ? (block.checked ? '✓' : '') : block.ordered ? block.marker : '•'}
+            {task ? block.checked ? '✓' : ''
+                : block.ordered ? block.marker : '•'}
           </Text>
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}
@@ -6289,8 +6528,11 @@ function MarkdownBodyBase({
       >
       {groups.flatMap((group, groupIndex) => {
         const renderedGroup = group.type === 'text_run'
-          ? renderTextRun(group)
-          : <MarkdownBlockContent key={group.key} block={group.block} renderBlock={renderSingleBlock} />;
+          ? (
+              renderTextRun(group)
+            ) : (
+              <MarkdownBlockContent key={group.key} block={group.block} renderBlock={renderSingleBlock} />
+            );
         if (groupIndex === 0 || isTextRunContinuationGroup(group)) {
           return [renderedGroup];
         }
@@ -6457,7 +6699,10 @@ function renderInline(
       baseStyle: [ctx.baseStyle, ...inline.marks.map((mark) => markdownMarkStyle(styles, mark))],
     });
   }
+  // Only interactive spans need the share-row cancellation context. Plain
+  // formatting must not subscribe thousands of nodes to that gesture scope.
   const SpanText = ctx.SpanText ?? MessageBodyText;
+  const StaticSpan = ctx.SpanText === MarkdownSelectableSpan ? UITextView : (ctx.SpanText ?? Text);
   const openImage = ctx.onOpenImage ?? (ctx.onOpenPayload
     ? (url: string, alt?: string) => {
         const title = mobileMarkdownImageTitle(url, alt);
@@ -6467,10 +6712,15 @@ function renderInline(
         ));
       }
     : undefined);
-  const spanKey = (suffix: string) => (ctx.keyPrefix ? `${ctx.keyPrefix}:${suffix}` : suffix);
+  const spanKey = (suffix: string) =>
+    ctx.keyPrefix ? `${ctx.keyPrefix}:${suffix}` : suffix;
   switch (inline.type) {
     case 'text':
-      return <SpanText key={spanKey(`text:${index}`)} style={ctx.baseStyle}>{inline.text}</SpanText>;
+      // RN inherits the enclosing text style; native selectable spans still
+      // carry explicit block styles because their flattening contract differs.
+      return !ctx.SpanText && !ctx.baseStyle
+        ? inline.text
+        : <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`text:${index}`)} style={ctx.baseStyle}>{inline.text}</StaticSpan>;
     case 'link': {
       if (inline.managedMediaKind) {
         const mediaKind = inline.managedMediaKind;
@@ -6516,7 +6766,7 @@ function renderInline(
           explicitLabel
           ?? (projectTarget ? projectDisplayName(projectTarget.workingDir) : inline.url);
         return (
-          <SpanText key={spanKey(`xdt-link:${index}:${inline.url}`)} style={ctx.baseStyle}>
+          <SpanText maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`xdt-link:${index}:${inline.url}`)} style={ctx.baseStyle}>
             {display}
           </SpanText>
         );
@@ -6555,10 +6805,13 @@ function renderInline(
       );
     }
     case 'strong':
-      return <SpanText key={spanKey(`strong:${index}`)} style={[ctx.baseStyle, styles.markdownStrong]}>{inline.text}</SpanText>;
+      return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`strong:${index}`)} style={[ctx.baseStyle, styles.markdownStrong]}>{inline.text}</StaticSpan>;
     case 'emphasis':
-      return <SpanText key={spanKey(`em:${index}`)} style={[ctx.baseStyle, styles.markdownEmphasis]}>{inline.text}</SpanText>;
+      return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`em:${index}`)} style={[ctx.baseStyle, styles.markdownEmphasis]}>{inline.text}</StaticSpan>;
     case 'code':
+      if (!classifyInlineCodePathCandidate(inline.text)) {
+        return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`code:${index}`)} style={[ctx.baseStyle, styles.markdownInlineCode]}>{inline.text}</StaticSpan>;
+      }
       return (
         <InlineCodePathSpan
           key={spanKey(`code:${index}`)}
@@ -6570,20 +6823,22 @@ function renderInline(
         />
       );
     case 'strikethrough':
-      return <SpanText key={spanKey(`strike:${index}`)} style={[ctx.baseStyle, styles.markdownStrike]}>{inline.text}</SpanText>;
+      return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`strike:${index}`)} style={[ctx.baseStyle, styles.markdownStrike]}>{inline.text}</StaticSpan>;
     case 'math':
       // inline 公式:原生 Text 流内嵌不了 KaTeX,用 Unicode 近似(上标 ²、
       // 希腊字母、√ 等)保持文本流/选择/性能;复杂公式的精确渲染走 display
       // 块的 WebView KaTeX。
       return (
-        <SpanText key={spanKey(`math:${index}`)} style={[ctx.baseStyle, styles.markdownMathInline]}>
+        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={[ctx.baseStyle, styles.markdownMathInline]}>
           {latexToUnicodeApproximation(inline.text)}
-        </SpanText>
+        </StaticSpan>
       );
     case 'image': {
       const managedPreview = ctx.renderManagedImage?.(inline);
       if (managedPreview) {
-        return <Text key={spanKey(`image:${index}:${inline.url}`)} testID="message.markdownManagedImage">{managedPreview}</Text>;
+        return (
+          <Text key={spanKey(`image:${index}:${inline.url}`)} testID="message.markdownManagedImage">{managedPreview}</Text>
+        );
       }
       // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
       // (clickableInlineStyle 保证两者同源)。
@@ -6650,9 +6905,9 @@ function MarkdownSessionLinkSpan({
   const explicit =
     inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
   const targetMessage = session.messageClientId
-    ? messages.find((message) => (
-        message.clientId === session.messageClientId || message.id === session.messageClientId
-      ))
+    ? messages.find((message) =>
+          message.clientId === session.messageClientId || message.id === session.messageClientId
+      )
     : null;
   // 消息数组更新(流式 / 列表重渲)时,目标消息没变就不重算摘要。
   const messageLabel = useMemo(() => {
@@ -6661,9 +6916,9 @@ function MarkdownSessionLinkSpan({
   }, [targetMessage]);
   const title = session.messageClientId
     ? messageLabel || i18n.t('message.renderer.messageChipFallback')
-    : explicit
+    : (explicit
       ?? sessionLinkTitles?.[session.sessionId]
-      ?? i18n.t('message.renderer.sessionChipFallback');
+      ?? i18n.t('message.renderer.sessionChipFallback'));
   // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
   // (clickableInlineStyle 保证两者同源)。
   const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
@@ -6797,10 +7052,13 @@ function ToolMediaBlock({
       style={[styles.toolMediaBlock, { gap: contentLayout.attachmentGap }]}
       testID="message.toolMediaBlock"
     >
-      {cards.map((card) => <PluginResultCard key={card.callId} {...card} actions={actions}
-        excludedUrls={[...item.tools.flatMap((tool) => extractPayloadToolResultMedia(tool.secondaryBody ?? '').map((entry) => entry.url)), ...files.map((file) => file.url)]} />)}
-      {files.map((file) => <FileChip key={file.url} name={file.title} path={file.url} layout={contentLayout}
-        onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined} />)}
+      {cards.map((card) => (
+        <PluginResultCard key={card.callId} {...card} actions={actions}
+        excludedUrls={[...item.tools.flatMap((tool) => extractPayloadToolResultMedia(tool.secondaryBody ?? '').map((entry) => entry.url)), ...files.map((file) => file.url)]} />))}
+      {files.map((file) => (
+        <FileChip key={file.url} name={file.title} path={file.url} layout={contentLayout}
+        onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined} />
+      ))}
       {media.map((entry, index) => (
         <MediaPreview
           key={`${entry.kind}:${entry.url}:${index}`}
@@ -6828,32 +7086,46 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
-  return <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+  return (
+    <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
     {blocks?.map((block) => {
-      if (block.primitive === 'plugin-card-actions') return <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
-        onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />;
+      if (block.primitive === 'plugin-card-actions') return (
+            <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
+          );
       const url = (block.data as { url?: unknown } | undefined)?.url;
       const kind = managedToolMediaKind(url);
       if (typeof url === 'string' && excludedUrls.includes(url)) return null;
       if (kind && typeof url === 'string') {
         const media = { kind, url, previewable: false };
-        return <MediaPreview key={block.id} label={mediaLabel(media)} layout={layout} media={media}
+        return (
+            <MediaPreview key={block.id} label={mediaLabel(media)} layout={layout} media={media}
           onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildMediaPayload(media, mediaLabel(media))) : undefined}
-          onResolveRemoteMedia={actions.onResolveRemoteMedia} variant={kind === 'image' ? 'attachment' : 'card'} />;
+          onResolveRemoteMedia={actions.onResolveRemoteMedia} variant={kind === 'image' ? 'attachment' : 'card'} />
+          );
       }
       if (block.primitive === 'file' && typeof url === 'string' && /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb$/.test(url)) {
         const name = url.split('/').pop()!;
-        return <FileChip key={block.id} name={name} path={url} layout={layout}
-          onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildFilePayload(name, url)) : undefined} />;
-      }
-      return <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
+        return (
+            <FileChip key={block.id} name={name} path={url} layout={layout}
+          onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildFilePayload(name, url)) : undefined} />
+          );
+        }
+        return (
+          <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
+        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+        );
     })}
-    {!blocks && !error ? <Text style={styles.detailText}>{t('message.renderer.loading')}</Text> : null}
-    {error ? <MessageContentOpenButton onPress={retry} accessibilityLabel={t('message.renderer.retryPreview')}>
+    {!blocks && !error ? (
+        <Text style={styles.detailText}>{t('message.renderer.loading')}</Text>
+      ) : null}
+    {error ? (
+        <MessageContentOpenButton onPress={retry} accessibilityLabel={t('message.renderer.retryPreview')}>
       <Text style={styles.detailText}>{t('message.renderer.retryPreview')}</Text>
-    </MessageContentOpenButton> : null}
-  </View>;
+    </MessageContentOpenButton>
+      ) : null}
+  </View>
+  );
 }
 
 /**
@@ -7019,7 +7291,8 @@ function MediaPreview({
 
   // Measure with the same decoder that displays the image: RN getSize cannot
   // decode SVG. Reuse the decoded dimensions without a second image request.
-  const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize }) => {
+  const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
+    }) => {
     if (!(width > 0 && height > 0)) return;
     if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
       attachmentIntrinsicSizeCache.clear();
@@ -7029,8 +7302,10 @@ function MediaPreview({
   }, [media.url, setIntrinsicSize]);
 
   if (media.kind === 'video' && !presentationOnly) {
-    return <InlineVideoPlayer key={media.url} url={media.url} label={label}
-      width={layout.markdownTableAvailableWidth} visible={visible} resolve={onResolveRemoteMedia} onOpen={onOpen} />;
+    return (
+      <InlineVideoPlayer key={media.url} url={media.url} label={label}
+      width={layout.markdownTableAvailableWidth} visible={visible} resolve={onResolveRemoteMedia} onOpen={onOpen} />
+    );
   }
 
   if (localUri) {
@@ -7279,7 +7554,9 @@ function ToolResultPreview({
 }) {
   const styles = useThemedStyles(makeStyles);
   const imageId = readFailedImageDelivery(tool.secondaryBody);
-  if (imageId) return <GeneratedImageRetry imageId={imageId} onRetry={onRetryImageDelivery} />;
+  if (imageId) return (
+      <GeneratedImageRetry imageId={imageId} onRetry={onRetryImageDelivery} />
+    );
   const payload = buildToolResultPayload({ ...tool, secondaryBody: readToolProcessText(tool.secondaryBody) });
   if (!payload) return null;
   const preview = summarizeMessagePayloadPreview(payload, { maxPreviewChars: TOOL_RESULT_PREVIEW_MAX_CHARS });
@@ -7298,7 +7575,9 @@ function ToolResultPreview({
       testID="message.toolPayloadButton"
     >
       <Text style={styles.toolResult} numberOfLines={layout.toolResultMaxLines}>{preview.previewText}</Text>
-      {showHint ? <Text style={styles.toolResultHint}>{preview.actionLabel}</Text> : null}
+      {showHint ? (
+        <Text style={styles.toolResultHint}>{preview.actionLabel}</Text>
+      ) : null}
     </MessageContentOpenButton>
   );
 }
@@ -7323,7 +7602,9 @@ function MessageContentOpenButton({
   const styles = useThemedStyles(makeStyles);
   const interactionDisabled = disabled || !onPress;
   const onLongPress = useContext(MessageContentLongPressContext);
-  if (presentationOnly) return <View style={style} testID={testID}>{children}</View>;
+  if (presentationOnly) return (
+      <View style={style} testID={testID}>{children}</View>
+    );
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
@@ -7393,11 +7674,11 @@ function MessagePayloadModal({
     };
   }, [imageAnnotation, onClose]);
   const payloadSummary = useMemo(
-    () => payload ? summarizeMessagePayload(payload) : null,
+    () => (payload ? summarizeMessagePayload(payload) : null),
     [i18nInstance.language, payload],
   );
   const payloadPreview = useMemo(
-    () => payload ? summarizeMessagePayloadPreview(payload) : null,
+    () => (payload ? summarizeMessagePayloadPreview(payload) : null),
     [i18nInstance.language, payload],
   );
   const payloadDetailText = payloadHeaderDetailText(payloadPreview, payloadSummary?.subtitle);
@@ -7495,6 +7776,23 @@ function MessagePayloadModal({
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
   const immersiveMermaid = payload?.kind === 'mermaid';
+  const collection = useContext(PreviewCollectionContext);
+  if (
+    payload &&
+    onResolveRemoteMedia &&
+    ((payload.kind === "file" && payload.sourcePath) ||
+      (payload.kind === "media" && !isLightboxMediaKind(payload.media.kind)))
+  ) {
+    return (
+      <RemoteAttachmentPreview
+        key={payload.kind === "file" ? payload.sourcePath : payload.media.url}
+        name={payload.title}
+        mediaKind={payload.kind === 'media' && payload.media.kind === 'audio' ? 'audio' : undefined}
+        onClose={onClose}
+        resolve={(signal) => resolveAttachmentPreviewSource(payload, onResolveRemoteMedia, signal)}
+      />
+    );
+  }
 
   return (
     <Modal
@@ -7505,7 +7803,13 @@ function MessagePayloadModal({
       visible={!!payload}
     >
       {immersiveMermaid && payload ? (
-        <View style={styles.payloadModal} testID="message.payloadModal">
+        <View style={[
+            styles.payloadModal,
+            {
+              paddingTop: safeAreaInsets.top + 64,
+              paddingBottom: safeAreaInsets.bottom + (collection ? 56 : 0),
+            },
+          ]} testID="message.payloadModal">
           <MermaidDiagramWebView
             bare
             deferSource
@@ -7515,40 +7819,35 @@ function MessagePayloadModal({
             testID="message.payloadMermaidDiagram"
             zoomable
           />
-          <View style={[styles.payloadFloatingActions, { top: modalSafeArea.paddingTop, right: safeAreaInsets.right + spacing.lg }]}>
-            {imageAnnotation ? (
-              <PayloadHeaderActionButton
-                accessibilityLabel={t('message.renderer.annotateSendToChat')}
-                disabled={mermaidExporting}
-                onPress={() => { void annotateMermaid(); }}
-                style={[styles.payloadHeaderButton, styles.payloadFloatingButton]}
-                testID="message.payloadAnnotateButton"
-              >
-                <PencilLine color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-              </PayloadHeaderActionButton>
-            ) : null}
-            <PayloadHeaderActionButton
-              accessibilityLabel={t('message.renderer.exportDiagramImage')}
-              disabled={mermaidExporting}
-              onPress={() => { void exportMermaidPng(); }}
-              style={[styles.payloadHeaderButton, styles.payloadFloatingButton]}
-              testID="message.payloadExportButton"
-            >
-              {mermaidExporting ? (
-                <ActivityIndicator color={colors.textSecondary} size="small" />
-              ) : (
-                <ShareIcon color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-              )}
-            </PayloadHeaderActionButton>
-            <PayloadHeaderActionButton
-              accessibilityLabel={t('message.renderer.closeDetail')}
-              onPress={onClose}
-              style={[styles.payloadCloseButton, styles.payloadFloatingButton]}
-              testID="message.payloadCloseButton"
-            >
-              <X color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-            </PayloadHeaderActionButton>
-          </View>
+          <PreviewHeader
+            name={payload.title}
+            onClose={onClose}
+            actions={[
+              {
+                key: "copy",
+                label: t("message.renderer.copyDetailContent"),
+                onPress: copyPayload,
+              },
+              {
+                key: "export",
+                label: t("message.renderer.exportDiagramImage"),
+                onPress: () => {
+                  void exportMermaidPng();
+                },
+                disabled: mermaidExporting,
+              },
+              ...(imageAnnotation
+                ? [
+                    {
+                      key: "annotate",
+                      label: t('message.renderer.annotateSendToChat'),
+                      onPress: () => { void annotateMermaid(); },
+                      disabled: mermaidExporting,
+                    },
+                  ]
+                : []),
+            ]} />
+              <PreviewFooter />
           {annotatePayload && annotateImages ? (
             // 嵌套标注层:必须渲染在本 Modal 的 children 内(见 annotatePayload 注释)。
             // 入口本身就是「标注」:打开即进标注模式;放弃标注直接回图表(对齐桌面)。
@@ -7568,108 +7867,40 @@ function MessagePayloadModal({
         style={[
           styles.payloadModal,
           {
-            paddingBottom: modalSafeArea.paddingBottom,
+            paddingBottom: modalSafeArea.paddingBottom + (collection ? 56 : 0),
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,
-            paddingTop: modalSafeArea.paddingTop,
-          },
+            paddingTop: safeAreaInsets.top + 64,
+            },
         ]}
         testID="message.payloadModal"
       >
-        <View
-          style={[
-            styles.payloadHeader,
-            {
-              // 横屏压成紧凑单行(标题/按钮垂直居中),纵向空间全部让给 body。
-              alignItems: headerLayout.landscape ? 'center' : 'flex-start',
-              flexDirection: headerLayout.headerDirection,
-              gap: headerLayout.headerGap,
-              minHeight: headerLayout.headerMinHeight,
-              paddingHorizontal: headerLayout.headerPaddingHorizontal,
-            },
-          ]}
-          testID="message.payloadViewerHeader"
-        >
-          <View style={styles.payloadHeaderText}>
-            <Text style={styles.payloadTitle} numberOfLines={headerLayout.titleNumberOfLines}>{payloadSummary?.title ?? ''}</Text>
-            {payloadDetailText && headerLayout.showSubtitle ? (
-              <Text style={styles.payloadGalleryCount} numberOfLines={1} testID="message.payloadSubtitle">
-                {payloadDetailText}
-              </Text>
-            ) : null}
-          </View>
-          <View
-            style={[
-              styles.payloadHeaderActions,
-              {
-                alignItems: headerLayout.actionsAlignItems,
-                flexDirection: headerLayout.actionsDirection,
-                width: headerLayout.actionsWidth,
-              },
+        <PreviewHeader
+            name={payloadSummary?.title ?? ''}
+            detail={payloadDetailText}
+            onClose={onClose}
+            actions={[
+              ...(canCopyPayload
+                ? [
+                    {
+                      key: "copy",
+                      label: t('message.renderer.copyDetailContent'),
+                      onPress: copyPayload,
+                    },
+                  ]
+                : []),
+              ...(canOpenPayloadUrl
+                ? [
+                    {
+                      key: "open",
+                      label: t('message.renderer.openDetailLink'),
+                      onPress: openPayloadUrl,
+                    },
+                  ]
+                : []),
             ]}
-          >
-            <View
-              style={[
-                styles.payloadHeaderPrimaryActions,
-                {
-                  gap: headerLayout.actionGap,
-                  justifyContent: headerLayout.primaryActionsJustifyContent,
-                },
-              ]}
-            >
-              {canCopyPayload ? (
-                <PayloadHeaderActionButton
-                  accessibilityLabel={t('message.renderer.copyDetailContent')}
-                  disabled={payloadCopyState === 'copying'}
-                  onPress={copyPayload}
-                  style={[
-                    styles.payloadHeaderButton,
-                    { minWidth: headerLayout.actionButtonMinWidth },
-                  ]}
-                  testID="message.payloadCopyButton"
-                >
-                  {payloadCopyState === 'copying' ? (
-                    <ActivityIndicator color={colors.textSecondary} size="small" />
-                  ) : payloadCopyState === 'copied' ? (
-                    <Check color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                  ) : (
-                    <Copy color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                  )}
-                </PayloadHeaderActionButton>
-              ) : null}
-              {canOpenPayloadUrl ? (
-                <PayloadHeaderActionButton
-                  accessibilityLabel={t('message.renderer.openDetailLink')}
-                  onPress={openPayloadUrl}
-                  style={[
-                    styles.payloadHeaderButton,
-                    { minWidth: headerLayout.actionButtonMinWidth },
-                  ]}
-                  testID="message.payloadOpenButton"
-                >
-                  <ExternalLink color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-                </PayloadHeaderActionButton>
-              ) : null}
-            </View>
-            {payloadCopyState === 'copied' || payloadCopyState === 'failed' ? (
-              <Text style={styles.payloadHeaderStatus} testID="message.payloadCopyStatus">
-                {payloadCopyState === 'copied' ? t('message.renderer.copyStateCopied') : t('message.renderer.copyStateFailed')}
-              </Text>
-            ) : null}
-            <PayloadHeaderActionButton
-              accessibilityLabel={t('message.renderer.closeDetail')}
-              onPress={onClose}
-              style={[
-                styles.payloadCloseButton,
-                { minWidth: headerLayout.closeButtonMinWidth },
-              ]}
-              testID="message.payloadCloseButton"
-            >
-              <X color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-            </PayloadHeaderActionButton>
-          </View>
-        </View>
+          />
         {payload ? (
           <View style={styles.payloadViewerBody} testID="message.payloadViewerBody">
             <MessagePayloadBody
@@ -7680,7 +7911,8 @@ function MessagePayloadModal({
             />
           </View>
         ) : null}
-      </View>
+          <PreviewFooter />
+        </View>
       )}
     </Modal>
   );
@@ -7857,11 +8089,13 @@ function MessagePayloadBody({
             },
           ]}>
             <Text style={styles.payloadMediaKind}>{bodyPresentation.media?.kindLabel ?? payloadMediaKindLabel(payload.media.kind)}</Text>
-            {remoteState.status === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
+            {remoteState.status === 'loading' ? (
+              <ActivityIndicator color={colors.textSecondary} />
+            ) : null}
             <Text style={styles.payloadMediaHint}>
               {remoteMedia
                 ? remoteMediaStatusText(remoteState, bodyPresentation.media?.remoteIdleText)
-                : bodyPresentation.media?.unsupportedText ?? t('message.renderer.mediaNotPreviewable')}
+                : (bodyPresentation.media?.unsupportedText ?? t('message.renderer.mediaNotPreviewable'))}
             </Text>
             {remoteState.status === 'error' && remoteMedia && onResolveRemoteMedia ? (
               <PayloadActionButton
@@ -7990,7 +8224,9 @@ function DiffPayloadBody({
           testID="message.diffFilePreviewBlock"
         >
           <Text style={styles.payloadDiffSectionTitle}>{t('message.renderer.currentFilePreview')}</Text>
-          {previewState.status === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
+          {previewState.status === 'loading' ? (
+            <ActivityIndicator color={colors.textSecondary} />
+          ) : null}
           <Text
             style={styles.payloadMediaHint}
             testID={previewState.status === 'ready' ? 'message.diffFilePreviewReady' : 'message.diffFilePreviewStatus'}
@@ -8086,7 +8322,8 @@ function DiffPayloadPane({
         <Text style={styles.payloadDiffPaneTitle}>{title}</Text>
       </View>
       <View style={styles.payloadDiffPaneBody}>
-        {lines.length > 0 ? lines.map((line) => (
+        {lines.length > 0 ? (
+          lines.map((line) => (
           <View
             key={line.key}
             style={[
@@ -8111,7 +8348,7 @@ function DiffPayloadPane({
               {line.text || ' '}
             </Text>
           </View>
-        )) : (
+          ))) : (
           <Text style={styles.payloadDiffEmptyLine}>{emptyText}</Text>
         )}
       </View>
@@ -8187,14 +8424,18 @@ function FilePayloadBody({
         <Text selectable style={styles.payloadText}>
           {bodyPresentation.file?.displayPath ?? bodyPresentation.emptyText}
         </Text>
-        {previewState.status === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
+        {previewState.status === 'loading' ? (
+          <ActivityIndicator color={colors.textSecondary} />
+        ) : null}
         <Text style={styles.payloadMediaHint} testID={filePreviewStatusTestId(previewKind)}>
           {textPreviewStatusText(previewState, canPreview, previewKind)}
         </Text>
         <PayloadPathActions layout={layout} path={sourcePath}>
-          {onResolveRemoteMedia && isDesktopLocalMediaUrl(sourcePath) ? <PayloadActionButton
+          {onResolveRemoteMedia && isDesktopLocalMediaUrl(sourcePath) ? (
+            <PayloadActionButton
             accessibilityLabel={t('files.browser.exportShare')} label={t('files.browser.exportShare')}
-            layout={layout} busy={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
+            layout={layout} busy={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" />
+          ) : null}
 
           {canPreview && previewState.status !== 'ready' ? (
             <PayloadActionButton
@@ -8629,15 +8870,27 @@ function messageControlActionIcon(
   }
   if (id === 'copy') {
     return copyState === 'copying'
-      ? <ActivityIndicator color={colors.textSecondary} size="small" />
-      : copyState === 'copied'
-        ? <Check color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
-        : <Copy color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
+      ? (
+      <ActivityIndicator color={colors.textSecondary} size="small" />
+    ) : copyState === 'copied'
+        ? (
+      <Check color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+    ) : (
+      <Copy color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+    );
   }
-  if (id === 'delete') return <Trash2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
-  if (id === 'edit') return <Pencil color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
-  if (id === 'rewind') return <Undo2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
-  return <Split color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
+  if (id === 'delete') return (
+      <Trash2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+    );
+  if (id === 'edit') return (
+      <Pencil color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+    );
+  if (id === 'rewind') return (
+      <Undo2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+    );
+  return (
+    <Split color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />
+  );
 }
 
 function mediaLabel(media: NormalizedToolMedia): string {
@@ -8664,7 +8917,8 @@ function measureInWindow(
   target: unknown,
 ): Promise<WindowFrame | null> {
   return new Promise((resolve) => {
-    const measurable = target as {
+    const measurable = target as
+      | {
       measureInWindow?: (
         callback: (x: number, y: number, width: number, height: number) => void,
       ) => void;
@@ -8745,7 +8999,9 @@ function findLastUserInputClientIdInItem(
 }
 
 function messageClientId(item: MobileMessageItem): string {
-  return item.message.source.clientId || item.message.source.id || item.message.key;
+  return (
+    item.message.source.clientId || item.message.source.id || item.message.key
+  );
 }
 
 /** Host-stamped input a companion reply answers (agentMeta.replyToClientId). */
@@ -8756,8 +9012,10 @@ function readReplyToClientId(message: NormalizedRemoteMessage): string | null {
 
 /** A message the companion's reply can point back to: a visible message the owner typed. */
 function isOwnerTypedMessage(message: NormalizedRemoteMessage | undefined): message is NormalizedRemoteMessage {
-  return !!message && message.kind === 'user' && !message.isSyntheticTrigger && !message.automationOrigin
-    && !message.hookSource && !message.sessionOrigin && !message.systemCardType;
+  return (
+    !!message && message.kind === 'user' && !message.isSyntheticTrigger && !message.automationOrigin
+    && !message.hookSource && !message.sessionOrigin && !message.systemCardType
+  );
 }
 
 /** 语法 kind → 样式。plain 不走这里(直接当字符串塞进父 Text,少一层节点)。 */
@@ -8808,15 +9066,15 @@ function HighlightedCodeText({
       selectable={selectable}
       style={styles.markdownCodeText}
     >
-      {tokens.map((token, index) => (
+      {tokens.map((token, index) =>
         token.kind === 'plain'
-          ? token.text
-          : (
+          ? (
+          token.text
+        ) : (
             <SpanComponent key={index} style={syntaxStyleFor(styles, token.kind)}>
               {token.text}
             </SpanComponent>
-          )
-      ))}
+        ))}
     </MarkdownSelectableText>
   );
 }
@@ -10040,32 +10298,43 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const instanceKey = useId();
   const origin = useContext(ChatFilePathContext);
   const heavyContentVisible = useContext(MessageHeavyContentVisibilityContext);
-  const withVisibility = (content: ReactNode, visible: boolean) =>
-    <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>;
+  const withVisibility = (content: ReactNode, visible: boolean) => (
+    <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>
+  );
   const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={props} />, visible);
-  const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
-  return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
-    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
+  const parts = useMemo(() => (props.renderRichAnswers ? splitRichAnswer(props.text) : []), [props.text, props.renderRichAnswers]);
+  if (!parts.some((part) => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
+  return (
+    <View style={{ gap: spacing.lg }}>{parts.map((part) => part.kind === 'rich'
+    ? (
+          <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
         renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
-    : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
+        ) : (
+          <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />),
+      )}</View>
+  );
 }
 
 /** Each composed column supplies its actual width; media never assumes a full message row. */
-function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0] }) {
+function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0];
+}) {
   const origin = useContext(ChatFilePathContext);
   const resolver = useContext(MarkdownRemoteMediaContext);
   const visible = useContext(MessageHeavyContentVisibilityContext);
   const [width, setWidth] = useState(0);
   const raw = richMediaSource(node);
   if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
-  if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
+  if (node.kind === 'video' && youtubeVideo(raw)) return (
+      <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />
+    );
   const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
   const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
   const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
   // Images outside workdir retain explicit-open. Managed videos prepare a paused preview.
-  if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
+  if (!url) return (
+      <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />
+    );
   const label = richString(node, 'alt', node.kind);
   const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
   // Rich answers also render outside LegendList (cloud companions). Keep ordinary
@@ -10075,33 +10344,44 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
   const visual = richVisualStyle(node);
   const imageWidth = typeof visual.width === 'number' || typeof visual.width === 'string'
     ? width : Math.min(body.layout.imagePreviewWidth, width);
-  const naturalFrameHeight = imageWidth * body.layout.imagePreviewHeight / body.layout.imagePreviewWidth;
+  const naturalFrameHeight =
+    (imageWidth * body.layout.imagePreviewHeight) / body.layout.imagePreviewWidth;
   const imageHeight = Math.min(typeof visual.maxHeight === 'number' ? visual.maxHeight : Infinity,
     Math.max(typeof visual.minHeight === 'number' ? visual.minHeight : 0,
       typeof visual.height === 'number' ? visual.height : naturalFrameHeight));
   const layout = { ...body.layout, imagePreviewWidth: imageWidth,
     imagePreviewHeight: imageHeight,
     mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
-  return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
+  return (
+    <View style={{ minWidth: 0 }} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+    {width > 0 && node.kind === 'video' ? (
+        <InlineVideoPlayer key={previewKey} url={url} label={label}
       width={width} visible={visible} resolve={resolver}
       onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} />
-      : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
+      ) : width > 0 ? (
+        <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
-      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}
-  </View>;
+      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} />
+      ) : null}
+  </View>
+  );
 }
 
-function GeneratedImageRetry({ imageId, onRetry }: { imageId: string; onRetry?: (id: string) => Promise<void> }) {
+function GeneratedImageRetry({ imageId, onRetry }: { imageId: string; onRetry?: (id: string) => Promise<void>;
+}) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
-  return <View>
+  return (
+    <View>
     <Text style={styles.imageDeliveryHint}>{t(failed ? 'chat:imageDelivery.retryFailed' : 'chat:imageDelivery.failed')}</Text>
-    {onRetry && <Pressable accessibilityRole="button" disabled={pending} style={styles.imageDeliveryRetry} onPress={async () => {
+    {onRetry && (
+        <Pressable accessibilityRole="button" disabled={pending} style={styles.imageDeliveryRetry} onPress={async () => {
       setPending(true); setFailed(false);
       try { await onRetry(imageId); } catch { setFailed(true); } finally { setPending(false); }
-    }}><Text style={styles.imageDeliveryRetryText}>{t(pending ? 'chat:imageDelivery.retrying' : 'chat:imageDelivery.retry')}</Text></Pressable>}
-  </View>;
+    }}><Text style={styles.imageDeliveryRetryText}>{t(pending ? 'chat:imageDelivery.retrying' : 'chat:imageDelivery.retry')}</Text></Pressable>
+      )}
+  </View>
+  );
 }

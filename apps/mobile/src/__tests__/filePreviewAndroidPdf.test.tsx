@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { createElement, act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Screen from '../../app/files/preview/[sessionId]';
 import { storeCachedListing } from '@/session/fileBrowserCache';
 
-// Integration: Android WebView cannot render PDFs. The real preview screen must
-// show the export/share page instead, fetch nothing until the user taps it, and
-// then hand the original file name and PDF mime type to the system share sheet.
+// Integration: Android authorizes the PDF and mounts the shared reader;
+// saving still shares the original filename and MIME type.
 const state = vi.hoisted(() => ({
   scope: '',
   listDir: vi.fn(),
@@ -19,15 +18,19 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  const View = ({ children, testID }: { children?: ReactNode; testID?: string }) =>
+  const View = ({ children, testID }: { children?: ReactNode; testID?: string;
+  }) =>
     createElement('div', { 'data-testid': testID }, children);
-  const Pressable = ({ children, onPress, testID }: { children?: ReactNode; onPress?: () => void; testID?: string }) =>
+  const Pressable = ({ children, onPress, testID }: { children?: ReactNode; onPress?: () => void; testID?: string;
+  }) =>
     createElement('button', { 'data-testid': testID, onClick: onPress }, children);
   return {
-    View, Text: View, Pressable, ActivityIndicator: () => null, Alert: {}, Platform: { OS: 'android' },
+    View, Text: View,
+    ScrollView: View, Pressable, ActivityIndicator: () => null, Alert: {}, Platform: { OS: 'android' },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
-    FlatList: (props: { data: unknown[]; renderItem: (row: { item: unknown; index: number }) => ReactNode }) => {
+    FlatList: (props: { data: unknown[]; renderItem: (row: { item: unknown; index: number }) => ReactNode;
+    }) => {
       state.pager = props;
       return createElement('div', null, props.data.map((item, index) => createElement('div', { key: index }, props.renderItem({ item, index }))));
     },
@@ -63,11 +66,29 @@ vi.mock('@/theme', async () => {
   return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors: tokens.darkColors }), useThemedStyles: (make: any) => make(tokens.darkColors) };
 });
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => {}, multiRemove: async () => {} } }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['ArrowDownToLine', 'Copy', 'Database', 'File', 'Info', 'MessageSquarePlus', 'Share'].map(key => [key, () => null])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['ArrowDownToLine', 'Copy', 'Database', 'File', 'Info', 'MessageSquarePlus', 'Share'].map((key) => [key, () => null])));
 vi.mock('expo-clipboard', () => ({}));
 vi.mock('expo-image', () => ({ Image: () => null }));
 vi.mock('expo-sharing', () => ({ shareAsync: state.shareAsync }));
-vi.mock('react-native-webview', () => ({ WebView: () => { throw new Error('Android PDF page must not mount a WebView'); } }));
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock("expo-file-system", () => ({
+  File: class {
+    exists = false;
+  },
+}));
+vi.mock("@/session/ModelDocumentPreview", () => ({
+  ModelDocumentPreview: () => null,
+}));
+vi.mock("@/session/DiagramDocumentPreview", () => ({
+  DiagramDocumentPreview: () => null,
+}));
+vi.mock("@/session/TextDocumentPreview", () => ({
+  TextDocumentPreview: () => null,
+}));
+vi.mock("@/session/PdfDocumentPreview", () => ({
+  PdfDocumentPreview: ({ uri }: { uri: string }) =>
+    createElement("div", { "data-testid": "pdf.reader", "data-uri": uri }),
+}));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: () => {} }));
 vi.mock('@/session/remoteAbsFileFetch', () => ({}));
 vi.mock('@/session/pdfPreviewSource', () => ({
@@ -77,7 +98,13 @@ vi.mock('@/session/fileBrowserExport', () => ({ exportRemoteFileToUrl: state.exp
 vi.mock('@/session/FileTransferBusyNotice', () => ({ FileTransferBusyNotice: () => null }));
 vi.mock('@/session/HtmlFileReader', () => ({}));
 vi.mock('@/session/HtmlPreviewLoading', () => ({}));
-vi.mock('@/session/HtmlBrowserChrome', () => ({ HtmlBrowserChrome: () => null }));
+vi.mock('@/session/HtmlBrowserChrome', () => ({ HtmlBrowserChrome: ({ onShare }: { onShare: () => void }) =>
+    createElement("button", {
+      "data-testid": "preview.share",
+      onClick: onShare,
+    }),
+}));
+vi.mock("@/session/PreviewChrome", () => ({ PreviewFooter: () => null }));
 vi.mock('@/session/HtmlWebsiteBrowser', () => ({}));
 vi.mock('@/session/mobileHtmlPreview', () => ({}));
 vi.mock('@/session/useHtmlSnapshot', () => ({}));
@@ -108,21 +135,24 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); });
 
 describe('Android PDF preview', () => {
-  it('shows the export/share page without fetching, then shares the original PDF on tap', async () => {
+  it("previews the authorized PDF on Android and shares the original on tap", async () => {
     await act(async () => { root.render(<Screen />); });
 
-    expect(host.querySelector('[data-testid="filePreview.unsupported"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="filePreview.pdfLoading"]')).toBeNull();
-    expect(host.textContent).toContain("PDFs can't be previewed inside Cindy on Android yet.");
-    expect(state.exportFile).not.toHaveBeenCalled();
-    // No WebView owns horizontal drags on Android, so the pager keeps swiping to neighbours.
-    expect(state.pager.scrollEnabled).toBe(true);
+    expect(host.querySelector('[data-testid="filePreview.unsupported"]')).toBeNull();
+    expect(host.querySelector('[data-testid="pdf.reader"]')
+        ?.getAttribute("data-uri"),
+    ).toBe("https://oss.example.invalid/report.pdf");
+    expect(state.exportFile).toHaveBeenCalledOnce();
+    expect(state.shareAsync).not.toHaveBeenCalled();
+    expect(state.pager.scrollEnabled).toBe(false);
 
-    const share = host.querySelector<HTMLButtonElement>('[data-testid="filePreview.unsupportedDownload"]');
+    const share = host.querySelector<HTMLButtonElement>(
+      '[data-testid="preview.share"]',
+    );
     expect(share).not.toBeNull();
     await act(async () => { share!.click(); });
 
-    expect(state.exportFile).toHaveBeenCalledOnce();
+    expect(state.exportFile).toHaveBeenCalledTimes(2);
     expect(state.exportFile.mock.calls[0]?.slice(1)).toEqual(['/repo', 'docs/report.pdf', 7]);
     expect(state.shareTemp).toHaveBeenCalledWith(
       'https://oss.example.invalid/report.pdf', 'application/pdf', 'report.pdf', expect.anything(),
