@@ -49,6 +49,9 @@ test("Mobile src 下所有界面文件都算 UI 路径", () => {
 		"apps/mobile/src/remote-desktop/RemoteDesktopControls.tsx",
 		"apps/mobile/src/inputHandoff/InputHandoffSheet.ios.tsx",
 		"apps/mobile/src/session/ContextSheet.tsx",
+		"apps/mobile/src/platform/chrome/nativeGlassButtonStyle.ios.ts",
+		"apps/mobile/src/plugins/PluginTaskPickerView.ios.ts",
+		"apps/mobile/src/session/Something.android.ts",
 	]) assert.equal(isUiPath(file), true, file);
 	for (const file of ["apps/mobile/src/device-link/client.ts", "apps/mobile/app.config.js", "packages/maker-shared/src/x.tsx"]) {
 		assert.equal(isUiPath(file), false, file);

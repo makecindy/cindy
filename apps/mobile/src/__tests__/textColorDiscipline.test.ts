@@ -45,7 +45,7 @@ const files = collectFiles();
 
 const NEUTRAL_TEXT_COLORS = ['textPrimary', 'textSecondary', 'textTertiary', 'textPlaceholder', 'ctaText'];
 const SEMANTIC_TEXT_COLORS = [
-  'errorText', 'destructive', 'statusError', 'statusDone', 'statusAccent', 'swipeActionText',
+  'errorText', 'destructive', 'statusDone', 'statusAccent', 'swipeActionText',
   'chatInlineCodeText', 'betaChannelBadgeForeground', 'sharedTaskConfirmForeground',
   'taskTagWhite', 'taskTagWhiteCheck', // 任务标签底色上的勾与字
 ];
@@ -70,6 +70,8 @@ const KNOWN_TEXT_COLOR_DEBT = new Map<string, number>([
   // 2026-10-31 盘点:main 上刚合入的有色文字,规范未登记这些文字用途,待设计裁决或有意可见 PR。
   ['src/session/SessionUsageSummary.tsx quotaWarn quotaBarWarn', 1], // 额度条专用色,规范写明不用于百分比文字
   ['src/session/SessionUsageSummary.tsx quotaCrit quotaBarCrit', 1], // 同上
+  ['src/session/BotGroupCreateSheet.tsx nameError statusError', 1], // statusError 仅限状态点 / 徽标,成段错误文案应为 errorText
+  ['src/session/ContextSheetCollabView.tsx inline statusError', 1], // 同上
   ['src/session/CompanionListRow.tsx unreadCount botUnread', 1], // 规范只登记 botUnread 用于未读点,计数文字未登记
   ['src/session/ContextSheetGoalView.tsx textColor prop statusRecording', 1], // 目标视图操作按钮文字用录制状态色,该 token 定义只供状态指示
   ['src/session/InteractionPanel.tsx inline statusReady', 1], // 就绪阶段文字用品牌 teal,规范只登记了状态点
@@ -94,7 +96,8 @@ const balancedFrom = (src: string, start: number) => {
 /** 位置 index 之前最近的 JSX 开标签名,如 Text / Animated.Text / View。 */
 const enclosingTag = (src: string, index: number) =>
   [...src.slice(Math.max(0, index - 1500), index).matchAll(/<([A-Z][\w.]*)\b/g)].pop()?.[1];
-const isTextTag = (tag?: string) => !!tag && /(?:^|\.)(?:Text|AppText|TextInput|AppTextInput)$/.test(tag);
+// 文字组件:Text / TextInput 及以 Text 结尾的包装组件(AppText、MarkdownSelectableText、NativeText …),它们转发标准 Text 样式。
+const isTextTag = (tag?: string) => !!tag && /(?:^|\.)\w*Text(?:Input)?$/.test(tag);
 // SwiftUI 里明确不是文字的所有者(形状、图标、分隔、占位):它们的 foregroundStyle 不算文字色。
 // 其余所有者——包括没有 JSX 标签的可复用修饰器(如 nativeGlassButtonStyle.ios.ts)——都按文字色检查。
 const SWIFTUI_NON_TEXT = new Set(['Circle', 'Rectangle', 'RoundedRectangle', 'Capsule', 'Ellipse', 'UnevenRoundedRectangle', 'Image', 'Divider', 'Spacer', 'ProgressView', 'Gauge']);
@@ -246,6 +249,9 @@ describe('text color discipline', () => {
     expect(scanPlaceholderColors('const img = { placeholder: colors.surfaceChip };')).toEqual([]);
     expect(tokens('<Input theme={{ background: colors.chatCodeSurface, text: colors.border, textSecondary: colors.textSecondary }} />').sort()).toEqual(['border', 'textSecondary']);
     expect(scanPlaceholderColors('const t = { placeholderColor: colors.textPlaceholder };')).toEqual(['textPlaceholder']);
+    // 以 Text 结尾的包装组件转发标准 Text 样式,引用的命名样式也要追。
+    expect(scanTextColors('<MarkdownSelectableText style={styles.danger}>x</MarkdownSelectableText>\nconst styles = { danger: { color: c.border } }').map((f) => f.token)).toEqual(['border']);
+    expect(scanTextColors('<NativeText style={[styles.a, styles.danger]} />\nconst styles = { danger: { color: c.border } }').map((f) => f.token)).toEqual(['border']);
     expect(tokens('<Row textColor={colors.border} />')).toEqual(['border']);
     expect(tokens('<Row textColor={on ? colors.textPrimary : colors.border} labelColor={colors.textSecondary} />')).toEqual(['textPrimary', 'border', 'textSecondary']);
     expect(tokens('const fg = on ? colors.ctaText : colors.border;\n<Text modifiers={[foregroundStyle(fg)]} />')).toEqual(['ctaText', 'border']);

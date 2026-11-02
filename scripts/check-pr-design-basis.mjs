@@ -54,7 +54,9 @@ export function isUiPath(path) {
   return (
     UI_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     UI_FILE_SUFFIXES.some((suffix) => path.endsWith(suffix)) ||
-    (path.startsWith(MOBILE_UI_ROOT) && path.endsWith('.tsx'))
+    (path.startsWith(MOBILE_UI_ROOT) && path.endsWith('.tsx')) ||
+    // 视觉辅助 .ts：平台 chrome / 玻璃按钮样式等直接返回外观修饰器的文件，以及 .ios.ts / .android.ts 平台文件。
+    (path.startsWith(MOBILE_UI_ROOT) && (path.startsWith(`${MOBILE_UI_ROOT}platform/`) || /\.(?:ios|android)\.ts$/.test(path)))
   );
 }
 

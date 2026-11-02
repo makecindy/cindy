@@ -8,7 +8,7 @@
 
 圆角阻断只在确认的样式语境里生效（class 属性、`cn()` 等调用、纯类名字符串、样式对象 `borderRadius:`、CSS 文件）；写在普通文案里的 `rounded-md` 只报告。
 
-**近期命中**：main 最近 100 个 first-parent 合并（`b683ba1b5d..49fbcc4d07`，窗口随 main 前进，JSON 里是最终一次运行的范围），每个按 `<merge>^1..<merge>` 回放：
+**近期命中**：main 最近 100 个 first-parent 合并（`867757bf90..f721219be6`，窗口随 main 前进，JSON 里是最终一次运行的范围），每个按 `<merge>^1..<merge>` 回放：
 
 - 规范外圆角 block：1 个合并，命中 #8238（`dash/header-round-buttons`，合并提交 `c4c6d736ac`）里 `GitContextBadge.tsx:449` 的 `rounded-md`：PR 链接行的真实 6px 圆角，属于真违规，不是误报。本 PR 创建以来窗口里先后命中过 #7889（`cfd02a20b4`，侧栏 20px 图标按钮）、#8092（`37c5bb9519`，三处 `rounded-md`）和这一处，都在本 PR 创建之后才合进 main，是 CI 在旧基线上先后拦下它们的原因——main 上持续有人新增 6px 圆角，说明门禁有用。
 - 颜色 block：0（豁免过期没有拦下任何近期改动）。
@@ -40,7 +40,7 @@
 
 ## 3. Mobile 字色测试
 
-`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **14 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（12 次，11 条）与 `KNOWN_PLACEHOLDER_DEBT`（2 次，2 条）里，按「文件 样式名 token」加次数登记：
+`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **16 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（14 次，13 条）与 `KNOWN_PLACEHOLDER_DEBT`（2 次，2 条）里，按「文件 样式名 token」加次数登记：
 
 | 文件 | token | 次数 | 说明 |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@
 | `RemoteDesktopSecuritySettings.tsx` | `inputCaret` | 1 | 空闲超时可用态 |
 | `SharedTaskScreen.tsx` | `sharedTaskConfirmBackground` | 1 | 危险文字借用确认钮红 |
 | `SessionUsageSummary.tsx` | `quotaBarWarn` / `quotaBarCrit` | 1 + 1 | 额度条专用色，规范写明不用于百分比文字 |
+| `BotGroupCreateSheet.tsx` / `ContextSheetCollabView.tsx` | `statusError` | 1 + 1 | `statusError` 仅限状态点 / 徽标，成段错误文案应为 `errorText` |
 | `CompanionListRow.tsx` 未读计数 | `botUnread` | 1 | 规范只登记 `botUnread` 用于未读点，计数文字未登记 |
 | `SessionImportSheet.tsx` | `warningFg` | 1 | 警告文字，规范只登记了图标与皇冠 |
 | `InteractionPanel.tsx` | `statusReady` | 1 | 就绪阶段文字用品牌 teal |
