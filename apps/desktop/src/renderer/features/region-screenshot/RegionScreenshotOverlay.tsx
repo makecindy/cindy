@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 
 import i18n from '@/i18n';
+import { resolveScreenshotTranslationLanguage, type ScreenshotTranslationPreference } from '../../../shared/screenshotTranslation';
 import { getInitialThemeVariant } from '@/hooks/useTheme';
 import { themeService } from '@/themes/theme-service';
 import {
@@ -63,7 +64,7 @@ import {
 } from './annotations';
 import { bitmapToImageData, cropOpaqueImageDataToBitmap, imageDataToBitmap, type RegionScreenshotOverlayBridge } from './bridge';
 import { colorHex, colorRgb, Magnifier, type PixelColor } from './Magnifier';
-import { ScreenshotModeBar, ScreenshotStyleBar, ScreenshotToolbar, TOOL_SHORTCUTS, type ScreenshotMode } from './ScreenshotToolbar';
+import { ScreenshotAiMenu, ScreenshotModeBar, ScreenshotStyleBar, ScreenshotToolbar, TOOL_SHORTCUTS, type ScreenshotMode } from './ScreenshotToolbar';
 import { SCREENSHOT_INK, SCREENSHOT_OVERLAY, type ScreenshotInk } from './screenshotColors';
 import { LiveCapturePanel } from './LiveCapturePanel';
 import { ScrollCaptureOverlay } from './ScrollCaptureOverlay';
@@ -194,6 +195,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [aiMenuOpen, setAiMenuOpen] = useState(false);
+  const [translationPreference, setTranslationPreference] = useState<ScreenshotTranslationPreference>('ui');
+  const translationPreferenceRef = useRef(translationPreference);
+  translationPreferenceRef.current = translationPreference;
   const [toolbarSize, setToolbarSize] = useState<RegionSize>({ width: 640, height: 38 });
   const [overToolbar, setOverToolbar] = useState(false);
 
@@ -284,6 +288,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       // 隐藏期间用户可能改了主题; 每次截图按当前设置重新套用。
       themeService.applyTheme(getInitialThemeVariant().theme);
       resetInteraction();
+      setTranslationPreference(payload.translationPreference ?? 'ui');
       setActiveDisplay(imageEditor || payload.cursor !== null);
       if (imageEditor) {
         setLongResult({ image: payload.frame, selection: payload.lastRegion! });
@@ -311,6 +316,15 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
           if (document.hasFocus()) bridge.focused(payload.token);
         }),
       );
+    });
+    const offTranslation = bridge.onTranslationLanguageChanged?.(({ token, preference }) => {
+      if (state.current.session?.token !== token) return;
+      translationPreferenceRef.current = preference;
+      setTranslationPreference(preference);
+    });
+    const offLocale = bridge.onLocaleChanged?.(({ token, locale }) => {
+      if (state.current.session?.token !== token) return;
+      if (i18n.language !== locale) void i18n.changeLanguage(locale);
     });
     const offEnd = bridge.onEnd(() => {
       resetInteraction();
@@ -349,6 +363,8 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       offBegin();
       offEnd();
       offClear();
+      offTranslation?.();
+      offLocale?.();
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('blur', onBlur);
     };
@@ -610,7 +626,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       busyRef.current = true;
       setAiMenuOpen(false);
       const ok = await bridge
-        .exportImage(current.token, { action, selection: selected, image })
+        .exportImage(current.token, { action, selection: selected, image,
+          ...(action === 'translate' ? { translationLanguage: resolveScreenshotTranslationLanguage(translationPreferenceRef.current, i18n.resolvedLanguage || i18n.language) } : {}),
+        })
         .catch(() => false);
       if (!ok) busyRef.current = false;
     },
@@ -1040,6 +1058,15 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
 
   // ── 样式 ───────────────────────────────────────────────────────────────
 
+  const translationProps = {
+    translationPreference,
+    onTranslationPreferenceChange: async (value: ScreenshotTranslationPreference) => {
+      const token = state.current.session?.token;
+      if (!token || !await bridge.setTranslationLanguage(token, value)) throw new Error('Translation preference not saved');
+      if (state.current.session?.token === token) setTranslationPreference(value);
+    },
+  };
+
   const selectedAnnotation = selectedId ? annotations.find((a) => a.id === selectedId) ?? null : null;
   const styleTool: AnnotationTool | null = editing
     ? 'text'
@@ -1301,6 +1328,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       )}
       {session && !imageEditor && activeDisplay && <div className="absolute z-20 w-max -translate-x-1/2" style={{ left: modeBarCenter ?? safe.x + safe.width / 2, top: safe.y + 12, maxWidth: safe.width - 24 }} onPointerEnter={() => setOverToolbar(true)} onPointerLeave={() => setOverToolbar(false)}>
         <ScreenshotModeBar mode={captureMode} finished={!!longResult} canAsk={isSelected && !dragging} aiMenuOpen={aiMenuOpen}
+          {...translationProps}
           area={safe} onPositionChange={setModeBarCenter}
           onMode={(mode) => { commitEditing(); setCaptureMode(mode); setTool(null); setSelectedId(null); setAiMenuOpen(false); setLiveError(false); }}
           onToggleAiMenu={() => setAiMenuOpen((open) => !open)} onAction={(action) => void runAction(action)} />
@@ -1320,7 +1348,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       )}
     </div>
   );
-  return imageEditor ? <ScreenshotEditorViewport key={session?.token ?? 'empty'} image={session?.frameSize ?? null} tools={toolbar} onAction={(action) => void runAction(action)}
+  return imageEditor ? <ScreenshotEditorViewport key={session?.token ?? 'empty'} image={session?.frameSize ?? null} tools={toolbar} aiMenu={<ScreenshotAiMenu {...translationProps} canAsk={!!session} aiMenuOpen={aiMenuOpen} onToggleAiMenu={() => setAiMenuOpen((open) => !open)} onAction={(action) => void runAction(action)} />}
     onMinimize={() => { if (session) window.regionScreenshotEditor?.minimize(session.token); }}
     onClose={() => { if (session) bridge.cancel(session.token); }}
   >{canvasContent}</ScreenshotEditorViewport> : canvasContent;

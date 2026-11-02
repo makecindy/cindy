@@ -2,6 +2,12 @@
   "progress": {
     "stop": "Detener"
   },
+  "work": {
+    "queued": "En cola {{count}}",
+    "active": "En curso {{count}}",
+    "expand": "Expandir actividad de compañeros",
+    "collapse": "Contraer actividad de compañeros"
+  },
   "title": "Chats grupales",
   "memberSeparator": ", ",
   "memberCount_one": "Miembro de {{count}}",
@@ -194,6 +200,7 @@
     "eyebrow_many": "Plan · Pasos {{count}}"
   },
   "speaking": {
+    "queued": "En cola",
     "stopping": "Parando…",
     "planning": "Dividiendo el trabajo…",
     "step": "Trabajando en ello…"
