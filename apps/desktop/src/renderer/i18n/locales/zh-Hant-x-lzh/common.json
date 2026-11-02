@@ -18777,6 +18777,9 @@
     "failed": "操作未畢，請再試或覽此機之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "適寬",
+    "fitPage": "適頁",
+    "pageNumber": "頁碼",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖",
