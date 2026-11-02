@@ -9338,13 +9338,17 @@ assertRouteCurrent();
      * codex 会把同一份 tool_params 再渲染一份 tool_params_display 一起发给客户端
      * （codex-rs core/src/mcp_tool_call.rs 的 build_mcp_tool_approval_display_params：
      * 同一对象的逐字段副本，不是截断版）。两份都进证据等于把同一个动作数两遍 ——
-     * 动作文本长度按 4096 字符预算计量（MAX_AUTO_REVIEW_ACTION_TEXT_CHARS），
-     * 参数里带一段几 KB 指令的普通调用就会凭空超预算被静默拦截：用户从没被问过，
-     * Agent 还被告知「用户拒绝」（#7254）。
+     * 完整证据按 131,072 字符预算计量（MAX_AUTO_REVIEW_ACTION_TEXT_CHARS；另一个
+     * 4,096 是同步静态解析自己的上限 MAX_AUTO_REVIEW_STATIC_TEXT_CHARS，超了只是
+     * 转完整模型审阅，不是拦截），同一份几 KB 指令的参数被数两遍就凭空多出一倍。
      *
      * 这里只去掉**重复的那一份**：原始参数一字不删地保留，审阅模型看到的动作内容
      * 与之前完全一致，变的只是同一份内容不再被计两次。上下文（elicitation 的
      * message）本来就在 input 里，也不再重复一份。
+     *
+     * 另外要分清两件事：完整证据**真的**超预算时，裁决是 `ask`（交用户确认，见
+     * 854c36412a），不是静默拦截。所以去掉副本不是为了「让调用通过」，而是让
+     * 预算只按真实动作量计一次，别把普通调用误判成超限。
      */
     function mcpToolReviewAction(toolName: string, input: Record<string, unknown>): ReviewableAction {
       const rawInput: Record<string, unknown> = { ...input };
