@@ -103,7 +103,7 @@
 - **写操作**：带 `idempotencyKey`。同一内容重试沿用原编号，内容变了换新编号；写入方按「当前用户 + 编号」去重，同编号不同内容应拒绝。**不自动重试**：超时不等于没写入，取消等待也不等于已撤销，按编号核对。
 - **生命周期**：用 `AbortController` 取消等待，`onteardown` 里停止更新 DOM。卡片离屏可能被卸载，重开回到最初的结果；要保留的状态通过工具存取。
 - **文件**：页面拿不到本机路径，只能读取本卡已授权文件的只读地址。显示用 `resource_link` 的 `_meta['cindy/file'].url`（临时、仅本卡有效，不自己拼、不持久保存）；需要身份的图片先 `fetch_file`。`upload_files` 一次最多 4 个，单个 64 MiB、合计 128 MiB。拖放不推荐，用 `pick_files`。手机和远程查看时文件选择、导出可能不可用，提示回执行电脑操作。
-- **从对话交来的文件**：在 hostContext 的 `cindy/attachments`（见下例），每项是 `resource_link`（`name`、`uri`、`size`，地址同上）。媒体直接显示；`uri` 以 `handoff:` 开头的是交接的 CSV、XLSX（需要 0.1.123-beta 及以上）：首屏只显示名称和大小，不读不解析；生成页面时把引用写进按钮（如 `data-file-ref`），点击时用插件自己的参数名交给工具（如 `files`），不用 `cindy_handoff_files`。要预览才读 `url`；没有 `url` 是文件已失效（7 天未用或已删除），提示重新发送。未声明交接时表格走 `dir`（一次性、10 分钟、单个 50 MiB）：插件立即暂存，批次号和预览写进首屏。
+- **从对话交来的文件**：在 hostContext 的 `cindy/attachments`（见下例），每项是 `resource_link`（`name`、`uri`、`size`，地址同上）。媒体直接显示；`uri` 以 `handoff:` 开头的是交接的 CSV、XLSX（需要 0.1.122-beta 及以上）：首屏只显示名称和大小，不读不解析；生成页面时把引用写进按钮（如 `data-file-ref`），点击时用插件自己的参数名交给工具（如 `files`），不用 `cindy_handoff_files`。要预览才读 `url`；没有 `url` 是文件已失效（7 天未用或已删除），提示重新发送。未声明交接时表格走 `dir`（一次性、10 分钟、单个 50 MiB）：插件立即暂存，批次号和预览写进首屏。
 
   ```js
   const links = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachments'] ?? [];
