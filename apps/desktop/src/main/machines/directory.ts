@@ -42,8 +42,14 @@ export interface SshMachine {
   port: number;
   user: string;
   connection: string;
-  /** reachable：读到了；unreachable：连不上或超时；unreadable：连上了，但那台跑不了这段命令（例如 Windows）。 */
-  availability: 'reachable' | 'unreachable' | 'unreadable';
+  /**
+   * reachable：读到了。unreachable：连不上或超时。unreadable：连上了，但跑不了这段命令（例如 Windows）。
+   * host_key_changed：主机密钥和记录不一致，已拒绝连接，要向可信来源核对指纹。
+   * unverified：还没信任过这台的密钥，这里不连接：自动读取不能替用户做首次信任。
+   */
+  availability: 'reachable' | 'unreachable' | 'unreadable' | 'host_key_changed' | 'unverified';
+  /** 配置里地址相同的其他条目，可能是同一台机器的另一个入口，一个连不上不代表这台机器有问题。 */
+  sameAddressAs?: string[];
   os: string | null;
   arch: string | null;
   status: MachineStatus | null;
@@ -69,6 +75,8 @@ export interface MachineDirectoryDeps {
   listSsh(): Promise<Array<Pick<SshMachine, 'kind' | 'id' | 'hostname' | 'port' | 'user' | 'connection'>>>;
   /** 在那台主机上跑只读状态命令，返回输出；连不上时抛错。 */
   readSsh(id: string): Promise<string>;
+  /** 这台的密钥是否已被信任过；不连接。 */
+  isSshKeyKnown(hostname: string, port: number): Promise<boolean>;
   /** 传输层等多久算这次没问到：一台卡住不能拖住其他机器。 */
   probeTimeoutMs?: number;
 }
@@ -90,13 +98,14 @@ const withTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
 async function probeSsh(host: Awaited<ReturnType<MachineDirectoryDeps['listSsh']>>[number], deps: MachineDirectoryDeps): Promise<SshMachine> {
   const empty = { os: null, arch: null, status: null };
   try {
+    if (!await deps.isSshKeyKnown(host.hostname, host.port)) return { ...host, availability: 'unverified', ...empty };
     const parsed = parseSshStatus(await withTimeout(deps.readSsh(host.id), deps.probeTimeoutMs ?? SSH_PROBE_TIMEOUT_MS));
     return parsed
       ? { ...host, availability: 'reachable', os: parsed.os, arch: parsed.arch, status: parsed.status }
       : { ...host, availability: 'unreadable', ...empty };
   } catch (error) {
     const code = /^\[([A-Z_]+)\]/.exec(message(error))?.[1];
-    return { ...host, availability: 'unreachable', ...empty, ...(code ? { errorCode: code } : {}) };
+    return { ...host, availability: code === 'SSH_HOST_KEY_MISMATCH' ? 'host_key_changed' : 'unreachable', ...empty, ...(code ? { errorCode: code } : {}) };
   }
 }
 
@@ -136,7 +145,10 @@ export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineD
       osVersion: device.deviceInfo?.osVersion ?? null,
       ...await probe(device, deps),
     }))),
-    deps.listSsh().then(async hosts => ({ hosts: await Promise.all(hosts.map(host => probeSsh(host, deps))) }), (error: unknown) => ({ error: message(error) })),
+    deps.listSsh().then(async hosts => ({ hosts: (await Promise.all(hosts.map(host => probeSsh(host, deps)))).map(host => {
+      const others = hosts.filter(other => other.id !== host.id && other.hostname === host.hostname).map(other => other.id);
+      return others.length ? { ...host, sameAddressAs: others } : host;
+    }) }), (error: unknown) => ({ error: message(error) })),
   ]);
   return {
     computers,

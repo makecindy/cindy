@@ -1261,6 +1261,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             listSsh: async () => (await (await loadRemoteSsh()).getRemoteSshPoolHydrated()).list().map(({ config, status }) => ({
               kind: 'ssh' as const, id: config.id, hostname: config.hostname, port: config.port, user: config.user, connection: status,
             })),
+            isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
             readSsh: async (id) => {
               const remoteSsh = await loadRemoteSsh();
               await remoteSsh.ensureRemoteHostReady(id);

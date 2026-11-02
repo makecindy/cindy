@@ -23,6 +23,7 @@ const deps = (devices: DeviceLinkDeviceView[], invokeStatus: MachineDirectoryDep
   selfName: () => 'this-mac',
   listSsh: async () => [],
   readSsh: async () => '',
+  isSshKeyKnown: async () => true,
   probeTimeoutMs: 5,
 });
 const byId = async (input: MachineDirectoryDeps) =>
@@ -85,6 +86,22 @@ describe('list_machines directory', () => {
       ['nas', 'reachable', 512 * 1024], ['stuck', 'unreachable', undefined], ['windows', 'unreadable', undefined],
     ]);
     expect(ssh[0]!.status?.disk).toEqual({ freeBytes: 40 * 1024, totalBytes: 100 * 1024 });
+  });
+
+  it('never connects to a host whose key was not trusted before, and reports a changed key as such', async () => {
+    const host = (id: string, hostname = id) => ({ kind: 'ssh' as const, id, hostname, port: 22, user: 'me', connection: 'disconnected' });
+    const readSsh = vi.fn(async (id: string): Promise<string> => { throw new Error(id === 'router' ? '[SSH_HOST_KEY_MISMATCH] changed' : '[SSH_CONNECT_FAILED] refused'); });
+    const { ssh } = await listMachines({
+      ...deps([], async () => status),
+      listSsh: async () => [host('new'), host('router'), host('mac', 'mini'), host('mini-1221', 'mini')],
+      readSsh,
+      isSshKeyKnown: async (hostname) => hostname !== 'new',
+    });
+    expect(ssh.map(item => [item.id, item.availability, item.sameAddressAs])).toEqual([
+      ['new', 'unverified', undefined], ['router', 'host_key_changed', undefined],
+      ['mac', 'unreachable', ['mini-1221']], ['mini-1221', 'unreachable', ['mac']],
+    ]);
+    expect(readSsh).not.toHaveBeenCalledWith('new');
   });
 
   it('says so when SSH hosts could not be read instead of reporting none', async () => {
