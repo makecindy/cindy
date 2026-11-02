@@ -96,6 +96,22 @@ describe('headless profile', () => {
       }),
     ]);
   });
+  // 生产 profile 的提示词摘要必须与随包 prompt.md 一致，否则 headless 会话根本起不来
+  // (readProfile 抛 system prompt digest does not match expectedSystemPromptDigest)。
+  // 改 Desktop 提示词后忘了重跑 profiles:freeze 会在这里被拦下。
+  it('keeps every tracked production profile consistent with its prompt file', async () => {
+    const profileFiles = [
+      'cindy-production-claude/profile.example.json',
+      'cindy-production-codex/profile.example.json',
+      'cindy-production-pi/profile.example.json',
+      'cindy-production-pi/profile.byom.example.json',
+      'cindy-production-pi/profile.deepseek-v4-flash.example.json',
+    ];
+    for (const file of profileFiles) {
+      const resolved = await readProfile(path.resolve('profiles', file));
+      expect(resolved.systemPromptDigest).toBe(sha256(resolved.systemPrompt!));
+    }
+  });
   it('resolves a bundled binary relative to the profile file', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'headless-profile-relative-'));
     await writeFile(path.join(dir, 'bin'), 'binary');
