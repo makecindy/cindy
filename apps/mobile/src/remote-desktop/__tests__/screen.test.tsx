@@ -4352,6 +4352,61 @@ describe("remote desktop controls", () => {
     ]);
   });
 
+  // Unit: review of #8430. Clipboard sends a host-wide release; a modifier the
+  // user still holds must be pressed again, not silently lost.
+  it("presses a still-held modifier again after the clipboard control released input", async () => {
+    fixture.nativeMenus = true;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities"
+        ? { ...result, clipboardText: true }
+        : result;
+    });
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    act(() => button("keyboard").click());
+    act(() => fixture.views["remoteDesktop.keyboardMode"].onPress());
+    const keys = fixture.views["remoteDesktop.keys"];
+    act(() =>
+      keys.onLayout({ nativeEvent: { layout: { width: 370, height: 276 } } }),
+    );
+    const at = (id: string, identifier: number) => {
+      const style = Object.assign(
+        {},
+        ...fixture.views[`remoteDesktop.key.${id}`].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+      return {
+        nativeEvent: {
+          identifier,
+          locationX: style.left + style.width / 2,
+          locationY: style.top + style.height / 2,
+        },
+      };
+    };
+    act(() => keys.onTouchStart(at("ShiftLeft", 1)));
+    act(() => keys.onTouchStart(at("KeyA", 2)));
+    act(() => keys.onTouchEnd(at("KeyA", 2)));
+    fixture.post.mockClear();
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[data-testid="native-menu.paste"]')!
+        .click(),
+    );
+    // The host-wide release comes first, then Shift is pressed again.
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m: any) => m.events)
+        .slice(0, 2),
+    ).toEqual([
+      { kind: "release" },
+      { kind: "key", code: "ShiftLeft", down: true },
+    ]);
+  });
+
   it("falls back to the bar when no system keyboard rises, as with a hardware keyboard", async () => {
     vi.useFakeTimers();
     try {

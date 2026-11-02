@@ -891,6 +891,7 @@ export function RemoteDesktopSession({
     request,
     exitLock.current,
   );
+  const keyResync = useRef<(() => void) | null>(null);
   const transferClipboard = async (action: "copy" | "paste") => {
     const current = active.current;
     const epoch = generation.current;
@@ -906,6 +907,8 @@ export function RemoteDesktopSession({
     };
     check();
     send({ type: "events", events: [{ kind: "release" }] });
+    // The key surface still holds what the user's fingers hold; press it again.
+    keyResync.current?.();
     if (
       caps?.clipboardContent &&
       remotePresentation?.readClipboard &&
@@ -3425,6 +3428,7 @@ export function RemoteDesktopSession({
     // Inactive already released host input; latched modifiers must not outlive it.
     enabled: canInput && appState === "active",
     allowInput: foldKeyInputAllowed,
+    resyncRef: keyResync,
     send,
     systemActions: foldSystemActions,
     undo: foldUndo,

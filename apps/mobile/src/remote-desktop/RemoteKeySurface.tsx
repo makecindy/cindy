@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type ReactNode,
 } from "react";
 import { StyleSheet, View, type GestureResponderEvent } from "react-native";
@@ -215,6 +216,7 @@ export function RemoteKeySurface({
   renderKeycap,
   renderOverlay,
   testID = "remoteDesktop.keys",
+  resyncRef,
 }: {
   platform: HostPlatform;
   enabled: boolean;
@@ -240,6 +242,11 @@ export function RemoteKeySurface({
   renderKeycap?: (rect: KeyRect) => ReactNode;
   renderOverlay?: (rects: KeyRect[]) => ReactNode;
   testID?: string;
+  /**
+   * Filled with a function that presses again whatever this surface still holds.
+   * The screen calls it after an action that released every host key.
+   */
+  resyncRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { t } = useTranslation();
   const { colors: themeColors } = useTheme();
@@ -344,6 +351,7 @@ export function RemoteKeySurface({
     () => allRects.filter((rect) => !rect.id.startsWith(STRIP_END)),
     [allRects],
   );
+  if (resyncRef) resyncRef.current = () => emit(input.resync());
   const rectsRef = useRef(rects);
   rectsRef.current = rects;
 
