@@ -45,6 +45,9 @@ vi.mock('../../logger.js', () => ({
 }));
 
 vi.mock('../../maker-ipc/register.js', () => ({
+  // The production provider now captures this optional reader during setup.
+  // This suite exercises collab delivery with the group-history host absent.
+  tryGetBotGroupHistoryReader: () => undefined,
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
   getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
