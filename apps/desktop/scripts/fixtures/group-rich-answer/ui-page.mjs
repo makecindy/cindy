@@ -14,9 +14,10 @@ export default {
     assert.equal(await page.getByTestId('sent-answer').innerText(), '');
     assert.equal(await page.locator('img[alt="活动插图"]').count(), 1);
     assert.equal(await page.locator('svg[aria-label="路线示意"]').count(), 1);
-    if (ui.ctx?.case === 'readonly' || await button.isDisabled()) {
+    if (ui.case === 'readonly') {
       assert.equal(await button.isDisabled(), true); return;
     }
+    assert.equal(await button.isDisabled(), false);
     await page.getByLabel('同行人数').fill('3');
     await ui.capture('edited');
     await button.click();

@@ -42,6 +42,17 @@ import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
+/** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
+const richReplyAttempts = { owner: getDataOwnerGeneration().dataOwnerId, ids: new Map<string, string>() };
+function richReplyClientId(key: string): string {
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (richReplyAttempts.owner !== owner) { richReplyAttempts.owner = owner; richReplyAttempts.ids.clear(); }
+  const clientId = richReplyAttempts.ids.get(key) ?? crypto.randomUUID();
+  richReplyAttempts.ids.delete(key);
+  richReplyAttempts.ids.set(key, clientId);
+  if (richReplyAttempts.ids.size > 256) richReplyAttempts.ids.delete(richReplyAttempts.ids.keys().next().value!);
+  return clientId;
+}
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
@@ -568,16 +579,17 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   };
   const onSent = useCallback(() => { refreshRef.current(); refreshBotGroups(); }, []);
   // A component reply belongs to this thread; the composer's “also send” choice and draft stay intact.
-  const sendRichAnswer = async (text: string) => {
+  const sendRichAnswer = async (text: string, sourceMessageId: string) => {
     if (readOnly || sharing) return false;
     const owner = getDataOwnerGeneration();
-    const input = { text, clientId: crypto.randomUUID(), mentions: { all: false, botIds: [] } };
+    const attemptKey = JSON.stringify([group.id, rootId, sourceMessageId, text]);
+    const input = { text, clientId: richReplyClientId(attemptKey), mentions: { all: false, botIds: [] } };
     onSendStart({ ...input, attachments: [], quote: null });
     try {
       const result = await api().reply({ groupId: group.id, rootId, ...input });
       if (!isDataOwnerGenerationCurrent(owner)) return false;
       onSendSettled(input.clientId, result.ok ? { ok: true, messageId: result.messageId } : { ok: false });
-      if (result.ok) onSent();
+      if (result.ok) { richReplyAttempts.ids.delete(attemptKey); onSent(); }
       return result.ok;
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) onSendSettled(input.clientId, { ok: false });
@@ -625,7 +637,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         shareScope={shareScope}
         sharing={sharing}
         readOnly={readOnly}
-        onRichSend={sendRichAnswer}
+        onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.

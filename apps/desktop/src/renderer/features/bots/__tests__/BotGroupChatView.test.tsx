@@ -4588,3 +4588,45 @@ it('renders a verified shared bot answer with its send action disabled', async (
   expect((button as HTMLButtonElement).disabled).toBe(true);
   expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
 });
+
+// PR #8439 P1: simulate a committed reply whose receipt is lost. Existing happy-path
+// routing coverage did not detect a second server-side reply after retry/remount (unit tier).
+it('reuses a rich thread reply attempt after a lost receipt and panel remount', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const content = '```cindy-ui\n' + [
+    { seq: 1, version: 1, op: 'create', id: 'text', kind: 'input', props: { label: 'Retry reply text', default: 'First reply' } },
+    { seq: 2, op: 'create', id: 'send', kind: 'button', props: { label: 'Retry rich reply', send: { ref: 'text' } } },
+  ].map(op => JSON.stringify(op)).join('\n') + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+  mocks.thread.mockResolvedValue({ ok: true, root: msg({ id: 'u1', content: 'Retry root' }), hasMore: false,
+    replies: [msg({ id: 'rich-retry-origin', authorKind: 'bot', authorBotId: 'a', content })] });
+  const saved = new Map<string, string>();
+  let loseReceipt = true;
+  mocks.reply.mockImplementation(async ({ clientId }: { clientId: string }) => {
+    if (!saved.has(clientId)) saved.set(clientId, `server-reply-${saved.size + 1}`);
+    if (loseReceipt) { loseReceipt = false; throw new Error('TIMEOUT'); }
+    return { ok: true, messageId: saved.get(clientId)! };
+  });
+  renderView();
+  const open = async () => {
+    fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    return { panel, button: await within(panel).findByRole('button', { name: 'Retry rich reply' }) };
+  };
+  let view = await open();
+  fireEvent.click(view.button);
+  await within(view.panel).findByText('richAnswer.sendFailed');
+  const firstId = mocks.reply.mock.calls[0]![0].clientId;
+  fireEvent.click(within(view.panel).getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
+  view = await open();
+  fireEvent.click(view.button);
+  await within(view.panel).findByRole('button', { name: 'richAnswer.sent' });
+  expect(mocks.reply.mock.calls[1]![0].clientId).toBe(firstId);
+  expect(saved.size).toBe(1);
+  fireEvent.change(within(view.panel).getByLabelText('Retry reply text'), { target: { value: 'New reply' } });
+  fireEvent.click(within(view.panel).getByRole('button', { name: 'Retry rich reply' }));
+  await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(3));
+  expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(firstId);
+  expect(saved.size).toBe(2);
+});
