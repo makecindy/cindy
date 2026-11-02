@@ -15235,7 +15235,8 @@
         "resume": "Retomar",
         "pause": "Pausar",
         "deleteAutomation": "Excluir automação"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -15474,6 +15475,14 @@
         "preRunPluginRequired": "Escolha um plugin para a verificação prévia",
         "templateParamRequired": "Insira {{label}}",
         "templateApplyFailed": "Não foi possível aplicar o modelo. Verifique os parâmetros e tente novamente."
+      },
+      "webhook": {
+        "label": "Gatilho de webhook",
+        "description": "Executa esta tarefa quando chega um evento externo. As condições de horário continuam valendo.",
+        "eventsLabel": "Somente estes eventos (opcional)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "Separe com vírgulas. Deixe vazio para responder a todos os eventos.",
+        "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários."
       }
     },
     "chips": {
@@ -15674,6 +15683,30 @@
           "prompt": "Verifique os documentos no diretório de trabalho e encontre conteúdo que precisa ser atualizado.\nRestrições:\n- Procure informações desatualizadas (datas antigas, links quebrados, processos ou ferramentas obsoletos), contradições e duplicações\n- Cite o caminho do arquivo e a localização de cada problema e explique o motivo\n- Categorize as sugestões como \"atualizar / mesclar / excluir\" e produza uma lista de revisão\n- Apresente apenas o relatório; não modifique os documentos"
         }
       }
+    },
+    "webhook": {
+      "title": "Gatilho de webhook",
+      "url": "Endereço de recebimento",
+      "secret": "Segredo",
+      "copy": "Copiar",
+      "urlUnavailable": "O endereço de recebimento não está disponível agora.",
+      "quotaNotifyTitle": "Limite de recebimentos de Webhook atingido",
+      "quotaExhausted": "Os {{limit}} recebimentos de Webhook de hoje acabaram e voltam às {{time}}. Até lá, eventos externos não acionarão tarefas. Execuções agendadas e o uso do modelo não são afetados.",
+      "signedOut": "Entre na sua conta Cindy para retomar o recebimento. Suas configurações foram mantidas.",
+      "serviceUnavailable": "O recebimento de Webhook não está disponível neste ambiente.",
+      "suspended": "Os Webhooks estão desativados para esta conta.",
+      "endpointLimit": "Esta conta atingiu o limite de endereços de recebimento. Exclua as tarefas de Webhook que não usa mais e tente novamente.",
+      "offline": "Este computador não está conectado ao servidor no momento. Os eventos ficam guardados e são entregues ao reconectar.",
+      "localOnlyHint": "Este endereço só funciona neste computador. Encaminhe eventos públicos para ele, por exemplo com gh webhook forward.",
+      "eventsSummary": "Eventos: {{events}}",
+      "lastReceived": "Último evento: {{time}}",
+      "neverReceived": "Nenhum evento recebido ainda",
+      "ignored": "{{count}} ignorados",
+      "generateSecret": "Gerar segredo",
+      "rotateSecret": "Gerar segredo novamente",
+      "secretOnce": "Copie este segredo agora. Ele não será exibido novamente.",
+      "secretMissing": "Os eventos são recusados até que um segredo seja gerado.",
+      "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa."
     }
   },
   "issueTracker": {

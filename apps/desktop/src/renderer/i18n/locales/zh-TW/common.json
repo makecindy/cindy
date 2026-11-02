@@ -15027,7 +15027,8 @@
         "resume": "恢復",
         "pause": "暫停",
         "deleteAutomation": "刪除自動化"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手動觸發",
@@ -15266,6 +15267,14 @@
         "preRunPluginRequired": "請為前置檢查選擇插件",
         "templateParamRequired": "請填寫{{label}}",
         "templateApplyFailed": "無法套用模板，請檢查參數後重試"
+      },
+      "webhook": {
+        "label": "Webhook 觸發",
+        "description": "外部事件到達時執行此任務，排程條件仍然有效。",
+        "eventsLabel": "只回應這些事件（選填）",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "以逗號分隔；留空則回應所有事件。",
+        "quotaHint": "每天的 Webhook 接收次數有上限，這裡的篩選不會減少次數。請在傳送方（如 GitHub）只勾選需要的事件。"
       }
     },
     "chips": {
@@ -15466,6 +15475,30 @@
           "prompt": "體檢工作目錄中的文件，找出需要更新的內容。\n約束：\n- 檢查過期資訊（舊日期、失效連結、已廢棄的流程或工具）、前後矛盾和重複內容\n- 每個問題都註明檔案路徑和具體位置，說明判斷依據\n- 按\"建議更新 / 建議合併 / 建議刪除\"分類，給出修訂建議清單\n- 只輸出體檢報告，不要直接修改文件"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook 觸發",
+      "url": "接收位址",
+      "secret": "金鑰",
+      "copy": "複製",
+      "urlUnavailable": "接收位址暫時無法使用。",
+      "quotaNotifyTitle": "Webhook 接收次數已用完",
+      "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次數已用完，{{time}} 恢復。在此之前外部事件不會觸發任務；定時執行和模型額度不受影響。",
+      "signedOut": "登入 Cindy 帳號後恢復接收，設定已保留。",
+      "serviceUnavailable": "目前環境暫不提供 Webhook 接收服務。",
+      "suspended": "此帳號的 Webhook 已被停用。",
+      "endpointLimit": "帳號的接收位址數已達上限。請刪除不用的 Webhook 任務後再試。",
+      "offline": "這台電腦暫時未連上伺服器。事件會暫存，連線恢復後送達。",
+      "localOnlyHint": "此位址只在這台電腦上有效。公開網路事件需要轉發過來，例如使用 gh webhook forward。",
+      "eventsSummary": "事件：{{events}}",
+      "lastReceived": "最近事件：{{time}}",
+      "neverReceived": "尚未收到事件",
+      "ignored": "已忽略 {{count}} 個",
+      "generateSecret": "產生金鑰",
+      "rotateSecret": "重新產生金鑰",
+      "secretOnce": "請立即複製此金鑰，之後不會再顯示。",
+      "secretMissing": "產生金鑰之前，事件都會被拒絕。",
+      "rotateFailed": "無法產生金鑰。金鑰只能在執行此任務的電腦上管理。"
     }
   },
   "issueTracker": {

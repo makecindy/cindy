@@ -1073,6 +1073,50 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
   });
 });
 
+// ── schedule_create / schedule_update: Webhook 触发需要 Cindy 账号 ───────────────
+
+describe('Webhook 触发需要可用的接收方', () => {
+  const baseArgs = {
+    name: 't',
+    prompt: 'p',
+    cronExpr: '*/10 * * * *',
+    timezone: 'Asia/Shanghai',
+    recurring: true,
+    agentKind: 'claude-code',
+    notify: { desktop: true, feishu: false },
+  };
+
+  async function callCreate(receiver: 'cloud' | 'signed-out' | 'unavailable', extra: Record<string, unknown>) {
+    const create = vi.fn((input: object) => ({ id: 'new-sched', ...input }));
+    const registry = new SchedulerToolRegistry();
+    registerScheduleCreateTool(
+      registry,
+      { getScheduler: () => ({ create }) as never, webhookReceiver: () => receiver },
+      () => ({ agentKind: 'claude-code', workingDir: '/x' }),
+    );
+    const res = await registry.call('schedule_create', { ...baseArgs, ...extra });
+    return { create, env: JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; message?: string } };
+  }
+
+  it('未登录时拒绝开启，不创建任务', async () => {
+    const { create, env } = await callCreate('signed-out', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(env.message).toContain('登录 Cindy 账号');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('当前环境没有接收服务时拒绝开启', async () => {
+    const { create, env } = await callCreate('unavailable', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {
+    expect((await callCreate('cloud', { webhookTrigger: {} })).env.ok).toBe(true);
+    expect((await callCreate('signed-out', {})).env.ok).toBe(true);
+  });
+});
+
 // ── schedule_create: bindToCurrentSession 按 ctx 自动绑定 targetSessionId ───────
 
 describe('schedule_create — bindToCurrentSession', () => {

@@ -138,6 +138,10 @@ export interface ScheduleFormState {
   recurring: boolean;
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
+  /** undefined = 这次编辑不涉及 Webhook，保存时不动已有配置。 */
+  webhookEnabled?: boolean;
+  /** 逗号分隔的事件筛选，原样保留用户输入。 */
+  webhookEvents?: string;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
@@ -616,6 +620,12 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     targetSessionId: hasRealBinding(form) ? form.targetSessionId.trim() : undefined,
     preRunHook: buildPreRunHook(form),
     preRunPlugin: buildPreRunPlugin(form),
+    // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
+    ...(form.webhookEnabled === undefined ? {} : {
+      webhookTrigger: form.webhookEnabled
+        ? { events: (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean) }
+        : null,
+    }),
     notify: {
       desktop: form.notifyDesktop,
       feishu: form.notifyFeishu,

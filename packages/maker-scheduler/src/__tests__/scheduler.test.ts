@@ -1178,6 +1178,60 @@ describe('Scheduler', () => {
     expect(h.runner.fire).toHaveBeenCalledTimes(1);
   });
 
+  // Bug: resume armed the placeholder cron of a manual schedule, so a webhook-only task
+  // started firing on a timer after pause + resume. Public resume entry; unit.
+  it('resume keeps a manual schedule off the timer', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.pause(sch.id);
+    await h.scheduler.resume(sch.id);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    h.clock.setTo(Date.UTC(2026, 0, 2));
+    await h.scheduler.tick();
+    expect(h.runner.fire).not.toHaveBeenCalled();
+  });
+
+  // Rule: docs/product-rules/schedule-webhook-trigger.md. The route must survive edits, or
+  // every forwarder configured with the old address silently stops delivering.
+  it('generates the webhook route itself and keeps it across edits', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { endpointId: 'caller-chosen', events: ['issues'] } });
+    const endpointId = sch.webhookTrigger!.endpointId;
+    expect(endpointId).not.toBe('caller-chosen');
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pull_request.closed'] } });
+    expect(edited.webhookTrigger).toEqual({ endpointId, events: ['pull_request.closed'] });
+    const cleared = await h.scheduler.update(sch.id, { webhookTrigger: null });
+    expect(cleared.webhookTrigger).toBeUndefined();
+    const reopened = await h.scheduler.update(sch.id, { webhookTrigger: {} });
+    expect(reopened.webhookTrigger?.endpointId).not.toBe(endpointId);
+  });
+
+  it('rejects a webhook on a timed one-shot, which the first event would use up', async () => {
+    await expect(h.scheduler.create({ ...baseInput, recurring: false, webhookTrigger: {} })).rejects.toThrow('recurring');
+    const manual = await h.scheduler.create({ ...baseInput, recurring: false, manual: true, webhookTrigger: {} });
+    expect(manual.webhookTrigger).toBeDefined();
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    await expect(h.scheduler.update(sch.id, { recurring: false })).rejects.toThrow('recurring');
+  });
+
+  it('rejects malformed webhook event filters', async () => {
+    await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
+  });
+
+  // Rule: the event reaches this fire only; a deferred attempt leaves no run and no cron replay.
+  it('passes webhook events to the runner, marks the run, and leaves retries to the caller', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
+    const webhook = { events: [{ deliveryId: 'd1', event: 'issues', receivedAt: 1 }], omitted: 0 };
+    await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook });
+    expect(h.runner.fire.mock.calls[0]![1].webhook).toEqual(webhook);
+    expect((await h.storage.listRuns(sch.id))[0]?.triggerSource).toBe('webhook');
+
+    const before = (await h.storage.get(sch.id))?.nextFireAt;
+    h.runner.fire.mockResolvedValueOnce({ sessionId: '', deferred: true, deferRetryMs: 1 });
+    const result = await h.scheduler.runNow(sch.id, { deferToCaller: true, webhook });
+    expect(result.deferred).toBe(true);
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBe(before);
+    expect(await h.storage.listRuns(sch.id)).toHaveLength(1);
+  });
+
   it('rechecks an approved resume inside the serialized schedule mutation', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     await h.scheduler.pause(sch.id);

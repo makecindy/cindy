@@ -15027,7 +15027,8 @@
         "resume": "恢复",
         "pause": "暂停",
         "deleteAutomation": "删除自动化"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手动触发",
@@ -15266,6 +15267,14 @@
         "preRunPluginRequired": "请为前置检查选择插件",
         "templateParamRequired": "请填写{{label}}",
         "templateApplyFailed": "无法应用模板，请检查参数后重试"
+      },
+      "webhook": {
+        "label": "Webhook 触发",
+        "description": "外部事件到达时运行此任务，定时条件仍然有效。",
+        "eventsLabel": "只响应这些事件（可选）",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "用逗号分隔；留空则响应全部事件。",
+        "quotaHint": "每天的 Webhook 接收次数有上限，这里的筛选不会减少次数。请在发送方（如 GitHub）只勾选需要的事件。"
       }
     },
     "chips": {
@@ -15466,6 +15475,30 @@
           "prompt": "体检工作目录中的文档，找出需要更新的内容。\n约束：\n- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容\n- 每个问题都注明文件路径和具体位置，说明判断依据\n- 按\"建议更新 / 建议合并 / 建议删除\"分类，给出修订建议清单\n- 只输出体检报告，不要直接修改文档"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook 触发",
+      "url": "接收地址",
+      "secret": "密钥",
+      "copy": "复制",
+      "urlUnavailable": "接收地址暂时不可用。",
+      "quotaNotifyTitle": "Webhook 接收次数已用完",
+      "quotaExhausted": "今天的 {{limit}} 次 Webhook 接收次数已用完，{{time}} 恢复。在此之前外部事件不会触发任务；定时运行和模型额度不受影响。",
+      "signedOut": "登录 Cindy 账号后恢复接收，配置已保留。",
+      "serviceUnavailable": "当前环境暂不提供 Webhook 接收服务。",
+      "suspended": "这个账号的 Webhook 已被停用。",
+      "endpointLimit": "账号的接收地址数已达上限。删除不用的 Webhook 任务后再试。",
+      "offline": "这台电脑暂时没有连上服务器。事件会暂存，连接恢复后送达。",
+      "localOnlyHint": "此地址只在这台电脑上有效。公网事件需要转发过来，比如用 gh webhook forward。",
+      "eventsSummary": "事件：{{events}}",
+      "lastReceived": "最近事件：{{time}}",
+      "neverReceived": "还没有收到事件",
+      "ignored": "已忽略 {{count}} 个",
+      "generateSecret": "生成密钥",
+      "rotateSecret": "重新生成密钥",
+      "secretOnce": "请现在复制此密钥，之后不会再显示。",
+      "secretMissing": "生成密钥之前，事件都会被拒绝。",
+      "rotateFailed": "无法生成密钥。密钥只能在运行此任务的电脑上管理。"
     }
   },
   "issueTracker": {

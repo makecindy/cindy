@@ -69,6 +69,7 @@ import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { createAgentAppUpdateCallbacks } from '../agent-app-update/index.js';
 import { getScheduler } from '../scheduler-host/index.js';
+import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { searchSessionsWithBotScope } from '../maker-host/session-search.js';
@@ -645,6 +646,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker
       // 仅 description 生成模式需要,tool-call 时才解引用。
+      webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
+      webhookReceiver: scheduleWebhookReceiver,
       hookScript: {
         isSessionAgentOnOtherDevice: async (sessionId) => {
           const row = await getSessionRowSnapshot(sessionId);

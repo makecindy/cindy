@@ -6,6 +6,7 @@ import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Switch } from '@/components/ui/switch';
 import { PreRunPluginFields } from './PreRunPluginFields';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -136,6 +137,16 @@ export function ScheduleFormDialog({
 }: Props) {
   const { t, i18n } = useTranslation();
   const formApi = useScheduleForm(initial);
+  // 能否接收 Webhook 由任务所在电脑决定：没有 Cindy 账号时不显示开关。
+  const [webhookReceiverReady, setWebhookReceiverReady] = useState(false);
+  useEffect(() => {
+    let current = true;
+    window.electronAPI.maker.schedule.webhookReceiver().then(
+      (receiver) => { if (current) setWebhookReceiverReady(receiver === 'cloud' || receiver === 'local'); },
+      () => { if (current) setWebhookReceiverReady(false); },
+    );
+    return () => { current = false; };
+  }, []);
   const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -846,6 +857,7 @@ export function ScheduleFormDialog({
                       setField('intervalMs', value.intervalMs);
                     }}
                   />
+                  {!form.webhookEnabled && (
                   <button
                     type="button"
                     role="checkbox"
@@ -881,9 +893,53 @@ export function ScheduleFormDialog({
                     </span>
                     {t('scheduler.editor.fields.once')}
                   </button>
+                  )}
                 </>
               )}
             </div>
+
+            {/* 项目自动化写入仓库文件，接收地址和密钥不能进仓库，所以不提供。
+                没有 Cindy 账号时隐藏；已有配置保持不变，登录后恢复接收。 */}
+            {!isProjectAutomationMode && webhookReceiverReady && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-13 leading-none text-[var(--settings-btn-secondary-text)]">
+                      {t('scheduler.editor.webhook.label')}
+                    </span>
+                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                      {t('scheduler.editor.webhook.description')}
+                    </span>
+                  </div>
+                  <Switch
+                    aria-label={t('scheduler.editor.webhook.label')}
+                    checked={form.webhookEnabled ?? false}
+                    onCheckedChange={(enabled) => {
+                      setField('webhookEnabled', enabled);
+                      // 定时的一次性任务会被一次事件用完，开启时回到循环。
+                      if (enabled && !form.manual) setField('recurring', true);
+                    }}
+                  />
+                </div>
+                {form.webhookEnabled && (
+                  <>
+                    <input
+                      value={form.webhookEvents ?? ''}
+                      onChange={(e) => setField('webhookEvents', e.target.value)}
+                      placeholder={t('scheduler.editor.webhook.eventsPlaceholder')}
+                      aria-label={t('scheduler.editor.webhook.eventsLabel')}
+                      className="h-10 rounded-full border border-[var(--settings-input-border)] bg-transparent px-4 text-sm text-[var(--settings-input-text)] outline-none"
+                    />
+                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                      {t('scheduler.editor.webhook.eventsHint')}
+                    </span>
+                    <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                      {t('scheduler.editor.webhook.quotaHint')}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
 
             {!isScriptMode && (
             <div className="flex flex-col gap-2.5">

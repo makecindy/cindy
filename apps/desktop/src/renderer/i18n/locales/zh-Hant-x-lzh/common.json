@@ -15027,7 +15027,8 @@
         "resume": "復行",
         "pause": "暫止",
         "deleteAutomation": "刪自運"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手觸",
@@ -15266,6 +15267,14 @@
         "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",
         "unavailable": "法器不可用",
         "unavailableHint": "此法器已不可用。未改擇他器前，運行時依「法器有失時」之設處置。"
+      },
+      "webhook": {
+        "label": "Webhook 觸發",
+        "description": "外事既至，則行此務；定時之約仍存。",
+        "eventsLabel": "唯應此諸事（可略）",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "以逗號相隔；空之則應諸事。",
+        "quotaHint": "Webhook 受信之數日有其限，此處之篩不減其數。請於發信之方（如 GitHub）唯選所需之事。"
       }
     },
     "chips": {
@@ -15466,6 +15475,30 @@
           "prompt": "體檢工作目錄中之文件，尋須更新之處。\n約束：\n- 察過時之資訊（舊日期、失效連結、已廢之流程或工具）、前後矛盾與重複之文\n- 每一患皆註卷之路徑與確切所在，述其所據\n- 依「宜更新 / 宜合併 / 宜刪除」分類，出修訂建議清單\n- 唯出體檢報告，勿徑改文件"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook 觸發",
+      "url": "受信之址",
+      "secret": "密鑰",
+      "copy": "複製",
+      "urlUnavailable": "受信之址暫不可用。",
+      "quotaNotifyTitle": "Webhook 受信之數已盡",
+      "quotaExhausted": "今日 Webhook 受信之數 {{limit}} 次已盡，{{time}} 乃復。未復之時，外事不觸任務；定時之行與模型之額皆不受影響。",
+      "signedOut": "登 Cindy 之籍，則復受之，所設皆存。",
+      "serviceUnavailable": "此境暫無 Webhook 受信之服務。",
+      "suspended": "此籍之 Webhook 已停。",
+      "endpointLimit": "此籍受信之址已滿。去其不用之 Webhook 任務，然後再試。",
+      "offline": "此機暫未連伺服器。事暫存之，復連乃達。",
+      "localOnlyHint": "此址唯於此機有效。公網之事須轉來，如用 gh webhook forward。",
+      "eventsSummary": "諸事：{{events}}",
+      "lastReceived": "近事：{{time}}",
+      "neverReceived": "未有所受",
+      "ignored": "已略 {{count}} 事",
+      "generateSecret": "生成密鑰",
+      "rotateSecret": "更生密鑰",
+      "secretOnce": "請即複製此鑰，後不復示。",
+      "secretMissing": "未生密鑰之前，諸事皆拒。",
+      "rotateFailed": "密鑰未能生成。密鑰唯可於行此務之機管理。"
     }
   },
   "issueTracker": {

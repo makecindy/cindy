@@ -15093,7 +15093,8 @@
         "resume": "Fortsetzen",
         "pause": "Pausieren",
         "deleteAutomation": "Automatisierung löschen"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
@@ -15332,6 +15333,14 @@
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
+      },
+      "webhook": {
+        "label": "Webhook-Auslöser",
+        "description": "Führt diese Aufgabe aus, wenn ein externes Ereignis eintrifft. Zeitbedingungen gelten weiterhin.",
+        "eventsLabel": "Nur diese Ereignisse (optional)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "Durch Kommas trennen. Leer lassen, um auf alle Ereignisse zu reagieren.",
+        "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wählen Sie beim Absender, etwa GitHub, nur die benötigten Ereignisse aus."
       }
     },
     "chips": {
@@ -15532,6 +15541,30 @@
           "prompt": "Prüfe die Dokumente im Arbeitsverzeichnis und finde Inhalte, die aktualisiert werden müssen.\nVorgaben:\n- Suche nach veralteten Informationen (überholte Datumsangaben, defekte Links, veraltete Abläufe oder Tools), Widersprüchen und Dopplungen\n- Gib für jedes Problem Dateipfad und Fundstelle an und begründe deine Einschätzung\n- Ordne Vorschläge den Kategorien „Aktualisieren / Zusammenführen / Löschen“ zu und erstelle eine Überarbeitungscheckliste\n- Gib nur den Bericht aus; ändere die Dokumente nicht"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook-Auslöser",
+      "url": "Empfangsadresse",
+      "secret": "Secret",
+      "copy": "Kopieren",
+      "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
+      "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
+      "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
+      "signedOut": "Melden Sie sich bei Ihrem Cindy-Konto an, um den Empfang fortzusetzen. Ihre Einstellungen bleiben erhalten.",
+      "serviceUnavailable": "Webhook-Empfang ist in dieser Umgebung nicht verfügbar.",
+      "suspended": "Webhooks sind für dieses Konto deaktiviert.",
+      "endpointLimit": "Dieses Konto hat das Limit für Empfangsadressen erreicht. Löschen Sie nicht mehr benötigte Webhook-Aufgaben und versuchen Sie es erneut.",
+      "offline": "Dieser Computer ist derzeit nicht mit dem Server verbunden. Ereignisse werden zwischengespeichert und nach der Wiederverbindung zugestellt.",
+      "localOnlyHint": "Diese Adresse funktioniert nur auf diesem Computer. Leite öffentliche Ereignisse dorthin weiter, zum Beispiel mit gh webhook forward.",
+      "eventsSummary": "Ereignisse: {{events}}",
+      "lastReceived": "Letztes Ereignis: {{time}}",
+      "neverReceived": "Noch keine Ereignisse empfangen",
+      "ignored": "{{count}} ignoriert",
+      "generateSecret": "Secret erzeugen",
+      "rotateSecret": "Secret neu erzeugen",
+      "secretOnce": "Kopiere dieses Secret jetzt. Es wird nicht erneut angezeigt.",
+      "secretMissing": "Ereignisse werden abgelehnt, bis ein Secret erzeugt wurde.",
+      "rotateFailed": "Das Secret konnte nicht erzeugt werden. Secrets lassen sich nur auf dem Computer verwalten, auf dem diese Aufgabe läuft."
     }
   },
   "issueTracker": {

@@ -35,6 +35,7 @@ import { basenameOf, describeDestination, humanizeAgentKind } from '../lib/forma
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
+import { WebhookTriggerPanel } from './WebhookTriggerPanel';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -208,9 +209,12 @@ export function RunHistoryPane({
   // 用 summarizeConfig 复用创建对话框那套语义化摘要（"Daily at 09:00" / "Hourly" / "Weekly on Mon, Wed at 14:30" ...），
   // 跟 chip 文案 100% 对齐；不再用 cronToHuman 的 "At 09:00" 风格。
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
-  const cronText = s.manual
+  const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
     : summarizeConfig(cronToConfig(s.cronExpr), t);
+  const cronText = s.webhookTrigger
+    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    : timingText;
   const agentText = humanizeAgentKind(s.agentKind);
   const dest = describeDestination(s, t);
   // title 兜底显示完整路径，悬浮即可看到 — basename 视觉简洁，hover/title 看全量
@@ -298,6 +302,8 @@ export function RunHistoryPane({
 
       {/* Recent runs label —— 跟下面的列表区一起挂载/卸载，避免数字 0→N 跳变。
           count 与逐 run 卡片数量一致；持续会话也不再按 sessionId 折叠。 */}
+      {s.webhookTrigger && <WebhookTriggerPanel schedule={s} />}
+
       {hasLoaded && (
         <div className="px-6 pb-2 pt-4 text-10 font-medium tracking-[0.6px] text-[var(--cmd-palette-item-meta)]">
           {t('scheduler.detail.recentRuns', { count: runs.length })}

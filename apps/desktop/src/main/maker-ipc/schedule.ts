@@ -73,6 +73,7 @@ import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import { remoteCreateWorkingDirError } from './remoteScheduleWorkingDir.js';
 import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -735,6 +736,29 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         hookPathDeps,
       );
       return scheduler.create(normalized);
+    });
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_STATUS, async (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      return schedule ? getScheduleWebhookHost()?.status(schedule) ?? null : null;
+    });
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RECEIVER, async () => scheduleWebhookReceiver());
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ROTATE_SECRET, async (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    // 密钥明文不经过远程通道；通道本身也不在 Device Link 白名单内。
+    if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'Webhook secrets can only be managed on the computer running this schedule');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', `Schedule not found: ${scheduleId}`);
+      const host = getScheduleWebhookHost();
+      if (!host) throwIpcError('INTERNAL', 'Schedule webhooks are not running');
+      return host.rotateSecret(schedule);
     });
   });
 

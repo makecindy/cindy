@@ -7516,6 +7516,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Full scheduled model selection, including bound Harness changes and template overrides.
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
+      // Older hosts keep only known columns and would report success while dropping the trigger.
+      supportsScheduleWebhookTrigger: true,
       // Remote schedule_create checks workingDir on this computer before insert.
       // Older peers accept maker:schedule:create without that check; callers must
       // see this flag or refuse instead of storing a missing path.

@@ -133,6 +133,7 @@ const SCHEDULER_DDL = [
       job_config TEXT,
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
+      webhook_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -193,6 +194,7 @@ const SCHEDULER_DDL = [
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
       result_text TEXT,
       pre_run_hook_result TEXT,
+      trigger_source TEXT,
       read_at INTEGER,
       heartbeat_at INTEGER
     )

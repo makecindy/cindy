@@ -665,6 +665,10 @@ export const MAKER_INVOKE = {
   SCHEDULE_CREATE_FROM_TEMPLATE: 'maker:schedule:create-from-template',
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
+  SCHEDULE_WEBHOOK_STATUS: 'maker:schedule:webhook-status',
+  /** 这台电脑现在能不能接收 Webhook：决定是否显示开关。 */
+  SCHEDULE_WEBHOOK_RECEIVER: 'maker:schedule:webhook-receiver',
+  SCHEDULE_WEBHOOK_ROTATE_SECRET: 'maker:schedule:webhook-rotate-secret',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
   PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',

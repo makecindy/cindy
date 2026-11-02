@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
+import { assertWebhookReceiverAvailable } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
@@ -108,6 +109,17 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('插件前置检查，语义见 schedule_create 同名字段。传 null = 关闭；省略 = 不修改。只支持本机的定时任务。'),
+      webhookTrigger: z
+        .strictObject({
+          events: z
+            .array(z.string().min(1).max(100))
+            .max(32)
+            .optional()
+            .describe('只响应这些事件，每项为 event 或 event.action，例 "check_suite"、"pull_request.closed"；省略 = 全部'),
+        })
+        .nullable()
+        .optional()
+        .describe('Webhook 触发，语义见 schedule_create 同名字段。传 null = 关闭（接收地址和密钥一并作废）；省略 = 不修改；修改筛选时地址和密钥不变。只支持本机的定时任务。'),
       preRunHook: z
         .object({
           command: z.string().min(1),
@@ -159,6 +171,8 @@ export function registerScheduleUpdateTool(
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
           : (patch as { preRunPlugin?: unknown }).preRunPlugin !== undefined
             ? '插件前置检查只能在本机设置（插件装在各自的电脑上）'
+          : (patch as { webhookTrigger?: unknown }).webhookTrigger !== undefined
+            ? 'Webhook 触发只能在本机设置（接收地址和密钥都属于任务所在电脑）'
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
@@ -192,6 +206,7 @@ export function registerScheduleUpdateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = patch as UpdateScheduleInput;
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
         if ((patch as { targetSessionId?: string | null }).targetSessionId === null) {
           // JSON 边界的"解绑"表达:null → 归一成 undefined 但保留 key(storage patch
           // 按 hasOwnProperty 判定,key 在且 undefined = 清列 NULL,同 preRunHook 约定)。

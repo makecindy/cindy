@@ -7257,6 +7257,22 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookReceiver: () => Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'>;
+      webhookStatus: (id: string) => Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null>;
+      /** 生成新的签名密钥并作废旧密钥;明文只在这次返回。仅任务所在电脑可用。 */
+      rotateWebhookSecret: (id: string) => Promise<{ secret: string; url?: string }>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

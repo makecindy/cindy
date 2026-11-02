@@ -15027,7 +15027,8 @@
         "resume": "재개",
         "pause": "일시 중지",
         "deleteAutomation": "자동화 삭제"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "수동 트리거",
@@ -15266,6 +15267,14 @@
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",
         "templateParamRequired": "{{label}}을(를) 입력하세요",
         "templateApplyFailed": "템플릿을 적용할 수 없습니다. 매개변수를 확인한 후 다시 시도하세요."
+      },
+      "webhook": {
+        "label": "Webhook 트리거",
+        "description": "외부 이벤트가 도착하면 이 작업을 실행합니다. 시간 조건도 계속 적용됩니다.",
+        "eventsLabel": "이 이벤트만(선택)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "쉼표로 구분합니다. 비워 두면 모든 이벤트에 응답합니다.",
+        "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요."
       }
     },
     "chips": {
@@ -15466,6 +15475,30 @@
           "prompt": "작업 디렉터리의 문서를 점검하고 업데이트가 필요한 내용을 찾으세요.\n제약 사항:\n- 오래된 정보(지난 날짜, 끊어진 링크, 폐기된 절차나 도구), 모순, 중복 내용을 확인합니다\n- 각 문제의 파일 경로와 구체적인 위치를 표시하고 판단 근거를 설명합니다\n- \"업데이트 권장 / 병합 권장 / 삭제 권장\"으로 분류하고 수정 체크리스트를 작성합니다\n- 점검 보고서만 출력하고 문서 자체는 수정하지 않습니다"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook 트리거",
+      "url": "수신 주소",
+      "secret": "시크릿",
+      "copy": "복사",
+      "urlUnavailable": "수신 주소를 지금 사용할 수 없습니다.",
+      "quotaNotifyTitle": "Webhook 수신 횟수를 모두 사용했습니다",
+      "quotaExhausted": "오늘의 Webhook 수신 횟수 {{limit}}회를 모두 사용했습니다. {{time}}에 다시 시작됩니다. 그때까지 외부 이벤트로 작업이 실행되지 않습니다. 예약 실행과 모델 사용량에는 영향이 없습니다.",
+      "signedOut": "Cindy 계정에 로그인하면 수신이 다시 시작됩니다. 설정은 유지됩니다.",
+      "serviceUnavailable": "이 환경에서는 Webhook 수신을 사용할 수 없습니다.",
+      "suspended": "이 계정의 Webhook이 비활성화되었습니다.",
+      "endpointLimit": "계정의 수신 주소 수가 한도에 도달했습니다. 사용하지 않는 Webhook 작업을 삭제한 뒤 다시 시도하세요.",
+      "offline": "이 컴퓨터가 현재 서버에 연결되어 있지 않습니다. 이벤트는 보관되었다가 다시 연결되면 전달됩니다.",
+      "localOnlyHint": "이 주소는 이 컴퓨터에서만 작동합니다. 공개 이벤트는 gh webhook forward 등으로 전달하세요.",
+      "eventsSummary": "이벤트: {{events}}",
+      "lastReceived": "최근 이벤트: {{time}}",
+      "neverReceived": "아직 받은 이벤트가 없습니다",
+      "ignored": "{{count}}개 무시됨",
+      "generateSecret": "시크릿 생성",
+      "rotateSecret": "시크릿 다시 생성",
+      "secretOnce": "지금 이 시크릿을 복사하세요. 다시 표시되지 않습니다.",
+      "secretMissing": "시크릿을 생성하기 전까지 이벤트가 거부됩니다.",
+      "rotateFailed": "시크릿을 생성하지 못했습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다."
     }
   },
   "issueTracker": {

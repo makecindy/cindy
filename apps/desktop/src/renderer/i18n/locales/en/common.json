@@ -15093,7 +15093,8 @@
         "resume": "Resume",
         "pause": "Pause",
         "deleteAutomation": "Delete Automation"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -15332,6 +15333,14 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
+      },
+      "webhook": {
+        "label": "Webhook trigger",
+        "description": "Run this task when an external event arrives. Time conditions still apply.",
+        "eventsLabel": "Only these events (optional)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "Separate with commas. Leave empty to respond to every event.",
+        "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need."
       }
     },
     "chips": {
@@ -15532,6 +15541,30 @@
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook trigger",
+      "url": "Receiving address",
+      "secret": "Secret",
+      "copy": "Copy",
+      "urlUnavailable": "The receiving address is unavailable right now.",
+      "quotaNotifyTitle": "Webhook delivery limit reached",
+      "quotaExhausted": "Today's {{limit}} Webhook deliveries are used up and resume at {{time}}. Until then, outside events won't trigger tasks. Scheduled runs and model usage aren't affected.",
+      "signedOut": "Sign in to your Cindy account to resume receiving. Your settings are kept.",
+      "serviceUnavailable": "Webhook receiving isn't available in this environment.",
+      "suspended": "Webhooks are disabled for this account.",
+      "endpointLimit": "This account has reached its limit of receiving addresses. Delete Webhook tasks you no longer need and try again.",
+      "offline": "This computer isn't connected to the server right now. Events are held and delivered once it reconnects.",
+      "localOnlyHint": "This address only works on this computer. Forward public events to it, for example with gh webhook forward.",
+      "eventsSummary": "Events: {{events}}",
+      "lastReceived": "Last event: {{time}}",
+      "neverReceived": "No events received yet",
+      "ignored": "{{count}} ignored",
+      "generateSecret": "Generate secret",
+      "rotateSecret": "Regenerate secret",
+      "secretOnce": "Copy this secret now. It won't be shown again.",
+      "secretMissing": "Events are rejected until a secret is generated.",
+      "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task."
     }
   },
   "issueTracker": {

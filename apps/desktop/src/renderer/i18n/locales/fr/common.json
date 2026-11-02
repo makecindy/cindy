@@ -15235,7 +15235,8 @@
         "resume": "Reprendre",
         "pause": "Mettre en pause",
         "deleteAutomation": "Supprimer l'automatisation"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Déclenchement manuel",
@@ -15474,6 +15475,14 @@
         "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
+      },
+      "webhook": {
+        "label": "Déclencheur webhook",
+        "description": "Exécute cette tâche à l'arrivée d'un événement externe. Les conditions horaires restent actives.",
+        "eventsLabel": "Uniquement ces événements (facultatif)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "Séparez par des virgules. Laissez vide pour répondre à tous les événements.",
+        "quotaHint": "Les réceptions Webhook sont limitées par jour et le filtrage ici ne réduit pas ce nombre. Chez l'expéditeur, comme GitHub, sélectionnez uniquement les événements utiles."
       }
     },
     "chips": {
@@ -15674,6 +15683,30 @@
           "prompt": "Contrôle l'état des documents du répertoire de travail et repère les contenus à mettre à jour.\nContraintes :\n- Recherche les informations obsolètes (dates périmées, liens morts, processus ou outils abandonnés), les contradictions et les doublons\n- Cite le chemin du fichier et l'emplacement de chaque problème, et explique ton raisonnement\n- Classe les suggestions en « mettre à jour / fusionner / supprimer » et produis une liste de révisions\n- Produis uniquement le rapport ; ne modifie pas les documents"
         }
       }
+    },
+    "webhook": {
+      "title": "Déclencheur webhook",
+      "url": "Adresse de réception",
+      "secret": "Secret",
+      "copy": "Copier",
+      "urlUnavailable": "L'adresse de réception n'est pas disponible pour le moment.",
+      "quotaNotifyTitle": "Limite de réceptions Webhook atteinte",
+      "quotaExhausted": "Les {{limit}} réceptions Webhook du jour sont épuisées. Reprise à {{time}}. D'ici là, les événements externes ne déclencheront pas de tâches. Les exécutions planifiées et l'utilisation des modèles ne sont pas affectées.",
+      "signedOut": "Connectez-vous à votre compte Cindy pour reprendre la réception. Vos réglages sont conservés.",
+      "serviceUnavailable": "La réception Webhook n'est pas disponible dans cet environnement.",
+      "suspended": "Les Webhooks sont désactivés pour ce compte.",
+      "endpointLimit": "Ce compte a atteint sa limite d'adresses de réception. Supprimez les tâches Webhook inutiles, puis réessayez.",
+      "offline": "Cet ordinateur n'est pas connecté au serveur pour le moment. Les événements sont conservés et livrés à la reconnexion.",
+      "localOnlyHint": "Cette adresse ne fonctionne que sur cet ordinateur. Transférez-y les événements publics, par exemple avec gh webhook forward.",
+      "eventsSummary": "Événements : {{events}}",
+      "lastReceived": "Dernier événement : {{time}}",
+      "neverReceived": "Aucun événement reçu pour le moment",
+      "ignored": "{{count}} ignorés",
+      "generateSecret": "Générer un secret",
+      "rotateSecret": "Régénérer le secret",
+      "secretOnce": "Copiez ce secret maintenant. Il ne sera plus affiché.",
+      "secretMissing": "Les événements sont refusés tant qu'aucun secret n'est généré.",
+      "rotateFailed": "Impossible de générer le secret. Les secrets ne peuvent être gérés que sur l'ordinateur qui exécute cette tâche."
     }
   },
   "issueTracker": {

@@ -268,6 +268,11 @@ export function RunHistoryCard({
             {formatRunTimestamp(run.firedAt, Date.now(), t)}
           </span>
         </div>
+        {run.triggerSource === 'webhook' && (
+          <span className="shrink-0 rounded-full border border-[var(--cmd-palette-border)] px-2 py-0.5 text-11 font-medium leading-none text-[var(--cmd-palette-item-meta)]">
+            {t('scheduler.cell.tagWebhook')}
+          </span>
+        )}
         <StatusChip status={run.status} />
       </header>
 

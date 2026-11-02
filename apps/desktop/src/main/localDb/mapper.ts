@@ -50,6 +50,7 @@ import type {
   RunStatus,
   AgentKind as SchedulerAgentKind,
   ScriptExecutionConfig,
+  ScheduleWebhookTrigger,
   ScriptCapability,
   PreRunHookRunResult,
   PreRunPluginFailureAction,
@@ -734,6 +735,20 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
   }
 }
 
+function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof value.endpointId !== 'string' || !value.endpointId) return undefined;
+    const events = Array.isArray(value.events)
+      ? value.events.filter((event): event is string => typeof event === 'string')
+      : [];
+    return { endpointId: value.endpointId, ...(events.length ? { events } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 function serializeScriptConfig(config: ScriptExecutionConfig | undefined): string | null {
   return config ? JSON.stringify(config) : null;
 }
@@ -748,6 +763,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
@@ -808,6 +824,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
     kind: s.kind,
@@ -866,6 +883,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
@@ -1001,6 +1019,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
+    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };
@@ -1026,6 +1045,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     costAttribution: r.costAttribution ?? 'exact',
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
+    triggerSource: r.triggerSource ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

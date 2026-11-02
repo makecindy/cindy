@@ -140,6 +140,32 @@ export interface ScheduleNotifyConfig {
 }
 
 /**
+ * Webhook 触发条件。与定时条件独立：manual=false 时两者并存，manual=true 时只由事件触发。
+ * endpointId 只是接收地址的路由键，由引擎生成；签名密钥由宿主另存，不进任务记录。
+ */
+export interface ScheduleWebhookTrigger {
+  endpointId: string;
+  /** 只响应这些事件，每项为 `event` 或 `event.action`；缺省响应全部。 */
+  events?: string[];
+}
+
+/** 写入时不接受 endpointId：新开启由引擎生成，已开启则沿用。 */
+export type ScheduleWebhookTriggerInput = Omit<ScheduleWebhookTrigger, 'endpointId'> & { endpointId?: string };
+
+/** 只含路由所需的扁平元数据；请求正文不落盘，任务需要细节时自行查询。 */
+export interface ScheduleWebhookEvent {
+  deliveryId: string;
+  event: string;
+  action?: string;
+  repository?: string;
+  number?: number;
+  sender?: string;
+  headSha?: string;
+  conclusion?: string;
+  receivedAt: number;
+}
+
+/**
  * 前置检查脚本（Pre-run Hook）配置。任务触发时 runner 先执行该脚本再决定是否
  * 真正启动 agent（不启动 = 零 token 消耗）。协议对齐 Claude Code hooks：
  *   - exit 0 → 放行本轮
@@ -306,6 +332,8 @@ export interface Schedule {
    * 详见 PreRunHookConfig。
    */
   preRunHook?: PreRunHookConfig;
+  /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
+  webhookTrigger?: ScheduleWebhookTrigger;
   /** 插件前置检查;undefined = 未配置。详见 PreRunPluginConfig。 */
   preRunPlugin?: PreRunPluginConfig;
   notify: ScheduleNotifyConfig;
@@ -362,6 +390,8 @@ export interface ScheduleRun {
   resultText?: string;
   /** 本轮实际执行过前置检查时的结构化结果。 */
   preRunHookResult?: PreRunHookRunResult;
+  /** 本轮由什么触发；缺省为定时或手动。 */
+  triggerSource?: 'webhook';
   /** 用户已读时间戳（毫秒）；NULL 表示未读。仅对终态 run 有意义。 */
   readAt?: number;
   /**
@@ -435,6 +465,8 @@ export interface CreateScheduleInput {
    * create 时 null 与 undefined 同义,引擎归一成 undefined）。
    */
   preRunHook?: PreRunHookConfig | null;
+  /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
+  webhookTrigger?: ScheduleWebhookTriggerInput | null;
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;

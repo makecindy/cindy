@@ -324,6 +324,22 @@ describe('canSubmitSessionBinding', () => {
   });
 });
 
+// Rule: docs/product-rules/schedule-webhook-trigger.md. Turning the switch off must clear the
+// trigger, and a caller that never touched it must not; JSON null is the only clearing form.
+describe('buildScheduleInput webhook trigger', () => {
+  it.each([
+    [{ webhookEnabled: true, webhookEvents: ' check_suite, pull_request.closed ,' }, { events: ['check_suite', 'pull_request.closed'] }],
+    [{ webhookEnabled: true, webhookEvents: '' }, { events: [] }],
+    [{ webhookEnabled: false, webhookEvents: 'issues' }, null],
+  ])('%j', (fields, expected) => {
+    expect(buildScheduleInput(makeForm(fields)).webhookTrigger).toEqual(expected);
+  });
+
+  it('omits the key when the form does not carry the field', () => {
+    expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+});
+
 function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState {
   return {
     name: 'follow-up',

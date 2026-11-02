@@ -215,6 +215,7 @@ export class ScriptScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
+          ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
         },
@@ -523,6 +524,7 @@ export class ScriptScheduleRunner {
         firedAt: ctx.firedAt,
         workingDir: schedule.workingDir,
         ...(schedule.targetSessionId ? { targetSessionId: schedule.targetSessionId } : {}),
+        ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
       },
     });
 

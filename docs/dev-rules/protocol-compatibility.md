@@ -24,6 +24,24 @@
 `REMOTE_AGENT_UNAVAILABLE`。手机经新版被控电脑代读即生效，手机自身解析同样走该函数。
 官方与自建中转只透传既有 invoke，无需改动。
 
+## 自动化任务 Webhook 触发（2026-11-02）
+
+`Schedule` 新增可选字段 `webhookTrigger`，`ScheduleRun` 新增可选字段 `triggerSource`，对应追加列
+`schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（migration 0144）。沿用既有
+`maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。
+旧主机只保留已知列，会报告成功却丢掉配置，所以能力新增 `supportsScheduleWebhookTrigger`；Agent 工具的
+跨设备写入一律拒绝。同账号 invoke 新增只读的 `maker:schedule:webhook-status`。
+`maker:schedule:webhook-rotate-secret` 返回明文密钥，不进 Device Link 白名单。官方及自建中转沿用通用
+invoke 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。投递格式兼容 GitHub 的 `X-GitHub-Event`、
+`X-GitHub-Delivery`、`X-Hub-Signature-256`。
+
+接收改走 webhook-server 后，端点清单纯增可选字段 `webhookApiBaseUrl`，不 bump schemaVersion：老客户端忽略，
+缺失或留空时隐藏入口，也是灰度开关；该字段按区域锁定，不进 `CROSS_REGION_ENDPOINT_KEYS`。REST、长连接帧和
+关闭码的合同正本是 cindy-server 的 `docs/webhook-server.md`，双方忽略不认识的帧 `type`。同账号 invoke 新增只读的
+`maker:schedule:webhook-receiver`；`webhook-status` 的返回增加 `receiver`、`connected`、`problem`、`quotaLimit`、
+`quotaResetAt`。长连接新增 `quota` 帧，只在接收次数用完时出现，没有恢复帧，客户端按 `resetAt` 自行解除。功能尚未发布，
+没有存量客户端。服务端先部署并验证，再把清单字段填上。
+
 ## 仓库自动任务导入确认（2026-11-01）
 
 同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。

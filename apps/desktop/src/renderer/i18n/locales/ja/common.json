@@ -15027,7 +15027,8 @@
         "resume": "再開",
         "pause": "一時停止",
         "deleteAutomation": "自動化を削除"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手動トリガー",
@@ -15266,6 +15267,14 @@
         "preRunPluginRequired": "事前チェックのプラグインを選んでください",
         "templateParamRequired": "{{label}}を入力してください",
         "templateApplyFailed": "テンプレートを適用できませんでした。パラメータを確認して再試行してください。"
+      },
+      "webhook": {
+        "label": "Webhook トリガー",
+        "description": "外部イベントが届いたときにこのタスクを実行します。時間の条件も引き続き有効です。",
+        "eventsLabel": "対象のイベントのみ（任意）",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "カンマで区切ります。空欄にするとすべてのイベントに応答します。",
+        "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。"
       }
     },
     "chips": {
@@ -15466,6 +15475,30 @@
           "prompt": "作業ディレクトリ内のドキュメントを点検し、更新が必要な内容を見つけてください。\n制約：\n- 古い情報（過去の日付、無効なリンク、廃止された手順やツール）、矛盾、重複を確認する\n- 各問題についてファイルパスと具体的な場所を示し、判断理由を説明する\n- 「更新を推奨 / 統合を推奨 / 削除を推奨」に分類し、修正チェックリストを作成する\n- 点検レポートだけを出力し、ドキュメント自体は変更しない"
         }
       }
+    },
+    "webhook": {
+      "title": "Webhook トリガー",
+      "url": "受信アドレス",
+      "secret": "シークレット",
+      "copy": "コピー",
+      "urlUnavailable": "受信アドレスは現在利用できません。",
+      "quotaNotifyTitle": "Webhook の受信回数が上限に達しました",
+      "quotaExhausted": "本日の Webhook 受信回数 {{limit}} 回を使い切りました。{{time}} に再開します。それまで外部イベントではタスクは実行されません。スケジュール実行とモデルの利用枠には影響しません。",
+      "signedOut": "Cindy アカウントにログインすると受信を再開します。設定は保持されています。",
+      "serviceUnavailable": "この環境では Webhook の受信を利用できません。",
+      "suspended": "このアカウントの Webhook は無効になっています。",
+      "endpointLimit": "アカウントの受信アドレス数が上限に達しました。不要な Webhook タスクを削除してからお試しください。",
+      "offline": "このコンピューターは現在サーバーに接続されていません。イベントは保留され、再接続後に届きます。",
+      "localOnlyHint": "このアドレスはこのコンピューターでのみ有効です。公開イベントは gh webhook forward などで転送してください。",
+      "eventsSummary": "イベント：{{events}}",
+      "lastReceived": "最新のイベント：{{time}}",
+      "neverReceived": "まだイベントを受信していません",
+      "ignored": "{{count}} 件を無視",
+      "generateSecret": "シークレットを生成",
+      "rotateSecret": "シークレットを再生成",
+      "secretOnce": "今すぐこのシークレットをコピーしてください。再度表示されません。",
+      "secretMissing": "シークレットを生成するまで、イベントは拒否されます。",
+      "rotateFailed": "シークレットを生成できませんでした。シークレットはこのタスクを実行するコンピューターでのみ管理できます。"
     }
   },
   "issueTracker": {

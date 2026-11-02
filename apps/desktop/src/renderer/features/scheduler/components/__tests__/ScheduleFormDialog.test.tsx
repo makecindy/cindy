@@ -99,6 +99,7 @@ beforeEach(() => {
   state.references.clear();
   state.loading = false;
   localStorage.clear();
+  vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'cloud' } } });
 });
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
@@ -107,7 +108,7 @@ afterEach(() => vi.unstubAllGlobals());
 // model-only selection from the real hook-generation IPC request.
 it('sends the explicit local Harness and location when generating a bound hook', async () => {
   const generatePreRunHook = vi.fn(async () => ({ ok: false, reason: 'no_candidate', attempts: [] }));
-  vi.stubGlobal('electronAPI', { maker: { schedule: { generatePreRunHook } } });
+  vi.stubGlobal('electronAPI', { maker: { schedule: { generatePreRunHook, webhookReceiver: async () => 'cloud' } } });
   state.references.set('bound', { id: 'bound', state: 'available', status: 'active', agentKind: 'claude-code', agentDeviceId: 'studio' });
   mount(schedule({ targetSessionId: 'bound', modelAgentKind: 'codex', modelAgentDeviceId: '', providerId: '',
     preRunHook: { command: 'node check.mjs' } }));
@@ -117,6 +118,23 @@ it('sends the explicit local Harness and location when generating a bound hook',
   await waitFor(() => expect(generatePreRunHook).toHaveBeenCalledWith(expect.objectContaining({
     targetSessionId: 'bound', modelAgentDeviceId: '', agentKind: 'codex', model: 'shared', resolveBoundSessionRoute: true,
   })));
+});
+
+// Using a Webhook requires a Cindy account: the switch stays hidden while signed out, and a
+// saved trigger must survive editing the task so that receiving resumes after signing in.
+it('hides the Webhook switch without a Cindy account and keeps the saved trigger', async () => {
+  vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
+  const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
+  await waitFor(() => expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.label' })).toBeNull());
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+    webhookTrigger: { events: ['check_suite'] },
+  }), true));
+});
+
+it('shows the Webhook switch once this computer can receive events', async () => {
+  mount(schedule());
+  await waitFor(() => expect(screen.getByRole('switch', { name: 'scheduler.editor.webhook.label' })).toBeTruthy());
 });
 
 it('saves a selected remote-only model against its own catalog', async () => {

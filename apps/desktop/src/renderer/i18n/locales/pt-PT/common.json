@@ -15235,7 +15235,8 @@
         "resume": "Retomar",
         "pause": "Pausar",
         "deleteAutomation": "Eliminar automatização"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -15474,6 +15475,14 @@
         "preRunPluginRequired": "Escolhe um plugin para a verificação prévia",
         "templateParamRequired": "Introduz {{label}}",
         "templateApplyFailed": "Não foi possível aplicar o modelo. Verifique os parâmetros e tente novamente."
+      },
+      "webhook": {
+        "label": "Acionador de webhook",
+        "description": "Executa esta tarefa quando chega um evento externo. As condições de horário continuam válidas.",
+        "eventsLabel": "Apenas estes eventos (opcional)",
+        "eventsPlaceholder": "check_suite, pull_request.closed",
+        "eventsHint": "Separe com vírgulas. Deixe vazio para responder a todos os eventos.",
+        "quotaHint": "As receções de Webhook têm um limite diário e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários."
       }
     },
     "chips": {
@@ -15674,6 +15683,30 @@
           "prompt": "Verificar o estado dos documentos no diretório de trabalho e identificar conteúdo que precisa de atualização.\nRestrições:\n- Procurar informação desatualizada (datas antigas, ligações inativas, processos ou ferramentas obsoletos), contradições e duplicações\n- Citar o caminho do ficheiro e a localização de cada problema e explicar o raciocínio\n- Categorizar como sugestões de \"atualizar / unir / eliminar\" e produzir uma lista de revisão\n- Apresentar apenas o relatório; não modificar os documentos"
         }
       }
+    },
+    "webhook": {
+      "title": "Acionador de webhook",
+      "url": "Endereço de receção",
+      "secret": "Segredo",
+      "copy": "Copiar",
+      "urlUnavailable": "O endereço de receção não está disponível de momento.",
+      "quotaNotifyTitle": "Limite de receções de Webhook atingido",
+      "quotaExhausted": "As {{limit}} receções de Webhook de hoje esgotaram-se e são retomadas às {{time}}. Até lá, os eventos externos não acionam tarefas. As execuções agendadas e a utilização do modelo não são afetadas.",
+      "signedOut": "Inicie sessão na sua conta Cindy para retomar a receção. As suas definições foram mantidas.",
+      "serviceUnavailable": "A receção de Webhook não está disponível neste ambiente.",
+      "suspended": "Os Webhooks estão desativados para esta conta.",
+      "endpointLimit": "Esta conta atingiu o limite de endereços de receção. Elimine as tarefas de Webhook que já não utiliza e tente novamente.",
+      "offline": "Este computador não está ligado ao servidor de momento. Os eventos ficam guardados e são entregues ao restabelecer a ligação.",
+      "localOnlyHint": "Este endereço só funciona neste computador. Reencaminhe os eventos públicos para ele, por exemplo com gh webhook forward.",
+      "eventsSummary": "Eventos: {{events}}",
+      "lastReceived": "Último evento: {{time}}",
+      "neverReceived": "Ainda não foram recebidos eventos",
+      "ignored": "{{count}} ignorados",
+      "generateSecret": "Gerar segredo",
+      "rotateSecret": "Gerar segredo novamente",
+      "secretOnce": "Copie este segredo agora. Não voltará a ser apresentado.",
+      "secretMissing": "Os eventos são recusados até ser gerado um segredo.",
+      "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser geridos no computador que executa esta tarefa."
     }
   },
   "issueTracker": {
