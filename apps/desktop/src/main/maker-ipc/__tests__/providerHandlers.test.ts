@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { mkdtemp, writeFile, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +8,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, DiscoveredModel, ModelRegistry, ProviderPreset, ProviderView } from '@cindy/model-providers';
-import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, storedCustomProviderId } from '@cindy/model-providers';
 import { providerViewToCustomProviderConfig } from '../../../renderer/lib/customProviders.js';
 
 import type { ProviderImportPreview } from '../../../shared/providerImport.js';
@@ -14,7 +16,9 @@ import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelR
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { createCustomProvider, getCustomProvider, listCustomProviders, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
+import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
+import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
   beginProviderRouteMutation,
@@ -4089,6 +4093,90 @@ describe('provider:models-fetch handler', () => {
 });
 
 describe('provider:oauth mutation ordering', () => {
+  // Unit regression for #8485: run register.ts's actual login closure plus the
+  // real IPC transaction and in-memory DB. Mocking oauthLogin with afterCommit
+  // missed generic discovery saving new sources before credential cleanup.
+  // Minimal failure: persisted A -> OAuth login discovers B -> cleanup erased B.
+  // Compile the production closure once, without booting the Electron host.
+  const registerSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const registerAst = ts.createSourceFile('register.ts', registerSource, ts.ScriptTarget.Latest, true);
+  let loginClosure = '';
+  const findLogin = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(registerAst) === 'oauthLogin') {
+      loginClosure = ts.transpileModule(`return ${node.initializer.getText(registerAst)};`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+    }
+    ts.forEachChild(node, findLogin);
+  };
+  findLogin(registerAst);
+
+  async function genericLoginSetup(discoveryFails = false, waitForLogin?: Promise<void>) {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'generic-source-order', name: 'Gateway',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://auth.example.test/authorize',
+        tokenUrl: 'https://auth.example.test/token', clientId: 'fixture-client', scopes: 'openid' } },
+      runtimes: { pi: { baseUrl: 'https://gateway.example.test/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'chatgpt/foo', name: 'Foo', opaqueModelId: true,
+          discoveredSource: { kind: 'magpie', providerId: 'Old account' } }] } } };
+    await createCustomProvider(config);
+    let catalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider(config)] };
+    const refreshCatalog = async () => {
+      catalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider((await getCustomProvider(config.id))!)] };
+    };
+    const rollbackCredentials = vi.fn(() => true);
+    const runGenericOAuthLogin = vi.fn(async (_provider: unknown, _oauth: unknown, callbacks: { onCredentialPersisted(rollback: () => boolean): void }) => {
+      callbacks.onCredentialPersisted(rollbackCredentials);
+      await waitForLogin;
+      return { ok: true };
+    });
+    const sourceAtDiscovery: (string | undefined)[] = [];
+    const discoverGenericOAuthModels = vi.fn(async () => {
+      sourceAtDiscovery.push((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId);
+      if (discoveryFails) throw new Error('fixture discovery unavailable');
+      return issueModelSourceSnapshot([{ id: 'chatgpt/foo', name: 'Foo', opaqueModelId: true,
+        discoveredSource: { kind: 'magpie', providerId: 'New account' } }], 'pi', 'fixture-request');
+    });
+    const broadcastToAllWindows = vi.fn();
+    const bindings = { subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
+      getActiveCatalog: () => catalog, storedCustomProviderId, runGenericOAuthLogin,
+      broadcastToAllWindows, MAKER_PUSH, deriveModelsDiscoveryUrl, discoverGenericOAuthModels,
+      getCustomProvider, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged,
+      refreshCustomProvidersIntoCatalog: refreshCatalog };
+    const oauthLogin = new Function(...Object.keys(bindings), loginClosure)(...Object.values(bindings)) as ProviderHandlerDeps['oauthLogin'];
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ oauthLogin, beginRouteMutation: beginProviderRouteMutation,
+      getModelCatalog: () => catalog, refreshCatalog }));
+    return { config, harness, runGenericOAuthLogin, discoverGenericOAuthModels, rollbackCredentials,
+      sourceAtDiscovery, broadcastToAllWindows };
+  }
+
+  it.each([false, true])('generic OAuth clears the old source before discovery and retains its result (discoveryFails=%s)', async discoveryFails => {
+    const setup = await genericLoginSetup(discoveryFails);
+    await expect(setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, setup.config.id)).resolves.toEqual({ ok: true });
+    expect(setup.sourceAtDiscovery).toEqual([undefined]);
+    const model = (await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0];
+    expect(model.discoveredSource?.providerId).toBe(discoveryFails ? undefined : 'New account');
+    expect(model.id).toBe('chatgpt/foo');
+    expect(model.opaqueModelId).toBe(true);
+    expect(setup.rollbackCredentials).not.toHaveBeenCalled();
+    expect(setup.broadcastToAllWindows).toHaveBeenCalledWith(MAKER_PUSH.PROVIDER_CHANGED, {});
+  });
+
+  it('generic OAuth cancellation before acceptance rolls back without discovery or source cleanup', async () => {
+    let finish!: () => void;
+    const setup = await genericLoginSetup(false, new Promise<void>(resolve => { finish = resolve; }));
+    const login = setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, setup.config.id);
+    await vi.waitFor(() => expect(setup.runGenericOAuthLogin).toHaveBeenCalledOnce());
+    await setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, setup.config.id);
+    finish();
+    await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(setup.rollbackCredentials).toHaveBeenCalledOnce();
+    expect(setup.discoverGenericOAuthModels).not.toHaveBeenCalled();
+    expect(setup.broadcastToAllWindows).not.toHaveBeenCalled();
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old account');
+  });
+
   // PR #6900 unit: the login discovery callback must lose its authority on an
   // owner switch too. Existing cancellation tests only invalidated the login ID.
   it('invalidates login discovery and rolls credentials back after an owner change', async () => {
