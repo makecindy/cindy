@@ -3,14 +3,15 @@ import { StrictMode, useState, type ReactNode } from 'react';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
+import { ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
 import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
-import { clearDraft } from '@/lib/composerDraftStore';
+import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
+import type { AttachedFile } from '@/lib/fileTypes';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
 import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMaskState } from '../../../../shared/botGroupChat';
@@ -20,6 +21,11 @@ import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareC
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   mask: vi.fn(), mentions: vi.fn(), refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
+  materialize: vi.fn(async (files: readonly AttachedFile[]) => [...files]),
+}));
+vi.mock('@/lib/annotationBurnIn', async (original) => ({
+  ...(await original<typeof import('@/lib/annotationBurnIn')>()),
+  materializeAnnotatedAttachmentsForSend: (files: readonly AttachedFile[]) => mocks.materialize(files),
 }));
 // Partial: the 话题 reply box shares the group composer, whose attachment pieces pull in the app i18n instance.
 vi.mock('react-i18next', async (original) => ({
@@ -39,9 +45,11 @@ const group = { id: 'room', members: [], messages: [message] } as unknown as Bot
 const render = (ui: ReactNode) => renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
 beforeEach(() => {
   vi.clearAllMocks(); mocks.ownerCurrent = true;
+  mocks.reply.mockReset();
   shareSelectionStore.reset();
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
-  clearDraft(botGroupThreadDraftKey(group.id, 'root'));
+  discardDraft(botGroupThreadDraftKey(group.id, 'root'));
+  mocks.materialize.mockReset().mockImplementation(async files => [...files]);
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
   mocks.mask.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_OPERATION' });
@@ -56,7 +64,7 @@ beforeEach(() => {
     chatServer: mocks, onBotGroupChanged: () => () => {},
   } } });
 });
-afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); discardDraft(botGroupThreadDraftKey(group.id, 'root')); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
   // Review regressions: a delayed personal config must preserve chat-local state;
@@ -741,11 +749,10 @@ describe('chat interaction controls', () => {
   });
 
   it('creates and displays a copyable link in Strict Mode', async () => {
-    render(<StrictMode><ChatInviteButton groupId="room" members={[
+    render(<StrictMode><ChatInviteDialog groupId="room" onClose={vi.fn()} members={[
       { botId: 'self', name: 'Alex', avatar: '👤', avatarColor: 'graphite', status: 'active', isSelf: true },
       { botId: 'bot', name: 'Cindy', avatar: '🤖', avatarColor: 'violet', status: 'active' },
     ]} /></StrictMode>);
-    fireEvent.click(screen.getByRole('button', { name: k('invite') }));
     expect((await screen.findByRole('textbox', { name: k('inviteLink') }) as HTMLInputElement).value).toBe('cindy://chat-invite/test');
     expect(mocks.createInvite).toHaveBeenCalledExactlyOnceWith({ groupId: 'room', clientId: expect.any(String) });
     expect(screen.queryByRole('button', { name: k('createLink') })).toBeNull();
@@ -777,6 +784,165 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // Regression: thread mode hid the attachment menu and silently sent text only.
+  // Real panel + useAttachments; unit tier, picking a single image is the minimal input.
+  // #8084 / r4429774858: also-send must carry its image before the main share receipt arrives.
+  it('sends an image-only thread draft, keeps it on failure and clears it after retry', async () => {
+    const image = { id: 'thread-photo', name: 'photo.png', ext: '.png', category: 'image' as const,
+      mimeType: 'image/png', size: 12, path: '', url: 'cindy-media://blobs/photo.png' };
+    Object.assign(window.electronAPI, {
+      getFilePath: () => '/fixture/photo.png',
+      cacheImageFromPath: vi.fn(async () => ({ url: image.url })),
+    });
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' })
+      .mockResolvedValueOnce({ ok: true, messageId: 'image-reply' });
+    let finishShare!: (result: { ok: true; messageId: string }) => void;
+    mocks.shareToMain.mockImplementationOnce(() => new Promise(resolve => { finishShare = resolve; }));
+    const settleShare = vi.fn();
+    const onPostPending = vi.fn(() => settleShare);
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} onPostPending={onPostPending} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: k('thread.alsoSend') }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), { key: 'Enter' });
+    expect(await screen.findByRole('menuitem', { name: 'extraDirs.addFiles' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /bots.groupChat.composer.division/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'extraDirs.addFiles' }));
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['image-bytes'], image.name, { type: image.mimeType })] },
+    });
+    const send = screen.getByRole('button', { name: k('sendReply') });
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    expect((await screen.findByRole('alert')).textContent).toBe(k('requestFailed'));
+    expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({
+      rootId: 'root', text: '', attachments: [expect.objectContaining({ name: image.name, url: image.url })],
+    }));
+    const original = mocks.reply.mock.calls[0]![0];
+    fireEvent.click(send);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(true));
+    expect(onPostPending).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'image-reply', threadRootId: 'root', content: '',
+      attachments: [expect.objectContaining({ name: image.name, url: image.url, category: 'image' })],
+    }));
+    expect(settleShare).not.toHaveBeenCalled();
+    await act(async () => finishShare({ ok: true, messageId: 'main-share' }));
+    expect(settleShare).toHaveBeenCalledWith('main-share');
+  });
+
+  // #8084 / r4428010998: existing remount cases start after caching, missing this late result.
+  // Unit: real panel/hook, one deferred image cache, close then reopen on either side of completion.
+  it.each(['before', 'after'] as const)('keeps a pending image when the thread reopens %s cache completion', async reopen => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const url = 'cindy-media://blobs/late-thread-photo.png';
+    let finishCache!: (value: { url: string }) => void;
+    const cached = new Promise<{ url: string }>(resolve => { finishCache = resolve; });
+    const cacheImageFromPath = vi.fn(() => cached);
+    Object.assign(window.electronAPI, { getFilePath: () => '/fixture/late.png', cacheImageFromPath });
+    const open = () => render(<StrictMode><ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} /></StrictMode>);
+    const first = open();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Original draft' } });
+    fireEvent.change(first.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['image-bytes'], 'late.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(cacheImageFromPath).toHaveBeenCalledTimes(1));
+    first.unmount();
+    const second = reopen === 'before' ? open() : null;
+    if (second) fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Newer draft' } });
+    await act(async () => {
+      finishCache({ url });
+      await cached;
+    });
+    expect(getDraft(scope)?.attachments).toEqual([expect.objectContaining({ name: 'late.png', url })]);
+    const reopened = second ?? open();
+    expect(screen.getByAltText('late.png').getAttribute('src')).toBe(url);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(second ? 'Newer draft' : 'Original draft');
+    reopened.unmount();
+    expect(getDraft(scope)?.attachments).toEqual([expect.objectContaining({ name: 'late.png', url })]);
+  });
+
+  // Review regression: id-only settlement erased newer annotations after reopening during upload.
+  // Unit tier: real panel/hook, one image, one delayed reply; selection/retry is covered above.
+  it('preserves a newer attachment draft when an earlier thread upload settles after reopening', async () => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file = { id: 'thread-photo', name: 'photo.png', ext: '.png', category: 'image' as const,
+      mimeType: 'image/png', size: 12, path: '', url: 'cindy-media://blobs/photo.png' };
+    saveDraft(scope, { text: null, attachments: [file] });
+    let finish!: (value: { ok: true; messageId: string }) => void;
+    mocks.reply.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const send = screen.getByRole('button', { name: k('sendReply') });
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    first.unmount();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    await screen.findByRole('img', { name: file.name });
+    const edited = { ...file, annotationStrokes: [{ points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }] };
+    // The shared draft write is the same live hook update used by annotation edits.
+    act(() => saveDraft(scope, { ...getDraft(scope)!, attachments: [edited] }));
+    await act(async () => finish({ ok: true, messageId: 'earlier-reply' }));
+    expect(getDraft(scope)?.attachments).toEqual([edited]);
+    expect(screen.getByRole('img', { name: file.name })).toBeTruthy();
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // #8084 review: local refs lost both the send id and the burned image on remount.
+  // Unit: real panel/hook, one annotation result, delayed burn + reply, then an explicit retry.
+  it('keeps an in-flight thread attempt and its prepared media across panel remounts', async () => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file: AttachedFile = { id: 'remount-photo', name: 'photo.png', ext: '.png', category: 'image',
+      size: 12, mimeType: 'image/png', path: '', url: 'cindy-media://blobs/remount-original.png' };
+    const prepared = { ...file, url: 'cindy-media://blobs/remount-burned.png', annotated: true };
+    saveDraft(scope, { text: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'with image' }] }] }, attachments: [file] });
+    let finishBurn!: (files: AttachedFile[]) => void;
+    let finishReply!: (result: { ok: false; errorCode: 'REQUEST_TIMEOUT' }) => void;
+    mocks.materialize.mockImplementationOnce(() => new Promise(resolve => { finishBurn = resolve; }));
+    mocks.reply.mockImplementationOnce(() => new Promise(resolve => { finishReply = resolve; }))
+      .mockResolvedValueOnce({ ok: true, messageId: 'remount-reply' });
+    const panel = () => <ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />;
+    const first = render(panel());
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    first.unmount();
+    const second = render(panel());
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finishBurn([prepared]));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    second.unmount();
+    const third = render(panel());
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finishReply({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(k('requestFailed'));
+    expect((screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement).value).toBe('with image');
+    third.unmount();
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    render(panel());
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(mocks.reply.mock.calls[0]![0]);
+    expect(mocks.materialize).toHaveBeenCalledOnce();
+    await waitFor(() => expect(getAllDraftAttachmentUrls()).not.toContain(prepared.url));
+  });
+
+  // #8084 review: failed annotation copies must remain live only while retry is available.
+  it.each(['edit', 'discard'] as const)('releases failed thread prepared media after %s', async boundary => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file: AttachedFile = { id: 'held-photo', name: 'photo.png', ext: '.png', category: 'image',
+      size: 12, mimeType: 'image/png', path: '', url: 'cindy-media://blobs/held-original.png' };
+    const prepared = { ...file, url: 'cindy-media://blobs/held-burned.png', annotated: true };
+    saveDraft(scope, { text: null, attachments: [file] });
+    mocks.materialize.mockResolvedValueOnce([prepared]);
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'INVALID_ATTACHMENT' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    if (boundary === 'edit') fireEvent.change(screen.getByRole('textbox', { name: k('replyPlaceholder') }), { target: { value: 'changed' } });
+    else act(() => discardDraft(scope));
+    await waitFor(() => expect(getAllDraftAttachmentUrls()).not.toContain(prepared.url));
+  });
+
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {
     mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValueOnce({ ok: true, messageId: 'reply' });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
@@ -795,10 +961,10 @@ describe('chat interaction controls', () => {
 
   describe('thread @ picker', () => {
     const namesakes = [
-      { botId: 'ann-chris', name: 'Ann', status: 'active' },
-      { botId: 'ann-dana', name: 'Ann', status: 'active' },
-      { botId: 'bo', name: 'Bo', status: 'active' },
-      { botId: 'gone', name: 'Annie', status: 'left' },
+      { botId: 'ann-chris', name: 'Ann', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'ann-dana', name: 'Ann', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'gone', name: 'Annie', status: 'missing' as const, avatar: '', avatarColor: '' },
     ];
     const renderThread = () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
@@ -810,6 +976,21 @@ describe('chat interaction controls', () => {
     const type = (input: HTMLTextAreaElement, value: string, caret = value.length) =>
       fireEvent.change(input, { target: { value, selectionStart: caret, selectionEnd: caret } });
     const labels = () => screen.queryAllByRole('option').map(option => option.textContent);
+
+    // Unit UI regression: the independent bulk entry exists only when the owner enables it.
+    it('offers and sends the separate teammate broadcast only when enabled', async () => {
+      mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
+      const view = render(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: true }} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      fireEvent.click(screen.getByRole('option', { name: /bots.groupChat.mention.allBots.*allBotsHint/ }));
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, allBots: true, botIds: [] });
+      view.rerender(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: false }} rootId="root" onClose={vi.fn()} />);
+      type(input, '@');
+      expect(labels().some(label => label?.includes('allBots'))).toBe(false);
+    });
 
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {
       const input = renderThread();
@@ -937,7 +1118,7 @@ describe('chat interaction controls', () => {
 
     it('names only the picked companion whose name is a Thread 「所有人」 alias', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
-      const members = [{ botId: 'all-bot', name: 'all', status: 'active' }, { botId: 'bo', name: 'Bo', status: 'active' }];
+      const members = [{ botId: 'all-bot', name: 'all', status: 'active' }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];
       render(<ChatThreadPanel group={{ ...group, members } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@al');
@@ -952,7 +1133,7 @@ describe('chat interaction controls', () => {
 
     it('never offers or resolves the current user, as on mobile', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
-      const members = [{ botId: 'me', name: 'Dash', status: 'active', isSelf: true }, { botId: 'bo', name: 'Bo', status: 'active' }];
+      const members = [{ botId: 'me', name: 'Dash', status: 'active', isSelf: true }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];
       render(<ChatThreadPanel group={{ ...group, members } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@');

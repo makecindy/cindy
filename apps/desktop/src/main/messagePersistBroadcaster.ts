@@ -1,5 +1,4 @@
 import { materializeToolProcessMedia } from './cindy-media/toolProcessMedia.js';
-import { importExternalCodexMessagesForSession } from './maker-host/codex-local-sessions.js';
 import { withToolProcessMedia, type ProcessMediaRef, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 import { readTaskResultsForReply } from './botTaskReplyResults.js';
 /**
@@ -277,9 +276,17 @@ function stampBlockAfterTurnStart(
 // In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
 // so expanding midway does not depend on deltas a collapsed controller never received.
 const historyThinkingBlocks = new Map<string, Map<string, Message>>();
+// blockIds whose `final` arrived while its queued write has not settled yet, mapped
+// to the exact snapshot entry that write persists. Those snapshots survive turn
+// boundaries (the write's release callback owns them); a snapshot without a final
+// belongs to a dead attempt and is dropped on turn settle. Identity compare (not a
+// bare blockId set) keeps a stale write's release from unmarking a newer snapshot
+// re-created under the same blockId after a history cleanup.
+const historyThinkingFinalBlocks = new Map<string, Map<string, Message>>();
 const historyThinkingOwners = new Map<string, OwnerScope>();
 export function clearSessionThinkingSnapshots(sessionId: string): void {
   historyThinkingBlocks.delete(sessionId);
+  historyThinkingFinalBlocks.delete(sessionId);
   historyThinkingOwners.delete(sessionId);
 }
 export function getSessionThinkingSnapshots(sessionId: string): Message[] {
@@ -770,45 +777,6 @@ function enqueueTurnErrorWrite(
     });
 }
 
-const pendingCodexReconciliation = new Map<string, {
-  ownerScope: OwnerScope;
-  rows: Map<string, number | undefined>;
-}>();
-
-function requestCodexReconciliation(sessionId: string, clientId: string, createdAt: number | undefined, ownerScope: OwnerScope): void {
-  const pending = pendingCodexReconciliation.get(sessionId);
-  if (pending && isOwnerScopeCurrent(pending.ownerScope)) {
-    pending.rows.set(clientId, createdAt);
-    return;
-  }
-  const work = { ownerScope, rows: new Map([[clientId, createdAt]]) };
-  pendingCodexReconciliation.set(sessionId, work);
-  // Background per-session work: unrelated writes and sequence cursor commits
-  // never wait on history reconciliation. Writes during a pass form one batch.
-  void Promise.resolve().then(async () => {
-    try {
-      while (work.rows.size && isOwnerScopeCurrent(ownerScope) && pendingCodexReconciliation.get(sessionId) === work) {
-        const batch = [...work.rows].slice(0, 400);
-        for (const [id] of batch) work.rows.delete(id);
-        const ids = batch.filter(([, at]) => !backgroundTurnPredatesSessionClear(sessionId, at)).map(([id]) => id);
-        if (ids.length) await importExternalCodexMessagesForSession(sessionId, { localWrite: ids });
-      }
-    } finally {
-      if (pendingCodexReconciliation.get(sessionId) === work) pendingCodexReconciliation.delete(sessionId);
-    }
-  }).catch((error) => {
-    log.warn('Codex import reconciliation failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
-  });
-}
-
-function reconcileCalibratedCodexReply(
-  sessionId: string, updated: NonNullable<Awaited<ReturnType<typeof updateDbMessageContent>>>, ownerScope: OwnerScope,
-): void {
-  if (updated.agentKind === 'codex' && sessionId.startsWith('codex-') && isOwnerScopeCurrent(ownerScope)) {
-    requestCodexReconciliation(sessionId, updated.clientId, Date.parse(updated.createdAt), ownerScope);
-  }
-}
-
 /** 在事件入队时冻结 agent_kind，避免 writeChain 延迟执行时读到切换后的可变 Map。 */
 function enqueueVisibleDbMessage(
   label: string,
@@ -820,13 +788,6 @@ function enqueueVisibleDbMessage(
   enqueueWrite(label, async (ownerScope) => {
     const result = await createVisibleDbMessage(sessionId, stamped, ownerScope);
     onPersisted?.();
-    if (stamped.role === 'assistant' && stamped.agentKind === 'codex'
-      && sessionId.startsWith('codex-') && isOwnerScopeCurrent(ownerScope)
-      && !backgroundTurnPredatesSessionClear(sessionId, stamped.createdAt)) {
-      // A list read may have imported this reply before the live write. Repair
-      // it now; an already open local window need not request history again.
-      requestCodexReconciliation(sessionId, stamped.clientId, stamped.createdAt, ownerScope);
-    }
     return result;
   });
 }
@@ -1653,6 +1614,11 @@ export function onThinkingEvent(
   const releaseSnapshot = () => {
     if (blocks.get(blockId) !== finalSnapshot) return;
     blocks.delete(blockId);
+    const finals = historyThinkingFinalBlocks.get(sessionId);
+    if (finals !== undefined && finalSnapshot !== undefined && finals.get(blockId) === finalSnapshot) {
+      finals.delete(blockId);
+      if (finals.size === 0) historyThinkingFinalBlocks.delete(sessionId);
+    }
     if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
       historyThinkingBlocks.delete(sessionId);
       historyThinkingOwners.delete(sessionId);
@@ -1660,6 +1626,14 @@ export function onThinkingEvent(
   };
 
   if (data.stage === 'final') {
+    const finals = historyThinkingFinalBlocks.get(sessionId) ?? new Map<string, Message>();
+    // The entry was just set above for this same blockId, so it is defined at runtime;
+    // the guard only satisfies the checker.
+    const marked = blocks.get(blockId);
+    if (marked) {
+      finals.set(blockId, marked);
+      historyThinkingFinalBlocks.set(sessionId, finals);
+    }
     const finishedAt = receivedAt;
     const text = typeof data.text === 'string' ? data.text : '';
     const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
@@ -2181,14 +2155,45 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
 }
 
 /**
+ * 逻辑 turn 终态时丢弃从未收到 final/redacted 的在途思考快照。
+ *
+ * 这些块属于中途死掉的尝试(连接断开 / 供应商失败 / 用户中断):final 永远不会来,
+ * 永远不会落库,而快照若留着,历史视图读取会把它们当 live 行追加到时间线末尾,
+ * 运行中工作组的「正在工作…」预览就被钉死在这些早已结束的历史思考上
+ * (实测:一次 pi-gateway 断连后,5 条泄漏快照长期霸占预览)。仍在流式的块每条
+ * delta 都会重新 set 回缓存,清掉只会影响已死块。已收到 final 的块不受影响:
+ * 它们的写已入队,由写完成的 release 回调收口;写失败时的保留是既有契约
+ * (messagePersistBroadcaster.test.ts 'keeps failed final thinking until explicit cleanup')。
+ */
+function releaseUnfinalizedThinkingSnapshots(sessionId: string): void {
+  const blocks = historyThinkingBlocks.get(sessionId);
+  if (!blocks) return;
+  const finals = historyThinkingFinalBlocks.get(sessionId);
+  for (const [blockId, entry] of [...blocks]) {
+    // Only the exact generation whose final-write is still queued is protected;
+    // a stale entry under the same blockId is a dead attempt, not this marker.
+    if (finals?.get(blockId) === entry) continue;
+    blocks.delete(blockId);
+  }
+  if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
+    historyThinkingBlocks.delete(sessionId);
+    historyThinkingFinalBlocks.delete(sessionId);
+    historyThinkingOwners.delete(sessionId);
+  }
+}
+
+/**
  * turn 结束(done)时重置 per-turn 状态(对齐老 renderer 在 done case 把两个 Map 置空 +
  * lastAgentMeta 清空)。assistant block 已在 done 边界 flush;此处清 tool_result 相关 Map
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
   assistantItemPersistIds.delete(sessionId);
-  // Event-stream completion is not a persistence barrier. Thinking snapshots
-  // survive until their write succeeds or an explicit history/owner cleanup.
+  // Event-stream completion is not a persistence barrier. Snapshots that already
+  // saw `final` survive until their queued write settles (or an explicit
+  // history/owner cleanup); blocks that never saw one belong to a dead attempt —
+  // keeping them would let the history view read them as live rows forever.
+  releaseUnfinalizedThinkingSnapshots(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
@@ -2312,7 +2317,6 @@ function assembleAssistantTextEvent(
       if (!isCurrentBoundary() || !isOwnerScopeCurrent(ownerScope)) return;
       if (updated) {
         broadcastMessageRow(sessionId, updated, ownerScope);
-        reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
       }
       if (agentMeta) {
         const patched = await patchMessageAgentMetaWithResult(sessionId, linkedPersistId, { ...agentMeta });
@@ -2367,7 +2371,6 @@ function assembleAssistantTextEvent(
             if (updated && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
               lateFinalCandidate.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);
-              reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
             }
           },
         );
@@ -2445,7 +2448,6 @@ function assembleAssistantTextEvent(
               // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
               boundaryFlushed.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);
-              reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
             }
           },
         );

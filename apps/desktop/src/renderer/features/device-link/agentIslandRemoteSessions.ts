@@ -63,6 +63,7 @@ export function buildAgentIslandRemoteSessionInputs(
       deviceName: session.deviceLinkDeviceName ?? null,
       title: session.title?.trim() || null,
       workingDir: session.workingDir,
+      ...(session.projectDir !== undefined ? { projectDir: session.projectDir } : {}),
       workspaceKind: session.workspaceKind,
       agentKind: session.agentKind,
       ...remoteActivityInput(activity),

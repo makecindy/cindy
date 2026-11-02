@@ -15,6 +15,7 @@ import {
   ghostPermissionItems,
   ghostPermissionProjectionKey,
   type GhostManifest,
+  type GhostTrustLevel,
   type GhostPermissionItem,
   type InstalledGhost,
 } from './ghost.js';
@@ -58,9 +59,11 @@ export type GhostInstallConsentFacts =
 
 /** Main 投给确认界面的一次确认请求。 */
 export interface GhostInstallConsentRequest {
-  /** Host-selected presentation; task-capability does not install/update a package. */
-  purpose?: 'task-capability' | 'share-replace';
+  /** Host-selected presentation; capability confirmations do not install/update a package. */
+  purpose?: 'task-capability' | 'share-replace' | 'ui-capability';
   requestId: string;
+  /** Host-verified trust shown on the local installation dialog. */
+  trust?: GhostTrustLevel;
   initiator: GhostInstallConsentInitiator;
   origin: GhostInstallConsentOrigin;
   /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */

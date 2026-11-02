@@ -38,12 +38,20 @@ const types = {
 if (!preview) app.dock?.hide();
 app.whenReady().then(() => {
   const ownSession = session.fromPartition('ui-check');
-  // Only the local fixture's DOM fullscreen is needed by video assertions.
-  // Screen capture, media devices and every other permission remain denied.
-  const canFullscreen = (wc, permission) =>
-    permission === 'fullscreen' && wc?.getURL().startsWith(origin + '/');
-  ownSession.setPermissionRequestHandler((wc, permission, callback) => callback(canFullscreen(wc, permission)));
-  ownSession.setPermissionCheckHandler((wc, permission) => canFullscreen(wc, permission));
+  const allowsFullscreen = (wc, permission, requestingUrl) => {
+    if (permission !== 'fullscreen' || !wc) return false;
+    try {
+      return new URL(requestingUrl).origin === origin && new URL(wc.getURL()).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  ownSession.setPermissionRequestHandler((wc, permission, callback, details) =>
+    callback(allowsFullscreen(wc, permission, details.requestingUrl)),
+  );
+  ownSession.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
+    Boolean(allowsFullscreen(wc, permission, requestingOrigin)),
+  );
   ownSession.on('will-download', (event) => event.preventDefault());
   ownSession.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
@@ -74,41 +82,50 @@ app.whenReady().then(() => {
       return new Response(null, { status: 404 });
     }
   });
-  const win = new BrowserWindow({
+  const createWindow = (size) => {
+    const win = new BrowserWindow({
+      width: size.width,
+      height: size.height,
+      useContentSize: true,
+      // Native decorations round at forced 2x DPI on Windows (400 CSS px became
+      // 401). Background captures need only the content, not a platform frame.
+      frame: preview,
+      show: preview,
+      title: 'Cindy UI Check',
+      webPreferences: {
+        // A hidden native Windows window can retain its old renderer size and
+        // stop producing frames. Offscreen rendering keeps checks hidden while
+        // allowing exact resizing and screenshots without showing a native window.
+        offscreen: !preview && process.platform === 'win32',
+        // Exercise the real DOM fullscreen/top layer without asking an invisible
+        // offscreen native window to enter OS fullscreen.
+        // Native fullscreen transitions remain a full-Desktop acceptance check.
+        disableHtmlFullscreenWindowResize: !preview,
+        session: ownSession,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        nodeIntegrationInWorker: false,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        experimentalFeatures: false,
+        plugins: false,
+        navigateOnDragDrop: false,
+      },
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.on('will-navigate', (event, url) => {
+      if (new URL(url).origin !== origin) event.preventDefault();
+    });
+    void win.loadURL('about:blank');
+    return win;
+  };
+  // Main-process test harness only; no renderer IPC or app bootstrap is exposed.
+  app.on('ui-check:create-window', createWindow);
+  createWindow({
     width: Number(process.env.CINDY_UI_WIDTH),
     height: Number(process.env.CINDY_UI_HEIGHT),
-    useContentSize: true,
-    // Native decorations round at forced 2x DPI on Windows (400 CSS px became
-    // 401). Background captures need only the content, not a platform frame.
-    frame: preview,
-    show: preview,
-    title: 'Cindy UI Check',
-    webPreferences: {
-      // A hidden native Windows window can retain its old renderer size and
-      // stop producing frames. Offscreen rendering keeps checks hidden while
-      // allowing exact resizing and screenshots without showing a native window.
-      offscreen: !preview && process.platform === 'win32',
-      // Exercise the real DOM Fullscreen API/top layer without entering a native
-      // macOS Space. A hidden check window cannot complete that OS transition,
-      // and its pending resize would otherwise contaminate subsequent variants.
-      disableHtmlFullscreenWindowResize: !preview,
-      session: ownSession,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      nodeIntegrationInSubFrames: false,
-      nodeIntegrationInWorker: false,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      experimentalFeatures: false,
-      plugins: false,
-      navigateOnDragDrop: false,
-    },
   });
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin !== origin) event.preventDefault();
-  });
-  void win.loadURL('about:blank');
 });
 app.on('window-all-closed', () => app.quit());

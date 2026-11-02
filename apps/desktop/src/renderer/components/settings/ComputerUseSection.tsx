@@ -1593,12 +1593,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
           />
         ) : null}
-        {/* 拷贝登录文件只对独立浏览器有用;别的浏览器下隐藏,但已经开着时仍要能关掉并删除拷贝。 */}
-        {browserBackendKind === 'external' || (browserBackendKind !== null && useRealProfile) ? (
+        {/* 拷贝登录文件只对独立浏览器有用,其它浏览器下一律隐藏;要删除拷贝时切回独立浏览器再关。 */}
+        {browserBackendKind === 'external' ? (
           <BrowserRealProfileSubsection
             enabled={useRealProfile}
             pending={useRealProfilePending}
-            available={browserBackendKind === 'external'}
             onToggle={(next) => void handleToggleRealProfile(next)}
           />
         ) : null}

@@ -559,9 +559,6 @@
     "apps/desktop/src/renderer/__tests__/deviceLinkProjectsConcurrency.test.tsx": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/__tests__/deviceProvidersCache.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/__tests__/deviceProvidersRecovery.test.tsx": {
       "resetModules": 1
     },

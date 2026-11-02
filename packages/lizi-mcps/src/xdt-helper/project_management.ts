@@ -76,7 +76,7 @@ export function registerProjectManagementTools(
     name: "list_projects",
     category: "control",
     description:
-      "List registered projects on the local Cindy host, including empty projects with no tasks. Returns working_dir, directory_name, custom display alias (null means default), hidden state and whether the directory exists. The sidebar may disambiguate identical directory names with parent paths; always identify targets by working_dir. Hidden projects are included by default so they can be restored. Use next_offset for the next page. Unlike list_workdirs, this reads the project list rather than task history. Unavailable from SSH tasks.",
+      "List registered projects on the local Cindy host, including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
     inputShape: {
       include_hidden: z.boolean().default(true),
       offset: z.number().int().min(0).default(0),
@@ -94,6 +94,7 @@ export function registerProjectManagementTools(
         (data) => ({
           projects: data.projects.map((row) => ({
             working_dir: row.workingDir,
+            project_path: row.workingDir,
             directory_name: row.directoryName,
             alias: row.alias,
             hidden: row.hidden,

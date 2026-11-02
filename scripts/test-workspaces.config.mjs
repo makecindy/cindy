@@ -279,6 +279,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
   'src/renderer/__tests__/iconButtonTooltips.test.ts',
   'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  // Existing project-picker source assertions enforce cross-file routing/design contracts.
+  'src/renderer/__tests__/newMakerProjectPicker.test.ts',
   'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
   'src/renderer/__tests__/projectsSidebarSection.test.ts',
   'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',

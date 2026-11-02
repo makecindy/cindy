@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -215,7 +216,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
       [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
-    headers: row.execution.pi.headers,
+    headers: withProviderAppAttribution(destination, options.headers, row.execution.pi.headers),
   };
   return model;
 }
@@ -229,7 +230,8 @@ export async function probePiProvider(options: PiProviderTransportOptions, signa
   return adapter.streamSimple(model, { messages: [{ role: 'user', content: 'ping', timestamp: 0 }] }, {
     apiKey: cloudflare ? undefined : options.apiKey,
     env: options.env,
-    headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
+    headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers)
+      : withProviderAppAttribution(model.baseUrl, options.headers),
     ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
       ? { fetch: options.fetchImpl } : {}),
     signal, maxRetries: 0, maxTokens: Math.min(maxTokens ?? 16, model.maxTokens),
@@ -308,7 +310,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     // `x-opencode-session`; without an inbound identity the route falls back to the helper's
     // one-shot (per-request) value rather than inventing a shared or pseudo-stable id.
     const sessionId = nativeBridgeSessionId(init);
-    const routeHeaders = withOpenCodeGoSessionHeader(options.headers, {
+    const routeHeaders = withOpenCodeGoSessionHeader(withProviderAppAttribution(model.baseUrl, options.headers), {
       providerId: options.providerId, catalogPresetId: options.catalogPresetId, upstream: model.baseUrl, sessionId,
     });
     const events = adapter.streamSimple(model, context, {

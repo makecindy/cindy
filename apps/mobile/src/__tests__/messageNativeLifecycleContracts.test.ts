@@ -380,7 +380,8 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     // 原生选择回归重新退化成验证整块复制。
     expect(flowSource).toContain('id: "message.markdownBody"');
     expect(flowSource).toContain('text: "^Copy$"');
-    expect(flowSource).toContain('- tapOn:\n    text: "^Copy$"');
+    // Git checkouts may use LF or CRLF; the exact system Copy action is unchanged.
+    expect(flowSource).toMatch(/- tapOn:\r?\n    text: "\^Copy\$"/);
     expect(flowSource).not.toContain('message.textSelectionModal');
     expect(flowSource).not.toContain('message.selectableMarkdownBody');
   });

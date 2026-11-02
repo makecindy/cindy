@@ -1182,7 +1182,7 @@ async function readAggregatedUsageHistory(
     if (cachedHistory && cachedHistoryOptsKey === key) return stalePayload(cachedHistory);
     const diskPayload = await hydrateFromDisk(key);
     if (diskPayload) return stalePayload(diskPayload);
-    return emptyUsageHistoryPayload();
+    return unreadUsageHistoryPayload();
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
@@ -1204,7 +1204,15 @@ async function readAggregatedUsageHistory(
     return stalePayload(diskPayload);
   }
   const fresh = await refreshUsageHistory(key, opts);
-  return fresh ? settle(fresh) : emptyUsageHistoryPayload();
+  return fresh ? settle(fresh) : unreadUsageHistoryPayload();
+}
+
+/**
+ * Nothing could be read yet (typically the local database is still opening at launch). Marked
+ * stale so callers look again shortly instead of caching zero usage as the current answer.
+ */
+function unreadUsageHistoryPayload(): UsageHistoryPayload {
+  return stalePayload(emptyUsageHistoryPayload());
 }
 
 /** DB 出错时的兜底空 payload (查询型 handler fallback-data 模式)。 */

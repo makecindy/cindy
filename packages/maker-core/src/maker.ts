@@ -1037,6 +1037,7 @@ export class Maker {
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
           workspaceKind: opts.workspaceKind,
+          projectDir: opts.projectDir,
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
