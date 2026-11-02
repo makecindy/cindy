@@ -567,6 +567,23 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     return result;
   };
   const onSent = useCallback(() => { refreshRef.current(); refreshBotGroups(); }, []);
+  // A component reply belongs to this thread; the composer's “also send” choice and draft stay intact.
+  const sendRichAnswer = async (text: string) => {
+    if (readOnly || sharing) return false;
+    const owner = getDataOwnerGeneration();
+    const input = { text, clientId: crypto.randomUUID(), mentions: { all: false, botIds: [] } };
+    onSendStart({ ...input, attachments: [], quote: null });
+    try {
+      const result = await api().reply({ groupId: group.id, rootId, ...input });
+      if (!isDataOwnerGenerationCurrent(owner)) return false;
+      onSendSettled(input.clientId, result.ok ? { ok: true, messageId: result.messageId } : { ok: false });
+      if (result.ok) onSent();
+      return result.ok;
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) onSendSettled(input.clientId, { ok: false });
+      return false;
+    }
+  };
 
   // Follow new replies while the reader is at the bottom, including content that grows later.
   const lastKey = replyRows[replyRows.length - 1]?.id ?? '';
@@ -607,6 +624,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         locale={locale}
         shareScope={shareScope}
         sharing={sharing}
+        readOnly={readOnly}
+        onRichSend={sendRichAnswer}
         reactionGroupId={group.id}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.

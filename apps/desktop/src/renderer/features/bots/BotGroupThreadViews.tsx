@@ -7,6 +7,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { ChevronRight, CornerDownRight, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
@@ -114,7 +115,8 @@ export function botGroupThreadShareLabel(share: BotGroupThreadShareView, t: (key
 }
 
 /** The referenced reply as the server has it now: edits show, deletions say so. */
-export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false }: {
+export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false, richScope }: {
+  richScope?: string;
   share: BotGroupThreadShareView; members: readonly BotGroupMemberView[]; attachments: ReactNode;
   /** Omitted inside the thread panel, where the quote is already the thread's root. */
   onOpenThread?: () => void;
@@ -142,7 +144,10 @@ export function BotGroupThreadShareQuote({ share, members, attachments, onOpenTh
           </figcaption>
           {share.content.trim() ? (
             <blockquote className={`min-w-0 break-words text-[var(--msg-assistant-text)] ${CHAT_BODY_CLASS}`}>
-              <MarkdownRenderer workingDir="" content={share.content} allowPrivilegedLinks={false} />
+              <SessionQuickSendProvider value={null}>
+                <MarkdownRenderer workingDir="" content={share.content} allowPrivilegedLinks={false}
+                  renderRichAnswers={share.authorKind === 'bot'} streamFadeKey={`group:${richScope}:${share.messageId}`} />
+              </SessionQuickSendProvider>
             </blockquote>
           ) : null}
           {attachments}

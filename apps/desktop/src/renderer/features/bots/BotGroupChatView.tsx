@@ -118,7 +118,7 @@ import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAu
 import { botGroupReadKey, markBotRead } from './botReadState';
 import { useGroupMask, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
-  beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
+  enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
   getBotGroupOutboxPreviews, interleaveBotGroupOutbox, mergeBotGroupLocalAttachments,
   noteBotGroupTimeline, projectBotGroupOutbox, useBotGroupOutbox,
 } from './botGroupOutbox';
@@ -1136,6 +1136,17 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
   }, [onOpenThread]);
   const onSending = useCallback(() => { stickToBottomRef.current = true; }, []);
+  const sendRichAnswer = useCallback(async (text: string) => {
+    const current = stateRef.current;
+    if (current.kind !== 'ready' || current.group.archived || current.group.dissolvedAt
+      || !isDataOwnerGenerationCurrent(readOwner.current)) return false;
+    const input = { groupId: current.group.id, ...(direct ? { conversationKind: 'direct' as const } : {}),
+      text, clientId: crypto.randomUUID(), mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, ''), draft: text,
+      tracked: [], quote: null, files: [], attachmentScope: botGroupAttachmentScope(current.group.id) });
+    stickToBottomRef.current = true;
+    return true;
+  }, [direct]);
   const locateNotification = useRef(locateQuoted); locateNotification.current = locateQuoted;
   useEffect(() => {
     if (state.kind !== 'ready' || !notificationTarget || handledNotification.current === location.key) return;
@@ -1362,6 +1373,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
+                  onRichSend={sendRichAnswer}
                   quoteDisplay={quoteDisplays.get(message.id)?.display}
                   onLocateQuote={onLocateQuote}
                   onQuote={quotable ? onQuote : undefined}

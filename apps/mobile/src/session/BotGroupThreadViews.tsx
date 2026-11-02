@@ -53,7 +53,8 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
     disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
-export function BotGroupThreadShare({ share, resolveMedia, resolveServerMedia, onRetry }: {
+export function BotGroupThreadShare({ share, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId }: {
+  messageKey?: string; messageId?: string;
   share: BotGroupThreadShareView; resolveMedia: ResolveRemoteMediaFn;
   resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>; onRetry?(): void;
 }) {
@@ -65,7 +66,7 @@ export function BotGroupThreadShare({ share, resolveMedia, resolveServerMedia, o
       : <>
         <Text style={styles.count}>{share.authorName}{share.edited ? ` · ${t('groupChat.thread.edited')}` : ''}</Text>
         {share.attachments.length ? <BotGroupMessageAttachments messageId={share.messageId} attachments={share.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
-        <BotGroupMarkdownText content={share.content} authorKind={share.authorKind} />
+        <BotGroupMarkdownText content={share.content} authorKind={share.authorKind} readOnly messageKey={messageKey} messageId={messageId} />
       </>}
   </View>;
 }
