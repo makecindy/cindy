@@ -472,8 +472,11 @@ Use the simulator system log for native crashes or native auth/session issues:
 xcrun simctl spawn booted log stream --style compact --predicate 'process == "Cindy"'
 ```
 
-The in-app "Open debugger to view warnings" banner means a JavaScript warning is
-active. Read Metro before changing UI code.
+React Native shows no per-warning banner here: without a debugger attached, the
+first warning only triggers a fixed "Open debugger to view warnings" banner.
+`src/debug/quietDevLogs.ts` hides that banner because it covers the UI, so a clean
+screen does not mean there are no warnings. Warnings still reach Metro and the
+debugger, and error banners still appear. Read Metro before changing UI code.
 
 For device-link network symptoms, collect:
 
