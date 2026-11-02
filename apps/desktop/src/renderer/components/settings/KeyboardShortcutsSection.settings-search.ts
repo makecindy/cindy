@@ -30,7 +30,7 @@ export default {
   order: 7,
   entries: [
     ...Object.values(keyboardShortcutsSettings),
-    ...APP_SHORTCUT_DEFINITIONS.map((definition) => ({
+    ...APP_SHORTCUT_DEFINITIONS.filter((definition) => !definition.hiddenInSettings).map((definition) => ({
       id: 'shortcuts.' + definition.id,
       tab: 'shortcuts' as const,
       targetId: 'settings-shortcut-' + definition.id,

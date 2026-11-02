@@ -81,10 +81,15 @@ describe('settings discoverability regressions', () => {
     expect(searchSettings(documents, '!!!')).toEqual([]);
   });
 
-  it('indexes shortcut definitions with their own navigation targets', () => {
-    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+  // Unit regression: hidden shortcut rows never mount, so returning their labels
+  // creates an unlocatable result. Exercise real translated queries on both platforms.
+  it.each(['win32', 'darwin'])('only finds visible shortcut settings on %s', (platform) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
     const result = searchSettings(documents, '截图').find(({ entry }) => entry.id === 'shortcuts.region-screenshot');
     expect(result?.entry.targetId).toBe('settings-shortcut-region-screenshot');
+    const hiddenQuery = searchI18n.t('settings.shortcuts.items.close-tab-or-window.label');
+    expect(searchSettings(documents, hiddenQuery).map(({ entry }) => entry.id))
+      .not.toContain('shortcuts.close-tab-or-window');
   });
 
   it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
