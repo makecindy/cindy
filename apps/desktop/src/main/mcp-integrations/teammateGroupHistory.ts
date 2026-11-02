@@ -24,12 +24,15 @@ export function createTeammateGroupHistoryProvider(deps: {
       if (!current() || !link) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
       if (!['canonical', 'thread', 'routine', 'group'].includes(link.role)) return { ok: false, errorCode: 'PERMISSION_DENIED' };
       const authority = link.role === 'group' ? await deps.authorizeGroupTool(input.callerSessionId, caller.botId, 'read-self') : null;
-      if (authority && authority.mode !== 'owner' && (!input.groupId || input.groupId !== authority.sourceGroup?.groupId))
+      // The model receives a group name, not its internal ID. Only a live tools
+      // grant may resolve an omitted ID to its own group; it never discovers others.
+      const groupId = input.groupId ?? (authority?.mode === 'tools' ? authority.sourceGroup?.groupId : undefined);
+      if (authority && authority.mode !== 'owner' && (!groupId || groupId !== authority.sourceGroup?.groupId))
         return { ok: false, errorCode: 'PERMISSION_DENIED' };
       if (!current()) return { ok: false, errorCode: 'OWNER_CHANGED' };
       const read = deps.getReader();
       if (!read) return { ok: false, errorCode: 'HOST_NOT_READY' };
-      const data = await read({ ...input, botId: caller.botId });
+      const data = await read({ ...input, groupId, botId: caller.botId });
       // The requester can lose membership or its tools grant while history is in
       // flight, before the execution's background revocation poll catches up.
       await authority?.refresh();

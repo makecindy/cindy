@@ -1,3 +1,5 @@
+import type { BotGroupMessageView } from '../../shared/botGroupChat.js';
+
 /** Read as the companion actor, never as its owner. No local history cache or read receipts. */
 export interface TeammateGroupHistoryQuery {
   botId: string;
@@ -10,11 +12,12 @@ interface Room { id: string; name: string; kind?: string; state: string }
 interface Message {
   id: string; seq: string; deleted: boolean; createdAt: string; threadRootId: string | null;
   author: { name: string; kind: string };
+  maskAttribution?: BotGroupMessageView['maskAttribution'];
   content: Array<{ type: string; text?: string; fallback?: string; caption?: string }>;
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[] }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution'] }>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -54,6 +57,7 @@ export function createTeammateGroupHistoryReader(deps: {
       if (!message.deleted && (!query || text.toLocaleLowerCase().includes(query))) {
         const record = { id: message.id, sequence: message.seq, author: message.author.name, authorKind: message.author.kind,
           createdAt: message.createdAt, threadRootId: message.threadRootId, text,
+          ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
           attachments: message.content.filter(block => block.type === 'media').map(block => block.caption ?? '') };
         // Budget the actual serialized record, including captions, metadata and
         // escaping. Return an oversized first record whole so the cursor advances.

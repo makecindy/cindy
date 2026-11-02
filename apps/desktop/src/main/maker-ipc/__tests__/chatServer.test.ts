@@ -1042,7 +1042,11 @@ describe('Chat Server result delivery and refresh', () => {
 
   // #8434: production adapter + HTTP serialization (unit transport fake, no cloud
   // account). Reader-only tests cannot detect owner-actor fallback or read writes.
-  it('routes group discovery and full history through the companion actor without downloading or acknowledging', async () => {
+  // #8433 review / message-source.md: the real HTTP adapter must retain the
+  // server-stamped AI reply identity; ordinary authors alone lose this distinction.
+  it.each([undefined, { self: { id: selfId, name: 'Member', avatarUrl: null },
+    companion: { id: botId, name: 'Cindy', avatarUrl: null }, sourceMessageId: 'source-message' }])(
+    'routes group history with server attribution %j without downloading or acknowledging', async maskAttribution => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     const members = [{ id: botId, kind: 'bot', state: 'joined' }];
     const text = 'full history'.repeat(2000);
@@ -1052,6 +1056,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (route === `/conversations/${roomId}/members`) return { body: members };
       if (route === `/conversations/${roomId}/messages?all=true&limit=20`) return { body: [{ id: 'historical-id', seq: '42', deleted: false,
         createdAt: '2026-11-02T00:00:00Z', threadRootId: 'topic-root', author: { name: 'Member', kind: 'human' },
+        ...(maskAttribution ? { maskAttribution } : {}),
         content: [{ type: 'text', text }, { type: 'media', caption: 'notes.pdf' }] }] };
       return response(route);
     });
@@ -1059,7 +1064,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect((await service.teammateHistory!({ botId: 'local-bot' })).groups).toEqual([{ id: roomId, name: 'Room' }]);
     expect((await service.teammateHistory!({ botId: 'local-bot', groupId: roomId })).messages).toEqual([{
       id: 'historical-id', sequence: '42', author: 'Member', authorKind: 'human', createdAt: '2026-11-02T00:00:00Z',
-      threadRootId: 'topic-root', text, attachments: ['notes.pdf'],
+      threadRootId: 'topic-root', text, attachments: ['notes.pdf'], ...(maskAttribution ? { maskAttribution } : {}),
     }]);
     const reads = fixture.requests.slice(from).filter(request => request.url.includes('/conversations'));
     expect(reads).toHaveLength(4);

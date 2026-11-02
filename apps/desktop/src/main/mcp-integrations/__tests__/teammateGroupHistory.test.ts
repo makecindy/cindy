@@ -46,10 +46,26 @@ describe('companion group history host authorization', () => {
     read.mockImplementationOnce(async () => { unavailable = true; return { messages: [], hasMore: false, nextCursor: null }; });
     expect(await provider(call)).toEqual({ ok: false, errorCode: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
   });
-  it.each([undefined, 'other-group'])('denies tools-granted discovery or cross-group read: %s', async groupId => {
+  it.each(['other-group'])('denies tools-granted cross-group read: %s', async groupId => {
     grant('tools');
     const { provider, read } = setup();
     expect(await provider({ ...call, groupId })).toEqual({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(read).not.toHaveBeenCalled();
+  });
+  // #8433 review: the model only knows the group name; the live grant must
+  // resolve an omitted ID without exposing a cross-group discovery route (unit).
+  it('reads the verified current group when a tools-granted caller omits its ID', async () => {
+    grant('tools');
+    const { provider, read } = setup();
+    expect(await provider({ callerSessionId: 'lane', query: 'older', before: '42' })).toMatchObject({ ok: true });
+    expect(read).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'lane', botId: 'bot',
+      groupId: 'current-group', query: 'older', before: '42' });
+  });
+  it('denies an omitted ID when the live tools grant has no source group', async () => {
+    releases.push(registerGroupToolAuthority('lane', { botId: 'bot', mode: 'tools',
+      validate: async () => {}, isCurrent: () => true }));
+    const { provider, read } = setup();
+    expect(await provider({ callerSessionId: 'lane' })).toEqual({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(read).not.toHaveBeenCalled();
   });
   it('allows a live tools grant to read only its own group as the attributed companion', async () => {
