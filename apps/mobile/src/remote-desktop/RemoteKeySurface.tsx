@@ -69,6 +69,7 @@ export type SystemKeyAction = {
 
 const INPUT_METHOD = "inputMethod";
 const HINT_WIDTH = 160;
+const STRIP_END = "stripEnd.";
 const FN_LEGENDS: Record<string, string> = {
   Delete: "Del",
   Home: "Home",
@@ -207,6 +208,7 @@ export function RemoteKeySurface({
   compact = false,
   mode = "keyboard",
   strip,
+  stripEnd,
   palette,
   renderKeycap,
   renderOverlay,
@@ -229,6 +231,8 @@ export function RemoteKeySurface({
    */
   mode?: "keyboard" | "classic" | "bar";
   strip?: KeyStrip;
+  /** Non-key controls that take even cells at the strip's end, after a group gap. */
+  stripEnd?: ReactNode[];
   /** Hardware skins keep their own colors in either app theme. */
   palette?: ThemeColors;
   renderKeycap?: (rect: KeyRect) => ReactNode;
@@ -261,8 +265,9 @@ export function RemoteKeySurface({
 
   const systemKey = systemActions.map((action) => action.id).join();
   const hasInputMethod = Boolean(onInputMethod);
+  const stripEndCount = stripEnd?.length ?? 0;
   const stripKey = strip ? `${strip.height},${strip.left},${strip.right}` : "";
-  const rects = useMemo(() => {
+  const allRects = useMemo(() => {
     if (mode === "classic")
       return keyRects(
         classicKeyboardRows(platform),
@@ -308,6 +313,12 @@ export function RemoteKeySurface({
             ...(hasInputMethod
               ? [{ id: INPUT_METHOD, weight: 1, bare: true }]
               : []),
+            ...Array.from({ length: stripEndCount }, (_, index) => ({
+              id: `${STRIP_END}${index}`,
+              weight: 1,
+              bare: true,
+              groupGap: index === 0 ? gap : 0,
+            })),
           ];
     const rows =
       mode === "bar"
@@ -317,6 +328,7 @@ export function RemoteKeySurface({
     // stripKey stands for the strip's values, which callers rebuild each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    stripEndCount,
     platform,
     systemKey,
     hasInputMethod,
@@ -326,6 +338,10 @@ export function RemoteKeySurface({
     mode,
     stripKey,
   ]);
+  const rects = useMemo(
+    () => allRects.filter((rect) => !rect.id.startsWith(STRIP_END)),
+    [allRects],
+  );
   const rectsRef = useRef(rects);
   rectsRef.current = rects;
 
@@ -426,7 +442,7 @@ export function RemoteKeySurface({
   };
   const activate = useCallback((id: string) => activateRef.current(id), []);
 
-  return (
+  const keys = (
     // box-only keeps every finger's target and location on this one surface:
     // Android reports later fingers against the first finger's view.
     <View
@@ -494,11 +510,44 @@ export function RemoteKeySurface({
       ) : null}
     </View>
   );
+  if (!stripEnd?.length) return keys;
+  // Beside the box-only surface, not in it, so these keep their own touches.
+  return (
+    <View pointerEvents="box-none" style={styles.surface}>
+      {keys}
+      {stripEnd.map((node, index) => {
+        const cell = allRects.find(
+          (rect) => rect.id === `${STRIP_END}${index}`,
+        );
+        return cell ? (
+          <View
+            key={cell.id}
+            style={[
+              styles.stripEnd,
+              {
+                left: cell.x,
+                top: cell.y,
+                width: cell.width,
+                height: cell.height,
+              },
+            ]}
+          >
+            {node}
+          </View>
+        ) : null;
+      })}
+    </View>
+  );
 }
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     surface: { flex: 1, minHeight: 0 },
+    stripEnd: {
+      position: "absolute",
+      alignItems: "center",
+      justifyContent: "center",
+    },
     key: {
       position: "absolute",
       alignItems: "center",

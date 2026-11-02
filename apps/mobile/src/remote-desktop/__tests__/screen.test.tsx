@@ -5857,6 +5857,10 @@ describe("remote desktop controls", () => {
       regions: [{ kind: "division", x: 0, y: 400, width: 700, height: 30 }],
     });
     // Unit: the default deck replaces the toolbar and leaves the viewer in the upper half.
+    // Unit: clipboard and Controls live in the top row, leaving only the trackpad below.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.foldOperations"]'),
+    ).not.toBeNull();
     expect(
       host.querySelector('[data-testid="remoteDesktop.foldKeyboard"]'),
     ).not.toBeNull();

@@ -3423,6 +3423,7 @@ export function RemoteDesktopSession({
       enabled={!connectionPending && canInput}
       supported={caps?.clipboardText === true}
       transfer={transferClipboard}
+      tint={colors.textSecondary}
     />
   );
   return (
@@ -4142,13 +4143,13 @@ export function RemoteDesktopSession({
                   <Languages
                     size={iconSize.action}
                     strokeWidth={iconStroke.regular}
-                    color={colors.textPrimary}
+                    color={colors.textSecondary}
                   />
                 ) : (
                   <KeyboardIcon
                     size={iconSize.action}
                     strokeWidth={iconStroke.regular}
-                    color={colors.textPrimary}
+                    color={colors.textSecondary}
                   />
                 )}
               </Pressable>
@@ -4170,7 +4171,7 @@ export function RemoteDesktopSession({
                   <ChevronDown
                     size={iconSize.action}
                     strokeWidth={iconStroke.regular}
-                    color={colors.textPrimary}
+                    color={colors.textSecondary}
                   />
                 </Pressable>
               </View>

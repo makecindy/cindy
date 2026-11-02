@@ -34,11 +34,13 @@ function FoldDeckOperations({ onPress }: { onPress(): void }) {
       <Ellipsis
         size={iconSize.action}
         strokeWidth={iconStroke.regular}
-        color={colors.textPrimary}
+        color={colors.textSecondary}
       />
     </Pressable>
   );
 }
+
+const BAR_HEIGHT = 44;
 
 /** The default tabletop deck: a full keyboard and trackpad that follow the app theme. */
 export function FoldDesktopKeyboard({
@@ -69,21 +71,17 @@ export function FoldDesktopKeyboard({
       ]}
     >
       <View style={styles.keys}>
-        <RemoteKeySurface {...keys} />
+        <RemoteKeySurface
+          {...keys}
+          strip={{ height: BAR_HEIGHT }}
+          stripEnd={[clipboard, <FoldDeckOperations onPress={onOperations} />]}
+        />
       </View>
       <View style={styles.lower}>
-        <View style={styles.side}>
-          <View style={styles.round}>{clipboard}</View>
-        </View>
-        <View style={styles.padZone}>
-          <View pointerEvents="none" style={styles.pad} />
-          {/* The whole palm rest moves the pointer; a thumb need not land on the visible pad. */}
-          <View style={StyleSheet.absoluteFill}>
-            <FoldTouchpad send={keys.send} enabled={keys.enabled} bare />
-          </View>
-        </View>
-        <View style={styles.side}>
-          <FoldDeckOperations onPress={onOperations} />
+        <View pointerEvents="none" style={styles.pad} />
+        {/* The whole palm rest moves the pointer; a thumb need not land on the visible pad. */}
+        <View style={StyleSheet.absoluteFill}>
+          <FoldTouchpad send={keys.send} enabled={keys.enabled} bare />
         </View>
       </View>
     </View>
@@ -101,24 +99,21 @@ const makeStyles = (colors: ThemeColors) =>
     lower: {
       flex: 32,
       minHeight: 96,
-      flexDirection: "row",
-      alignItems: "stretch",
+      alignItems: "center",
     },
-    padZone: { flex: 1, alignItems: "center" },
     // Close to a laptop trackpad's proportions, set by the deck height.
     pad: {
       height: "100%",
-      aspectRatio: 1.6,
+      aspectRatio: 1.9,
       maxWidth: "100%",
       borderRadius: radius.container,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.borderTranslucent,
       backgroundColor: colors.surfaceElevated,
     },
-    side: { width: 44, justifyContent: "flex-end" },
     round: {
-      width: 44,
-      height: 44,
+      width: BAR_HEIGHT,
+      height: BAR_HEIGHT,
       alignItems: "center",
       justifyContent: "center",
       borderRadius: radius.pill,
