@@ -32,7 +32,6 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => sdkMock);
 vi.mock('../../logger', () => ({ createLogger: () => noopLogger() }));
 
 const tempDirs: string[] = [];
-const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 function noopLogger(): Logger {
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   return logger;
@@ -51,7 +50,7 @@ async function startSession(_mode: 'auto', options: {
   reviewer: NonNullable<AgentDeps['reviewAutoPermissionAction']>;
   interactionResolver: (request: InteractionRequest) => Promise<InteractionDecision>;
 }) {
-  process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+  const configDir = await makeTempDir();
   const workingDir = await makeTempDir();
   sdkMock.query.mockReturnValue({
     [Symbol.asyncIterator]() { return { next: () => new Promise<IteratorResult<unknown>>(() => {}) }; },
@@ -62,7 +61,10 @@ async function startSession(_mode: 'auto', options: {
   });
   const deps: AgentDeps = {
     auth: { async getState() { return { authenticated: true }; }, async triggerLogin() { return { authenticated: true }; },
-      async logout() {}, async getAuthEnv() { return {}; } },
+      // Unit / PR #8385 Windows CI: the production env builder strips inherited
+      // profile paths. Pass the isolated profile through the real auth contract,
+      // so native-read fault/deadline tests reach their intended SDK boundary.
+      async logout() {}, async getAuthEnv() { return { CLAUDE_CONFIG_DIR: configDir }; } },
     runtimeConfig: {}, binaryPath: process.execPath, logger: noopLogger(), mcpProviders: [],
     reviewAutoPermissionAction: options.reviewer, onClaudeLiveUserRules: options.observe,
   };
@@ -72,6 +74,7 @@ async function startSession(_mode: 'auto', options: {
   });
   type CanUseTool = (toolName: string, input: Record<string, unknown>, options: { toolUseID: string }) =>
     Promise<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown> }>;
+  expect(sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env?.CLAUDE_CONFIG_DIR).toBe(configDir);
   const canUseTool = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.canUseTool as CanUseTool | undefined;
   if (!canUseTool) throw new Error('expected sdk query canUseTool');
   const seen: InteractionRequest[] = [];
@@ -87,8 +90,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
-  if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-  else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
