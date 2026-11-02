@@ -10722,7 +10722,7 @@
         "readersLoading": "加载中…",
         "readersFailed": "无法加载已读名单",
         "readersHeading": "已读",
-        "readersUnreadHeading": "未读 · {{count}}",
+        "readersOfTotal": "已读 {{read}}/{{total}}",
         "readerUnknown": "未知成员",
         "invite": "邀请加入群聊",
         "groupCreated": "群聊已创建",

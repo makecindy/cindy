@@ -3251,8 +3251,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const epoch = messageReadersEpoch;
       const reply = inviteResponse(z.object({
         messageId: id, eligibleCount: z.number().int().min(0),
+        readCount: z.number().int().min(0).optional(), listed: z.boolean().optional(),
         readers: z.array(z.object({ actorId: id, readAt: z.string().nullable() })),
-        unread: z.array(z.object({ actorId: id })),
       }), await api(`/conversations/${room}/messages/${i.messageId}/readers`));
       // Former members stay on the list under their group name; a bot is never a reader.
       const members = await api<Member[]>(`/conversations/${room}/members`);

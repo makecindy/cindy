@@ -10847,6 +10847,18 @@
         "reactorFormer": "{{name}} (já não está no grupo)",
         "reactorsUnavailable_one": "Nome indisponível para mais {{count}} membro",
         "reactorsUnavailable_other": "Nomes indisponíveis para mais {{count}} membros",
+        "readStatusSent": "Enviada",
+        "readStatusRead": "Lida",
+        "readersCount_one": "Lida por {{count}}",
+        "readersCount_other": "Lida por {{count}}",
+        "readersView": "Ver quem leu",
+        "readersTooLarge": "O grupo é demasiado grande para listar quem leu",
+        "readersNone": "Ninguém leu",
+        "readersLoading": "A carregar…",
+        "readersFailed": "Não foi possível carregar quem leu",
+        "readersHeading": "Lida",
+        "readersOfTotal": "Lida {{read}}/{{total}}",
+        "readerUnknown": "Membro desconhecido",
         "invite": "Convidar para o grupo",
         "groupCreated": "Conversa de grupo criada",
         "inviteFriends": "Convide amigos para aderirem e trabalharem com o seu colega.",
@@ -11001,7 +11013,8 @@
           }
         },
         "replyCount_many": "{{count}} respostas",
-        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros"
+        "reactorsUnavailable_many": "Nomes indisponíveis para mais {{count}} membros",
+        "readersCount_many": "Lida por {{count}}"
       },
       "lifecycle": {
         "dissolve": "Dissolver grupo",

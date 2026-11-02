@@ -736,16 +736,26 @@ describe('Chat Server result delivery and refresh', () => {
       const { socket } = await open();
       const result = await service.chatServer!.readers({ groupId: roomId, messageId: target });
       if (!result.ok) throw new Error(result.errorCode);
-      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3,
+      // Only readers are given on; the server's unread list is ignored, and a bot is never a reader.
+      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 2, listed: true,
         readers: [{ actorId: peer, name: 'Peer', readAt: Date.parse('2026-10-03T00:00:05Z'), formerMember: false },
-          { actorId: former, name: 'Ada', readAt: null, formerMember: true }],
-        unread: [{ actorId: selfId, name: 'Me' }] });
+          { actorId: former, name: 'Ada', readAt: null, formerMember: true }] });
       const reads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/readers')).length;
       await service.chatServer!.readers({ groupId: roomId, messageId: target });
       expect(reads()).toBe(1);
       socket.emit('message', receipt({ readSeq: '9' }));
       await service.chatServer!.readers({ groupId: roomId, messageId: target });
       expect(reads()).toBe(2);
+    });
+    it('gives just the counts for a group the server does not list', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { body: { messageId: target, eligibleCount: 180, readCount: 37, listed: false, readers: [], unread: [] } } : original(route, method, body));
+      await open();
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: target })).resolves.toEqual({
+        ok: true, readers: { messageId: target, eligibleCount: 180, readCount: 37, listed: false, readers: [] } });
     });
     it('reports a group too large to list and refuses a server without the capability', async () => {
       serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));

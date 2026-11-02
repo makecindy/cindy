@@ -881,14 +881,17 @@ export interface ChatMaskMention {
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
 export interface BotGroupMessageReader { actorId: string; name: string | null; readAt: number | null; formerMember: boolean }
-/** Who has read one message of a group, and which human members have not (bot-group-chat.md「消息已读」). */
+/** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
 export interface BotGroupMessageReaders {
   messageId: string;
   /** Human members other than the author who can see the message. */
   eligibleCount: number;
-  /** Earliest first; those without a time last. */
+  /** How many of them have read it; matches `readers` when the list is given. */
+  readCount: number;
+  /** False in a very large group: only the two counts are given and `readers` is empty. */
+  listed: boolean;
+  /** In the order the server gives (who read first); a read without a time comes last. */
   readers: BotGroupMessageReader[];
-  unread: Array<Pick<BotGroupMessageReader, 'actorId' | 'name'>>;
 }
 export interface ChatInvitePreview {
   groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;

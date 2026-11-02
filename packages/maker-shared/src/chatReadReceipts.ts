@@ -112,11 +112,14 @@ export function createOthersReadOverlay() {
 
 const maxOf = (a: bigint | undefined, b: bigint | undefined): bigint => (a ?? 0n) > (b ?? 0n) ? (a ?? 0n) : (b ?? 0n);
 
-/** What `GET /conversations/:id/messages/:id/readers` answers. */
+/**
+ * What `GET /conversations/:id/messages/:id/readers` answers. `readCount` and `listed` come from servers
+ * that give only the counts in a very large group; older ones list everyone, and `unread` (never shown) is ignored.
+ */
 export interface MessageReadersReply {
   messageId: string; eligibleCount: number;
+  readCount?: number; listed?: boolean;
   readers: Array<{ actorId: string; readAt: string | null }>;
-  unread: Array<{ actorId: string }>;
 }
 
 /**
@@ -130,13 +133,16 @@ export function projectMessageReaders(
   nameOf: (actorId: string) => string | null,
 ): BotGroupMessageReaders {
   const memberOf = (actorId: string) => members.find(member => member.id === actorId);
+  const readers = reply.readers.filter(reader => memberOf(reader.actorId)?.kind !== 'bot').map(({ actorId, readAt }) => {
+    const at = readAt === null ? NaN : Date.parse(readAt);
+    return { actorId, name: nameOf(actorId), readAt: Number.isFinite(at) ? at : null, formerMember: memberOf(actorId)?.state !== 'joined' };
+  });
+  const listed = reply.listed !== false;
   return {
     messageId: reply.messageId,
     eligibleCount: reply.eligibleCount,
-    readers: reply.readers.filter(reader => memberOf(reader.actorId)?.kind !== 'bot').map(({ actorId, readAt }) => {
-      const at = readAt === null ? NaN : Date.parse(readAt);
-      return { actorId, name: nameOf(actorId), readAt: Number.isFinite(at) ? at : null, formerMember: memberOf(actorId)?.state !== 'joined' };
-    }),
-    unread: reply.unread.filter(unread => memberOf(unread.actorId)?.kind === 'human').map(({ actorId }) => ({ actorId, name: nameOf(actorId) })),
+    readCount: listed ? readers.length : Math.min(reply.readCount ?? 0, reply.eligibleCount),
+    listed,
+    readers: listed ? readers : [],
   };
 }

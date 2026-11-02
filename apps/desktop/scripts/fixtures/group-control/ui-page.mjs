@@ -26,6 +26,8 @@ export default {
   // The single-page builder does not implement Vite's ?url imports. Voice is outside this fixture.
   stubs: {
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
+    'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
   entry: './group-control-fixture.tsx',
   viewport: { width: 1280, height: 800 },
@@ -130,7 +132,7 @@ export default {
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
     },
     'read-receipts': {
-      about: 'Bot group 消息已读: my messages end in one check (sent) or two (read); the More menu lists who read it, avatars first, then who has not',
+      about: 'Bot group 消息已读: my messages end in one check (sent) or two (read) inside the bubble; clicking it lists who has read (names only, never who has not), and a very large group shows only 已读 N/总人数',
       viewport: { width: 900, height: 700 },
       data: { ...base, sidebar: false, readReceipts: true,
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }, { botId: 'c', actorId: 'c', name: 'Leo' },
@@ -149,7 +151,7 @@ export default {
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }] },
     },
     'read-receipts-thread': {
-      about: 'Bot group 消息已读 in the Thread panel: my replies end in a check on the bubble\'s left, level with its bottom',
+      about: 'Bot group 消息已读 in the Thread panel: my replies end in a check inside the bubble, level with the last line',
       viewport: { width: 1100, height: 760 },
       data: { ...base, sidebar: false, readReceipts: true, threadPanel: true,
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
@@ -334,8 +336,15 @@ export default {
       }));
       assert.ok(geometry.length >= 9 && geometry.every(item => item.button && item.size >= 24 && item.inside && !item.covers), `checks sit in the bubble corner: ${JSON.stringify(geometry)}`);
       // A short message does not grow a row for its check.
-      const shortHeight = geometry.find(item => item.id === 'rr-short-read').height;
-      assert.ok(shortHeight <= 46, `a one-line bubble stays one line (${shortHeight}px)`);
+      // The text keeps one line (the check shares it) and the bubble is that line plus its own padding and border.
+      const oneLine = await page.evaluate(() => {
+        const bubble = document.querySelector('[data-bot-group-message-id="rr-short-read"] [data-testid=bot-group-self-bubble]');
+        const text = bubble.querySelector('p');
+        const style = getComputedStyle(bubble), line = parseFloat(getComputedStyle(text).lineHeight);
+        const chrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((sum, key) => sum + parseFloat(style[key]), 0);
+        return { text: Math.round(text.getBoundingClientRect().height), line: Math.round(line), bubble: Math.round(bubble.getBoundingClientRect().height), chrome: Math.round(chrome) };
+      });
+      assert.ok(oneLine.text <= oneLine.line + 1 && oneLine.bubble <= oneLine.text + oneLine.chrome + 1, `a one-line bubble stays one line: ${JSON.stringify(oneLine)}`);
       await ui.capture('checks');
       // A one-line bubble is where the hover toolbar (level with the top) comes closest to the check's click area.
       const short = page.locator('[data-bot-group-message-id="rr-short-read"]');
@@ -352,17 +361,26 @@ export default {
       await page.mouse.move(0, 0);
       await short.getByTestId('read-receipt').focus();
       await ui.capture('focus');
-      // Two checks: who has read it, then who has not.
+      // Two checks: who has read it (never who has not).
       const many = page.locator('[data-bot-group-message-id="rr-many"]');
       await many.getByTestId('read-receipt').click();
       const popover = page.getByRole('dialog');
       await popover.getByText('Ada', { exact: true }).waitFor();
-      assert.equal(await popover.getByRole('listitem').count(), 6, 'four readers and two unread members');
+      assert.equal(await popover.getByRole('listitem').count(), 4, 'the four who have read, and no one who has not');
       await ui.capture('read-list');
       await page.keyboard.press('Escape');
       await popover.waitFor({ state: 'detached' });
       assert.ok(await many.getByTestId('read-receipt').evaluate(node => node === document.activeElement), 'focus returns to the check');
-      // One check: nobody has read it yet, and who has not is listed.
+      // A very large group: the counts only, no names.
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="rr-list"]').getByTestId('read-receipt').click();
+      const big = page.getByRole('dialog');
+      await big.getByText('37/180').waitFor();
+      assert.equal(await big.getByRole('listitem').count(), 0, 'no names in a group the server does not list');
+      await ui.capture('read-count-only');
+      await page.keyboard.press('Escape');
+      await big.waitFor({ state: 'detached' });
+      // One check: nobody has read it yet.
       await page.mouse.move(0, 0);
       await page.locator('[data-bot-group-message-id="rr-short-sent"]').getByTestId('read-receipt').click();
       await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
@@ -398,7 +416,7 @@ export default {
       await page.locator('[data-bot-group-message-id="mk-long"]').getByTestId('read-receipt').click();
       const popover = page.getByRole('dialog');
       await popover.getByText('Ada', { exact: true }).waitFor();
-      assert.equal(await popover.getByRole('listitem').count(), 6, 'four readers and two unread members');
+      assert.equal(await popover.getByRole('listitem').count(), 4, 'the four who have read, and no one who has not');
       assert.equal(await popover.locator('time').count(), 0, 'the list shows names, not times');
       await ui.capture('read-list');
       await page.keyboard.press('Escape');

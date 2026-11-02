@@ -10722,7 +10722,7 @@
         "readersLoading": "불러오는 중…",
         "readersFailed": "읽음 목록을 불러올 수 없어요",
         "readersHeading": "읽음",
-        "readersUnreadHeading": "읽지 않음 · {{count}}",
+        "readersOfTotal": "{{read}}/{{total}}명 읽음",
         "readerUnknown": "알 수 없는 멤버",
         "invite": "그룹에 초대",
         "groupCreated": "그룹 채팅이 생성되었습니다",

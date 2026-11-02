@@ -10722,7 +10722,7 @@
         "readersLoading": "読み込み中…",
         "readersFailed": "既読リストを読み込めません",
         "readersHeading": "既読",
-        "readersUnreadHeading": "未読 · {{count}}",
+        "readersOfTotal": "既読 {{read}}/{{total}}",
         "readerUnknown": "不明なメンバー",
         "invite": "グループに招待",
         "groupCreated": "グループチャットを作成しました",

@@ -65,7 +65,7 @@ function ReaderRow({ reader, members }: { reader: Pick<BotGroupMessageReader, 'a
   );
 }
 
-/** Who has read the message, then who has not; the loading and failed states are one quiet line. */
+/** Who has read the message (never who has not), or just how many in a very large group; loading and failed are one quiet line. */
 function ReadersList({ state, members }: { state: State; members?: readonly BotGroupMemberView[] }) {
   const { t } = useTranslation();
   const heading = 'px-2 pb-0.5 pt-1.5 text-12 font-medium text-[var(--text-tertiary)]';
@@ -74,26 +74,22 @@ function ReadersList({ state, members }: { state: State; members?: readonly BotG
   if (state.status === 'failed') return note(t(key('readersFailed')));
   const readers = state.status === 'ready' || state.status === 'loading' ? state.readers : null;
   if (!readers) return note(t(key('readersLoading')));
-  return (
+  if (!readers.listed) return (
     <div>
-      {readers.readers.length ? (
-        <>
-          <h3 className={heading}>{t(key('readersHeading'))}</h3>
-          <ul>{readers.readers.map(reader => <ReaderRow key={reader.actorId} reader={reader} members={members} />)}</ul>
-        </>
-      ) : note(t(key('readersNone')))}
-      {readers.unread.length ? (
-        <>
-          <h3 className={heading}>{t(key('readersUnreadHeading'), { count: readers.unread.length })}</h3>
-          <ul>{readers.unread.map(member => <ReaderRow key={member.actorId} reader={member} members={members} />)}</ul>
-        </>
-      ) : null}
+      <p className="px-2 pt-1.5 text-14 tabular-nums">{t(key('readersOfTotal'), { read: readers.readCount, total: readers.eligibleCount })}</p>
+      {note(t(key('readersTooLarge')))}
     </div>
   );
+  return readers.readers.length ? (
+    <div>
+      <h3 className={heading}>{t(key('readersHeading'))}</h3>
+      <ul>{readers.readers.map(reader => <ReaderRow key={reader.actorId} reader={reader} members={members} />)}</ul>
+    </div>
+  ) : note(t(key('readersNone')));
 }
 
-// Inside the bubble, at its bottom right, level with the last line of text (which reserves the room).
-const MARK_CLASS = 'absolute bottom-[7px] right-1.5 flex h-6 w-6 select-none items-center justify-center rounded-full';
+// Inside the bubble, at its bottom right, level with the last line of text (which reserves the room); 12px is the bubble's vertical padding.
+const MARK_CLASS = 'absolute bottom-[12px] right-1.5 flex h-6 w-6 select-none items-center justify-center rounded-full';
 
 /**
  * Inside your own bubble, at its bottom right: one check once it is sent, two once another member has
@@ -121,9 +117,9 @@ export function ChatReadReceipt({ groupId, messageId, read, members, interactive
     );
   }
   const loaded = state.status === 'ready' ? state.readers : null;
-  const label = loaded
-    ? loaded.readers.length ? t(key('readersCount'), { count: loaded.readers.length }) : t(key('readersNone'))
-    : t(key('readersView'));
+  const label = !loaded ? t(key('readersView'))
+    : !loaded.listed ? t(key('readersOfTotal'), { read: loaded.readCount, total: loaded.eligibleCount })
+    : loaded.readers.length ? t(key('readersCount'), { count: loaded.readers.length }) : t(key('readersNone'));
   return (
     <Popover open={open} onOpenChange={next => { setOpen(next); if (next) load(); }}>
       <Tip text={label}>

@@ -345,7 +345,7 @@ describe('bot group remote resources', () => {
   });
 
   it('hands a phone the read list and the read marks of this computer, and refuses a group without them', async () => {
-    const readers = { messageId: 'm2', eligibleCount: 1, readers: [], unread: [{ actorId: 'a', name: 'Ada' }] };
+    const readers = { messageId: 'm2', eligibleCount: 1, readCount: 0, listed: true, readers: [] };
     service.chatServer.readers.mockResolvedValue({ ok: true, readers });
     const read = detail({ serverBacked: true, supportsMessageReaders: true,
       messages: detail().messages.map((m, index) => index === 0 ? { ...m, isSelf: true, readByOthers: true } : m) });

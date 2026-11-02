@@ -10767,7 +10767,7 @@
         "readersLoading": "Loading…",
         "readersFailed": "Couldn't load who has read this",
         "readersHeading": "Read",
-        "readersUnreadHeading": "Unread · {{count}}",
+        "readersOfTotal": "Read {{read}}/{{total}}",
         "readerUnknown": "Unknown member",
         "invite": "Invite to group",
         "groupCreated": "Group Chat Created",

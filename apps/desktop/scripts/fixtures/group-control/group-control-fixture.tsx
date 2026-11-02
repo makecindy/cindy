@@ -413,13 +413,14 @@ void mountPage({
         stopBotGroupRound: forbid('maker.stopBotGroupRound'),
         chatServer: {
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),
-          readers: async (input: { messageId: string }) => ({ ok: true, readers: {
-            messageId: input.messageId, eligibleCount: 6,
-            readers: input.messageId === 'rr-many' || input.messageId === 'mk-long'
+          readers: async (input: { messageId: string }) => {
+            // A very large group: the server gives only the counts.
+            if (input.messageId === 'rr-list') return { ok: true, readers: { messageId: input.messageId, eligibleCount: 180, readCount: 37, listed: false, readers: [] } };
+            const readers = input.messageId === 'rr-many' || input.messageId === 'mk-long'
               ? ['g', 'h', 'c', 'd'].map((actorId, index) => ({ actorId, name: ['Ada', 'Kai', 'Leo', 'Mira'][index]!, readAt: T0 + (5 + index) * MINUTE, formerMember: false }))
-              : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }],
-            unread: input.messageId === 'rr-many' || input.messageId === 'mk-long' ? [{ actorId: 'e', name: 'Orin' }, { actorId: 'f', name: 'Quill' }]
-              : input.messageId.endsWith('short-sent') ? [{ actorId: 'g', name: 'Ada' }, { actorId: 'h', name: 'Kai' }] : [] } }),
+              : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }];
+            return { ok: true, readers: { messageId: input.messageId, eligibleCount: 6, readCount: readers.length, listed: true, readers } };
+          },
           react: forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),

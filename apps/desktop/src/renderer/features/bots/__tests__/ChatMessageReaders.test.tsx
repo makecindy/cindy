@@ -15,9 +15,8 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () =>
 const render = (ui: ReactNode) => renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
 const member = (actorId: string, name: string) => ({ actorId, botId: actorId, name, avatar: '', avatarUrl: null, avatarColor: 'violet', status: 'active' }) as BotGroupMemberView;
 const members = [member('a', 'Ada'), member('b', 'Bo'), member('c', 'Cy'), member('d', 'Di')];
-const list = (readers: string[], unread: string[]): BotGroupMessageReaders => ({ messageId: 'm1', eligibleCount: readers.length + unread.length,
-  readers: readers.map((actorId, index) => ({ actorId, name: actorId.toUpperCase(), readAt: 1_700_000_000_000 + index * 60_000, formerMember: false })),
-  unread: unread.map(actorId => ({ actorId, name: actorId.toUpperCase() })) });
+const list = (readers: string[], others = 0): BotGroupMessageReaders => ({ messageId: 'm1', eligibleCount: readers.length + others, readCount: readers.length, listed: true,
+  readers: readers.map((actorId, index) => ({ actorId, name: actorId.toUpperCase(), readAt: 1_700_000_000_000 + index * 60_000, formerMember: false })) });
 
 
 const mount = (props: { read?: boolean; interactive?: boolean } = {}) => render(
@@ -47,7 +46,7 @@ describe('the read check', () => {
   });
 
   it('is a labelled button that reads the list only when opened, then shows readers, then who has not', async () => {
-    mocks.readers.mockResolvedValue({ ok: true, readers: list(['a', 'b', 'c', 'd'], ['x']) });
+    mocks.readers.mockResolvedValue({ ok: true, readers: list(['a', 'b', 'c', 'd'], 1) });
     mount();
     expect(check().tagName).toBe('BUTTON');
     expect(check().getAttribute('aria-label')).toBe('readersView');
@@ -60,8 +59,9 @@ describe('the read check', () => {
     const popover = screen.getByRole('dialog');
     expect(['Ada', 'Bo', 'Cy', 'Di'].every(name => within(popover).queryByText(name))).toBe(true);
     expect(within(popover).getByText('readersHeading')).toBeTruthy();
-    expect(within(popover).getByText(/readersUnreadHeading.*"count":1/)).toBeTruthy();
-    expect(within(popover).getByText(/reactorFormer.*X/)).toBeTruthy();
+    // Only who has read: no unread group, nobody left out under another name.
+    expect(within(popover).queryByText(/readersUnreadHeading/)).toBeNull();
+    expect(within(popover).getAllByRole('listitem')).toHaveLength(4);
     // Name and avatar only, in the order the server gave (who read first); no time of reading.
     expect(popover.querySelector('time')).toBeNull();
     expect(within(popover).getAllByRole('listitem').slice(0, 4).map(item => item.querySelector('span.truncate')?.textContent)).toEqual(['Ada', 'Bo', 'Cy', 'Di']);
@@ -69,7 +69,7 @@ describe('the read check', () => {
   });
 
   it('closes with Esc and gives focus back to the check', async () => {
-    mocks.readers.mockResolvedValue({ ok: true, readers: list(['a'], []) });
+    mocks.readers.mockResolvedValue({ ok: true, readers: list(['a']) });
     mount();
     check().focus();
     fireEvent.click(check());
@@ -79,13 +79,13 @@ describe('the read check', () => {
     expect(document.activeElement).toBe(check());
   });
 
-  it('opens from a single check too: nobody has read it, and who has not is listed', async () => {
-    mocks.readers.mockResolvedValue({ ok: true, readers: list([], ['a', 'b']) });
+  it('opens from a single check too: nobody has read it, and no one is listed', async () => {
+    mocks.readers.mockResolvedValue({ ok: true, readers: list([], 2) });
     mount({ read: false });
     fireEvent.click(check());
     const popover = await screen.findByRole('dialog');
     expect(await within(popover).findByText('readersNone')).toBeTruthy();
-    expect(within(popover).getByText('Ada')).toBeTruthy();
+    expect(within(popover).queryAllByRole('listitem')).toHaveLength(0);
     expect(check().getAttribute('aria-label')).toBe('readersNone');
   });
 
@@ -96,6 +96,17 @@ describe('the read check', () => {
     await waitFor(() => expect(check().tagName).toBe('SPAN'));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(check().hasAttribute('data-share-exclude')).toBe(true);
+  });
+
+  it('gives how many have read, and no names, in a group the server does not list', async () => {
+    mocks.readers.mockResolvedValue({ ok: true, readers: { messageId: 'm1', eligibleCount: 180, readCount: 37, listed: false, readers: [] } });
+    mount();
+    fireEvent.click(check());
+    const popover = await screen.findByRole('dialog');
+    expect(await within(popover).findByText(/readersOfTotal.*"read":37.*"total":180/)).toBeTruthy();
+    expect(within(popover).getByText('readersTooLarge')).toBeTruthy();
+    expect(within(popover).queryAllByRole('listitem')).toHaveLength(0);
+    expect(check().getAttribute('aria-label')).toMatch(/readersOfTotal.*"read":37.*"total":180/);
   });
 
   it('says so when the list cannot be read or the group is too large', async () => {
