@@ -129,6 +129,31 @@ export default {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
     },
+    'read-receipts': {
+      about: 'Bot group 消息已读: my messages end in one check (sent) or two (read); the More menu lists who read it, avatars first, then who has not',
+      viewport: { width: 900, height: 700 },
+      data: { ...base, sidebar: false, readReceipts: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }, { botId: 'c', actorId: 'c', name: 'Leo' },
+          { botId: 'd', actorId: 'd', name: 'Mira' }, { botId: 'e', actorId: 'e', name: 'Orin' }, { botId: 'f', actorId: 'f', name: 'Quill' }] },
+    },
+    'read-receipts-mask': {
+      about: 'Bot group 消息已读 on 面具模式 messages (a teammate replied in my name): still my messages, one or two checks and the read list; the mask avatar beside the bubble never meets the check',
+      viewport: { width: 900, height: 760 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsMask: true,
+        members: [['a', 'Aster'], ['g', 'Ada'], ['h', 'Kai'], ['c', 'Leo'], ['d', 'Mira'], ['e', 'Orin'], ['f', 'Quill']].map(([id, name]) => ({ botId: id, actorId: id, name })) },
+    },
+    'read-receipts-fill': {
+      about: 'Bot group 消息已读: messages of growing length, so one has a last line just full: the check moves onto a row of its own instead of covering text',
+      viewport: { width: 700, height: 1200 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsFill: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }] },
+    },
+    'read-receipts-thread': {
+      about: 'Bot group 消息已读 in the Thread panel: my replies end in a check on the bubble\'s left, level with its bottom',
+      viewport: { width: 1100, height: 760 },
+      data: { ...base, sidebar: false, readReceipts: true, threadPanel: true,
+        members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
+    },
     'bubbles-wrapped': {
       about: 'PR #6549: wrapped reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
       viewport: { width: 800, height: 800 },
@@ -282,6 +307,134 @@ export default {
         assert.equal(await link.count(), 1, 'public media keep an actionable web link');
         assert.equal(await link.getAttribute('href'), url);
       }
+      return;
+    }
+    if (ui.case === 'read-receipts') {
+      const marks = page.getByTestId('read-receipt');
+      assert.equal(await marks.count(), 11, 'every sent message of mine has a check, no one else\'s');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))),
+        ['true', 'false', 'true', 'true', 'false', 'true', 'true', 'false', 'true', 'false', 'true']);
+      // The check is a 24px button inside the bubble's bottom right corner and never covers its text.
+      const geometry = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]');
+        const bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+        const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent.trim() && !node.parentElement.closest('[data-read-tail], button, time')) last = node;
+        }
+        let covers = false;
+        if (last) {
+          const range = document.createRange(); range.selectNodeContents(last);
+          covers = [...range.getClientRects()].some(r => r.right > m.left + 1 && r.left < m.right - 1 && r.bottom > m.top + 1 && r.top < m.bottom - 1);
+        }
+        return [{ id: row.getAttribute('data-bot-group-message-id'), button: mark.tagName === 'BUTTON', size: Math.round(m.width), inside: m.right <= b.right && m.bottom <= b.bottom + 1 && m.left >= b.left, covers, height: Math.round(b.height) }];
+      }));
+      assert.ok(geometry.length >= 9 && geometry.every(item => item.button && item.size >= 24 && item.inside && !item.covers), `checks sit in the bubble corner: ${JSON.stringify(geometry)}`);
+      // A short message does not grow a row for its check.
+      const shortHeight = geometry.find(item => item.id === 'rr-short-read').height;
+      assert.ok(shortHeight <= 46, `a one-line bubble stays one line (${shortHeight}px)`);
+      await ui.capture('checks');
+      // A one-line bubble is where the hover toolbar (level with the top) comes closest to the check's click area.
+      const short = page.locator('[data-bot-group-message-id="rr-short-read"]');
+      await short.hover();
+      await short.locator('[data-bot-group-message-actions]').waitFor({ state: 'visible' });
+      const apart = await short.evaluate(row => {
+        const bar = row.querySelector('[data-bot-group-message-actions]').getBoundingClientRect();
+        const mark = row.querySelector('[data-testid=read-receipt]').getBoundingClientRect();
+        return bar.right <= mark.left || bar.bottom <= mark.top || bar.left >= mark.right || bar.top >= mark.bottom;
+      });
+      assert.ok(apart, 'the toolbar and the check\'s click area do not overlap');
+      await ui.capture('hover-short');
+      // Keyboard focus lands on the check and shows a ring.
+      await page.mouse.move(0, 0);
+      await short.getByTestId('read-receipt').focus();
+      await ui.capture('focus');
+      // Two checks: who has read it, then who has not.
+      const many = page.locator('[data-bot-group-message-id="rr-many"]');
+      await many.getByTestId('read-receipt').click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.equal(await popover.getByRole('listitem').count(), 6, 'four readers and two unread members');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      assert.ok(await many.getByTestId('read-receipt').evaluate(node => node === document.activeElement), 'focus returns to the check');
+      // One check: nobody has read it yet, and who has not is listed.
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="rr-short-sent"]').getByTestId('read-receipt').click();
+      await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
+      await ui.capture('no-readers');
+      await page.keyboard.press('Escape');
+      await page.mouse.move(0, 0);
+      // Share mode: the checks are only marks, still outside the image.
+      await many.hover();
+      await many.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('chat.shareImage.entry'), exact: true }).click();
+      await page.mouse.move(0, 0);
+      await ui.capture('share-mode');
+      const shared = await page.evaluate(() => [...document.querySelectorAll('[data-testid=read-receipt]')].map(node => [node.tagName, node.hasAttribute('data-share-exclude')]));
+      assert.ok(shared.length === 11 && shared.every(([tag, excluded]) => tag === 'SPAN' && excluded), `checks are not clickable while sharing: ${JSON.stringify(shared)}`);
+      return;
+    }
+    if (ui.case === 'read-receipts-mask') {
+      const marks = page.getByTestId('read-receipt');
+      assert.equal(await marks.count(), 4, 'mask messages are mine: every one has a check, like my own message');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))), ['true', 'false', 'true', 'false']);
+      const geometry = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]');
+        const bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const avatar = row.querySelector('button[aria-label] [class*=rounded-full]')?.closest('button');
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect(), a = avatar?.getBoundingClientRect();
+        return [{ id: row.getAttribute('data-bot-group-message-id'), button: mark.tagName === 'BUTTON', size: Math.round(m.width), inside: m.right <= b.right && m.bottom <= b.bottom + 1 && m.left >= b.left,
+          mask: Boolean(a), apart: !a || a.left >= b.right - 1 || a.right <= b.left + 1 }];
+      }));
+      assert.ok(geometry.length === 4 && geometry.every(item => item.button && item.size >= 24 && item.inside && item.apart), `checks sit in the bubble, apart from the mask avatar: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.filter(item => item.mask).length, 3, 'three of them carry the mask avatar, the last one is plain');
+      await ui.capture('checks');
+      await page.locator('[data-bot-group-message-id="mk-long"]').getByTestId('read-receipt').click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.equal(await popover.getByRole('listitem').count(), 6, 'four readers and two unread members');
+      assert.equal(await popover.locator('time').count(), 0, 'the list shows names, not times');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      await page.mouse.move(0, 0);
+      await page.locator('[data-bot-group-message-id="mk-short-sent"]').getByTestId('read-receipt').click();
+      await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
+      await ui.capture('no-readers');
+      await page.keyboard.press('Escape');
+      return;
+    }
+    if (ui.case === 'read-receipts-fill') {
+      const rows = await page.evaluate(() => [...document.querySelectorAll('[data-bot-group-message-id]')].flatMap(row => {
+        const mark = row.querySelector('[data-testid=read-receipt]'), bubble = row.querySelector('[data-testid=bot-group-self-bubble]');
+        if (!mark || !bubble) return [];
+        const m = mark.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+        const walker = document.createTreeWalker(row.querySelector('p'), NodeFilter.SHOW_TEXT);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent.trim()) last = node;
+        const range = document.createRange(); range.selectNodeContents(last);
+        const covers = [...range.getClientRects()].some(r => r.right > m.left + 1 && r.left < m.right - 1 && r.bottom > m.top + 1 && r.top < m.bottom - 1);
+        const tail = row.querySelector('[data-read-tail]')?.getBoundingClientRect();
+        const rects = [...range.getClientRects()].map(r => [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]);
+        return [{ id: row.getAttribute('data-bot-group-message-id'), height: Math.round(b.height), covers, ...(covers ? { mark: [m.left, m.top, m.right, m.bottom].map(Math.round), tail: tail && [tail.left, tail.top, tail.right, tail.bottom].map(Math.round), rects } : {}) }];
+      }));
+      assert.ok(rows.length === 30 && rows.every(row => !row.covers), `no check covers text: ${JSON.stringify(rows)}`);
+      console.log('heights', rows.map(row => row.height).join(','));
+      await ui.capture('fill');
+      return;
+    }
+    if (ui.case === 'read-receipts-thread') {
+      await page.locator('[data-thread-preview="rr-thread"]').click();
+      const panel = page.getByTestId('bot-group-thread-panel').or(page.locator('[data-bot-group-thread-panel]')).first();
+      await page.getByTestId('read-receipt').nth(11).waitFor();
+      await page.mouse.move(0, 0);
+      await ui.capture('thread');
       return;
     }
     const input = page.locator('textarea');

@@ -621,6 +621,143 @@ describe('Chat Server result delivery and refresh', () => {
       .resolves.toEqual({ ok: false, errorCode: 'INVALID_INPUT' });
     expect(fixture.handle.mock.calls.some(([route]) => String(route).includes('/reactions'))).toBe(false);
   });
+  describe('message read receipts', () => {
+    const peer = '30000000-0000-4000-8000-000000000002';
+    const message = (seq: string, authorId = selfId, threadRootId: string | null = null) => ({
+      id: `50000000-0000-4000-8000-${seq.padStart(12, '0')}`, seq, authorId, author: { kind: 'human', name: authorId === selfId ? 'Me' : 'Peer' },
+      content: [{ type: 'text', text: `Message ${seq}` }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId });
+    const members = [{ id: selfId, kind: 'human', name: 'Me', state: 'joined', role: 'owner', ownerActorId: selfId },
+      { id: peer, kind: 'human', name: 'Peer', state: 'joined', role: 'member', ownerActorId: peer }];
+    const snapshot = (othersRead?: Array<{ thread_key: string; read_seq: string }>) => ({
+      room: room(roomId), members, messages: [message('9', peer), message('7'), message('3')], cursor: '9', ...(othersRead ? { othersRead } : {}) });
+    function serve(value: ReturnType<typeof snapshot>, messageReaders: number | undefined = 1) {
+      fixture.handle.mockImplementation(route => {
+        if (route === '/me') return { body: { actor: { id: selfId }, ...(messageReaders ? { capabilities: { messageReaders } } : {}) } };
+        if (route.endsWith('/snapshot')) return { body: value };
+        if (route.startsWith('/changes?')) return { body: { cursor: value.cursor, changes: [], hasMore: false } };
+        if (route.includes('/messages?')) return { body: value.messages };
+        return response(route);
+      });
+    }
+    async function open() {
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets[0];
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(300);
+      // The reconnect starts positions over; the open view reads again.
+      const reread = await service.getGroup(roomId);
+      if (!reread.ok) throw new Error(reread.errorCode);
+      return { socket, group: reread.group };
+    }
+    // The server sends a read receipt to the author's private channel only.
+    const receipt = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => JSON.stringify({ type: 'ephemeral', scope: `actor:${selfId}`, actorId: peer, kind: 'receipt',
+      data: JSON.stringify({ conversationId: roomId, threadRootId: null, ...data }), ...extra });
+    const snapshotReads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/snapshot')).length;
+
+    it('marks only my own messages that another member has read, from sequences', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { group } = await open();
+      expect(group.supportsMessageReaders).toBe(true);
+      expect(group.messages.map(m => [m.serverSequence, m.readByOthers])).toEqual([['3', true], ['7', false], ['9', undefined]]);
+    });
+    it('counts a 面具 message as mine, and a teammate speaking as itself as not', async () => {
+      const attribution = { self: { id: selfId, name: 'Me', avatarUrl: null }, companion: { id: botId, name: 'Cindy', avatarUrl: null }, sourceMessageId: message('9', peer).id };
+      // The server stores a mask reply under my own author ID as a human, with the attribution beside it.
+      const masked = { ...message('4'), maskAttribution: attribution };
+      const asBot = { ...message('8', botId), author: { kind: 'bot', name: 'Cindy' } };
+      serve({ ...snapshot([{ thread_key: 'main', read_seq: '5' }]),
+        members: [...members, { id: botId, kind: 'bot', name: 'Cindy', state: 'joined', role: 'member', ownerActorId: selfId }],
+        messages: [asBot, message('7'), masked, message('3', peer)] });
+      const { group } = await open();
+      expect(group.messages.map(m => [m.serverSequence, m.isSelf, m.maskAttribution ? 'mask' : '-', m.readByOthers])).toEqual([
+        ['3', false, '-', undefined], ['4', true, 'mask', true], ['7', true, '-', false], ['8', false, '-', undefined]]);
+    });
+    it('shows nothing without the server capability or its positions', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]), 0);
+      const { group } = await open();
+      expect(group).not.toHaveProperty('supportsMessageReaders');
+      expect(group.messages.some(m => 'readByOthers' in m)).toBe(false);
+    });
+    it('moves the check on a live receipt without reading anything or acknowledging it', async () => {
+      // The warm history projection is what the app uses: its snapshot is not read again.
+      let saved: unknown;
+      service.dispose();
+      deps.chatHistoryStore = () => ({ read: async () => saved as undefined, write: async (_room, state) => { saved = state ?? undefined; } });
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const { socket } = await open();
+      vi.mocked(deps.onChanged!).mockClear(); vi.mocked(socket.send).mockClear();
+      const reads = snapshotReads();
+      // A receipt that reads nothing of mine, one for a group this client does not follow, and the old
+      // public form on the group's channel change nothing.
+      socket.emit('message', receipt({ readSeq: '6' }));
+      socket.emit('message', receipt({ conversationId: '10000000-0000-4000-8000-0000000000ff', readSeq: '9' }));
+      socket.emit('message', receipt({ readSeq: '9' }, { scope: `conversation:${roomId}` }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).not.toHaveBeenCalled();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(deps.onChanged).toHaveBeenCalledTimes(1);
+      expect(deps.onChanged).toHaveBeenCalledWith({ groupId: roomId, change: 'messages' }, undefined);
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => m.readByOthers)).toEqual([true, true, undefined]);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(snapshotReads()).toBe(reads);
+    });
+    it('lets a newer snapshot replace positions received before it', async () => {
+      const value = snapshot([{ thread_key: 'main', read_seq: '5' }]);
+      serve(value);
+      const { socket } = await open();
+      socket.emit('message', receipt({ readSeq: '8' }));
+      // A member left: the maximum over current members went down.
+      serve({ ...value, othersRead: [{ thread_key: 'main', read_seq: '2' }] });
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '10', changes: [{ type: 'membership.changed', entityId: peer }] }));
+      await vi.advanceTimersByTimeAsync(300);
+      const group = await service.getGroup(roomId);
+      if (!group.ok) throw new Error(group.errorCode);
+      expect(group.group.messages.map(m => m.readByOthers)).toEqual([false, false, undefined]);
+    });
+    it('lists human readers by actor ID, caches them per message and drops them on a receipt', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const bot = botId, former = '30000000-0000-4000-8000-000000000003';
+      const target = message('7').id;
+      fixture.handle.mockImplementation(((previous) => (route: string, method: string, body: unknown) => {
+        if (route === `/conversations/${roomId}/messages/${target}/readers`) return { body: { messageId: target, eligibleCount: 3,
+          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: '2026-10-03T00:00:06Z' }, { actorId: former, readAt: null }],
+          unread: [{ actorId: bot }, { actorId: selfId }] } };
+        if (route === `/conversations/${roomId}/members`) return { body: [...members, { id: bot, kind: 'bot', name: 'Cindy', ownerName: 'Me', state: 'joined' },
+          { id: former, kind: 'human', name: 'Ada', ownerName: 'Ada', state: 'left' }] };
+        return previous(route, method, body);
+      })(fixture.handle.getMockImplementation()!));
+      const { socket } = await open();
+      const result = await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3,
+        readers: [{ actorId: peer, name: 'Peer', readAt: Date.parse('2026-10-03T00:00:05Z'), formerMember: false },
+          { actorId: former, name: 'Ada', readAt: null, formerMember: true }],
+        unread: [{ actorId: selfId, name: 'Me' }] });
+      const reads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/readers')).length;
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      expect(reads()).toBe(1);
+      socket.emit('message', receipt({ readSeq: '9' }));
+      await service.chatServer!.readers({ groupId: roomId, messageId: target });
+      expect(reads()).toBe(2);
+    });
+    it('reports a group too large to list and refuses a server without the capability', async () => {
+      serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
+      const target = message('7').id;
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route.endsWith('/readers')
+        ? { status: 409, body: { error: { code: 'GROUP_TOO_LARGE', message: 'x' } } } : original(route, method, body));
+      await open();
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: target })).resolves.toEqual({ ok: false, errorCode: 'GROUP_TOO_LARGE' });
+      await expect(service.chatServer!.readers({ groupId: roomId, messageId: 'nope' })).resolves.toEqual({ ok: false, errorCode: 'INVALID_INPUT' });
+    });
+  });
   it('an additive invite preserves people and all previously joined companions', async () => {
     const other = '60000000-0000-4000-8000-000000000002';
     fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { body: { room: room(roomId), messages: [], cursor: '1', members: [
