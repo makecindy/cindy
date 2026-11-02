@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   remoteClaude: [] as Array<[string | null, string | undefined]>,
   remoteCodex: [] as Array<[string | null, string | undefined]>,
   remoteXai: [] as Array<[string | null, string | undefined]>,
+  providerAccountUsage: null as Record<string, unknown> | null,
+  providerAccountUsageCalls: [] as Array<[string | undefined, string | null]>,
 }));
 
 const snapshot = (fiveHour: number) => ({
@@ -41,6 +43,21 @@ vi.mock('@/hooks/useAccountUsage', async (importOriginal) => ({
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
   useXaiSubscriptionUsage: () => null,
   requestXaiSubscriptionRefresh: vi.fn(),
+}));
+vi.mock('@/hooks/useProviderAccountUsage', () => ({
+  useProviderAccountUsage: (
+    provider: { id: string } | undefined,
+    _agent?: string,
+    deviceId: string | null = null,
+  ) => {
+    mocks.providerAccountUsageCalls.push([provider?.id, deviceId]);
+    return mocks.providerAccountUsage ?? {
+      supported: false,
+      result: null,
+      busy: false,
+      refresh: vi.fn(),
+    };
+  },
 }));
 vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
   useRemoteClaudeSubscriptionUsage: (deviceId: string | null, providerId?: string) => {
@@ -65,7 +82,10 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
   };
 });
 
-import { useDeviceProviderSubscriptionCard } from '../useProviderSubscriptionCard';
+import {
+  useDeviceProviderSubscriptionCard,
+  useProviderSubscriptionCard,
+} from '../useProviderSubscriptionCard';
 import { resetRemoteDeviceUsageMirrorsForTest } from '@/hooks/useRemoteDeviceUsage';
 import { useProviderUsageSnapshots, useProviderWeeklyQuota } from '../../new-chat/useProviderWeeklyQuota';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
@@ -101,6 +121,8 @@ beforeEach(() => {
   mocks.remoteClaude.length = 0;
   mocks.remoteCodex.length = 0;
   mocks.remoteXai.length = 0;
+  mocks.providerAccountUsage = null;
+  mocks.providerAccountUsageCalls.length = 0;
 });
 afterEach(() => {
   cleanup();
@@ -272,5 +294,48 @@ describe('useDeviceProviderSubscriptionCard', () => {
     expect(result.current).toBeNull();
     expect(mocks.remoteClaude.every(([deviceId]) => deviceId === null)).toBe(true);
     expect(mocks.localClaude.every(([enabled]) => !enabled)).toBe(true);
+  });
+
+  it('keeps OpenCode Go on the account usage card at the selected computer', () => {
+    const opencode = {
+      ...provider('opencode-go', { method: 'api-key' }),
+      routing: {
+        codex: {
+          upstream: 'https://opencode.ai/zen/go/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      opencodeGoUsageAgents: ['codex'],
+    } as ProviderView;
+    mocks.providerAccountUsage = {
+      supported: true,
+      busy: false,
+      refresh: vi.fn(),
+      result: {
+        status: 'ready',
+        stale: false,
+        snapshot: {
+          kind: 'opencode-go-quota',
+          fetchedAt: Date.now(),
+          windows: [
+            { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+            { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+            { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+          ],
+        },
+      },
+    };
+
+    const { result } = renderHook(() => ({
+      subscription: useProviderSubscriptionCard(opencode),
+      local: useDeviceProviderSubscriptionCard(opencode, null),
+      remote: useDeviceProviderSubscriptionCard(opencode, 'mini'),
+    }));
+
+    expect(result.current.subscription).toBeNull();
+    expect(result.current.local?.windows).toHaveLength(3);
+    expect(result.current.remote?.windows).toHaveLength(3);
+    expect(mocks.providerAccountUsageCalls).toContainEqual(['opencode-go', null]);
+    expect(mocks.providerAccountUsageCalls).toContainEqual(['opencode-go', 'mini']);
   });
 });

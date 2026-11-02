@@ -1,5 +1,6 @@
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -83,7 +84,6 @@ export function useProviderSubscriptionCard(provider?: ProviderView): UsageCardA
   );
   const claude = useClaudeSubscriptionUsage(source === 'claude', providerId);
   const xai = useXaiSubscriptionUsage(source === 'xai', providerId);
-  const opencodeGo = useProviderAccountUsage(source === 'opencode-go' ? provider : undefined);
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     if (!source) return;
@@ -103,12 +103,6 @@ export function useProviderSubscriptionCard(provider?: ProviderView): UsageCardA
     );
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
-  if (source === 'opencode-go' && opencodeGo.result?.status === 'ready'
-    && opencodeGo.result.snapshot.kind === 'opencode-go-quota') {
-    const card = buildOpenCodeGoUsageCard(opencodeGo.result.snapshot, t);
-    if (opencodeGo.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
-    return card;
-  }
   return null;
 }
 
@@ -126,7 +120,6 @@ function useRemoteProviderSubscriptionCard(
   const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: true });
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId);
-  const opencodeGo = useProviderAccountUsage(source === 'opencode-go' ? provider : undefined, undefined, deviceId);
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     if (!source) return;
@@ -141,12 +134,6 @@ function useRemoteProviderSubscriptionCard(
   }
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
-  if (source === 'opencode-go' && opencodeGo.result?.status === 'ready'
-    && opencodeGo.result.snapshot.kind === 'opencode-go-quota') {
-    const card = buildOpenCodeGoUsageCard(opencodeGo.result.snapshot, t);
-    if (opencodeGo.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
-    return card;
-  }
   return null;
 }
 
@@ -158,6 +145,25 @@ export function useDeviceProviderSubscriptionCard(
   const local = useProviderSubscriptionCard(deviceId === null ? provider : undefined);
   const remote = useRemoteProviderSubscriptionCard(deviceId === null ? undefined : provider, deviceId);
   const { t } = useTranslation();
+  const opencodeGo = useProviderAccountUsage(
+    provider && isOpenCodeGoProviderView(provider) ? provider : undefined,
+    undefined,
+    deviceId,
+  );
+  if (opencodeGo.supported) {
+    const snapshot = opencodeGo.result?.status === 'ready' ? opencodeGo.result.snapshot : null;
+    const card = buildOpenCodeGoUsageCard(
+      snapshot?.kind === 'opencode-go-quota' ? snapshot : null,
+      t,
+    );
+    if (opencodeGo.result?.status === 'unavailable') {
+      card.emptyText = t(`providerAccountUsage.error.${opencodeGo.result.error}`);
+    }
+    if (opencodeGo.result?.status === 'ready' && opencodeGo.result.stale) {
+      card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    }
+    return card;
+  }
   const kimi = useProviderAccountUsage(deviceId && isKimiCodingProviderView(provider) ? provider : undefined, undefined, deviceId);
   if (deviceId && kimi.supported) {
     const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;

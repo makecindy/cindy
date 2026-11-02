@@ -1477,13 +1477,15 @@ export function TodaySpendChip({
               windowLabelNowMs,
             )
           : [];
-  // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
+  // OpenCode Go exposes three meters; keep one rollup slot per window segment.
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
   const windowSlotA = chipWindows[0] ?? null;
   const windowSlotB = chipWindows[1] ?? null;
+  const windowSlotC = chipWindows[2] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const rollupC = useQuotaResetRollup(windowSlotC);
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
@@ -1499,7 +1501,7 @@ export function TodaySpendChip({
         </React.Fragment>
       );
     }
-    const rollup = index === 0 ? rollupA : rollupB;
+    const rollup = index === 0 ? rollupA : index === 1 ? rollupB : rollupC;
     const text = t(
       usesCodexQuotaForm
         ? 'todaySpend.codex.windowSegment'
@@ -1659,6 +1661,7 @@ export function TodaySpendChip({
   const deviceLinkRemoteFormResolved =
     !accountUnreadable &&
     (isDeviceLinkRemoteClaudeSubscription ||
+      usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
         (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let labelNode: React.ReactNode;
