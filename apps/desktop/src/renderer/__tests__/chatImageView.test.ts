@@ -15,8 +15,8 @@ vi.mock('@/hooks/useRemoteMediaUrl', () => ({
 }));
 
 vi.mock('../components/chat/ImageLightbox', () => ({
-  ImageLightbox: ({ onClose }: { onClose: () => void }) => React.createElement(
-    'button', { 'data-testid': 'image-lightbox', onClick: onClose }, 'close preview',
+  ImageLightbox: ({ onClose, enableGallery }: { onClose: () => void; enableGallery?: boolean }) => React.createElement(
+    'button', { 'data-testid': 'image-lightbox', 'data-gallery-enabled': String(enableGallery), onClick: onClose }, 'close preview',
   ),
 }));
 
@@ -368,7 +368,7 @@ describe('ChatImageView', () => {
     trigger.focus();
     fireEvent.keyDown(trigger, { key });
     expect(screen.getByTestId('image-lightbox')).toBeTruthy();
-    expect(trigger.dataset.galleryActive).toBe('1');
+    expect(screen.getByTestId('image-lightbox').dataset.galleryEnabled).toBe('true');
     const close = screen.getByTestId('image-lightbox');
     close.focus();
     fireEvent.click(close);

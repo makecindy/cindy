@@ -4,6 +4,10 @@ export default {
   real: 'RegionScreenshotOverlay, ScrollCaptureOverlay, LiveCapturePanel, ScrollCapture, CaptureRecorder, real Chromium canvas/MediaRecorder and GIF encoding',
   notCovered: 'Native screen acquisition, global keyboard sampling, macOS permissions and native save dialogs; frame source is synthetic.',
   cases: {
+    locale: { about: 'An open capture updates its translation label and export after the Main locale changes, retaining annotations' },
+    'locale-editor': { about: 'An open editor follows the Main locale without replacing its document or annotations' },
+    translation: { about: 'Follow UI language, choose a remembered target, recover from save failure, and export the chosen language' },
+    'translation-editor': { about: 'The independent image editor uses the same translation controls and export language' },
     snapping: { about: 'Correct a transparent window guess, hover adjacent elements, cycle hierarchy and click to select' },
     default: { about: 'Scroll overlapping text, finish, export the actual stitched pixels' },
     idle: { about: 'Repainting before the first scroll keeps the gesture hint, then scrolling still exports a long image' },
@@ -15,6 +19,99 @@ export default {
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
   async check(page, ui) {
+    if (ui.case.startsWith('locale')) {
+      const editor = ui.case.endsWith('-editor');
+      if (!editor) {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const box = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(editor ? box.x + 30 : 200, editor ? box.y + 30 : 200);
+      await page.locator('textarea').fill('Keep this annotation');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      const name = (locale, language) => new Intl.DisplayNames([locale], { type: 'language' }).of(language);
+      const oldLabel = await ui.t('regionScreenshot.translation.action', { language: name(ui.locale, ui.locale) });
+      await page.evaluate(() => window.captureLocaleChanged({ token: 'stale', locale: 'ja' }));
+      await page.getByRole('menuitem', { name: oldLabel, exact: true }).waitFor();
+      await page.evaluate(token => window.captureLocaleChanged({ token, locale: 'ja' }), editor ? 'editor' : 'fixture');
+      const label = await ui.t('regionScreenshot.translation.action', { lng: 'ja', language: name('ja', 'ja') });
+      const action = page.getByRole('menuitem', { name: label, exact: true });
+      await action.waitFor();
+      assert.equal(await page.locator('textarea').inputValue(), 'Keep this annotation');
+      await ui.capture('locale-synchronized');
+      await action.click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'ja');
+      return;
+    }
+    if (ui.case.startsWith('translation')) {
+      if (ui.case === 'translation') {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      // Review regression: closing Cindy must let the current text annotation
+      // continue receiving actual keystrokes in both capture and editor.
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const canvasBounds = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(ui.case === 'translation' ? 200 : canvasBounds.x + 30,
+        ui.case === 'translation' ? 200 : canvasBounds.y + 30);
+      const text = page.locator('textarea');
+      await text.fill('Before');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await text.evaluate(el => document.activeElement === el), 'closing Cindy restores the text annotation focus');
+      await page.keyboard.type(' after');
+      assert.equal(await text.inputValue(), 'Before after');
+      const trigger = page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') });
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await trigger.evaluate(el => document.activeElement === el), 'keyboard dismissal returns to Cindy');
+      const languageName = (tag) => new Intl.DisplayNames([ui.locale], { type: 'language' }).of(tag);
+      const uiTag = ['zh-CN', 'zh-Hans-x-lzh'].includes(ui.locale) ? 'zh-Hans' : ['zh-TW', 'zh-Hant-x-lzh'].includes(ui.locale) ? 'zh-Hant' : ui.locale;
+      const action = async (tag) => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.action', { language: languageName(tag) }), exact: true });
+      const openPicker = async () => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await (await action(uiTag)).waitFor();
+      await ui.capture('translation-default');
+      await openPicker();
+      const menuBounds = await page.getByRole('menu', { name: await ui.t('regionScreenshot.cindy') }).boundingBox();
+      const viewportWidth = await page.evaluate(() => window.innerWidth);
+      assert.ok(menuBounds && menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= viewportWidth,
+        'the language menu stays inside the editor after translated controls wrap');
+      await ui.capture('translation-languages');
+      await page.getByRole('menuitemradio', { name: languageName('fr'), exact: true }).click();
+      await (await action('fr')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'fr');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '', 'changing language never sends');
+      await openPicker();
+      await page.getByRole('menuitemradio', { name: await ui.t('regionScreenshot.translation.followUi'), exact: true }).click();
+      await (await action(uiTag)).waitFor();
+      await openPicker();
+      await page.evaluate(() => { window.captureQa.translationSaveFails = true; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'ui');
+      await ui.capture('translation-save-error');
+      await page.evaluate(() => { window.captureQa.translationSaveFails = false; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await (await action('de')).waitFor();
+      await openPicker();
+      await page.keyboard.press('Escape');
+      await (await action('de')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '');
+      await ui.capture('translation-selected');
+      await page.evaluate(() => window.translationChanged({ token: 'previous', preference: 'fr' }));
+      await (await action('de')).waitFor();
+      await page.evaluate(token => window.translationChanged({ token, preference: 'fr' }),
+        ui.case === 'translation' ? 'fixture' : 'editor');
+      await (await action('fr')).click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), 'translate');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'fr');
+      return;
+    }
     if (ui.case === 'snapping') {
       await page.getByText('180 × 140', { exact: true }).waitFor();
       await ui.capture('first-element');
@@ -66,6 +163,15 @@ export default {
       await (await button('regionScreenshot.live.scroll')).click();
       assert.equal(await (await button('regionScreenshot.live.startScroll')).count(), 0, 'dragging the toolbar does not create a capture selection');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0);
+      // The live capture mode bar retains all modes at the left edge.
+      await (await button('regionScreenshot.live.image')).click();
+      await page.mouse.move(100, 100); await page.mouse.down();
+      await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      await (await button('regionScreenshot.cindy')).click();
+      await page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      const menu = await page.getByRole('menu').boundingBox();
+      assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= ui.viewport.width,
+        `language menu stays on screen at the left toolbar limit: ${JSON.stringify(menu)}`);
       await ui.capture('dragged');
       return;
     }

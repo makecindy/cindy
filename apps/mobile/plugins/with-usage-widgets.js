@@ -15,7 +15,7 @@ const SOURCES = [
   'SingleSourceViews.swift',
   'ComputerIntent.swift',
 ];
-// The edit sheet's "Data source" strings (App Intents metadata reads the Localizable table).
+// The edit sheet's strings ("Data source", "Accounts first", "Hidden accounts") (App Intents metadata reads the Localizable table).
 const LOCALIZATIONS = ['en.lproj', 'zh-Hans.lproj', 'zh-Hant.lproj', 'ja.lproj', 'ko.lproj', 'de.lproj', 'es.lproj', 'fr.lproj', 'pt-BR.lproj', 'pt-PT.lproj'];
 // Same number font as the macOS menu bar panel (OFL, shipped next to its helper).
 const FONTS = ['BarlowCondensed-Medium.ttf', 'BarlowCondensed-SemiBold.ttf'];

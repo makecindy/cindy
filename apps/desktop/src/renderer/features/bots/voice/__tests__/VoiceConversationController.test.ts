@@ -48,6 +48,11 @@ function fixture() {
       pcm: new ArrayBuffer(0),
       done: true,
     })),
+    callStatus: vi.fn(async () => null),
+    publishCallStatus: vi.fn(),
+    callCommand: vi.fn(async () => ({ ok: true })),
+    onCallStatus: vi.fn(() => () => {}),
+    onCallCommand: vi.fn(() => () => {}),
     onEvent: vi.fn((callback) => {
       listener = callback;
       return () => {

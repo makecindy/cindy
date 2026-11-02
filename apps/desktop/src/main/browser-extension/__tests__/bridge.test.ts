@@ -171,6 +171,23 @@ async function fixture(
 }
 
 describe('policy · 地址校验与 URL 脱敏', () => {
+  it('validates the pieces of a large upload before they are queued', () => {
+    const base = { url: 'https://example.test', tabId: 1, selector: 'input' };
+    for (const payload of [
+      { op: 'begin', transfer: 't', chunkFiles: [{ name: 'a.bin', mimeType: '' }] },
+      { op: 'chunk', transfer: 't', file: 0, data: 'AAAA' },
+      { op: 'finish', transfer: 't' },
+      { op: 'abort', transfer: 't' },
+    ]) expect(() => validateBrowserExtensionJob('upload', { ...base, ...payload })).not.toThrow();
+    for (const [payload, message] of [
+      [{ op: 'nope', transfer: 't' }, /op must be/],
+      [{ op: 'finish' }, /transfer/],
+      [{ op: 'begin', transfer: 't', chunkFiles: [] }, /1–20/],
+      [{ op: 'chunk', transfer: 't', file: 20, data: 'AAAA' }, /file index/],
+      [{ op: 'chunk', transfer: 't', file: 0, data: 'A'.repeat(6_000_001) }, /4 MB/],
+    ] as const) expect(() => validateBrowserExtensionJob('upload', { ...base, ...payload })).toThrow(message);
+  });
+
   it('任何网页地址都放行(含本机与私网);带凭证地址与非网页协议拒绝;主机名规范化', () => {
     for (const url of ['https://example.test', 'http://127.0.0.2', 'http://[::1]', 'http://10.2.3.4', 'http://jira'])
       for (const action of ['text', 'click'])

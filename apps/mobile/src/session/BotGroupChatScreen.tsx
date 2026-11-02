@@ -35,7 +35,9 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { showConfirm } from '@/platform/chrome';
+import { X } from 'lucide-react-native';
 import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
@@ -78,9 +80,9 @@ import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
-import { fontWeight, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
   BOT_GROUP_MESSAGE_AVATAR_SIZE,
@@ -182,6 +184,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const chat = useBotGroupChat(host, groupId, threadRootId);
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
+  const stopPendingRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
   const [settings, setSettings] = useState(false);
   const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
   const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
@@ -203,8 +207,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
   const window = useAdaptiveWindow();
-  // Beside the persistent task list the system bar would span both panes; use the in-pane header.
+  // A horizontal system bar would span both panes; Duo's vertical bar stays native.
   const panePersistent = sessionPaneLayout(window).persistent;
+  const systemBack = useSystemNavigationBack();
   const nativeHeader = floatingHeader && window.barEdge === 'none' && !panePersistent;
   const nativeHeaderHeight = useHeaderHeight();
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -538,7 +543,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   };
 
   const stop = async () => {
+    if (stopPendingRef.current) return;
+    stopPendingRef.current = true; setStopping(true);
     try { await chat.act('stop'); } catch (error) { report(error, 'groupChat.composer.stopFailed'); }
+    finally { stopPendingRef.current = false; setStopping(false); }
   };
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -566,18 +574,24 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const memberLine = direct || memberCount === 0 ? '' : t('groupChat.memberCount', { count: memberCount });
   const headerMembers = group ? group.members.map((member) => identityFor(member.botId, member.name)) : [];
 
-  const threadFollow = threadRootId && chat.followThread ? <BotGroupThreadFollow nativeHeader={nativeHeader}
+  const threadFollow = threadRootId && chat.followThread ? <BotGroupThreadFollow nativeHeader={nativeHeader || systemBack}
     following={chat.threadMeta?.following} online={chat.online}
     onChange={chat.followThread} onError={error => report(error, 'groupChat.thread.followFailed')} /> : undefined;
   const header = imageSelectionActive ? <View style={styles.shareHeader}>
     <Stack.Screen options={{ headerShown: false }} />
     <ShareSelectAllButton busy={imageShareBusy} shareableIds={shareableIds} />
-  </View> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
+  </View> : systemBack ? <>
+    <SystemNavigationBack label={t('shared.back')} onPress={leave} />
+    {threadRootId ? threadFollow : direct ? null : <Stack.Toolbar placement="right">
+      <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('groupChat.settings.open')} disabled={!group} onPress={() => setSettings(true)} />
+    </Stack.Toolbar>}
+    <Stack.Screen options={{ headerTitle: threadRootId ? t('groupChat.thread.title') : title }} />
+  </> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
     mark={threadRootId ? null : peer ? <BotGroupAvatar deviceId={deviceId} identity={identityFor(peer.botId, peer.name)} size={CHAT_HEADER_MARK_SIZE} online={chat.online} /> : <BotGroupDuoAvatar deviceId={deviceId} members={headerMembers} online={chat.online} variant="header"
       working={group?.round.status === 'running'} />}
     title={threadRootId ? t('groupChat.thread.title') : title}
     accessory={nativeHeader ? undefined : threadFollow}
-    subtitle={threadRootId ? title : memberLine}
+    subtitle={!threadRootId && group?.round.status === 'running' ? t('groupChat.list.running') : threadRootId ? title : memberLine}
     identityLabel={[title, memberLine, memberNames].filter(Boolean).join(', ')}
     identityHint={t('groupChat.settings.open')}
     controlsReady={!!group}
@@ -670,7 +684,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onPlanAction={(action, planId) => void runPlanAction(action, planId)}
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           />
-      {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+      {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       </ScrollView>
       </MessageListVisibilityContext.Provider>
@@ -698,8 +712,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       </View>)}
       </ScrollView> : null}
       {!imageSelectionActive && replyTo ? <View style={styles.replyDraft}>
-        <View style={styles.flex}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
-        <MainWindowActionButton density="compact" action={{ label: t('message.quote.remove'), onPress: () => setReplyTo(null), testID: 'botGroup.cancelReply' }} />
+        <View style={styles.replyDraftBody}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('message.quote.remove')}
+          onPress={() => setReplyTo(null)} style={styles.replyDraftClose} testID="botGroup.cancelReply">
+          <View pointerEvents="none" style={styles.replyDraftCloseIcon}>
+            <X color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          </View>
+        </Pressable>
       </View> : null}
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
@@ -717,7 +736,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
   return <SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
-    {nativeHeader ? null : <Stack.Screen options={{ headerShown: false }} />}
+    {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
       <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
       <SessionHeaderNativeBlur height={Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target)} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} />
@@ -983,12 +1002,11 @@ function BotGroupTimelineItem({
   </> : null;
   if ((!message.threadShare || authoredShare) && message.kind === 'message' && message.authorKind === 'user' && message.isSelf !== false) {
     // Older computers send no attachments; a message with only attachments has no bubble.
-    const bubble = content.trim().length > 0 || attachments.length === 0;
+    const bubble = !!quoteDisplay || content.trim().length > 0 || attachments.length === 0;
     // G3: the 1:1 user bubble, including its compact density for one short line.
-    const compact = content.length <= COMPACT_BUBBLE_MAX_CHARS && !content.includes('\n');
+    const compact = !quoteDisplay && content.length <= COMPACT_BUBBLE_MAX_CHARS && !content.includes('\n');
     return <View style={styles.userRow} testID="botGroup.message.user">
       <View style={styles.userColumn}>
-        {quoteDisplay ? <BotGroupQuote display={quoteDisplay} align="right" onPress={onLocateQuote} /> : null}
         <View style={styles.userMessageContent}>
           {renderAttachments('right')}
           {bubble ? <View style={[
@@ -996,7 +1014,10 @@ function BotGroupTimelineItem({
             compact && styles.userBubbleCompact,
             userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
           ]} testID="botGroup.message.userBubble">
-            <BotGroupUserText content={content} mentionLabels={mentionLabels} />
+            {quoteDisplay ? <View style={styles.userQuote}>
+              <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} />
+            </View> : null}
+            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} /> : null}
           </View> : null}
         </View>
         {shareFooter}{footer}
@@ -1058,7 +1079,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   newMessages: { position: 'absolute', bottom: spacing.md, alignSelf: 'center', maxWidth: '90%' },
   newMessagesButton: { backgroundColor: colors.surfaceElevated },
   locatedMessage: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container },
-  replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container, marginHorizontal: spacing.md, marginBottom: spacing.xs,
+    paddingLeft: spacing.md, paddingRight: spacing.xs, paddingVertical: spacing.sm },
+  replyDraftClose: { alignItems: 'center', justifyContent: 'center', height: 44, width: 44 },
+  replyDraftCloseIcon: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceChip,
+    borderRadius: radius.pill, height: 26, width: 26 },
+  replyDraftBody: { flex: 1, minWidth: 0 },
+  userQuote: { alignSelf: 'stretch', marginBottom: spacing.xs },
   pendingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: spacing.sm },
   pendingText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   floatingHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
