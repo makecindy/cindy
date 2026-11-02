@@ -54,6 +54,7 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
   let current = payload();
   let baseline = payload();
   const commits: BotSettingsPayload[] = [];
+  const modelSelections: boolean[] = [];
   const statuses: BotAutosaveStatus[] = [];
   let failNext = 0;
   let resolveGate: (() => void) | null = null;
@@ -63,8 +64,9 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
     instantDelayMs: options.instantDelayMs ?? 0,
     readPayload: () => current,
     readBaseline: () => baseline,
-    commit: async (next) => {
+    commit: async (next, modelSelection) => {
       commits.push(next);
+      modelSelections.push(modelSelection === true);
       if (resolveGate) {
         await new Promise<void>((resolve) => {
           resolveGate = resolve;
@@ -82,6 +84,7 @@ function harness(options: { textDelayMs?: number; instantDelayMs?: number } = {}
   return {
     autosave,
     commits,
+    modelSelections,
     statuses,
     edit(patch: Partial<BotSettingsPayload>) {
       current = { ...current, ...patch };
@@ -389,6 +392,44 @@ describe('createBotSettingsAutosave flush & failure', () => {
     expect(h.commits).toHaveLength(2);
     expect(h.autosave.isDirty()).toBe(false);
     expect(h.statuses).toEqual(['saving', 'error', 'saving', 'saved']);
+  });
+
+  it.each(['flush', 'flushDetached'] as const)('accepts an unchanged model selection on %s, and only once', async (method) => {
+    const h = harness();
+    h.autosave.schedule('model');
+    expect(h.autosave.isDirty()).toBe(true);
+    await h.autosave[method]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.modelSelections).toEqual([true]);
+    expect(h.autosave.isDirty()).toBe(false);
+    await h.autosave[method]();
+    expect(h.commits).toHaveLength(1);
+  });
+
+  it('retains an unchanged model action after failure and retries it', async () => {
+    const h = harness();
+    h.failNextCommits(1);
+    h.autosave.schedule('model');
+    await h.autosave.flush();
+    expect(h.autosave.isDirty()).toBe(true);
+    await h.autosave.retry();
+    expect(h.modelSelections).toEqual([true, true]);
+    expect(h.autosave.isDirty()).toBe(false);
+  });
+
+  it.each([false, true])('does not acknowledge a later same-model choice from an earlier request (detached=%s)', async (detached) => {
+    const h = harness();
+    const gate = h.gate();
+    h.autosave.schedule('model');
+    void h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    h.autosave.schedule('model');
+    const trailing = detached ? h.autosave.flushDetached() : h.autosave.flush();
+    gate.release();
+    await trailing;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.modelSelections).toEqual([true, true]);
+    expect(h.autosave.isDirty()).toBe(false);
   });
 
   it('cancel() drops the pending timer without committing', async () => {

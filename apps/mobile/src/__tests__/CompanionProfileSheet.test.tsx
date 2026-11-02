@@ -89,6 +89,26 @@ it('waits for native dismissal before presenting the model picker and preserves 
   expect(h.view.visible).toBe(true); expect(h.view.page).toBe('models'); expect(h.view.dirty).toBe(true);
   expect(JSON.parse(h.view.values.modelChain)[0].model).toBe('real-model');
 });
+it('keeps a same-model picker selection dirty and submits the primary fields explicitly', async () => {
+  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
+  const values = { modelChain: JSON.stringify([primary]), followsDefault: false };
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', values,
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault'].map(id => ({ id, kind: 'text' })) } }] });
+  await render(); await act(async () => h.view.onOpen('models'));
+  expect(h.view.dirty).toBe(false);
+  await act(async () => h.model.onPick(0));
+  await act(async () => h.view.onClosed());
+  await act(async () => h.picker.onSelect(primary));
+  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
+  expect(h.view.dirty).toBe(true);
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.view.dirty).toBe(true);
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.invoke.mock.calls[1][2]).toMatchObject({ actionId: 'model-grant', input: values });
+  expect(h.view.dirty).toBe(false);
+});
+
 it('keeps the primary route while choosing a task model with a different harness', async () => {
   const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
   const task = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };

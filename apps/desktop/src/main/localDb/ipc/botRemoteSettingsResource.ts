@@ -231,8 +231,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
       }
       const capabilities: Record<string, unknown> = {};
+      const acceptsModelSelection = 'followsDefault' in input || 'modelChain' in input;
       // Old clients only send primary fields. Absence must preserve the task override.
-      if ('followsDefault' in input || 'modelChain' in input) {
+      if (acceptsModelSelection) {
         capabilities.modelChainOverride = followsDefault ? null : chain;
         capabilities.modelOverride = null;
       }
@@ -251,7 +252,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         if (!inherits && !route) throwIpcError('INVALID_PARAMS', 'Task model required');
         capabilities.taskModelOverride = inherits ? null : route;
       }
-      patch = { capabilities };
+      patch = { capabilities, ...(acceptsModelSelection ? { acceptSavedModelSelectionVersion: grant.version } : {}) };
     }
     if (patch && !Object.keys(patch).length) throwIpcError('INVALID_PARAMS', 'No changed teammate fields');
     if (grant.operation === 'permissions') {

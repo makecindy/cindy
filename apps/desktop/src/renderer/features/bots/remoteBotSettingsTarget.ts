@@ -4,7 +4,7 @@ import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory';
-import type { BotModelRoute } from '../../../shared/botModelChain';
+import { botProfileModelSelectionChanged, type BotModelRoute } from '../../../shared/botModelChain';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
 import type { BotSkillSummary } from '../../../shared/botSkill';
 import type { BotSettingsOp } from '../../../shared/botRemoteSettings';
@@ -24,7 +24,7 @@ export interface RemoteBotSettingsInput {
 }
 
 /** One teammate's profile as read from its computer; writes mirror the local store's optimistic rules. */
-export function createRemoteProfileStore(deviceId: string, botId: string) {
+export function createRemoteProfileStore(deviceId: string, botId: string, acceptsModelSelection = false) {
   let profile: BotProfile | null = null;
   const listeners = new Set<() => void>();
   let writeGeneration = 0;
@@ -61,7 +61,11 @@ export function createRemoteProfileStore(deviceId: string, botId: string) {
     async update(patch: BotProfileUpdatePatch): Promise<BotProfile> {
       const before = profile;
       if (!before) throw new Error('Bot not found');
-      const { avatarUploadToken: _token, capabilityBaseline, ...profilePatch } = patch;
+      const { avatarUploadToken: _token, capabilityBaseline, acceptModelSelection, ...profilePatch } = patch;
+      const acceptSelection = acceptModelSelection && acceptsModelSelection;
+      if (acceptModelSelection && !acceptsModelSelection && !botProfileModelSelectionChanged(
+        { ...before.capabilities }, { ...before.capabilities, ...profilePatch.capabilities },
+      )) throw createIpcError('UNSUPPORTED_CAPABILITY', 'Update the teammate computer to reselect the configured model');
       const generation = ++writeGeneration;
       writing += 1;
       profile = { ...before, ...profilePatch, capabilities: { ...before.capabilities, ...profilePatch.capabilities } };
@@ -75,7 +79,11 @@ export function createRemoteProfileStore(deviceId: string, botId: string) {
       try {
         let raw: unknown;
         for (const part of splitProfilePatch(body)) {
-          raw = await invokeBotSettings(deviceId, 'profile.update', botId, { patch: part });
+          // Accept once, before any long-text fragments advance the profile version.
+          raw = acceptSelection && saved === 0
+            ? await invokeBotSettings(deviceId, 'profile.acceptModelSelection', botId,
+                { patch: part, expectedVersion: before.currentVersion })
+            : await invokeBotSettings(deviceId, 'profile.update', botId, { patch: part });
           saved += 1;
         }
         const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
@@ -174,7 +182,7 @@ export function remoteBotSettingsPages(ops: ReadonlySet<BotSettingsOp>): Set<str
  */
 export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
   const { deviceId, botId } = input;
-  const profiles = createRemoteProfileStore(deviceId, botId);
+  const profiles = createRemoteProfileStore(deviceId, botId, input.ops.has('profile.acceptModelSelection'));
   const call = <T>(op: BotSettingsOp, args?: Record<string, unknown>) => invokeBotSettings<T>(deviceId, op, botId, args);
 
   let defaultChain: BotModelRoute[] = [];

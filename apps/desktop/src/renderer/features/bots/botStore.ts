@@ -1017,6 +1017,8 @@ export type BotProfileUpdatePatch = Partial<
   >
 > & {
   avatarUploadToken?: string;
+  /** Explicit picker action, including accepting an unchanged configured route. Never persisted. */
+  acceptModelSelection?: boolean;
   capabilities?: Partial<BotCapabilities>;
   capabilityBaseline?: BotCapabilityBaseline;
 };
@@ -1025,7 +1027,8 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, acceptModelSelection, ...profilePatch } = patch;
+  if (acceptModelSelection && !before.currentVersion) return Promise.reject(new Error('Bot profile version is unavailable'));
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -1046,6 +1049,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
     .update({
       id,
       ...profilePatch,
+      ...(acceptModelSelection ? { acceptSavedModelSelectionVersion: before.currentVersion } : {}),
       ...(capabilityBaseline ? { capabilityBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken

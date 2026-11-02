@@ -527,6 +527,18 @@ describe('Bot settings profile consolidation', () => {
     expect(task.getByTestId('current-model').textContent).toBe('claude-x');
   });
 
+  it('submits an explicit primary selection even when the configured route is unchanged', async () => {
+    const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
+    const chain = [primary];
+    renderSettings({ capabilities: capabilities({ ...primary, modelChain: chain, modelChainOverride: chain,
+      modelOverride: { model: primary.model, providerId: primary.providerId, effort: primary.effort, fastMode: primary.fastMode } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    await act(async () => { fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('model-selector')); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', expect.objectContaining({
+      acceptModelSelection: true,
+    })));
+  });
+
   it('keeps a long description inside the single editable field', () => {
     const long = 'x'.repeat(500);
     renderSettings({ description: long });

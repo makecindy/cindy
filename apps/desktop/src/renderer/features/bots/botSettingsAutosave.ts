@@ -187,7 +187,7 @@ export function reconcileBotSettingsDraft(
 export type BotAutosaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 /** 触发来源:文本输入走防抖,离散选择(开关 / 下拉 / 头像)走即时合并窗口。 */
-export type BotAutosaveTrigger = 'text' | 'instant';
+export type BotAutosaveTrigger = 'text' | 'instant' | 'model';
 
 export interface BotSettingsAutosaveOptions {
   /** 文本输入的防抖窗口,默认 1200ms。 */
@@ -199,7 +199,7 @@ export interface BotSettingsAutosaveOptions {
   /** 读取上次成功保存的快照(基线)。成功提交后由 commit 侧推进。 */
   readBaseline: () => BotSettingsPayload;
   /** 真正提交(IPC)。resolve = 已落库(此时 commit 侧应已推进基线);reject = 失败。 */
-  commit: (payload: BotSettingsPayload) => Promise<void>;
+  commit: (payload: BotSettingsPayload, modelSelection?: boolean) => Promise<void>;
   /** 状态变化回调。dispose 之后不再触发。 */
   onStatusChange?: (status: BotAutosaveStatus) => void;
 }
@@ -230,6 +230,9 @@ export function createBotSettingsAutosave(
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
   let detached = false;
+  // An explicit model choice is an action even when its configured value is unchanged.
+  let modelSelectionRevision = 0;
+  let savedModelSelectionRevision = 0;
 
   const emit = (status: BotAutosaveStatus): void => {
     if (detached) return;
@@ -245,7 +248,15 @@ export function createBotSettingsAutosave(
   };
 
   const isDirty = (): boolean =>
+    modelSelectionRevision !== savedModelSelectionRevision ||
     !botSettingsPayloadEqual(options.readPayload(), options.readBaseline());
+
+  const commit = async (payload: BotSettingsPayload): Promise<void> => {
+    const revision = modelSelectionRevision;
+    await options.commit(payload, revision !== savedModelSelectionRevision);
+    // A second choice made during this request still needs its own acceptance.
+    savedModelSelectionRevision = revision;
+  };
 
   const runNow = async (): Promise<void> => {
     clearTimer();
@@ -256,7 +267,7 @@ export function createBotSettingsAutosave(
     }
     if (detached) return;
     const payload = options.readPayload();
-    if (botSettingsPayloadEqual(payload, options.readBaseline())) {
+    if (!isDirty()) {
       // 无实际变化 —— 不发 IPC。
       return;
     }
@@ -265,7 +276,7 @@ export function createBotSettingsAutosave(
     // 看到 inFlight 为 null 而重复提交同一份 payload。
     const attempt = (async () => {
       try {
-        await options.commit(payload);
+        await commit(payload);
         emit(isDirty() ? 'idle' : 'saved');
       } catch {
         emit('error');
@@ -285,7 +296,8 @@ export function createBotSettingsAutosave(
   return {
     schedule(trigger) {
       if (detached) return;
-      if (trigger === 'instant') {
+      if (trigger === 'model') modelSelectionRevision += 1;
+      if (trigger !== 'text') {
         if (timer !== null) clearTimeout(timer);
         instantPending = true;
         timer = setTimeout(fire, instantDelayMs);
@@ -308,7 +320,7 @@ export function createBotSettingsAutosave(
       if (detached) return;
       clearTimer();
       const payload = options.readPayload();
-      const dirty = !botSettingsPayloadEqual(payload, options.readBaseline());
+      const dirty = isDirty();
       // 先断开状态回调:组件正在卸载,任何 setState 都是无主的。
       detached = true;
       if (!dirty) return;
@@ -319,12 +331,12 @@ export function createBotSettingsAutosave(
           .catch(() => undefined)
           .then(() => {
             const trailing = options.readPayload();
-            if (botSettingsPayloadEqual(trailing, options.readBaseline())) return;
-            return options.commit(trailing).catch(() => undefined);
+            if (!isDirty()) return;
+            return commit(trailing).catch(() => undefined);
           });
         return;
       }
-      void options.commit(payload).catch(() => undefined);
+      void commit(payload).catch(() => undefined);
     },
     cancel() {
       clearTimer();

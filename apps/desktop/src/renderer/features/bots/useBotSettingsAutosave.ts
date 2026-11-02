@@ -36,7 +36,7 @@ export interface UseBotSettingsAutosaveOptions {
   /** Shared with profile reconciliation and patch generation; only confirmed saves advance it. */
   baseline: { current: BotSettingsPayload };
   /** 真正提交。成功 resolve 并推进基线;失败 reject。 */
-  commit: (payload: BotSettingsPayload) => Promise<void>;
+  commit: (payload: BotSettingsPayload, modelSelection?: boolean) => Promise<void>;
   textDelayMs?: number;
   instantDelayMs?: number;
 }
@@ -107,9 +107,9 @@ export function useBotSettingsAutosave(
       instantDelayMs,
       readPayload: () => committablePayloadRef.current,
       readBaseline: () => baselineRef.current,
-      commit: async (next) => {
+      commit: async (next, modelSelection) => {
         if (!enabledRef.current) return;
-        await commitRef.current(next);
+        await commitRef.current(next, modelSelection);
       },
       onStatusChange: handleStatus,
     });

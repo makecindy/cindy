@@ -204,10 +204,13 @@ export function BotSettings({
     ),
   );
   const commitProfile = useCallback(
-    async (payload: BotSettingsPayload) => {
+    async (payload: BotSettingsPayload, modelSelection = false) => {
       savingProfileRef.current = true;
       try {
-        await target.profile.update(bot.id, botSettingsChanges(savedSettingsRef.current, payload, true));
+        await target.profile.update(bot.id, {
+          ...botSettingsChanges(savedSettingsRef.current, payload, true),
+          ...(modelSelection ? { acceptModelSelection: true } : {}),
+        });
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
@@ -630,7 +633,7 @@ export function BotSettings({
                     modelChain,
                     modelChainOverride: null,
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
                 value={displayedModelChain}
                 onChange={(modelChain) => {
@@ -648,7 +651,7 @@ export function BotSettings({
                       fastMode: primary.fastMode,
                     },
                   }));
-                  autosave.onEdit('instant');
+                  autosave.onEdit('model');
                 }}
               />
             </div>

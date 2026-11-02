@@ -527,6 +527,20 @@ describe('保存失败只回滚自己那一行', () => {
       };
   }
 
+  it('accepts the saved primary through the existing version check without persisting the intent flag', async () => {
+    const bot = addBotProfile({ name: 'Reselect primary', description: '' });
+    bot.currentVersion = 3;
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const update = vi.fn(async (_input: unknown) => ({ ...bot, currentVersion: 4 }));
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = update;
+    await updateBotProfile(bot.id, { acceptModelSelection: true });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: bot.id, acceptSavedModelSelectionVersion: 3 }));
+    expect(update.mock.calls[0]?.[0]).not.toHaveProperty('acceptModelSelection');
+    expect(getBotProfiles().find(item => item.id === bot.id)).not.toHaveProperty('acceptModelSelection');
+  });
+
   it('forwards the editing baseline to Main without adding it to optimistic profile state', async () => {
     const bot = addBotProfile({ name: 'Settings merge', description: '' });
     createdIds.push(bot.id);
