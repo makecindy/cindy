@@ -939,7 +939,7 @@ export class DeviceLinkClient {
     logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
   }>();
   private readonly sameAccountDirectGrace = new Map<string, {
-    wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>;
+    wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>; peerOffline: boolean;
   }>();
   /** Relay-authenticated provider-share path leases never survive process/account replacement. */
   private readonly providerShareDirectLeases = new Map<string, {
@@ -1451,15 +1451,19 @@ export class DeviceLinkClient {
   }
 
   /** Repeated signaling loss cannot renew the original deadline. */
-  private retainDirectPathOnSignalingLoss(deviceId: string): boolean {
-    if (this.hasOfflineDirectPath(deviceId)) return true;
+  private retainDirectPathOnSignalingLoss(deviceId: string, peerOffline = false): boolean {
+    if (this.hasOfflineDirectPath(deviceId)) {
+      const grace = this.sameAccountDirectGrace.get(deviceId);
+      if (grace && peerOffline) grace.peerOffline = true;
+      return true;
+    }
     if (!this.opts.retainDirectPathsOnRelayLoss || isScopedPeer(deviceId) || this.stopped
       || !this.usableDirectPath(deviceId) || !this.isLinkReady(deviceId)) return false;
     const wallUntil = Date.now() + DIRECT_PATH_SIGNALING_GRACE_MS;
     const monotonicUntil = this.monotonicNow() + DIRECT_PATH_SIGNALING_GRACE_MS;
     const timer = setTimeout(() => this.expireSameAccountDirectGrace(deviceId), DIRECT_PATH_SIGNALING_GRACE_MS);
-    timer.unref?.();
-    this.sameAccountDirectGrace.set(deviceId, { wallUntil, monotonicUntil, timer });
+    (timer as { unref?: () => void }).unref?.();
+    this.sameAccountDirectGrace.set(deviceId, { wallUntil, monotonicUntil, timer, peerOffline });
     return true;
   }
 
@@ -2921,7 +2925,7 @@ export class DeviceLinkClient {
         const snap = env.payload as PresenceSnapshot;
         // A missing signaling route is not proof that the authenticated data path died.
         if (snap.online === false) {
-          if (!this.retainDirectPathOnSignalingLoss(snap.deviceId)) this.detachDirectPath(snap.deviceId, 'peer-offline');
+          if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) this.detachDirectPath(snap.deviceId, 'peer-offline');
         } else {
           this.clearSameAccountDirectGrace(snap.deviceId);
         }
@@ -3035,7 +3039,7 @@ export class DeviceLinkClient {
             || routeLinkGeneration < this.getPeerLinkGeneration(routeDeviceId)
           );
         const retainedDirectRoute = payload.code === 'DEVICE_OFFLINE' && !!routeDeviceId
-          && !isScopedPeer(routeDeviceId) && !stalePeerRouteError && this.retainDirectPathOnSignalingLoss(routeDeviceId);
+          && !isScopedPeer(routeDeviceId) && !stalePeerRouteError && this.retainDirectPathOnSignalingLoss(routeDeviceId, true);
         const terminalRouteFailure = payload.code === 'REMOTE_DISABLED'
           || (payload.code === 'DEVICE_OFFLINE' && !retainedDirectRoute);
         // DEVICE_OFFLINE is a peer route transition, not merely a rejected
@@ -3941,7 +3945,10 @@ export class DeviceLinkClient {
     const channel = this.directPaths.get(deviceId);
     if (!channel) return;
     this.directPaths.delete(deviceId);
-    const signalingLost = this.sameAccountDirectGrace.has(deviceId);
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    // A local hello-ack may restore relay delivery without a fresh peer presence
+    // or handshake. Permit that fallback, but keep a known-offline peer closed.
+    const signalingLost = !!grace && (this.status !== 'online' || grace.peerOffline);
     this.clearSameAccountDirectGrace(deviceId);
     this.closeDirectChannel(deviceId, channel, reason);
     const peer = this.peerTransport.get(deviceId);

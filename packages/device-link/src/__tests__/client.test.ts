@@ -11691,6 +11691,50 @@ describe('bounded ordinary direct continuity', () => {
     } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
   });
 
+  // Unit: local recovery need not deliver fresh peer presence. Stale grace must
+  // allow reliable fallback unless the peer route is still explicitly offline.
+  it.each([false, true])('uses recovered relay after direct loss with peerOffline=%s', async peerOffline => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),
+      executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions.push(env.id!);
+        executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'via recovered relay' });
+      }
+    });
+    try {
+      owner.start(); executor.start(); await pump();
+      const opening = owner.openLink('executor', { controllerName: 'Group owner', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      const direct = connectDirect({ id: 'group-owner', client: owner }, { id: 'executor', client: executor });
+      relay.disconnect('group-owner');
+      owner.connectNow('test-relay-recovery'); await pump();
+      expect(owner.getStatus()).toBe('online');
+      expect(owner.hasOfflineDirectPath('executor')).toBe(true);
+      if (peerOffline) {
+        const socket = sockets.mock.results.filter(r => r.value.ownerId === 'group-owner').at(-1)!.value;
+        socket.push(presence('executor', false));
+      }
+      direct.handles.left!.closed(); await pump();
+      expect(owner.hasOfflineDirectPath('executor')).toBe(false);
+      expect(owner.isLinkReady('executor')).toBe(!peerOffline);
+      if (peerOffline) {
+        expect(executions).toEqual([]);
+      } else {
+        const request = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] });
+        await pump();
+        await expect(request).resolves.toEqual({ ok: true, result: 'via recovered relay' });
+        expect(executions).toHaveLength(1);
+        expect(reliableKinds(relay.deliveredTo.get('executor'), 'invoke')).toBe(1);
+      }
+    } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+
   it('bounds signaling loss to thirty minutes without renewal by traffic or repeated offline reports', async () => {
     vi.useFakeTimers();
     const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),

@@ -23,6 +23,7 @@ interface Job {
   resolve(value: DelegationCheckResult): void;
   reject(error: unknown): void;
   started: boolean;
+  controller: AbortController;
   timer?: ReturnType<typeof setTimeout>;
 }
 interface Queue {
@@ -37,7 +38,7 @@ interface Queue {
 export function createProviderShareDelegationChecks(deps: {
   captureScope(): Scope;
   scopeChanged(): Error;
-  request(input: DelegationCheckInput, scope: Scope, timeoutMs: number): Promise<DelegationCheckResult>;
+  request(input: DelegationCheckInput, scope: Scope, timeoutMs: number, signal: AbortSignal): Promise<DelegationCheckResult>;
   random?: () => number;
 }) {
   const random = deps.random ?? Math.random;
@@ -45,12 +46,16 @@ export function createProviderShareDelegationChecks(deps: {
 
   function clear(): void {
     const old = current;
-    current = undefined;
     if (!old) return;
+    // Disposing a host cancels its callers, not this account's server budget.
+    // Keep a running physical tail serialized and retain Retry-After/spacing
+    // when the next host captures the same account/endpoint scope.
     clearTimeout(old.timer);
     for (const job of old.pending.values()) {
       clearTimeout(job.timer);
-      job.reject(deps.scopeChanged());
+      const error = deps.scopeChanged();
+      job.controller.abort(error);
+      job.reject(error);
     }
     old.pending.clear();
     old.waiting.length = 0;
@@ -80,12 +85,15 @@ export function createProviderShareDelegationChecks(deps: {
     state.running = true;
     void (async () => {
       try {
-        const result = await deps.request(job.input, job.scope, job.deadline - now);
+        const result = await deps.request(job.input, job.scope, job.deadline - now, job.controller.signal);
+        job.controller.signal.throwIfAborted();
         if (current !== state || !job.scope.isCurrent()) throw deps.scopeChanged();
         state.failures = 0;
         job.resolve(result);
       } catch (error) {
-        if (current !== state || !job.scope.isCurrent()) {
+        if (job.controller.signal.aborted) {
+          job.reject(job.controller.signal.reason);
+        } else if (current !== state || !job.scope.isCurrent()) {
           job.reject(deps.scopeChanged());
         } else {
           if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 429) {
@@ -107,7 +115,7 @@ export function createProviderShareDelegationChecks(deps: {
         }
       } finally {
         clearTimeout(job.timer);
-        state.pending.delete(job.key);
+        if (state.pending.get(job.key) === job) state.pending.delete(job.key);
         state.running = false;
         state.nextAt = Math.max(state.retryAt, Date.now() + 750 + Math.floor(random() * 500));
         schedule(state);
@@ -132,13 +140,15 @@ export function createProviderShareDelegationChecks(deps: {
       let resolve!: Job['resolve'], reject!: Job['reject'];
       const promise = new Promise<DelegationCheckResult>((yes, no) => { resolve = yes; reject = no; });
       const job: Job = { key, input: { ...input }, scope, deadline: Date.now() + QUEUE_DEADLINE_MS,
-        promise, resolve, reject, started: false };
+        promise, resolve, reject, started: false, controller: new AbortController() };
       job.timer = setTimeout(() => {
         if (!job.started) {
           state.pending.delete(key);
           state.waiting = state.waiting.filter(queued => queued !== job);
         }
-        job.reject(new DelegationCheckDeferredError(Date.now() + 5_000));
+        const error = new DelegationCheckDeferredError(Date.now() + 5_000);
+        job.controller.abort(error);
+        job.reject(error);
       }, QUEUE_DEADLINE_MS);
       job.timer.unref?.();
       state.pending.set(key, job);

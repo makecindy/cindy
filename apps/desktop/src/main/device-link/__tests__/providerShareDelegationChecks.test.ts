@@ -24,7 +24,7 @@ function deferred() {
 }
 function harness() {
   let scope = 'account-a:cn';
-  const request = vi.fn<() => Promise<DelegationCheckResult>>(async () => approved);
+  const request = vi.fn<Parameters<typeof createProviderShareDelegationChecks>[0]['request']>(async () => approved);
   const checks = createProviderShareDelegationChecks({
     captureScope: () => { const key = scope; return { key, isCurrent: () => key === scope }; },
     scopeChanged: () => new Error('scope changed'), request, random: () => 0,
@@ -32,9 +32,10 @@ function harness() {
   return { request, checks, setScope: (value: string) => { scope = value; } };
 }
 
+let apiTestEpoch = 0;
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(0);
-  api.scope = 'account-a'; api.endpoint = 'https://api.example.invalid'; api.fetch.mockReset();
+  api.scope = 'account-' + ++apiTestEpoch; api.endpoint = 'https://api.example.invalid'; api.fetch.mockReset();
 });
 afterEach(() => { clearProviderShareDelegationChecks(); vi.clearAllTimers(); vi.useRealTimers(); });
 
@@ -63,6 +64,62 @@ describe('authenticated delegation API', () => {
 });
 
 describe('provider-share delegation checks', () => {
+  // Unit review regressions: the former deadline left HTTP/refresh occupying the gate;
+  // disposal dropped the same account's physical tail and Retry-After budget.
+  it('aborts an expired running query and lets a newer peer use the released gate', async () => {
+    const h = harness();
+    let signal: AbortSignal | undefined;
+    h.request.mockImplementationOnce((_input, _scope, _timeout, currentSignal) => new Promise((_yes, no) => {
+      signal = currentSignal;
+      currentSignal.addEventListener('abort', () => no(currentSignal.reason), { once: true });
+    }));
+    const old = expect(h.checks.check(input)).rejects.toHaveProperty('code', 'RATE_LIMITED');
+    await vi.advanceTimersByTimeAsync(14_999);
+    const fresh = h.checks.check({ ...input, guestDeviceId: 'fresh' });
+    await vi.advanceTimersByTimeAsync(1);
+    await old;
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(750);
+    await expect(fresh).resolves.toEqual(approved);
+    expect(h.request).toHaveBeenCalledTimes(2);
+    h.checks.clear();
+  });
+
+  it('keeps a canceled same-scope physical tail serialized across host disposal', async () => {
+    const h = harness(), pending = deferred();
+    h.request.mockImplementationOnce(() => pending.promise);
+    const old = expect(h.checks.check(input)).rejects.toThrow('scope changed');
+    await vi.advanceTimersByTimeAsync(0);
+    h.checks.clear();
+    await old;
+    const fresh = h.checks.check(input);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.request).toHaveBeenCalledTimes(1);
+    pending.resolve(approved);
+    await vi.advanceTimersByTimeAsync(750);
+    await expect(fresh).resolves.toEqual(approved);
+    expect(h.request).toHaveBeenCalledTimes(2);
+    h.checks.clear();
+  });
+
+  it('preserves Retry-After and repeated-429 backoff through same-scope host disposal', async () => {
+    const h = harness();
+    h.request.mockRejectedValue(Object.assign(new Error('rate limited'), { statusCode: 429 }));
+    const first = expect(h.checks.check(input)).rejects.toThrow('rate limited');
+    await vi.advanceTimersByTimeAsync(0); await first;
+    h.checks.clear();
+    const duringFirstCooldown = expect(h.checks.check(input)).rejects.toMatchObject({ retryAt: 60_000 });
+    await vi.advanceTimersByTimeAsync(0); await duringFirstCooldown;
+    expect(h.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const second = expect(h.checks.check(input)).rejects.toThrow('rate limited');
+    await vi.advanceTimersByTimeAsync(0); await second;
+    h.checks.clear();
+    const duringSecondCooldown = expect(h.checks.check(input)).rejects.toMatchObject({ retryAt: 180_000 });
+    await vi.advanceTimersByTimeAsync(0); await duringSecondCooldown;
+    h.checks.clear();
+  });
+
   it('joins only in-flight identical generations and never caches an authorization result', async () => {
     const h = harness(), pending = deferred();
     h.request.mockImplementationOnce(() => pending.promise);

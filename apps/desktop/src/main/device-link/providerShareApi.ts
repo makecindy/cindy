@@ -123,7 +123,7 @@ export async function revokeProviderShareDelegation(input: {
 const delegationChecks = createProviderShareDelegationChecks({
   captureScope,
   scopeChanged: () => new ProviderShareScopeChangedError(),
-  async request(input, scope, timeoutMs) {
+  async request(input, scope, timeoutMs, signal) {
     const value = await serverApiFetch<{ active?: unknown; ownerDeviceId?: unknown;
       expiresAt?: unknown; generation?: unknown }>(
       '/api/device-link/provider-shares/delegations/check', {
@@ -132,7 +132,7 @@ const delegationChecks = createProviderShareDelegationChecks({
           if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
           return getClientEndpoint('deviceLinkApiBaseUrl');
         },
-        timeoutMs, cache: 'no-store',
+        timeoutMs, signal, cache: 'no-store',
         logLabel: '/api/device-link/provider-shares/delegations/check',
         redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
       });

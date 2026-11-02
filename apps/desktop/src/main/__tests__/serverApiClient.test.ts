@@ -41,6 +41,39 @@ describe('serverApiFetch', () => {
     vi.clearAllMocks();
   });
 
+  // Unit: cancellation must cover HTTP and a shared auth refresh. Existing retry
+  // tests did not abort during either stage, allowing a late query after its deadline.
+  it.each(['fetch', 'refresh'] as const)('cancels during %s without a late HTTP retry or logout', async stage => {
+    const controller = new AbortController(), expired = new Error('query deadline expired');
+    let entered!: () => void, finish!: (value: boolean) => void;
+    const started = new Promise<void>(yes => { entered = yes; });
+    const refreshing = new Promise<boolean>(yes => { finish = yes; });
+    if (stage === 'fetch') {
+      mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => no(opts.signal!.reason), { once: true });
+        entered();
+      }));
+    } else {
+      mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }));
+      mocks.refresh.mockImplementationOnce(() => { entered(); return refreshing; });
+    }
+    let observed: unknown;
+    const result = serverApiFetch('/api/device-link/provider-shares/delegations/check', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { observed = 'success'; }, error => { observed = error; });
+    try {
+      await started;
+      controller.abort(expired);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(observed).toBe(expired);
+      await result;
+      finish(true);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    } finally { finish(true); }
+  });
+
   // Unit: a real HTTP rejection must retain only its parsed retry deadline.
   // Previously rawFetch discarded headers, so delegation checks could not obey 429.
   it.each([
