@@ -2845,8 +2845,13 @@ export function MessageRenderer({
       companionWorkingLabel,
       showPluginInvocations,
       companionPluginWork,
+      // Cross-row state a kept row reads through `actions`: which reply is the last for its message,
+      // and the five-minute stamps. Both keep their identity until they really change.
+      lastCompanionReplyKey,
+      companionTimeGroups,
     }),
-    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork],
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork,
+      lastCompanionReplyKey, companionTimeGroups],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -3651,13 +3656,13 @@ function MessageBubble({
   const canUseCompletedActions = !isStreamingAssistant;
   // Copy / side-chat text is only reachable once the row has settled (every consumer below is
   // gated on `canUseCompletedActions` or `showCompletedActionBar`). Skip the rich-answer re-parse
-  // while this row streams, and key the settled value on the message object so a re-render that
-  // did not change the row does not redo it.
+  // while this row streams, and key the settled value on the message object (plus the UI language,
+  // which localizes the attachment prefix) so a re-render that did not change the row does not redo it.
   const copyText = useMemo(() => {
     if (isStreamingAssistant) return '';
     const raw = buildMobileMessageCopyText(item.message);
     return item.message.kind === 'assistant' ? richAnswerText(raw) : raw;
-  }, [isStreamingAssistant, item.message]);
+  }, [isStreamingAssistant, item.message, i18nInstance.language]);
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。

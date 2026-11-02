@@ -38,7 +38,7 @@ import { CloudHomeUnreachableNotice, isMessageWaitingForCloudHome, useSustained 
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from '@/session/ChatIdentityHeader';
 import { useHiddenHistoryChase } from '@/session/hiddenHistoryChase';
-import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { collectCompanionPluginInvocations, companionPluginSourceMessages } from '@/session/pluginInvocations';
 import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionDisplayResource, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
@@ -6349,16 +6349,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ? { name: companionName, avatar: companionPortrait(COMPANION_AVATAR_SIZE) } : null,
   [companionChat, companionName, companionPortrait]);
   // Plugin invocations only depend on user / tool rows. `projectedMessages` is a new array on every
-  // streaming flush, so narrow it to those rows and keep the previous array while they are the same
-  // objects; otherwise every flush re-pairs tool results and re-stringifies their content.
-  const companionPluginSourceMessages = useStableValue(
-    useMemo(() => companionChat
-      ? projectedMessages.filter((message) => message.role === 'user' || message.role === 'tool_use' || message.role === 'tool_result')
-      : EMPTY_PLUGIN_SOURCE_MESSAGES, [companionChat, projectedMessages]),
+  // streaming flush, so narrow it to those rows (keeping legacy pairing boundaries) and keep the
+  // previous array while they are the same objects; otherwise every flush re-pairs tool results
+  // and re-stringifies their content.
+  const pluginSourceMessages = useStableValue(
+    useMemo(() => companionChat ? companionPluginSourceMessages(projectedMessages) : EMPTY_PLUGIN_SOURCE_MESSAGES,
+      [companionChat, projectedMessages]),
     sameArrayIdentity,
   );
-  const companionPluginInvocations = useMemo(() => companionChat ? collectCompanionPluginInvocations(companionPluginSourceMessages) : undefined,
-    [companionChat, companionPluginSourceMessages]);
+  const companionPluginInvocations = useMemo(() => companionChat ? collectCompanionPluginInvocations(pluginSourceMessages) : undefined,
+    [companionChat, pluginSourceMessages]);
   const companionWorkGroupLabel = companionChat && activePendingKind
     ? t(`devices.presentation.sessionList.preview.${activePendingKind === 'permission' ? 'permission'
       : activePendingKind === 'ask_user_question' ? 'answer'
