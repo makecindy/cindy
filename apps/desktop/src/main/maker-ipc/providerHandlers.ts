@@ -307,6 +307,8 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): (() => void) & { commit?: () => void };
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /** 模型/供应商启停落盘后唤醒等待中的插件 setup 复查。 */
+  notifyHostConfigChanged?(): void;
   /**
    * 自定义供应商删除后立即让供应商组转分享同步；删除组配置本身是异步落盘，不能等下一轮轮询。
    * 生产接线为 providerGroupReshare.kick，单测可注入内存桩。
@@ -1708,6 +1710,7 @@ export function registerProviderHandlers(
         assertSameOwner();
         persist(() => deps.setProviderDisabled(i.providerId as string, i.disabled as boolean));
       }
+      deps.notifyHostConfigChanged?.();
       deps.broadcastChanged();
       return { ok: true };
     };

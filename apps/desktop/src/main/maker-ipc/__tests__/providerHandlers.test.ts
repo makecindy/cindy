@@ -128,6 +128,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     finalizeCodexCustomProviderHostChange: vi.fn(async () => {}),
     cancelCodexCustomProviderHostChange: vi.fn(() => {}),
     beginRouteMutation: vi.fn(() => () => {}),
+    notifyHostConfigChanged: vi.fn(() => {}),
     broadcastChanged: vi.fn(() => {}),
     listProviderIds: () => [],
     setProviderOrder: vi.fn(() => true),
@@ -705,6 +706,7 @@ describe('model-disable:set handler', () => {
     ).rejects.toThrow(/INVALID_PARAMS/);
     expect(deps.setModelsDisabled).not.toHaveBeenCalled();
     expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.notifyHostConfigChanged).not.toHaveBeenCalled();
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 
@@ -719,6 +721,7 @@ describe('model-disable:set handler', () => {
       }),
     ).resolves.toEqual({ ok: true });
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('retired', ['gone-model'], false);
+    expect(deps.notifyHostConfigChanged).toHaveBeenCalledOnce();
   });
 
   it('写入串行:先到的停用(等目录校验)不被后到的启用超车,最后一次操作赢', async () => {

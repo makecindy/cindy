@@ -7771,6 +7771,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     finalizeCodexCustomProviderHostChange: finalizeCodexAfterAuthModeChange,
     cancelCodexCustomProviderHostChange: cancelCodexAuthModeChange,
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
+    notifyHostConfigChanged: () => {
+      getGhostSetupChangeBus().emitAll({ source: 'host_config', ref: 'model-provider' });
+    },
     broadcastChanged: () => { invalidateKimiAccountUsage(); broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}); },
     kickProviderGroupReshare: (reason) => providerGroupReshare.kick(reason),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),
