@@ -103,6 +103,7 @@ interface View {
   attach(guest: WebContents): void;
   close(): void;
   answerDirectory(requestId: string, path: string | null): Promise<void>;
+  answerModelPicker(requestId: string, route: import('@cindy/device-link').PluginModelSelection | null): Promise<unknown>;
 }
 const views = new Map<string, View>();
 
@@ -142,6 +143,19 @@ export async function answerRemotePluginSettingsDirectory(
   if (!view) throw unavailable();
   view.current();
   await view.answerDirectory(answer.requestId, answer.path);
+}
+
+export async function answerRemotePluginSettingsModelPicker(host: WebContents, raw: unknown): Promise<unknown> {
+  const answer = raw as { viewId?: unknown; requestId?: unknown; route?: unknown } | null;
+  if (!answer || typeof answer.viewId !== 'string') throw unavailable();
+  const parsed = parsePluginSettingsRequest({ op: 'settings', id: 'local', command: {
+    kind: 'answer-model-picker', requestId: answer.requestId, route: answer.route,
+  } });
+  if (!parsed || parsed.command.kind !== 'answer-model-picker') throw unavailable();
+  const view = [...views.values()].find(v => v.id === answer.viewId && v.host === host);
+  if (!view) throw unavailable();
+  view.current();
+  return view.answerModelPicker(parsed.command.requestId, parsed.command.route);
 }
 
 /** Main owns the encrypted exchange and the isolated page session. No values enter the app Renderer. */
@@ -238,6 +252,11 @@ export async function openRemotePluginSettings(
   const ses = session.fromPartition(partition);
   let guest: WebContents | undefined;
   const confirmations = new Set<string>();
+  const modelPickers = new Set<string>();
+  const dismissModelPicker = (requestId: string) => {
+    modelPickers.delete(requestId);
+    if (!host.isDestroyed()) host.send('ghosts:model-picker:dismissed', { requestId }, getSafeDataOwnerPushStamp());
+  };
   const prompt = (options: MessageBoxOptions) => {
     assertCurrent();
     const parent = BrowserWindow.fromWebContents(host);
@@ -270,6 +289,15 @@ export async function openRemotePluginSettings(
   const poll = async (after: number) => {
     const result = (await send({ kind: 'poll', after })) as PluginPagePoll;
     for (const item of result.confirms) void confirm(item);
+    for (const requestId of modelPickers) {
+      if (!result.modelPickers?.some(value => value.requestId === requestId)) dismissModelPicker(requestId);
+    }
+    for (const request of result.modelPickers ?? []) {
+      assertCurrent();
+      if (modelPickers.has(request.requestId)) continue;
+      modelPickers.add(request.requestId);
+      host.send('ghosts:model-picker:request', { ...request, deviceId: input.deviceId, remoteViewId: id }, getSafeDataOwnerPushStamp());
+    }
     for (const request of result.directories ?? []) {
       assertCurrent();
       host.send(
@@ -286,7 +314,7 @@ export async function openRemotePluginSettings(
         getSafeDataOwnerPushStamp(),
       );
     }
-    return { ...result, directories: undefined };
+    return { ...result, directories: undefined, modelPickers: undefined };
   };
   const fetchSettings = async (
     path: string,
@@ -431,10 +459,17 @@ export async function openRemotePluginSettings(
     answerDirectory: async (requestId, path) => {
       await send({ kind: 'answer-directory', requestId, path });
     },
+    answerModelPicker: async (requestId, route) => {
+      if (!modelPickers.has(requestId)) throw unavailable();
+      const result = await send({ kind: 'answer-model-picker', requestId, route }) as { handled: boolean; accepted: boolean };
+      if (result.accepted || !result.handled) dismissModelPicker(requestId);
+      return result;
+    },
     close: () => {
       if (closed) return;
       void send({ kind: 'close' }).catch(() => {});
       closed = true;
+      for (const requestId of [...modelPickers]) dismissModelPicker(requestId);
       clearInterval(keepAlive);
       clearTimeout(attachDeadline);
       views.delete(partition);

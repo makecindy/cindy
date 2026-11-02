@@ -7,9 +7,20 @@ export default {
   cases: {
     default: { about: '「全部」视图:联合列表 + 侧栏 rail 全格' },
     recent: { about: '「最近」视图:三态 Fast 载体(`ultrafast`/`true`)的条目后缀原样保留' },
+    'cindy-personal': { about: 'Personal Cindy AI source identity in the real model selector' },
+    'cindy-xd': { about: 'XD Cindy AI source identity beside the unchanged Auto model' },
+    'cindy-organization': { about: 'Long organization name in the real provider rail' },
   },
   async check(page, ui) {
     await page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') }).waitFor();
+    if (ui.case.startsWith('cindy-')) {
+      const suffix = ui.case === 'cindy-personal' ? await ui.t('settings.providers.xd.personal')
+        : ui.case === 'cindy-xd' ? await ui.t('settings.providers.xd.xdOrganization') : 'Example International Game Studio';
+      await page.getByRole('button', { name: `Cindy AI · ${suffix}`, exact: true }).click();
+      await page.getByText('Auto', { exact: true }).first().waitFor();
+      await ui.capture('cindy-account-models');
+      return;
+    }
     if (ui.case === 'default') {
       await ui.capture('all-view');
       return;

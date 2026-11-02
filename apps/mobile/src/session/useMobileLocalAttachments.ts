@@ -35,6 +35,7 @@ import {
   isCameraUnavailableOnSimulator,
   type MobileLocalAttachmentUploadCandidate,
   type MobileLocalAttachmentUploadController,
+  type MobileLocalAttachmentUploadDeps,
   type PendingLocalAttachmentUpload,
 } from '@/session/mobileLocalAttachmentUpload';
 import {
@@ -55,6 +56,8 @@ import {
 import type { RemoteSerializedAttachment } from '@/session/types';
 
 export interface UseMobileLocalAttachmentsOptions {
+  /** Fixed for this composer's lifetime; defaults to the existing computer upload. */
+  upload?: MobileLocalAttachmentUploadDeps['upload'];
   /**
    * composer 附件作用域。已建任务页传 sessionId；作用域换代后，旧 picker / 粘贴 /
    * 标注异步入口与上传完成结果不得写入新作用域。省略时保持旧的单作用域行为。
@@ -288,7 +291,7 @@ export function useMobileLocalAttachments(
       if (candidate.kind === 'image') assertMobileImageSize(size);
       else assertMobileDocumentSize(size);
     },
-    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId }),
+    upload: options.upload ?? ((candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId })),
     discard: (attachment, token) => discardMobileUploadedAttachment(attachment, {
       getToken: () => token === undefined ? optionsRef.current.getAccessToken() : Promise.resolve(token),
     }),

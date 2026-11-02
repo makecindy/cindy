@@ -43,10 +43,13 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   draftRange: null as UseVoiceInputResult['draftRange'],
   cancel: vi.fn().mockResolvedValue(undefined),
   prepare: vi.fn(),
+  micGranted: true,
   realModelSelector: false,
   listAgentSkills: vi.fn(),
   localProviders: [] as ProviderView[],
   uploadChatFolder: vi.fn(),
+  cacheImageFromBuffer: vi.fn(),
+  atPanelStandin: false,
 }));
 
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -85,7 +88,15 @@ vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: ({ open, onOpenChange, p
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: ({ disabled }: ComponentProps<typeof PermissionSelector>) => <button data-testid="permission-selector" disabled={disabled} /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typeof AtMentionPanel>) => { h.atPanel = props; return null; } }));
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typeof AtMentionPanel>) => {
+  h.atPanel = props;
+  // 焦点归还需要真实 DOM:焦点测试用与真实面板同契约的最小替身(面板根标记 + 搜索框)。
+  return h.atPanelStandin ? (
+    <div data-composer-suggestion-panel="">
+      <input data-composer-suggestion-search="" aria-label="newChat.atMention.typeToSearchFiles" />
+    </div>
+  ) : null;
+} }));
 vi.mock('@/lib/atResourceService', async (original) => ({ ...await original<typeof import('@/lib/atResourceService')>(), scanAtResources: h.scan }));
 vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query }: { query: string }) => <div data-testid="test-slash-palette" data-query={query} /> }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
@@ -109,12 +120,14 @@ const noOp = () => {};
 const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
   if (key === 'uploadChatFolder') return h.uploadChatFolder;
+  if (key === 'cacheImageFromBuffer') return h.cacheImageFromBuffer;
   if (key === 'getFilePath') return () => '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
   if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
+  if (key === 'getMicrophonePermissionCached') return () => ({ ok: h.micGranted, status: h.micGranted ? 'granted' : 'not-determined' });
   if (key === 'platform') return 'darwin';
   if (key === 'modelAccess') return undefined;
   if (key === 'then') return undefined;
@@ -137,6 +150,7 @@ const annotatedImage: AttachedFile = {
 
 beforeEach(() => {
   h.uploadChatFolder.mockReset();
+  h.cacheImageFromBuffer.mockReset().mockResolvedValue(undefined);
   h.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [] });
   h.localProviders = [];
   h.editor = null;
@@ -148,6 +162,7 @@ beforeEach(() => {
   h.draftRange = null;
   h.stop.mockClear();
   h.prepare.mockClear();
+  h.micGranted = true;
   h.realModelSelector = false;
   h.cancel.mockReset().mockResolvedValue(undefined);
   h.atPanel = null;
@@ -198,6 +213,48 @@ it('does not replace the empty editor after an external empty-draft notification
   }));
   expect(changed).not.toHaveBeenCalled();
   expect(h.editor!.state.selection.from).toBe(1);
+});
+
+// #8084 / r4428883080: thread textarea coverage missed ChatInput's debounced text save.
+// Unit: real ChatInput/Tiptap + attachment hook, one pending image across a remount;
+// its late result must appear in the tray without replacing unsaved editor text.
+it('keeps unsaved editor text when an unmounted composer finishes caching an image', async () => {
+  let finishCache!: (value: { url: string }) => void;
+  const cached = new Promise<{ url: string }>(resolve => { finishCache = resolve; });
+  h.cacheImageFromBuffer.mockReturnValue(cached);
+  let addImage!: ReturnType<typeof useAttachments>['addClipboardImage'];
+  function Composer() {
+    const attachmentState = useAttachments('composer-regression');
+    addImage = attachmentState.addClipboardImage;
+    return <ChatInput sessionId="composer-regression" deviceLinkDeviceId={null}
+      attachmentState={attachmentState} hideRuntimeControls showFolderPicker={false}
+      disableAutofocus onSend={async () => true} />;
+  }
+  const first = render(<Composer />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  let pending!: Promise<void>;
+  act(() => {
+    pending = addImage({ type: 'image/png', size: 4,
+      arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer } as Blob);
+  });
+  await waitFor(() => expect(h.cacheImageFromBuffer).toHaveBeenCalledOnce());
+  first.unmount();
+  const reopened = render(<Composer />);
+  await waitFor(() => expect(h.editor?.isDestroyed).toBe(false));
+  vi.useFakeTimers();
+  try {
+    act(() => { h.editor!.commands.insertContent('Newest draft'); });
+    expect(JSON.stringify(getDraft('composer-regression')?.text)).not.toContain('Newest draft');
+    const url = 'cindy-media://blobs/late-composer.png';
+    await act(async () => { finishCache({ url }); await pending; });
+    expect(h.editor!.getText()).toBe('Newest draft');
+    expect(reopened.container.querySelector(`img[src="${url}"]`)).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(getDraft('composer-regression')?.text).toEqual(plainTextToTiptapDoc('Newest draft'));
+    expect(getDraft('composer-regression')?.attachments).toEqual([expect.objectContaining({ url })]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // Companion chat 「回复」 bug: the quote appeared above the composer but focus stayed on the
@@ -337,6 +394,32 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
   view.rerender(<ChatInput {...view.props} />);
   fireEvent.pointerEnter(area);
   expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+});
+
+// 2026-10-30 Slack report: an accidental hold before voice input was ever
+// enabled popped the microphone permission dialog. The hint test above runs
+// granted; here the cached permission is missing (unit/jsdom).
+it('leaves hold-to-talk and its hint off until the microphone is authorized', async () => {
+  h.micGranted = false;
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const area = view.container.querySelector('[data-recommendation-active]')
+    ?? h.editor!.view.dom.parentElement!.parentElement!;
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+    fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(h.prepare).not.toHaveBeenCalled();
+    expect(h.listening).toBe(false);
+    fireEvent.mouseUp(window, { button: 0 });
+  } finally {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    vi.useRealTimers();
+  }
 });
 
 // 2026-10-26 regression (unit/jsdom): existing guidance must survive the 500ms
@@ -719,6 +802,8 @@ it('keeps a folder dragged from the remote task browser as a reference without u
 // Unit regression for #6551: the previous Send-only coverage missed queue edits.
 // Submit while A is packing, then drop B: both entry points must use the completed
 // attachment snapshot (including an otherwise empty edit) or preserve the draft.
+// #8084: a 120ms text autosave during A's completion must not restore an older
+// attachment list before React commits it. Fake time makes the CI ordering deterministic.
 it.each([
   { queueEdit: false, success: true, text: 'Read both folders' },
   { queueEdit: false, success: false, text: 'Read both folders' },
@@ -745,31 +830,40 @@ it.each([
   }
   render(<RemoteComposer />);
   await waitFor(() => expect(h.editor).not.toBeNull());
-  await act(async () => h.editor!.commands.setContent(`<p>${text}</p>`));
-  fireEvent.click(screen.getByRole('button', { name: 'Drop A' }));
-  await waitFor(() => expect(completions).toHaveLength(1));
-  const submit = screen.getByRole('button', {
-    name: queueEdit ? 'newChat.pendingQueue.editSaveAria' : 'newChat.sendButton.send',
-  });
-  expect((submit as HTMLButtonElement).disabled).toBe(false);
-  fireEvent.click(submit);
-  await waitFor(() => expect(h.editor!.isEditable).toBe(false));
-  fireEvent.click(screen.getByRole('button', { name: 'Drop B' }));
-  await waitFor(() => expect(completions).toHaveLength(2));
-  await act(async () => completions[0]({ ok: true, path: '/cache/a.bin', size: 100 }));
-  expect(onSend).not.toHaveBeenCalled();
-  await act(async () => completions[1](success
-    ? { ok: true, path: '/cache/b.bin', size: 100 }
-    : { ok: false, code: 'TRANSFER_FAILED' }));
-  if (success) {
-    await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
-    const sent = JSON.stringify(onSend.mock.calls[0]);
-    expect(sent).toContain('/cache/a.bin');
-    expect(sent).toContain('/cache/b.bin');
-    expect(sent).not.toContain('/controller/');
-  } else {
+  vi.useFakeTimers();
+  try {
+    await act(async () => h.editor!.commands.setContent(`<p>${text}</p>`));
+    fireEvent.click(screen.getByRole('button', { name: 'Drop A' }));
+    expect(completions).toHaveLength(1);
+    const submit = screen.getByRole('button', {
+      name: queueEdit ? 'newChat.pendingQueue.editSaveAria' : 'newChat.sendButton.send',
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(submit);
+    expect(h.editor!.isEditable).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Drop B' }));
+    expect(completions).toHaveLength(2);
+    await act(async () => {
+      completions[0]({ ok: true, path: '/cache/a.bin', size: 100 });
+      // Text autosave can run before React mirrors the newly prepared attachment.
+      await vi.advanceTimersByTimeAsync(120);
+    });
     expect(onSend).not.toHaveBeenCalled();
-    expect(h.editor!.getText()).toContain(text);
+    await act(async () => completions[1](success
+      ? { ok: true, path: '/cache/b.bin', size: 100 }
+      : { ok: false, code: 'TRANSFER_FAILED' }));
+    if (success) {
+      expect(onSend).toHaveBeenCalledOnce();
+      const sent = JSON.stringify(onSend.mock.calls[0]);
+      expect(sent).toContain('/cache/a.bin');
+      expect(sent).toContain('/cache/b.bin');
+      expect(sent).not.toContain('/controller/');
+    } else {
+      expect(onSend).not.toHaveBeenCalled();
+      expect(h.editor!.getText()).toContain(text);
+    }
+  } finally {
+    vi.useRealTimers();
   }
 });
 
@@ -788,6 +882,38 @@ it('does not let a pending local resource scan repopulate an SSH composer', asyn
   await waitFor(() => expect(currentPanelState()).toEqual({ kind: 'ready', items: [], truncated: false }));
   await act(async () => finish({ success: true, items: [{ type: 'file', relPath: 'stale.txt', name: 'stale.txt' }], truncated: false }));
   expect(currentPanelState()).toEqual({ kind: 'ready', items: [], truncated: false });
+});
+
+// 合成「+」面板的关闭焦点(面板搜索框退格收起走 onClose,不经过 MorphPopover 的
+// onOpenChange):面板内关闭必须把焦点交还编辑器,否则收合快照判「键盘关闭」、
+// 焦点掉回「+」按钮,接着打的字被按钮吃掉;焦点已在面板外则不得抢回。
+it('restores editor focus when the suggestion panel closes while focus is inside it', async () => {
+  h.atPanelStandin = true;
+  supplyRangeGeometry();
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  const box = await screen.findByRole('textbox', { name: 'newChat.atMention.typeToSearchFiles' });
+  await act(async () => { box.focus(); });
+  expect(document.activeElement).toBe(box);
+  await act(async () => { h.atPanel!.onClose(); });
+  const editorDom = view.container.querySelector('[contenteditable]');
+  expect(editorDom).not.toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(editorDom));
+});
+
+it('does not steal focus back when the suggestion panel closes after focus moved elsewhere', async () => {
+  h.atPanelStandin = true;
+  supplyRangeGeometry();
+  renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  await screen.findByRole('textbox', { name: 'newChat.atMention.typeToSearchFiles' });
+  // 用户已把焦点挪到面板外(如 Tab 到其他控件):关闭不得把焦点抢回编辑器。
+  const chip = screen.getByRole('button', { name: 'test-suggestions' });
+  await act(async () => { chip.focus(); });
+  await act(async () => { h.atPanel!.onClose(); });
+  expect(document.activeElement).toBe(chip);
 });
 
 it('keeps a remote draft with no directory local-scan-free, but searches nonempty queries remotely', async () => {

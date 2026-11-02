@@ -38,6 +38,8 @@ const cache = new Map<string, { until: number; pending: Promise<ProviderShareQuo
 async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAccount> {
   if (!provider.connected || provider.removed || provider.suspended) return empty('unavailable');
   const source = providerWeeklyQuotaSource(provider);
+  // Kimi account usage is only exposed to the owner, not through provider sharing.
+  if (source === 'kimi') return empty('unsupported');
   if (source) {
     const now = Date.now();
     const value =
@@ -58,8 +60,8 @@ async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAc
               (await readCodexRateLimitsForHost(provider.id))?.rateLimits ?? null,
               now,
             );
-    const windows = value.windows.map((window) => ({
-      kind: window.kind,
+    const windows = value.windows.filter((window) => window.kind !== 'period').map((window) => ({
+      kind: window.kind as 'session' | 'week' | 'scoped',
       label: window.label ?? null,
       remainingPercent: Math.max(0, 100 - window.usedPercent),
       resetsAt: window.resetsAtMs,

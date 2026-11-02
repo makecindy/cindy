@@ -22,10 +22,12 @@ export default {
     'dictation-starting': { about: 'Answer microphone starting', data: { question: '请补充你的意见。' } },
     'dictation-listening': { about: 'Answer recording with stop action', data: { question: '请补充你的意见。' } },
     'dictation-processing': { about: 'Answer transcription pending at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请补充你的意见。' } },
+    'dictation-speaker-filtered': { about: 'Answer recording explains that the voiceprint filter ignored someone else, at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请补充你的意见。' } },
     unresolved: { about: 'Missing and ambiguous references remain plain text', data: { question: '请查看 missing.html 和 ambiguous.html，文件尚未找到或有重名时保持普通文字。' } },
     'voice-single': { about: 'Voice choice instructions with an active listening toolbar', data: { question: '你希望采用哪种方案？', voice: true } },
     'voice-multi': { about: 'Spoken multi-selection awaits confirmation in the existing card', viewport: { width: 800, height: 700 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
     'voice-narrow': { about: 'Voice confirmation and toolbar at 320 px', viewport: { width: 320, height: 800 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
+    'voice-speaker-filtered': { about: 'Call bar explains that the voiceprint filter ignored someone else', data: { question: '你希望采用哪种方案？', voice: true, speakerFiltered: true } },
   },
   async ready(page) {
     await page.getByText('确认原型').waitFor();
@@ -42,7 +44,12 @@ export default {
         }));
       }
       if (ui.case === 'dictation-processing') await mic.click();
-      assert.equal(await mic.getAttribute('aria-busy'), ui.case === 'dictation-listening' ? 'false' : 'true');
+      if (ui.case === 'dictation-speaker-filtered') {
+        await page.evaluate(() => window.__uiPage.emit('voice', { type: 'speaker-filtered', runId: 'fixture-voice' }));
+        await page.getByText(await ui.t('voiceInputOverlay.speakerFiltered')).waitFor();
+      }
+      const recording = ui.case === 'dictation-listening' || ui.case === 'dictation-speaker-filtered';
+      assert.equal(await mic.getAttribute('aria-busy'), recording ? 'false' : 'true');
       assert.equal(await mic.isDisabled(), ui.case === 'dictation-processing');
       return;
     }
@@ -52,6 +59,8 @@ export default {
     }));
     if (ui.case.startsWith('voice-')) {
       assert.equal(await page.locator('.companion-voice-toolbar').count(), 1);
+      assert.equal(await page.getByText(await ui.t('voiceInputOverlay.speakerFiltered')).count(),
+        ui.case === 'voice-speaker-filtered' ? 1 : 0);
       assert.ok(await page.getByRole('status').count() >= 2);
       assert.equal(await page.getByTestId('ask-user-voice').count(), 0);
       return;

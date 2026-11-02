@@ -4,10 +4,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { AgentEvent } from '@cindy/maker-core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { collectGeneratedFiles } from '../../../renderer/lib/generatedFiles';
 import { resolveToolFilePath } from '../../../renderer/lib/localPathResolver';
+import { localTaskImagePath } from '../../cindy-media/taskImageMarkdown';
+import { collectOutboundAttachments } from '../../hook-control/outbound';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { createRemoteAgentHandle } from '../controller/proxyHandle';
 import type { RemoteAgentRunClient } from '../controller/runClient';
@@ -19,13 +21,13 @@ let root: string;
 beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-event-projection-'))); });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function setup(virtual: string) {
+function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined) {
   const real = path.join(root, '真实 目录');
   fs.mkdirSync(real);
   const workspace = new ExecutorWorkspace({ workingDir: real, aliases: [{ from: virtual, to: real }] });
   workspace.setVirtualRoot(virtual);
   const controller = createRemoteAgentHandle({
-    client: { callWithId: async () => undefined } as unknown as RemoteAgentRunClient,
+    client: { callWithId } as unknown as RemoteAgentRunClient,
     started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: virtual, virtualWorkspace: true, methods: [], state: {} },
     workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: () => 'request-id', dispose: async () => {},
   });
@@ -45,6 +47,30 @@ async function eventsFrom(controller: ReturnType<typeof setup>['controller'], in
 // Unit regression: a quota terminal followed by a missing remote run must keep
 // the actionable error (and its reset time), rather than replacing it with EXPIRED.
 describe('remote terminal error ownership', () => {
+  // Unit regression: local in-flight tracking must not turn a rejected send into
+  // a restart candidate, or acknowledge an uncertain steer as delivered.
+  it('leaves a rejected send idle and does not manufacture a restart continuation', async () => {
+    const { controller } = setup('/remote/workspace', async () => { throw new Error('rejected'); });
+    await expect(controller.handle.send({ type: 'user', content: 'work' })).rejects.toThrow('rejected');
+    expect(controller.isQuiet()).toBe(true);
+    controller.onInterrupted();
+    expect(await eventsFrom(controller, [])).toEqual([]);
+  });
+
+  it('does not acknowledge an in-flight steer when the supplier disappears', async () => {
+    let interrupt = false;
+    const { controller } = setup('/remote/workspace', async () => {
+      if (!interrupt) return;
+      controller.onInterrupted();
+      throw new Error('steer delivery unknown');
+    });
+    await controller.handle.send({ type: 'user', content: 'work' });
+    interrupt = true;
+    await expect(controller.handle.steer!({ type: 'user', content: 'additional instruction' })).rejects.toThrow('delivery unknown');
+    const events = await eventsFrom(controller, []);
+    expect(events.map(event => event.type)).toEqual(['error', 'done']);
+  });
+
   it.each([true, false])('preserves a terminal error across remote close; paired done=%s', async (done) => {
     const { controller } = setup('/remote/workspace');
     const error: AgentEvent = { type: 'error', source: 'claude-code', data: {
@@ -213,6 +239,51 @@ describe('remote file references on the task computer', () => {
     expect(output.filter((event) => event.type === 'text').map((event) => ({ parentUuid: event.agentMeta?.parentUuid, text: text(event) })))
       .toEqual(['child-a', 'child-b'].map((parentUuid) => ({ parentUuid, text: written(path.join(real, parentUuid + '.txt')) })));
     if (boundary === 'done') expect(output.at(-1)?.type).toBe('done');
+  });
+
+  // X 的 @askmycindy 回帖，unit：投影 + 出站收集都走生产入口，用户看到的是视频附件而不是「附件未能发送」。
+  // 修复前 localFileUrl 只认 ?path= 形态，`xdt-file:///影子路径` 原样落库，收集器按目录外跳过。
+  // 相邻用例只覆盖 file:// 与 ?path=；模型按渠道说明写的正是无 host 形态。Windows 与带裸空格的 Mac
+  // 影子目录各是一条独立分支：前者要去掉盘符前的斜杠，后者不能被 URL 分词在空格处截断。
+  describe.each([['完整回复', true], ['逐字流式', false]])('%s', (_delivery, final) => it.each([
+    ['Windows 影子路径', 'C:\\Agent\\workspace', 'intro.mp4', (target: string) => target.replace(/\\/g, '/')],
+    ['编码后的路径', '/Users/a/Application Support/workspace', 'intro (1).mp4', (target: string) => encodeURI(target).replace('(', '%28').replace(')', '%29')],
+    ['带裸空格的路径', '/Users/a/Application Support/workspace', 'intro.mp4', (target: string) => target],
+  ])('delivers a remote video from the xdt-file link written for channels (%s)', async (_name, virtual, file, spell) => {
+    const { real, controller } = setup(virtual);
+    const native = virtual.startsWith('C:') ? path.win32 : path.posix;
+    fs.writeFileSync(path.join(real, file), 'video bytes');
+    const link = '[介绍](xdt-file://' + (virtual.startsWith('C:') ? '/' : '') + spell(native.join(virtual, file)) + ')';
+    const reply = '做好了\n\n' + link;
+    const output = await eventsFrom(controller, final ? [
+      { type: 'text', source: 'codex', data: { text: reply, isFinal: true } },
+    ] : [...reply].map((character) => ({
+      type: 'text', source: 'codex', data: { text: character, isFinal: false, agentMessageId: 'message-1' },
+    })));
+    const warn = vi.fn();
+    const collected = await collectOutboundAttachments(output.map(text).join(''), [], {
+      provider: 'x', allowedFileRoots: [real], resolveImageUrl: () => { throw new Error('unused'); },
+      log: { warn },
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(collected.skipped).toBe(0);
+    expect(collected.text.trim()).toBe('做好了');
+    expect(collected.attachments).toEqual([{
+      name: file, mimeType: 'video/mp4', dataBase64: Buffer.from('video bytes').toString('base64'),
+    }]);
+  }));
+
+  // 同一缺陷的图片写法：模型把示例里的 xdt-file 换成 xdt-image 时，渠道导入靠 localTaskImagePath 读本机文件。
+  it('restores a hostless xdt-image reference for the channel image importer', async () => {
+    const { real, controller } = setup('C:\\Agent\\workspace');
+    fs.writeFileSync(path.join(real, 'a.png'), 'image bytes');
+    const output = await eventsFrom(controller, [
+      { type: 'text', source: 'codex', data: { text: '![图](xdt-image:///C:/Agent/workspace/a.png)', isFinal: true } },
+    ]);
+    const imagePath = localTaskImagePath(/\((.+)\)/.exec(text(output[0]))![1]);
+    // 本机文件路径按宿主语义比较：从 URI 解码出的 Windows 路径可以保留正斜杠。
+    expect(imagePath && path.normalize(imagePath)).toBe(path.join(real, 'a.png'));
+    expect(fs.readFileSync(imagePath!, 'utf8')).toBe('image bytes');
   });
 
   it('restores nested file changes and media file URLs while preserving external URLs, media identities and vendor metadata', async () => {

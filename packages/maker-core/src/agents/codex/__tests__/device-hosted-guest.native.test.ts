@@ -49,9 +49,9 @@ async function listFiles(dir: string): Promise<string[]> {
 
 describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server', () => {
   // 本机应用复用真实 app-server 夹具；历史 hhh namespace 验证 v1 兼容，不读取用户凭据。
-  it.each([true, false, 'local-host-only', 'local-native'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
+  it.each([true, false, 'local-host-only', 'local-native', 'hosted-client-only'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
     const guest = variant === true;
-    const localHostOnly = variant === 'local-host-only';
+    const localHostOnly = variant === 'local-host-only' || variant === 'hosted-client-only';
     const localClient = localHostOnly || variant === 'local-native';
     const root = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'cindy-codex-guest-native-')));
     const hostHome = path.join(root, 'host-codex-home');
@@ -125,7 +125,6 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         answerDeliveryPrompt: 'CINDY_ANSWER_DELIVERY_CANARY',
       },
       getGhostRosterPrompt: () => 'WORKDIR_GHOST_ROSTER_CANARY',
-      getContactsPromptState: () => 'enabled',
       prepareCodexHostToolCatalog: async modelId => {
         const target=path.join(root,'host-tool-models.json');
         await writeFile(target,JSON.stringify({models:[{slug:modelId,display_name:modelId,description:null,supported_reasoning_levels:[],shell_type:'unified_exec',visibility:'none',supported_in_api:true,priority:99,base_instructions:'Use the available host tools.',include_skills_usage_instructions:false,include_plugin_usage_instructions:false,include_apps_usage_instructions:false,supports_reasoning_summary_parameter:true,default_reasoning_summary:'auto',support_verbosity:false,truncation_policy:{mode:'bytes',limit:10000},context_window:272000,max_context_window:272000,effective_context_window_percent:95,experimental_supported_tools:[],apply_patch_tool_type:null,supports_search_tool:false}]}));
@@ -185,6 +184,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     };
     try {
       const handle = await agent.startSession({
+        ...(variant === 'hosted-client-only' ? { deviceHosted } : {}),
         sessionId: guest ? 'guest-native' : 'owner-native',
         model: 'gpt-5.5',
         ...(guest ? { providerId: 'xd' } : {}),
@@ -229,7 +229,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
           : bodies[0];
         for (const segment of [
           'CINDY_HOST_IDENTITY_CANARY', 'CINDY_ANSWER_DELIVERY_CANARY',
-          'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY', 'Smart Contacts',
+          'CLIENT_INSTRUCTIONS_CANARY', 'WORKDIR_GHOST_ROSTER_CANARY',
         ]) expect(prompt).toContain(segment);
         expect(prompt).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');
         expect(bodies.join('')).not.toContain('PRIVATE_MEMORY_INDEX_CANARY');

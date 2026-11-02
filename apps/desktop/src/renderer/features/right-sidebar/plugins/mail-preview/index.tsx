@@ -17,7 +17,9 @@ export function MailPreviewBody({ state, ctx, active: tabActive = true, shellVis
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ binding: string; message?: MailMessage; draftCallId?: string; error?: boolean; unavailable?: 'unavailable' | 'notReady'; providerId?: string; providers?: MailReaderChoice[] }>();
   const owner = getDataOwnerGeneration();
-  const scope = JSON.stringify([owner, ctx.sessionId, ctx.deviceLinkDeviceId, state.url]);
+  // Object fields preserve unresolved (omitted) versus confirmed-local (null).
+  // Array serialization turns both into null and skips the first local read.
+  const scope = JSON.stringify({ owner, sessionId: ctx.sessionId, deviceId: ctx.deviceLinkDeviceId, url: state.url });
   const [selection, setSelection] = useState<{ scope: string; id: string }>();
   const selected = selection?.scope === scope ? selection.id : undefined;
   const binding = JSON.stringify([scope, attempt, selected]);

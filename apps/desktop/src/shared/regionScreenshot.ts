@@ -8,7 +8,12 @@
  * 坐标约定: 浮层内一律是该显示器的 DIP (= 窗口 CSS 像素), 定格原图与导出图是物理像素。
  */
 
+import type { ScreenshotTranslationLanguage, ScreenshotTranslationPreference } from './screenshotTranslation';
+
 export const REGION_SCREENSHOT_CHANNEL = {
+  SET_TRANSLATION_LANGUAGE: 'region-screenshot:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot:translation-language-changed',
+  LOCALE_CHANGED: 'region-screenshot:locale-changed',
   /** send: 浮层页面已挂载, 可以接收截图会话 (窗口隐藏预热时发一次)。 */
   SHELL_READY: 'region-screenshot:shell-ready',
   /** main → 浮层: 开始一次截图会话 ({@link RegionScreenshotBegin})。 */
@@ -23,7 +28,7 @@ export const REGION_SCREENSHOT_CHANNEL = {
   CLEAR: 'region-screenshot:clear',
   /** main → 浮层: 会话结束, 清空画面与全部交互态后隐藏。 */
   END: 'region-screenshot:end',
-  /** invoke(token, windowId, x, y): 指针下的界面元素, 由内到外 (DIP)。 */
+  /** invoke(token, windowId, x, y): 实际命中窗口与由内到外的元素 (DIP)。 */
   ELEMENTS_AT: 'region-screenshot:elements-at',
   /** send(token, text): 复制取到的颜色值。 */
   COPY_TEXT: 'region-screenshot:copy-text',
@@ -40,6 +45,9 @@ export const REGION_SCREENSHOT_CHANNEL = {
 
 /** Local-only image editor. Every incoming signal is bound to its top-level renderer. */
 export const REGION_SCREENSHOT_EDITOR_CHANNEL = {
+  SET_TRANSLATION_LANGUAGE: 'region-screenshot-editor:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot-editor:translation-language-changed',
+  LOCALE_CHANGED: 'region-screenshot-editor:locale-changed',
   READY: 'region-screenshot-editor:ready',
   BEGIN: 'region-screenshot-editor:begin',
   END: 'region-screenshot-editor:end',
@@ -138,9 +146,20 @@ export interface RegionScreenshotBitmap {
 export interface RegionScreenshotWindow {
   id: number;
   rect: RegionRect;
+  /** Captured native regions in hit order; absent on older helpers/platforms. */
+  snapRects?: RegionRect[];
+}
+
+/** A point query can correct the rectangular window guess through transparent overlays. */
+export interface RegionScreenshotHit {
+  window: RegionScreenshotWindow | null;
+  rects: RegionRect[];
+  /** Default document/content region; finer elements remain available via wheel. */
+  preferredRect?: RegionRect;
 }
 
 export interface RegionScreenshotBegin {
+  translationPreference?: ScreenshotTranslationPreference;
   /** 本次会话标识; 迟到的回调凭它与新会话区分。 */
   token: string;
   locale: string;
@@ -163,6 +182,7 @@ export interface RegionScreenshotBegin {
 }
 
 export interface RegionScreenshotExport {
+  translationLanguage?: ScreenshotTranslationLanguage;
   action: RegionScreenshotAction;
   /** 最终选区 (DIP), main 记为「上次区域」并据此放置贴图。 */
   selection: RegionRect;
@@ -184,6 +204,7 @@ export interface RegionScreenshotPinState {
 
 /** 截图交给新任务: 已入仓的图片与用户点的动作。 */
 export interface RegionScreenshotComposeRequest {
+  translationLanguage?: ScreenshotTranslationLanguage;
   id: string;
   ownerStamp: import('./dataOwnerPush').DataOwnerPushStamp;
   action: RegionScreenshotAiAction;

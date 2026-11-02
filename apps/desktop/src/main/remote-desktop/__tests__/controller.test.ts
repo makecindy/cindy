@@ -2032,3 +2032,81 @@ describe('automatic control (autoControl)', () => {
     expect(h.controller.state?.controlling).toBe(true);
   });
 });
+
+// Unit: a live heartbeat previously kept an unattended unlocked desktop open forever.
+// Exercise the production lease/input/tick path with an injected clock, without real waits.
+describe('host-enforced idle lock', () => {
+  async function setup(minutes: number | undefined = 1) {
+    const h = harness();
+    h.deps.lockScreen = vi.fn(async () => {});
+    const { lease } = await h.controller.request('phone', {
+      op: 'start', displayId: '1', control: true,
+      ...(minutes === undefined ? {} : { idleTimeoutMinutes: minutes }),
+    }) as RemoteDesktopLease;
+    const keepAlive = async (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 3000) {
+        h.advance(3000);
+        await h.controller.request('phone', { op: 'heartbeat', lease });
+      }
+    };
+    return { ...h, lease, keepAlive };
+  }
+  it('expires despite heartbeats and release cleanup, and only an explicit reconnect clears it', async () => {
+    const h = await setup();
+    await h.keepAlive(57000);
+    h.controller.input(h.lease, 1, [{ kind: 'release' }]);
+    h.advance(3000);
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease: h.lease })).rejects.toThrow('DESKTOP_IDLE_TIMEOUT');
+    await h.controller.stop();
+    expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+    expect(h.controller.state).toBeNull();
+    await expect(h.controller.request('phone', { op: 'start', displayId: '1', resume: true })).rejects.toThrow('DESKTOP_IDLE_TIMEOUT');
+    await expect(h.controller.request('phone', { op: 'start', displayId: '1' })).resolves.toHaveProperty('lease');
+  });
+  it('renews only on real input, preserves elapsed time on recovery, and expires at the new deadline', async () => {
+    const h = await setup();
+    await h.keepAlive(30000);
+    h.controller.input(h.lease, 1, [{ kind: 'move', x: 0.5, y: 0.5 }]);
+    await h.keepAlive(27000);
+    const resumed = await h.controller.request('phone', { op: 'start', displayId: '1', resume: true, idleTimeoutMinutes: 1 }) as RemoteDesktopLease;
+    for (let i = 0; i < 10; i++) {
+      h.advance(3000);
+      await h.controller.request('phone', { op: 'heartbeat', lease: resumed.lease, idleTimeoutMinutes: 1 });
+    }
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    h.advance(3000);
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease: resumed.lease })).rejects.toThrow('DESKTOP_IDLE_TIMEOUT');
+    await h.controller.stop();
+    expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+  });
+  it('locks on lost heartbeat and forbids unattended recovery even when ordinary exit lock is off', async () => {
+    const h = await setup();
+    h.advance(12000);
+    h.controller.tick();
+    await h.controller.stop();
+    expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+    await expect(h.controller.request('phone', { op: 'start', displayId: '1', resume: true })).rejects.toThrow('DESKTOP_STOPPED');
+  });
+  it.each([0, undefined])('keeps disabled/legacy policy %s unchanged', async (minutes) => {
+    const h = harness();
+    h.deps.lockScreen = vi.fn(async () => {});
+    const { lease } = await h.controller.request('phone', { op: 'start', displayId: '1', ...(minutes === undefined ? {} : { idleTimeoutMinutes: minutes }) }) as RemoteDesktopLease;
+    for (let i = 0; i < 21; i++) {
+      h.advance(3000);
+      await h.controller.request('phone', { op: 'heartbeat', lease });
+    }
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    expect(h.controller.state).not.toBeNull();
+  });
+  it('starts a fresh countdown when enabling a policy on an existing connection', async () => {
+    const h = await setup(0);
+    await h.keepAlive(60000);
+    await h.controller.request('phone', { op: 'heartbeat', lease: h.lease, idleTimeoutMinutes: 1 });
+    await h.keepAlive(57000);
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    h.advance(3000);
+    h.controller.tick();
+    await h.controller.stop();
+    expect(h.deps.lockScreen).toHaveBeenCalledOnce();
+  });
+});

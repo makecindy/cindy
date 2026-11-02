@@ -373,25 +373,6 @@ function readErrorString(error: unknown, key: 'name' | 'message' | 'reason'): st
   return typeof value === 'string' ? value : undefined;
 }
 
-async function assertSelectedMicrophoneAvailable(deviceId?: string): Promise<void> {
-  // Browser/Electron expose the system default microphone as the synthetic
-  // "default" device. Enumerating devices before every start adds startup
-  // latency and cannot prove that this moving target is unavailable, so let
-  // getUserMedia surface the platform error for automatic/default capture.
-  if (!isSpecificMicrophoneDeviceId(deviceId)) return;
-  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-  const audioInputs = devices.filter((device) => device.kind === 'audioinput');
-  // Before permission is granted, browsers may expose opaque/empty IDs. Only
-  // fail fast when the list has comparable IDs and the selected one is
-  // definitely absent; otherwise let getUserMedia surface the platform error.
-  if (
-    audioInputs.some((device) => Boolean(device.deviceId)) &&
-    !audioInputs.some((device) => device.deviceId === deviceId)
-  ) {
-    throw new VoiceInputSelectedMicrophoneUnavailableError();
-  }
-}
-
 function keepAliveKey(options: KeepAliveSessionOptions): KeepAliveSessionKey {
   return JSON.stringify({
     workletUrl: options.workletUrl,
@@ -527,12 +508,6 @@ class KeepAliveMicSession {
   private async startInternal(): Promise<void> {
     ensureKeepAliveDeviceChangeListener();
     ensureKeepAlivePowerReleaseListener();
-    // Also guarded: if a release lands while enumerating and the device then
-    // reads as absent, the raw VoiceInputSelectedMicrophoneUnavailableError
-    // would send prewarm/capture down their automatic-fallback paths and open
-    // the *default* microphone after the power event.
-    await this.awaitStartupStep(assertSelectedMicrophoneAvailable(this.options.deviceId));
-
     // A release (suspend/lock/setting off) can land while this is pending, in
     // which case bailing out avoids opening a device nothing could then close.
     const sharedState = await this.awaitStartupStep(prewarmVoiceInputAudio(this.options.workletUrl));
@@ -1222,13 +1197,8 @@ export class WebMicAudioEngine {
     const benchmarkFixturePromise = BENCHMARK_FIXTURE_ENABLED
       ? prewarmVoiceInputBenchmarkFixture().catch(() => null)
       : Promise.resolve(null);
-    await this.awaitDirectStartupStep(
-      assertSelectedMicrophoneAvailable(this.deviceId),
-      powerGenerationAtStart,
-    );
-    // The enumeration above passed its own check, but a release can land in the
-    // gap before we ask for the device. Without this the request would be made
-    // after the one-shot event and only be closed once it resolves.
+    // exact deviceId makes getUserMedia authoritative. A separate enumeration
+    // adds a serial device round trip and can become stale before opening it.
     this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
     const streamPromise = this.awaitDirectStartupStep(
       navigator.mediaDevices.getUserMedia({

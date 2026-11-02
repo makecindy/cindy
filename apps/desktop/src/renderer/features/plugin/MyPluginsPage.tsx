@@ -564,6 +564,7 @@ export function MyPluginsPage({
     ownerMatches && versionPage?.pluginId === selectedId ? versionPage.releases : [];
   const latest = plugin?.latestSubmission ? [plugin.latestSubmission] : [];
   const unreadReview = reviewUpdates.updates.find(item => item.pluginId === selectedId && item.unread);
+  const unreadMarket = unreadReview && unreadReview.status !== 'approved' && unreadReview.status !== 'rejected' ? unreadReview : null;
   const unreadRelease = unreadReview && [...latest, ...candidates].find(item =>
     item.releaseId === unreadReview.releaseId && item.sha256 === unreadReview.sha256 && item.revision === unreadReview.revision);
   const detailIsNewer =
@@ -609,8 +610,21 @@ export function MyPluginsPage({
       ? previous : { pluginId: visibleReviewPlugin, key: visibleReleaseKey });
     void reviewUpdates.markRead(visibleReviewPlugin, visibleReviewKey);
   }, [visibleReviewKey, visibleReviewPlugin, visibleReleaseKey, reviewUpdates.markRead]);
+  const visibleMarket = unreadMarket && currentDetail && Date.parse(currentDetail.queriedAt) >= Date.parse(unreadMarket.decidedAt) ? unreadMarket : null;
+  const visibleMarketKey = visibleMarket?.key;
+  const visibleMarketPlugin = visibleMarket?.pluginId;
+  useEffect(() => {
+    if (!visibleMarketKey || !visibleMarketPlugin) return;
+    const acknowledge = () => {
+      if (document.visibilityState === 'visible') void reviewUpdates.markRead(visibleMarketPlugin, visibleMarketKey);
+    };
+    acknowledge();
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => document.removeEventListener('visibilitychange', acknowledge);
+  }, [visibleMarketKey, visibleMarketPlugin, reviewUpdates.markRead]);
   const openUnreadResult = async () => {
     if (!unreadReview) return;
+    if (unreadMarket) { await refresh(); return; }
     const target = unreadReview, owner = ownerKey, sequence = ++versionRequest.current;
     setVersionsLoading(true);
     try {
@@ -881,11 +895,11 @@ export function MyPluginsPage({
           </details>
         </> : <p className="text-14 leading-6 text-[var(--text-secondary)]">{t(`${copy}.noSubmission`)}</p>}
       </section>
-      {unreadReview && !visibleReview ? (
+      {unreadReview && !visibleReview && !visibleMarket ? (
         <Button variant="secondary" size="sm" loading={versionsLoading}
           disabled={versionsLoading || !navigator.onLine} onClick={() => void openUnreadResult()}>
-          <AttentionDot tone={unreadReview.status === 'rejected' ? 'error' : 'done'} />
-          {t(`${copy}.viewReviewResult`, { version: unreadReview.version })}
+          <AttentionDot tone={unreadReview.status === 'approved' || unreadReview.status === 'enabled' ? 'done' : 'error'} />
+          {unreadMarket ? t(`${copy}.viewMarketResult`) : t(`${copy}.viewReviewResult`, { version: unreadReview.version })}
         </Button>
       ) : null}
       {versionFailure ? (
@@ -1005,7 +1019,7 @@ export function MyPluginsPage({
             >
               <p className="break-words text-14 text-[var(--text-primary)]">
                 {event.version ? `${event.version} · ` : ''}
-                {t(`${copy}.event.${event.type}`)}
+                {t(`${copy}.event.${event.pluginStatus === 'archived' ? 'archived' : event.type}`)}
               </p>
               <p className="text-12 text-[var(--text-tertiary)]">
                 {formatDate(event.at)}
@@ -1249,7 +1263,7 @@ export function MyPluginsPage({
                                 <PluginPublisherBadge kind={entry.publisherKind} />
                                 {entry.displayAuthor ? <span className="block break-words text-13 leading-5 text-[var(--text-tertiary)]">{entry.displayAuthor}</span> : null}
                               </span>
-                              {review ? <span role="img" className="inline-flex" aria-label={t(`${copy}.unreadReview`)}><AttentionDot tone={review.status === 'rejected' ? 'error' : 'done'} /></span> : null}
+                              {review ? <span role="img" className="inline-flex" aria-label={t(`${copy}.unreadReview`)}><AttentionDot tone={review.status === 'approved' || review.status === 'enabled' ? 'done' : 'error'} /></span> : null}
                             </span>
                             <span className="my-plugins-local min-w-0 break-words text-13 leading-5 text-[var(--text-primary)]">
                               <span className="my-plugins-mobile-label">{t(`${copy}.localVersion`)} ·{' '}</span>

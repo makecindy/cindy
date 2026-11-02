@@ -4,6 +4,7 @@ import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { readFile } from 'node:fs/promises';
 import { installContentSecurityPolicy, parseOrigin } from '../security/csp';
 import { throwIpcError } from '../utils/ipcValidate';
+import { markCaptureWindowWebContents } from './captureWindowRegistry';
 
 declare const DESKTOP_CAPTURE_VITE_DEV_SERVER_URL: string | undefined;
 declare const DESKTOP_CAPTURE_VITE_NAME: string;
@@ -159,6 +160,14 @@ export class DesktopCaptureWindow {
       },
     });
     this.window = win;
+    markCaptureWindowWebContents(win.webContents);
+    if (this.mode === 'direct') {
+      // This data-only window signals exclusively to already authorized peers.
+      // Chromium's default mDNS host names cannot resolve across routed LANs.
+      // Expose the default route's address without enumerating other interfaces,
+      // granting media permissions, or changing the SDP's ICE/DTLS credentials.
+      win.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces');
+    }
     const failed = () => {
       if (this.window !== win) return;
       this.dispose();

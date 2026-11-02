@@ -4,6 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
+import es from '@/i18n/locales/es/common.json';
+import fr from '@/i18n/locales/fr/common.json';
+import de from '@/i18n/locales/de/common.json';
+import ptPT from '@/i18n/locales/pt-PT/common.json';
+import ptBR from '@/i18n/locales/pt-BR/common.json';
+import lzh from '@/i18n/locales/zh-Hant-x-lzh/common.json';
+import lzhHans from '@/i18n/locales/zh-Hans-x-lzh/common.json';
 import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
 import zhTW from '@/i18n/locales/zh-TW/common.json';
@@ -24,12 +31,30 @@ import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/com
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { getDraft as getNewMakerDraft, patchDraft } from '@/state/newMakerDraft';
 
-const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko };
+const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR, 'zh-Hant-x-lzh': lzh, 'zh-Hans-x-lzh': lzhHans };
 const raw = JSON.stringify({ error: {
   message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+it.each(['thread not found', 'app-server force-retired: auth changed'])(
+  'retains the specific execution failure in details: %s',
+  async (error) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    const onDiagnose = vi.fn();
+    const onRetry = vi.fn();
+    render(<I18nextProvider i18n={i18n}>
+      <ErrorBanner agentKind="codex" error={error} onRetry={onRetry} onDiagnose={onDiagnose} />
+    </I18nextProvider>);
+    fireEvent.click(screen.getByText(en.chat.errorBanner.networkShowRaw));
+    expect(screen.getByText(error)).toBeTruthy();
+    fireEvent.click(screen.getByText(en.chat.errorBanner.diagnose));
+    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: error }));
+    expect(onRetry).not.toHaveBeenCalled();
+  },
+);
 
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
@@ -75,6 +100,16 @@ it('appends the diagnosis prompt to an unsent new-task draft instead of replacin
 });
 
 describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
+  it('builds a localized diagnosis without a task link for early execution failures', async () => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, resources: { [locale]: { translation: locales[locale] } }, interpolation: { escapeValue: false } });
+    const prompt = buildErrorDiagnosisPrompt(i18n.t, null, {
+      message: 'Execution failed', details: 'runId: early-run; api_key=private-value',
+    });
+    expect(prompt).toContain('runId: early-run');
+    expect(prompt).not.toMatch(/private-value|cindy:\/\/|\{\{|diagnosePromptWithoutSession/);
+  });
+
   it('keeps the localized blocked-input fallback visible instead of a reply-failure summary', async () => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });

@@ -74,10 +74,11 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       'cindy.request',
       '/app-context',
       'clientIdAlternatives',
-      "region:'cn'|'global'",
       '主机会做清单白名单复验',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+    // Guard the public region union, not the Markdown example's whitespace.
+    expect(FORGE_GUIDE).toMatch(/region:\s*'cn'\s*\|\s*'global'/);
   });
 });

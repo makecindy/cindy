@@ -331,6 +331,28 @@ describe('Claude proxy routing for shared-provider guests', () => {
     }
   });
 
+  // Remote Pi's native ChatGPT adapter sends zstd. The proxy cannot read body.model
+  // until the native handler decodes it; an empty parsed body is not an empty model.
+  it.each(['guest', 'owner'])('routes $0 compressed Pi subscription requests to the decoding handler', async trust => {
+    const model = 'chatgpt/gpt-6.1-sol';
+    const binding = trust === 'guest'
+      ? registerGuestProviderRoute('pi-compressed', 'openai', candidate => candidate === model)
+      : bindHostedSessionProvider('pi-compressed', 'openai', (provider, candidate) => provider === 'openai' && candidate === model);
+    const dispose = registerPiProxySession('pi-compressed', 'compressed-token', () => 'openai');
+    try {
+      const decision = await transform(undefined, {
+        ...ctxWith({
+          'x-cindy-pi-session-id': 'pi-compressed',
+          'x-cindy-pi-session-token': 'compressed-token',
+          'x-cindy-pi-provider-id': 'openai',
+          'content-encoding': 'zstd',
+        }),
+        url: '/codex/responses',
+      });
+      expect(await statusOf(decision)).toBe(204);
+    } finally { dispose(); binding.release(); }
+  });
+
   it('allows an authorized owner child provider independently of the parent provider', async () => {
     let childAllowed = true;
     bindHostedSessionProvider('owner-parent', 'shared-a', (providerId, model) => childAllowed && providerId === 'other-b' && model === 'other-model');

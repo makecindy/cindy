@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, FILE_PEER_CHANNEL, type DeviceLinkClient } from '@cindy/device-link';
+import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
 
 // Run the production adapter with only its host dependencies injected, without
@@ -41,6 +41,7 @@ function loadBackgroundInvoke(overrides: Record<string, unknown>) {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const dependencies = {
+    parseProviderSharePeer,
     resolveRemoteAgentTargetWhenReady: async (id: string) => id,
     client: { isLinkReady: () => true },
     remoteInvoke: loadRemoteInvoke({}),

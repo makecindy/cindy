@@ -87,6 +87,11 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(result.projects.map(row => row.key)).toEqual(['p2']);
     expect(result.pinned).toBe(fixture.pinned);
     expect(activeContentFilterCount(filters)).toBe(1);
+    const hidden = applyHomeContentFilters(fixture, { ...filters, teammates: 'none' }, NOW);
+    expect(hidden.chats.map(row => row.session.id)).toEqual(fixture.chats.filter(row => row.session.id !== 'chat-cc').map(row => row.session.id));
+    expect(hidden.projects.map(row => row.key)).toEqual(['p1']);
+    expect(hidden.pinned).toBe(fixture.pinned);
+    expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], { ...filters, teammates: 'none' }, NOW).map(row => row.id)).toEqual(['unknown']);
     expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], filters, NOW).map(row => row.id)).toEqual(['known']);
   });
 
@@ -278,7 +283,7 @@ describe('task info and retained Home behavior', () => {
     const remove = vi.fn(), stopResume = vi.fn(), clearInterval = vi.fn();
     const refreshHomeSessionPr = vi.fn((_key: string, _load: () => unknown, _options: unknown) => 0);
     const AppState = { currentState: 'active', addEventListener: (_event: string, callback: typeof foreground) => { foreground = callback; return { remove }; } };
-    const effect = evaluate(callback, file, { key: 'cache', deviceId: 'd', sessionId: 's', online: true,
+    const effect = evaluate(callback, file, { key: 'cache', deviceId: 'd', sessionId: 's', online: true, foreground: false, includeRelated: false,
       isActive: () => visible, AppState, refreshHomeSessionPr, loadHomeSessionPr: vi.fn(), link: {}, refreshKey: 'updated',
       PR_STATUS_REFRESH_INTERVAL_MS: 90_000, Date, clearInterval, clearTimeout: vi.fn(),
       setInterval: (fn: () => void) => { poll = fn; return 1; }, setTimeout: vi.fn(),
@@ -395,4 +400,17 @@ describe('home PR cache', () => {
     const other = { ref: { ...ref, prNumber: 8 }, status: { ...merged, prNumber: 8 } } as never;
     await expect(loadHomeSessionPr(invoke, 'd', 's', other)).resolves.toEqual({ ref, status: null });
   });
+});
+
+
+// Glance needs multiple associated PRs; the existing Home row keeps its one-PR contract.
+it('loads the bounded PR list for glance and retains each known title through lookup failure', async () => {
+  const refs = [1, 2, 3, 4].map(n => ({ id: String(n), sessionId: 's', owner: 'example', repo: 'app', prNumber: n, lastSeenAt: n }));
+  const invoke = vi.fn(async (_device: string, channel: string) => channel.endsWith('list') ? refs :
+    refs.map(ref => ({ ...ref, ok: true, status: 'merged', title: `Actual PR ${ref.prNumber}` }))) as any;
+  const result = await loadHomeSessionPr(invoke, 'd', 's', null, true);
+  expect([result, ...result!.additional!].map(row => row!.ref.prNumber)).toEqual([4, 3, 2]);
+  expect(result!.status).toMatchObject({ title: 'Actual PR 4' });
+  invoke.mockImplementation(async (_device: string, channel: string) => { if (channel.endsWith('list')) return refs; throw new Error('offline'); });
+  expect(await loadHomeSessionPr(invoke, 'd', 's', result, true)).toEqual(result);
 });

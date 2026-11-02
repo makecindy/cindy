@@ -12,7 +12,7 @@
  * 两个 fetch 分开 mock:PUT 与 GET 走的是不同网络栈(undici 不吃系统代理,
  * Electron net 吃),把它们混成一个 mock 就测不出回退是否真的换了栈。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
 import { PassThrough, Readable, addAbortSignal } from 'node:stream';
 
@@ -33,8 +33,9 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
-vi.mock('../index.js', () => ({
-  deviceLinkApiBase: () => 'http://relay.test:3335',
+// presign 经 deviceLinkApi 发往当前中转;未启用自建中转时即官方清单里的 device-link 地址。
+vi.mock('../../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'http://relay.test:3335',
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -67,6 +68,7 @@ import {
   removeRemote,
   __testing,
 } from '../mediaTransfer.js';
+import { setSelfHostedRelaySource } from '../selfHostedRelayRouting.js';
 
 const PUT_PATH = '/api/device-link/media/presign-put';
 const GET_PATH = '/api/device-link/media/presign-get';
@@ -95,6 +97,33 @@ beforeEach(() => {
   renameMock.mockResolvedValue(undefined);
   rmMock.mockResolvedValue(undefined);
   createWriteStreamMock.mockImplementation(() => new PassThrough());
+});
+
+// docs/self-hosted-relay-plan.md §7:共享任务附件的成员授权在官方服务,走自建中转时不能向中转换地址。
+describe('走自建中转时的对象路由', () => {
+  const relay = {
+    baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'member' as const,
+    relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+  };
+  const lastBaseUrl = () => {
+    const baseUrl = apiFetch.mock.calls.at(-1)?.[1]?.baseUrl;
+    return typeof baseUrl === 'function' ? baseUrl() : baseUrl;
+  };
+  beforeEach(() => {
+    setSelfHostedRelaySource(() => relay);
+    netFetchMock.mockResolvedValue(new Response(new Uint8Array([1]), { status: 200 }));
+  });
+  afterEach(() => setSelfHostedRelaySource(null));
+
+  it('共享任务附件向官方换地址', async () => {
+    await downloadToBuffer('cindy/device-link/shared-task/task-a/member/file.png');
+    expect(lastBaseUrl()).toBe('http://relay.test:3335');
+  });
+
+  it('普通对象跟随当前中转', async () => {
+    await downloadToBuffer('cindy/device-link/account/file.png');
+    expect(lastBaseUrl()).toBe(relay.baseUrl);
+  });
 });
 
 describe('uploadLocalFile — 小文件整体 PUT', () => {
@@ -830,6 +859,96 @@ describe('downloadToFile — 原子完整性校验', () => {
 
     expect(renameMock).not.toHaveBeenCalled();
     expect(rmMock).toHaveBeenCalled();
+  });
+});
+
+/**
+ * 回归(2026-10-31):手机发来的附件取件卡在 presign / OSS 响应上永不结束,被控端一直不回复;
+ * 手机超时后只能当作「结果未知」反复重发,任务的第一条消息始终进不去。首次数据前必须在
+ * 最短的 15s 等待窗口内以带码错误结束(上层据此回 DEVICE_LINK_MEDIA_TRANSFER_FAILED),
+ * 但只要数据还在到,就不能按总耗时截断大附件。
+ */
+describe('downloadToFile — 无进展超时', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  afterEach(() => vi.useRealTimers());
+  const never = () => new Promise<never>(() => {});
+
+  it.each([
+    ['presign 无响应', 8_000, () => apiFetch.mockImplementationOnce(never)],
+    ['OSS 响应头无响应', 12_000, () => netFetchMock.mockImplementationOnce(never)],
+    [
+      '正文传到一半停住',
+      15_000,
+      () =>
+        netFetchMock.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          body: new ReadableStream({ start: (c) => c.enqueue(Uint8Array.from([1])) }),
+        }),
+    ],
+  ])('%s → 超时报 OSS_DOWNLOAD_STALLED,不发布文件', async (_case, waitMs, stall) => {
+    stall();
+    const settled = expect(downloadToFile(KEY, '/tmp/final.bin')).rejects.toMatchObject({
+      code: 'OSS_DOWNLOAD_STALLED',
+    });
+    await vi.advanceTimersByTimeAsync(waitMs);
+    await settled;
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['响应头', '首个正文字节'])('申请地址已耗时后%s停滞,累计等待仍短于手机 15s 窗口', async (phase) => {
+    apiFetch.mockImplementationOnce(() => new Promise((resolve) => {
+      setTimeout(() => resolve({ getUrl: 'https://oss.example/get', expiresAt: 'x' }), 7_000);
+    }));
+    if (phase === '响应头') netFetchMock.mockImplementationOnce(never);
+    else netFetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: true, status: 200, body: new ReadableStream() }), 1_000);
+    }));
+    const failed = vi.fn();
+    const download = downloadToFile(KEY, '/tmp/final.bin').catch(failed);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ code: 'OSS_DOWNLOAD_STALLED' }));
+    await download;
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
+  it('数据持续到达时总耗时超过上限也照常完成', async () => {
+    const bytes = Uint8Array.from([1, 2, 3]);
+    let next = 0;
+    netFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      // 每 10s 到一个字节,总计 40s:每段都短于无进展上限,总时长远超它。
+      body: new ReadableStream({
+        pull: (c) =>
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              if (next < bytes.length) c.enqueue(bytes.subarray(next, ++next));
+              else c.close();
+              resolve();
+            }, 10_000),
+          ),
+      }),
+    });
+    const done = downloadToFile(KEY, '/tmp/final.bin', {
+      size: bytes.byteLength,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+    await vi.advanceTimersByTimeAsync(45_000);
+    await expect(done).resolves.toBeUndefined();
+    expect(renameMock).toHaveBeenCalledWith(expect.stringMatching(/\.part$/), '/tmp/final.bin');
+  });
+
+  it('调用方取消仍按取消结束,不报成超时', async () => {
+    netFetchMock.mockImplementationOnce(never);
+    const caller = new AbortController();
+    const reason = new Error('cancelled by caller');
+    const settled = expect(
+      downloadToFile(KEY, '/tmp/final.bin', undefined, undefined, caller.signal),
+    ).rejects.toBe(reason);
+    await vi.advanceTimersByTimeAsync(0);
+    caller.abort(reason);
+    await settled;
   });
 });
 

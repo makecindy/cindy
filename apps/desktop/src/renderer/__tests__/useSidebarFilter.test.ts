@@ -43,6 +43,8 @@ import {
   loadManualProjectOrder,
   loadDialogueGroupCollapsedKeys,
   persistDialogueGroupCollapsedKeys,
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
   persistStatus,
   persistProjects,
   persistGroupBy,
@@ -461,6 +463,19 @@ describe('dialogueGroupCollapsedKeys（对话组按分组 key 独立折叠）', 
     expect([...loadDialogueGroupCollapsedKeys()]).toEqual([]);
     localStorage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify(['local', 42, 'device-1']));
     expect([...loadDialogueGroupCollapsedKeys()]).toEqual(['local', 'device-1']);
+  });
+});
+
+describe('pinnedSectionCollapsed（置顶段收起跨重启保留）', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('defaults to expanded and restores the last toggle', () => {
+    expect(loadPinnedSectionCollapsed()).toBe(false);
+    persistPinnedSectionCollapsed(true);
+    expect(loadPinnedSectionCollapsed()).toBe(true);
+    persistPinnedSectionCollapsed(false);
+    expect(loadPinnedSectionCollapsed()).toBe(false);
   });
 });
 
@@ -901,6 +916,9 @@ describe('creator filter selection and owner persistence', () => {
     persistCreators(['a', 'b'], OWNER_ID);
     expect(loadCreators(OWNER_ID)).toEqual(['a', 'b']);
     expect(loadCreators('owner-b')).toBe('all');
+    persistCreators('none', OWNER_ID);
+    expect(loadCreators(OWNER_ID)).toBe('none');
+    expect(nextCreatorsAfterToggle('none', 'a')).toEqual(['a']);
     persistCreators('all', OWNER_ID);
     expect(loadCreators(OWNER_ID)).toBe('all');
   });

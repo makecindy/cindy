@@ -4,6 +4,49 @@ import { NativeDesktopCapture } from '../remote-desktop/nativeCapture';
 import { regionSelectionToImageCrop, type RegionRect, type RegionScreenshotBitmap } from '../../shared/regionScreenshot';
 import type { RegionCaptureMode } from '../../shared/regionCapture';
 import { enumerateDesktopSources } from '../remote-desktop/captureSource';
+import type { DisplayCapture } from './session';
+
+/** Freeze only on demand. The existing user-session GDI helper avoids Electron's
+ * screen-source enumeration cost on SDR Windows displays. HDR / wide gamut and
+ * failed native capture retain Electron's existing color/capture behavior. */
+export async function captureScreenshotDisplays(displays: readonly Display[], helper?: SnapshotHelper): Promise<{
+  captures: DisplayCapture[];
+  backend: 'native' | 'electron';
+}> {
+  if (displays.length === 0) return { captures: [], backend: 'electron' };
+  const useNative = process.platform === 'win32' && helper && displays.every(display =>
+    display.depthPerComponent === 8 && display.colorSpace?.includes('primaries:BT709, transfer:SRGB,'));
+  if (useNative) {
+    const captures: DisplayCapture[] = [];
+    for (const display of displays) {
+      const rect = screen.dipToScreenRect(null, display.bounds);
+      const frame = await helper.capture(rect, 32768);
+      // Never silently resize or substitute a display; mixed-DPI coordinates are
+      // resolved by Electron before the helper reads physical desktop pixels.
+      if (!frame || frame.width !== rect.width || frame.height !== rect.height) break;
+      const image = nativeImage.createFromBitmap(Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength), {
+        width: frame.width, height: frame.height, scaleFactor: 1,
+      });
+      if (image.isEmpty()) break;
+      captures.push({ display, image });
+    }
+    if (captures.length === displays.length) return { captures, backend: 'native' };
+    // Recapture the whole set together if a screen failed, rather than combining
+    // frames taken before/after an unavailable helper with different timestamps.
+  }
+  const width = Math.max(...displays.map(d => Math.round(d.bounds.width * d.scaleFactor)));
+  const height = Math.max(...displays.map(d => Math.round(d.bounds.height * d.scaleFactor)));
+  const sources = await enumerateDesktopSources(() => desktopCapturer.getSources({
+    types: ['screen'], thumbnailSize: { width, height },
+  }), 5000);
+  const captures: DisplayCapture[] = [];
+  for (const display of displays) {
+    const source = sources.find(s => s.display_id === String(display.id))
+      ?? (displays.length === 1 && sources.length === 1 ? sources[0] : undefined);
+    if (source && !source.thumbnail.isEmpty()) captures.push({ display, image: source.thumbnail });
+  }
+  return { captures, backend: 'electron' };
+}
 
 /** Main crops before crossing IPC. No whole-display pixels reach the live panel. */
 export async function captureLiveRegion(display: Display, selection: RegionRect, mode: RegionCaptureMode, helper?: SnapshotHelper): Promise<RegionScreenshotBitmap> {
@@ -22,12 +65,14 @@ export async function captureLiveRegion(display: Display, selection: RegionRect,
   if (!source || source.thumbnail.isEmpty()) throw new Error('Display capture unavailable');
   const mapping = regionSelectionToImageCrop(selection, display.bounds, source.thumbnail.getSize(), display.scaleFactor);
   if (!mapping) throw new Error('Invalid capture region');
-  let image = source.thumbnail.crop(mapping.crop).resize(mapping.output);
+  let image = source.thumbnail.crop(mapping.crop);
+  if (image.getSize().width !== mapping.output.width || image.getSize().height !== mapping.output.height) image = image.resize(mapping.output);
   const maxSide = mode === 'gif' ? 960 : mode === 'video' ? 1920 : 32768;
   const ratio = Math.min(1, maxSide / Math.max(mapping.output.width, mapping.output.height));
   if (ratio < 1) image = image.resize({ width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) });
   const size = image.getSize();
-  return { ...size, data: new Uint8Array(image.toBitmap()) };
+  const pixels = image.toBitmap();
+  return { ...size, data: pixels.buffer instanceof ArrayBuffer && pixels.byteLength === pixels.buffer.byteLength ? new Uint8Array(pixels.buffer) : new Uint8Array(pixels) };
 }
 
 /** Reuses one user-session capture backend for the recording; never opens the
@@ -46,7 +91,7 @@ export class RegionVideoCapture {
       return result;
     }
     if (!this.native) {
-      this.native = new NativeDesktopCapture();
+      this.native = new NativeDesktopCapture({ encodeOnRequest: true });
     }
     const frame = await this.native.frame(String(display.id), true, { quality: 'hd', fps: 30, audio: false });
     if (generation !== this.generation || !frame || typeof frame === 'string') throw new Error('Region capture unavailable');
@@ -54,8 +99,14 @@ export class RegionVideoCapture {
     const mapping = regionSelectionToImageCrop(selection, display.bounds, source.getSize(), display.scaleFactor);
     if (!mapping) throw new Error('Invalid capture region');
     const ratio = Math.min(1, edge / Math.max(mapping.output.width, mapping.output.height));
-    const image = source.crop(mapping.crop).resize({ width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) });
-    return { ...image.getSize(), data: new Uint8Array(image.toBitmap()) };
+    const output = { width: Math.max(1, Math.round(mapping.output.width * ratio)), height: Math.max(1, Math.round(mapping.output.height * ratio)) };
+    let image = source.crop(mapping.crop);
+    if (image.getSize().width !== output.width || image.getSize().height !== output.height) image = image.resize(output);
+    // toBitmap owns this buffer; a view avoids copying the entire selected frame
+    // again before Electron serializes it. Copy sliced buffers so IPC cannot
+    // clone bytes outside the selection from a larger backing buffer.
+    const pixels = image.toBitmap();
+    return { ...image.getSize(), data: pixels.buffer instanceof ArrayBuffer && pixels.byteLength === pixels.buffer.byteLength ? new Uint8Array(pixels.buffer) : new Uint8Array(pixels) };
   }
 
   stop(): void { this.generation++; this.native?.stop(); this.native = null; }

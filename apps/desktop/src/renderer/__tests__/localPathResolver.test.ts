@@ -10,6 +10,15 @@
  */
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import {
+  resolveWorkspacePath,
+  resolveWorkspacePathBatch,
+  safeDecodeHrefForLookup,
+} from '../../main/pathResolver';
 
 import {
   _clearSmartResolveCache,
@@ -22,6 +31,7 @@ import {
   resolveLocalPathSmart,
   resolveLocalPathSmartCached,
   resolveToolFilePath,
+  revalidateNegativeLocalPathSmart,
   toFileUrl,
   toLocalFileUrl,
 } from '@/lib/localPathResolver';
@@ -274,6 +284,64 @@ describe('resolveLocalPathSmart', () => {
   });
 });
 
+describe('file URL decoding across renderer and main', () => {
+  afterEach(() => {
+    _clearSmartResolveCache();
+  });
+
+  // F3: both IPC paths reach the production host decoder after file URL conversion.
+  it.each([
+    ['file:///C:/project/a%2520b.pdf', 'C:/project/a%20b.pdf'],
+    ['file:///project/a%2520b.pdf', '/project/a%20b.pdf'],
+    ['file:///project/report%23final.pdf', '/project/report#final.pdf'],
+  ])('preserves the literal target of %s for direct and batched lookup', async (href, expected) => {
+    const resolvePath = vi.fn().mockResolvedValue({ status: 'none', candidates: [] });
+    const resolvePathBatch = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('window', { electronAPI: { resolvePath, resolvePathBatch } });
+
+    await resolveLocalPathSmart(href, '/project', { refresh: true });
+    await resolveLocalPathSmartCached(href, '/project');
+
+    expect([
+      safeDecodeHrefForLookup(resolvePath.mock.calls[0][0].href),
+      safeDecodeHrefForLookup(resolvePathBatch.mock.calls[0][0].hrefs[0]),
+    ]).toEqual([expected, expected]);
+  });
+
+  it('resolves a literal percent filename through the renderer and main production entry points', async () => {
+    let root: string | undefined;
+
+    try {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-renderer-path-'));
+      const target = path.join(root, 'a%20b.pdf');
+      fs.writeFileSync(target, '%PDF');
+      const href = toFileUrl(target);
+
+      const resolvePath = vi.fn(({ href: lookupHref, workingDir }: { href: string; workingDir: string }) =>
+        resolveWorkspacePath(lookupHref, workingDir));
+      const resolvePathBatch = vi.fn(({ hrefs, workingDir }: { hrefs: string[]; workingDir: string }) =>
+        resolveWorkspacePathBatch(hrefs, workingDir));
+      vi.stubGlobal('window', { electronAPI: { resolvePath, resolvePathBatch } });
+
+      const direct = await resolveLocalPathSmart(href, root, { refresh: true });
+      expect(direct.status).toBe('unique');
+      if (direct.status === 'unique') {
+        expect(direct.kind).toBe('file');
+        expect(path.normalize(direct.absPath)).toBe(path.normalize(target));
+      }
+
+      const batch = await resolveLocalPathSmartCached(href, root);
+      expect(batch.status).toBe('unique');
+      if (batch.status === 'unique') {
+        expect(batch.kind).toBe('file');
+        expect(path.normalize(batch.absPath)).toBe(path.normalize(target));
+      }
+    } finally {
+      if (root) fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('resolveLocalPathSmartCached + peekResolveLocalPathSmart (renderer cache + batch)', () => {
   afterEach(() => {
     _clearSmartResolveCache();
@@ -389,6 +457,35 @@ describe('resolveLocalPathSmartCached + peekResolveLocalPathSmart (renderer cach
     vi.stubGlobal('window', { electronAPI: {} });
     const r = await resolveLocalPathSmartCached('src/x.ts', '/repo');
     expect(r).toEqual({ status: 'none', fallbackAbsPath: '/repo/src/x.ts' });
+  });
+
+  // 否定重查还没返回时，这条结论被缓存容量（500 条）挤掉：同路径的普通查找要加入这次重查，
+  // 不能再发一个不带 revalidateNegative 的查找，让两个结果互相覆盖。
+  it('joins a negative re-check in flight after the cache dropped the entry', async () => {
+    let answer!: (raw: Record<string, unknown>) => void;
+    const resolvePathBatch = vi.fn(
+      async ({ hrefs, revalidateNegative }: { hrefs: string[]; revalidateNegative?: boolean }) => {
+        if (revalidateNegative) return new Promise<Record<string, unknown>>((resolve) => { answer = resolve; });
+        return Object.fromEntries(hrefs.map((href) => [href, { status: 'none', candidates: [] }]));
+      },
+    );
+    vi.stubGlobal('window', { electronAPI: { resolvePathBatch } });
+    await resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    const start = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => start + 3_000);
+
+    const recheck = revalidateNegativeLocalPathSmart('out/clip.mp4', '/task', start + 3_000);
+    await Promise.resolve();
+    await Promise.all(Array.from({ length: 500 }, (_, i) => resolveLocalPathSmartCached(`other-${i}.ts`, '/task')));
+    expect(peekResolveLocalPathSmart('out/clip.mp4', '/task')).toBeUndefined();
+    const calls = resolvePathBatch.mock.calls.length;
+
+    const plain = resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    answer({ 'out/clip.mp4': { status: 'unique', candidates: ['/task/film/out/clip.mp4'] } });
+    expect(await plain).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(await recheck).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(resolvePathBatch).toHaveBeenCalledTimes(calls);
+    vi.restoreAllMocks();
   });
 });
 

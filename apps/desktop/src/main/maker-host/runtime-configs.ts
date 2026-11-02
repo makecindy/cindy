@@ -23,6 +23,7 @@ import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
+import { readUserToolSearchOverride } from './claude-user-tool-search.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -180,6 +181,8 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         // 独立 Claude 账号已停用,只有本机 Claude Code 登录算「连了订阅」。
         oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
           ? false : hasClaudeNativeLogin(),
+        // 用户显式配置的 ENABLE_TOOL_SEARCH 压过来源默认值(#7524);只对本机 spawn 读。
+        userToolSearch: ctx.spawnMode === 'remote' ? undefined : () => readUserToolSearchOverride(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。

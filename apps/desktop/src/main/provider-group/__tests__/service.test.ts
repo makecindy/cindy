@@ -1500,6 +1500,29 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     expect(h.deps.fallback).toHaveBeenCalledWith('s1', { message: '[REMOTE_AGENT_SHARE_PAUSED] paused' }, 3);
   });
 
+  it('requests an O-issued switch for a live direct executor failure', async () => {
+    const h = guestHarness();
+    const direct = { ownerRoute: SHARE_ROUTE, requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa') };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => direct });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    expect(service.mayHandleTurnError('s1', signals)).toBe(true);
+    await service.onTurnError('s1', signals, 7);
+    expect(direct.requestSwitch).toHaveBeenCalledTimes(1);
+    expect(h.guestSwitch.takeForOpen('s1')).toBe('token-direct-aaaaaaaaaaaa');
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the direct error back when O declines the switch', async () => {
+    const h = guestHarness();
+    const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+      directGuestSession: () => ({ ownerRoute: SHARE_ROUTE, requestSwitch: async () => undefined }) });
+    const signals = { message: '[REMOTE_AGENT_UNAVAILABLE] executor disconnected' };
+    await service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();
     stale.guestSwitch.offer('s1', 'token-aaaaaaaaaaaaaaaa');
@@ -1735,5 +1758,58 @@ describe('moving a task into a group on this computer from the model list (2026-
       current: { agentDeviceId: 'elsewhere', providerId: 'openai' },
     })).toBeNull();
     expect(h.bindings.size).toBe(0);
+  });
+});
+
+// Unit regression: plain remote suppliers must use the same cancelled/leased recovery
+// as group suppliers. Previously only a group binding could enter this path.
+describe('supplier process restart', () => {
+  const signals = { reason: 'remote_agent_restarted' };
+  it('continues on the original computer without a group binding or relocation', async () => {
+    const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    expect(h.service.mayHandleTurnError('task', signals)).toBe(true);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('task', 99, expect.objectContaining({
+      attempt: 1, maxAttempts: 1, agentReconnect: { computer: '' },
+    }));
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  // Unit: the persisted share:<id> route identifies O; only a live direct
+  // handle can probe its pinned M. Expiry during the probe must cancel recovery.
+  it.each(['returns', 'expires'] as const)('probes the direct executor instead of its share owner: %s', async outcome => {
+    const SHARE_ROUTE = 'share:direct-restart';
+    let live = true;
+    const direct = { ownerRoute: SHARE_ROUTE, requestSwitch: async () => undefined,
+      probeReconnect: vi.fn(async () => { if (outcome === 'expires') live = false; return 'ok' as const; }) };
+    const h = harness({ row: { agentDeviceId: SHARE_ROUTE, providerId: 'shared-provider' } });
+    const service = createProviderGroupService({ ...h.deps, directGuestSession: () => live ? direct : null });
+    await service.onTurnError('task', signals, 1);
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(direct.probeReconnect).toHaveBeenCalledOnce();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(outcome === 'returns' ? 1 : 0);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'close', 'close-probe-rejected', 'removed', 'unavailable', 'offline'] as const)('does not continue after %s', async outcome => {
+    const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    if (outcome === 'removed') h.deps.isFailoverEligible.mockResolvedValue(false);
+    else if (outcome === 'close' || outcome === 'close-probe-rejected') h.probe.mockImplementation(async () => {
+      h.deps.leaseRecovery.mockReturnValue(null);
+      if (outcome === 'close-probe-rejected') throw new Error('probe failed after close');
+      return 'ok';
+    });
+    else if (outcome === 'stop') h.probe.mockImplementation(async () => {
+      h.service.noteUserAction('task');
+      return 'ok';
+    });
+    else h.probe.mockResolvedValue(outcome);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    if (outcome === 'offline') expect(h.probe).toHaveBeenCalledTimes(PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1);
+    if (outcome !== 'stop' && outcome !== 'close' && outcome !== 'close-probe-rejected') expect(h.deps.fallback).toHaveBeenCalledOnce();
+    else expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 });

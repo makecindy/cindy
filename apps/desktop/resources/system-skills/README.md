@@ -14,3 +14,14 @@ host through the essential `cindy_helper` bridge; another client may discover
 the Skill files, but cannot run the workflow without that host capability.
 
 Cindy materializes these resources into its user-data directory at startup. Do not put user-authored Skills here.
+
+## Rules for bundled Skills
+
+- A bundled Skill only describes workflows that apply to any git project. Repository-specific
+  rules — DCO sign-off, unit-test gates, preview or personal-client setups, repository approval
+  words — stay in that repository's `AGENTS.md` / `CLAUDE.md` / `CONTRIBUTING` / PR template;
+  the Skill only tells the agent to follow them (2026-10-12 decision).
+- The `pr` Skill (PR #8244) runs only when the user explicitly wants a pull request (`/pr`,
+  "发 PR", following up a PR). An ordinary change request — including "change it but don't
+  publish yet" or "show me first" — is handled directly, without creating a worktree or showing
+  a PR card. Do not loosen the Skill description to make it easier to select (2026-10-31 decision).

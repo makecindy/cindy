@@ -140,6 +140,23 @@ it.skipIf(process.platform === 'win32')('runs a copied script after the source i
   expect(await fs.readdir(path.join(root, 'bots/bot/import-executions'))).toEqual([]);
 });
 
+// A selected destination must not bypass imported credential redaction or also use the old route.
+it('replaces imported delivery only after redaction and still settles completion once', async () => {
+  const routine = { id: 'routine', botId: 'bot', delivery: { kind: 'companion', mode: 'direct' } } as Routine;
+  await shared.store.write(root, 'bot', { version: 1, env: { REPORT_TOKEN: 'fixture-private-token' }, mcp: [], credentials: [], automations: {
+    routine: { kind: 'hermes', original: {}, sourceRoot: root },
+  } }, () => {});
+  const selected = vi.fn(async (_text: string) => {});
+  const finish = () => finishImportedAutomation(root, routine, 'chat', 'run', 'Report fixture-private-token', true,
+    new AbortController().signal, () => {}, selected);
+  await finish(); await finish();
+  expect(selected).toHaveBeenCalledTimes(1);
+  expect(selected.mock.calls[0]![0]).toContain('Report');
+  expect(selected.mock.calls[0]![0]).not.toContain('fixture-private-token');
+  expect(shared.message).not.toHaveBeenCalled();
+  expect((await shared.store.read(root, 'bot', () => {}))!.automations!.routine!.completed).toBe(1);
+});
+
 it('counts only successful completion toward the source repeat limit', async () => {
   const routine = { id: 'routine', botId: 'bot' } as Routine;
   await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {

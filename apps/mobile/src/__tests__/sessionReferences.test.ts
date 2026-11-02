@@ -51,6 +51,20 @@ function asInvoke(
   return (deviceId, channel, args = []) => implementation(deviceId, channel, args) as Promise<never>;
 }
 
+function hasIsolatedSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe('mobile session-reference links', () => {
   it('only permits stored-snapshot fallback for transient source outages', () => {
     expect(canFallbackToStoredMobileSessionReferenceSnapshot(
@@ -673,6 +687,35 @@ describe('resolveMobileSessionReferences', () => {
     expect(context.truncated).toBe(true);
     const partialNeighbor = context.messages.find((item) => item.role === 'assistant');
     expect(partialNeighbor?.content.length).toBeLessThan(20_000);
+  });
+
+  it.each([
+    { layout: 'emoji before quote', payloadBody: '😀"' },
+    { layout: 'quote before emoji', payloadBody: '"😀' },
+  ])('keeps emoji whole when the serialized payload cut trims $layout content', async ({ payloadBody }) => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0] };
+      const request = args[0] as { sessionId: string };
+      const content = request.sessionId === 's-tail'
+        ? '😀'.repeat(5_000)
+        : payloadBody.repeat(3_000);
+      return {
+        items: [message(request.sessionId, '1', 'c1', content)],
+        hasMore: false,
+      };
+    });
+
+    const contexts = await resolveMobileSessionReferences([
+      { sessionId: 's-tail', deviceId: 'dev-a' },
+      { sessionId: 's-payload', deviceId: 'dev-a' },
+    ], invoke);
+
+    const contents = contexts.flatMap((context) =>
+      context.messages.map((item) => item.content));
+    expect(contents.map(hasIsolatedSurrogate)).toEqual([false, false]);
+    expect(contents.every((content) => content.startsWith('…'))).toBe(true);
+    expect(estimateMobileReferenceTokens(serializeMobileSessionReferencePayload(contexts)))
+      .toBeLessThanOrEqual(8_000 - 128);
   });
 
   it('routes each reference to its own authorized source and shares the 20-message limit', async () => {

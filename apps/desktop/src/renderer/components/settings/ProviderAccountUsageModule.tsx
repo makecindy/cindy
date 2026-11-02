@@ -7,6 +7,7 @@
  * 供应商返回 null，不占位。
  */
 
+import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -17,34 +18,42 @@ import {
   isZhipuCodingPlanProviderView,
 } from '../../lib/providerAccountUsageView';
 import { useProviderAccountUsage } from '../../hooks/useProviderAccountUsage';
+import { Button } from '../ui/button';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { buildDeepSeekUsageCard, buildZhipuUsageCard } from '../status/usageCardModel';
+import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard } from '../status/usageCardModel';
 
 export function ProviderAccountUsageModule({ provider }: { provider?: ProviderView }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const deepSeek = hasDeepSeekOfficialRouteView(provider);
   const zhipu = isZhipuCodingPlanProviderView(provider);
-  const usage = useProviderAccountUsage(deepSeek || zhipu ? provider : undefined);
+  const kimi = isKimiCodingProviderView(provider);
+  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi ? provider : undefined);
   const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider);
-  if (!deepSeek && !zhipu) return null;
+  if (!deepSeek && !zhipu && !kimi) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;
   const errorText =
     usage.result?.status === 'unavailable'
-      ? t(`providerAccountUsage.error.${usage.result.error}`)
+      ? t(`providerAccountUsage.${kimi ? 'kimi.' : ''}error.${usage.result.error}`)
       : null;
-  const account = deepSeek
+  const account = kimi
+    ? buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t)
+    : deepSeek
     ? buildDeepSeekUsageCard(snapshot?.kind === 'deepseek-balance' ? snapshot : null, t, locale)
     : buildZhipuUsageCard(snapshot?.kind === 'zhipu-coding-plan-quota' ? snapshot : null, t);
   if (errorText && !snapshot) account.emptyText = errorText;
   // 余额来自哪个引擎的密钥：同一供应商各引擎可用不同账户，标注免得用户误读。
-  if (usage.result?.status === 'ready' && usage.result.agent) {
+  if (!kimi && usage.result?.status === 'ready' && usage.result.agent) {
     account.identity ??=
       usage.result.agent === 'claude-code'
         ? 'Claude Code'
         : usage.result.agent === 'codex'
           ? 'Codex'
           : 'Pi';
+  }
+
+  if (kimi && usage.result?.status === 'ready' && usage.result.stale) {
+    account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
   }
 
   return (
@@ -56,9 +65,11 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
       <QuotaHoverCard
         variant="embedded"
         account={account}
-        dashboardLabel={deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
+        dashboardLabel={kimi ? t('providerAccountUsage.kimi.usage') : deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
         onOpenDashboard={dashboardUrl ? () => void window.electronAPI.openExternal(dashboardUrl) : undefined}
-      />
+      >
+        {kimi && <div className="px-4 pb-2"><Button variant="secondary" tone="quiet" size="sm" disabled={usage.busy} onClick={usage.refresh}>{t('providerAccountUsage.kimi.refresh')}</Button></div>}
+      </QuotaHoverCard>
     </div>
   );
 }

@@ -4,14 +4,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import { portableBotAvatarOrFallback, BOT_AVATAR_MAX_BYTES } from '../../shared/botAvatarValue.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
-import { fetchPublicImageBytes } from '../im/publicImageFetch.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
+import { restoreCloudAvatar } from './avatarRestore.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import { botProfileVersions, botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema.js';
@@ -26,7 +25,7 @@ import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
-import { deleteBotSkillForBot, listBotSkillSourcesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
+import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
 import { companionTodoStore } from '../maker-ipc/botTodoAccess.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botWorkbenchService.js';
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
@@ -48,6 +47,7 @@ import {
   COMPANION_PROFILE_KEY,
   COMPANION_ROUTINE_PREFIX,
   COMPANION_SKILL_PREFIX,
+  COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
   type CompanionPreferenceValue,
@@ -110,6 +110,8 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
       slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
     } });
+    const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
+    if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
   // Todos, routines and the workbench move with the companion too (cloud-companions.md §2). A read
   // failure aborts the cycle like the files above, so nothing is tombstoned by mistake.
@@ -132,34 +134,6 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
 /** The SKILL.md as stored, so native frontmatter (tools, invocation, …) moves with the companion. */
 async function readSkillContent(botId: string, slug: string): Promise<string | null> {
   return readBotSkillSourceForBot(botId, slug);
-}
-
-const AVATAR_FETCH_TIMEOUT_MS = 15_000;
-
-/**
- * The actor's public avatar (https) as bounded image bytes for the normal creation path. Cloud
- * data is untrusted: the shared guarded download checks every hop against private networks and
- * stops reading at the size limit.
- */
-async function fetchAvatarBase64(url: string, signal?: AbortSignal): Promise<string | null> {
-  try {
-    const { buffer } = await fetchPublicImageBytes(url, BOT_AVATAR_MAX_BYTES, undefined, { signal, timeoutMs: AVATAR_FETCH_TIMEOUT_MS });
-    return Buffer.from(buffer).toString('base64');
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The cloud avatar in a form the local profile holds; no usable cloud avatar means the same
- * default a new profile gets. A downloadable image that cannot be read throws: the take-over
- * must not finish with a stale avatar that the new home would publish.
- */
-async function cloudAvatar(avatar: string | null, signal?: AbortSignal): Promise<{ portable: string } | { imageBase64: string }> {
-  if (!avatar?.startsWith('https://')) return { portable: portableBotAvatarOrFallback(avatar) };
-  const imageBase64 = await fetchAvatarBase64(avatar, signal);
-  if (!imageBase64) throw new Error('AVATAR_UNAVAILABLE');
-  return { imageBase64 };
 }
 
 type MaterializeLocal = Omit<CompanionMaterializeHost, 'latestRows'>;
@@ -201,20 +175,22 @@ function createMaterializer(input: {
     },
     // Normal creation path: no invitation, no generated persona, the new home's default model.
     createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
-      const restored = await cloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
         ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
-      { templateId, allowSameName: true });
+      { templateId, allowSameName: true, avatarFallback: 'fallback' in restored && restored.fallback === true });
     },
     updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
-      const restored = await cloudAvatar(avatar, fence.signal);
+      const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
         ...(description !== undefined ? { description } : {}),
         ...(identitySource !== undefined ? { identitySource } : {}),
         ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined, { templateId, replacesUnfinishedMeeting: true, allowSameName: true });
+        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined,
+      { templateId, replacesUnfinishedMeeting: true, allowSameName: true,
+        avatarFallback: 'portable' in restored ? restored.fallback === true : undefined });
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();
@@ -281,6 +257,8 @@ function createMaterializer(input: {
     readSkill: readSkillContent,
     saveSkill: async (botId, slug, content, enabled) => { await saveBotSkillSourceForBot(botId, slug, content, { enabled }); },
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
+    readSkillFiles: (botId, slug) => readBotSkillFilesForBot(botId, slug),
+    applySkillFiles: (botId, slug, files, fetch, options) => applyBotSkillFilesForBot(botId, slug, files, fetch, options),
     ensureCanonicalSession: botId => input.ensureCanonicalSession(botId),
     // Rewound and deleted rows are included (`removed`): removed here means never re-imported.
     localMessageTimes: async (sessionId, fromMs) => (await getDbClient().drizzle

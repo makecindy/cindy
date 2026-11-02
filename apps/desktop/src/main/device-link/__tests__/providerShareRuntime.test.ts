@@ -56,6 +56,7 @@ vi.mock('../providerShareApi.js', () => ({
   fetchIdentityCard: vi.fn(),
   sha256Hex: (value: string) => value,
   providerShareOwnerKey: () => state.scope,
+  checkProviderShareDelegation: vi.fn(async () => ({ active: false })),
 }));
 vi.mock('../providerShareCrossRegion.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareCrossRegion.js')>(),
@@ -64,6 +65,13 @@ vi.mock('../providerShareCrossRegion.js', async (importOriginal) => ({
 
 import { providerShareApi } from '../providerShareApi';
 import { crossRegionLeave } from '../providerShareCrossRegion';
+import {
+  applyProviderShareDelegation, clearProviderShareDelegations,
+  delegatedProviderShareLeases, delegatedProviderShareModelAllowed,
+  delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed,
+  delegatedProviderShareTaskAccess, invalidateProviderShareDelegation,
+  revokeDelegatedProviderShareGuest,
+} from '../providerShareDelegatedAccess';
 
 import {
   applyLocalMemberChange,
@@ -81,6 +89,7 @@ import {
   startProviderShareHost,
   stopProviderShareHost,
   watchProviderShareRequests,
+  verifyProviderShareMemberGeneration,
 } from '../providerShareHost';
 import {
   isProviderShareRefusal,
@@ -141,11 +150,231 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  clearProviderShareDelegations();
   stopProviderShareHost();
   stopProviderShareGuest();
 });
 
+describe('delegated executor access', () => {
+  it('closes every old direct task immediately after owner deletion, then admits a fresh grant', async () => {
+    const peer = guest('m1');
+    const other = guest('m2');
+    const generation = '55555555-5555-4555-8555-555555555555';
+    const grant = { op: 'delegate' as const, action: 'grant' as const,
+      shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+      model: 'model-one', generation, cleanupEpoch: 1 };
+    const check = async () => ({ active: true, ownerDeviceId: 'owner-pc', generation,
+      expiresAt: Date.now() + 30 * 60_000 });
+    await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'old_one' }, check);
+    await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'old_two' }, check);
+    await applyProviderShareDelegation('owner-pc', { ...grant, memberId: 'm2', sessionId: 'other' }, check);
+    revokeDelegatedProviderShareGuest('another-owner', peer, 1);
+    expect(delegatedProviderShareSessionAllowed(peer, 'old_one')).toBe(true);
+    await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'new_one', cleanupEpoch: 2 }, check);
+    expect(revokeDelegatedProviderShareGuest('owner-pc', peer, 1, true)).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'new_one')).toBe(true);
+    expect(revokeDelegatedProviderShareGuest('owner-pc', peer, 2, true)).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'old_one')).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'old_two')).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'new_one')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-one', 'old_one')).toBe(false);
+    expect(delegatedProviderShareReceiptAuthority(peer, 'old_one')).toBeNull();
+    expect(delegatedProviderShareSessionAllowed(other, 'other')).toBe(true);
+    await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'newer_one', cleanupEpoch: 3 }, check);
+    expect(delegatedProviderShareSessionAllowed(peer, 'newer_one')).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'old_one')).toBe(false);
+  });
+
+  // One share member can run two tasks on one M whose group entries point at
+  // different local providers. Each task must retain its own source and model (unit tier).
+  it('keeps concurrent task providers and models isolated on the same guest peer', async () => {
+    state.allowed.add('openai');
+    const peer = guest('m1');
+    const generation = '44444444-4444-4444-8444-444444444444';
+    const base = { op: 'delegate' as const, action: 'grant' as const,
+      shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', generation };
+    const check = async () => ({ active: true, ownerDeviceId: 'owner-pc', generation,
+      expiresAt: Date.now() + 30 * 60_000 });
+    await applyProviderShareDelegation('owner-pc', { ...base, providerId: 'anthropic',
+      sessionId: 'claude_task', model: 'claude-opus' }, check);
+    await applyProviderShareDelegation('owner-pc', { ...base, providerId: 'openai',
+      sessionId: 'gpt_task', model: 'gpt-5' }, check);
+    expect(delegatedProviderShareTaskAccess(peer, 'claude_task')?.providerId).toBe('anthropic');
+    expect(delegatedProviderShareTaskAccess(peer, 'gpt_task')?.providerId).toBe('openai');
+    expect(delegatedProviderShareTaskAccess(peer, 'unknown_task')).toBeNull();
+    expect(delegatedProviderShareModelAllowed(peer, 'claude-opus', 'gpt_task')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'gpt-5', 'claude_task')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'gpt-5', 'gpt_task')).toBe(true);
+    state.allowed.delete('anthropic');
+    expect(delegatedProviderShareTaskAccess(peer, 'claude_task')).toBeNull();
+    expect(delegatedProviderShareTaskAccess(peer, 'gpt_task')?.providerId).toBe('openai');
+    expect(providerShareGuestAccess(peer)?.providerId).toBe('openai');
+  });
+
+  // A turn can finish just after its 30-minute lease ends. The production M→O
+  // metering path needs its original generation, while guest admission must close (unit tier).
+  it('keeps only short-lived accounting authority after a task lease expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+      const peer = guest('m1');
+      const generation = '11111111-1111-4111-8111-111111111111';
+      const grant = { op: 'delegate' as const, action: 'grant' as const,
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'long_task', model: 'model-one', generation };
+      await applyProviderShareDelegation('owner-pc', grant, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt: Date.now() + 30 * 60_000 }));
+      state.remoteControl = false;
+      expect(providerShareGuestAccess(peer)).toBeNull();
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation });
+      state.remoteControl = true;
+      state.allowed.clear();
+      expect(providerShareGuestAccess(peer)).toBeNull();
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation });
+      state.allowed.add('anthropic');
+      vi.setSystemTime(new Date(Date.now() + 30 * 60_000 + 1));
+      expect(providerShareGuestAccess(peer)).toBeNull();
+      expect(delegatedProviderShareLeases()).toEqual([]);
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation });
+      expect(delegatedProviderShareReceiptAuthority(peer, 'other_task')).toBeNull();
+      vi.setSystemTime(new Date(Date.now() + 5 * 60_000 + 1));
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('clears an expired task accounting authority on account change', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+      const peer = guest('m1');
+      const generation = '22222222-2222-4222-8222-222222222222';
+      await applyProviderShareDelegation('owner-pc', { op: 'delegate', action: 'grant',
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'long_task', model: 'model-one', generation }, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt: Date.now() + 30 * 60_000 }));
+      vi.setSystemTime(new Date(Date.now() + 30 * 60_000 + 1));
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task')).not.toBeNull();
+      state.scope = 'cloud:another:1';
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task')).toBeNull();
+      state.scope = 'cloud:owner:1';
+      expect(delegatedProviderShareReceiptAuthority(peer, 'long_task')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Both O's explicit revoke and M's server recheck can race with a completed
+  // turn's done event. They close execution immediately but preserve its receipt (unit tier).
+  it('keeps accounting authority briefly when a delegated task is revoked or invalidated', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+      const peer = guest('m1');
+      const generation = '33333333-3333-4333-8333-333333333333';
+      const grant = { op: 'delegate' as const, action: 'grant' as const,
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        model: 'model-one', generation };
+      const check = async () => ({ active: true, ownerDeviceId: 'owner-pc', generation,
+        expiresAt: Date.now() + 30 * 60_000 });
+      await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'revoke_task' }, check);
+      await applyProviderShareDelegation('owner-pc', { ...grant, sessionId: 'invalid_task' }, check);
+      const invalidNonce = delegatedProviderShareLeases().find((entry) => entry.sessionId === 'invalid_task')!.lease.nonce;
+      state.remoteControl = false;
+      expect(await applyProviderShareDelegation('owner-pc', { ...grant, action: 'revoke', sessionId: 'revoke_task' }))
+        .toBe(true);
+      invalidateProviderShareDelegation(peer, 'invalid_task', invalidNonce);
+      state.remoteControl = true;
+      expect(providerShareGuestAccess(peer)).toBeNull();
+      expect(delegatedProviderShareLeases()).toEqual([]);
+      expect(delegatedProviderShareReceiptAuthority(peer, 'revoke_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation });
+      expect(delegatedProviderShareReceiptAuthority(peer, 'invalid_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation });
+      vi.setSystemTime(new Date(Date.now() + 5 * 60_000 + 1));
+      expect(delegatedProviderShareReceiptAuthority(peer, 'revoke_task')).toBeNull();
+      expect(delegatedProviderShareReceiptAuthority(peer, 'invalid_task')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Permission boundary: two tasks on one guest device must not revoke each other or acquire owner permissions.
+  it('binds concurrent task leases to their approved models and stops on revocation or account change', async () => {
+    const peer = guest('m1');
+    // The delegated gate itself must fail closed when a caller forgets its
+    // host-level authorization check. O's owned-share path is handled there.
+    expect(delegatedProviderShareSessionAllowed(peer, 'task_one')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-one', 'task_one')).toBe(false);
+    const generation = '11111111-1111-4111-8111-111111111111';
+    const base = { op: 'delegate' as const, action: 'grant' as const, shareId: 'share-1',
+      memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic', generation };
+    const check = async () => ({ active: true, ownerDeviceId: 'owner-pc', expiresAt: Date.now() + 30 * 60_000,
+      generation });
+    await expect(applyProviderShareDelegation('owner-pc', { ...base, generation: '22222222-2222-4222-8222-222222222222',
+      sessionId: 'task_invalid', model: 'model-one' }, check)).rejects.toThrow('REMOTE_AGENT_INVALID');
+    await applyProviderShareDelegation('owner-pc', { ...base, sessionId: 'task_one', model: 'model-one' }, check);
+    await applyProviderShareDelegation('owner-pc', { ...base, sessionId: 'task_two', model: 'model-two' }, check);
+    expect(providerShareGuestAccess(peer)).toMatchObject({ providerId: 'anthropic', memberId: 'm1' });
+    expect(delegatedProviderShareSessionAllowed(peer, 'task_one')).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'unassigned')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-one', 'task_one')).toBe(true);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-two', 'task_two')).toBe(true);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-two', 'task_one')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'model-one', 'task_two')).toBe(false);
+    expect(delegatedProviderShareModelAllowed(peer, 'other', 'task_one')).toBe(false);
+    const renewal = '33333333-3333-4333-8333-333333333333';
+    await applyProviderShareDelegation('owner-pc', { ...base, generation: renewal,
+      sessionId: 'task_one', model: 'model-one' }, async () => ({ active: true,
+      ownerDeviceId: 'owner-pc', expiresAt: Date.now() + 30 * 60_000, generation: renewal }));
+    expect(await applyProviderShareDelegation('owner-pc', { ...base, action: 'revoke',
+      sessionId: 'task_one', model: 'model-one' })).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'task_one')).toBe(true);
+    expect(await applyProviderShareDelegation('owner-pc', { ...base, action: 'revoke', generation: renewal,
+      sessionId: 'task_one', model: 'model-one' })).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'task_one')).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'task_two')).toBe(true);
+    expect(providerShareGuestAccess(peer)).not.toBeNull();
+    state.remoteControl = false;
+    expect(providerShareGuestAccess(peer)).toBeNull();
+    state.remoteControl = true;
+    state.scope = 'cloud:another:1';
+    expect(providerShareGuestAccess(peer)).toBeNull();
+  });
+});
+
 describe('provider share host snapshot', () => {
+  // Unit tier: server grant may race a deletion after O's last poll. Its new
+  // server epoch does not prove O cleaned the old guest data.
+  it('rejects a post-grant incarnation mismatch and fails closed when the fresh read is offline', async () => {
+    state.owned = [share([member('g1')])];
+    const callbacks = events();
+    startProviderShareHost(callbacks);
+    await refreshProviderShareHost('test');
+    const expected = { shareId: 'share-1', memberId: 'g1', joinedAt: member('g1').joinedAt };
+    await expect(verifyProviderShareMemberGeneration(expected)).resolves.toBeUndefined();
+    state.ownedError = true;
+    await expect(verifyProviderShareMemberGeneration(expected)).rejects.toThrow('offline');
+    state.ownedError = false;
+    state.owned = [share([{ ...member('g1'), joinedAt: '2026-10-28T01:00:00.000Z' }])];
+    await expect(verifyProviderShareMemberGeneration(expected)).rejects.toThrow('membership changed');
+    await refreshProviderShareHost('test');
+    expect(callbacks.revoked).toHaveBeenCalledWith({ shareId: 'share-1', memberId: 'g1' }, true);
+  });
+
+  // Production snapshot entry; a removed member can be reapproved with the same ID
+  // while O misses both transitions. Status-only comparison kept the old history (unit).
+  it('purges when the server reuses a member ID with a different joinedAt, even if both snapshots are active', async () => {
+    state.owned = [share([member('m1')])];
+    const ev = events();
+    startProviderShareHost(ev);
+    await refreshProviderShareHost('g1');
+    state.ownedError = true;
+    await refreshProviderShareHost('offline');
+    state.ownedError = false;
+    state.owned = [share([{ ...member('m1'), joinedAt: '2026-10-02T00:00:00.000Z' }])];
+    await refreshProviderShareHost('g2');
+    expect(ev.revoked).toHaveBeenCalledWith({ shareId: 'share-1', memberId: 'm1' }, true);
+  });
+
   it('admits only active members while remote control and remote use stay on', async () => {
     state.owned = [share([member('m1'), member('m2', 'paused')])];
     const ev = events();

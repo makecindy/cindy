@@ -135,6 +135,7 @@ describe('startGhostOauthFlow', () => {
       expect(form.get('code')).toBe('code-abc');
       expect(form.get('client_id')).toBe('client-123');
       expect(form.get('client_secret')).toBeNull();
+      expect(form.has('resource')).toBe(false);
       expect(String(input)).toBe(BASE_CONFIG.tokenUrl);
       return jsonResponse({
         access_token: 'at-1',
@@ -169,6 +170,48 @@ describe('startGhostOauthFlow', () => {
       // 60s 安全余量已扣除。
       expect(result.bundle.expiresAt).toBeLessThanOrEqual(Date.now() + 3600 * 1000);
     }
+  });
+
+  it.each<{
+    name: string;
+    authorizeUrl: string;
+    extraAuthorizeParams: Record<string, string>;
+    resources: string[];
+  }>([
+    {
+      name: 'extraAuthorizeParams resource overrides the URL value',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fold.example.com`,
+      extraAuthorizeParams: { resource: 'https://mcp.example.com/mcp?tenant=a&region=b', prompt: 'consent' },
+      resources: ['https://mcp.example.com/mcp?tenant=a&region=b'],
+    },
+    {
+      name: 'repeated resource indicators in the authorize URL',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fa.example.com&resource=https%3A%2F%2Fb.example.com`,
+      extraAuthorizeParams: { prompt: 'consent' },
+      resources: ['https://a.example.com', 'https://b.example.com'],
+    },
+  ])('token exchange preserves $name', async ({ authorizeUrl, extraAuthorizeParams, resources }) => {
+    let authorizedResources: string[] = [];
+    const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const form = new URLSearchParams(String(init?.body ?? ''));
+      expect(form.getAll('resource')).toEqual(resources);
+      expect(form.getAll('resource')).toEqual(authorizedResources);
+      expect(form.has('prompt')).toBe(false);
+      expect(form.has('state')).toBe(false);
+      return jsonResponse({ access_token: 'fake-resource-token' });
+    });
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, authorizeUrl, extraAuthorizeParams },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      openExternal: (url) => {
+        authorizedResources = new URL(url).searchParams.getAll('resource');
+        return browserRedirect(url, (au) => ({
+          code: 'fake-resource-code', state: au.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('clientSecret 提供时进表单;extra 参数上 URL 且保留参数不可覆盖', async () => {
@@ -606,6 +649,67 @@ describe('startGhostOauthFlow', () => {
     });
 
     expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
+  });
+
+  it('服务端签发应用身份失败:不拉浏览器,保留错误分类', async () => {
+    const openExternal = vi.fn();
+    const broker: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(async () => ({ ok: false as const, error: 'SERVICE_UNAVAILABLE' as const })),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, clientId: undefined, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(broker.exchange).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份时卡住:再点连接即顶掉前一单,不拉浏览器、不阻塞新一单', async () => {
+    const firstOpen = vi.fn();
+    let secondDone: Promise<unknown> = Promise.resolve();
+    const hanging: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(() => {
+        // 前一单卡在请求上时，用户再次点连接。
+        secondDone = startGhostOauthFlow({
+          config: BASE_CONFIG,
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-next' })) as unknown as typeof fetch,
+          openExternal: (url) => browserRedirect(url, (au) => ({
+            code: 'c-next',
+            state: au.searchParams.get('state') ?? '',
+          })),
+        });
+        return new Promise<never>(() => undefined);
+      }),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const first = startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: hanging,
+      openExternal: firstOpen,
+    });
+    await expect(first).resolves.toMatchObject({ ok: false, error: 'CANCELLED' });
+    await expect(secondDone).resolves.toMatchObject({ ok: true });
+    expect(firstOpen).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份超过整单时限 → TIMEOUT,不拉浏览器', async () => {
+    const openExternal = vi.fn();
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: { bootstrap: () => new Promise<never>(() => undefined), exchange: vi.fn(), refresh: vi.fn() },
+      openExternal,
+      timeoutMs: 50,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'TIMEOUT' });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {

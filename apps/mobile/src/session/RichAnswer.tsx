@@ -62,6 +62,8 @@ import {
   type ThemeColors,
 } from "@/theme";
 import {
+  splitRichAnswer,
+  type RichValues,
   richVisualStyle,
   richColor,
   richVector,
@@ -85,6 +87,7 @@ import {
   type RichValue,
 } from "@cindy/maker-shared/rich-answer";
 import { useSessionQuickSend } from './SessionQuickSendContext';
+import type { ChatFilePathContextValue } from './chatFilePathContext';
 
 /** Answer colors are Cindy theme colors; the model only names a role. */
 const richPalette = (colors: ThemeColors): RichPalette => ({
@@ -120,6 +123,23 @@ const memory = new RichInteractionMemory({
     await AsyncStorage.setItem("cindy.richAnswer.viewState.v1", value);
   },
 });
+/** Click-time copy: an export never changes the conversation's local controls. */
+export function snapshotRichAnswerValues(
+  source: string,
+  scope: {
+    userId: string | undefined;
+    origin: Pick<ChatFilePathContextValue, 'deviceId' | 'sessionId'> | null;
+    messageKey: string;
+  },
+): Readonly<Record<number, RichValues>> {
+  const stateKey = `${scope.userId ?? 'signed-out'}:${scope.origin?.deviceId ?? ''}:${scope.origin?.sessionId ?? ''}:${scope.messageKey}`;
+  return Object.fromEntries(
+    splitRichAnswer(source)
+      .filter((part) => part.kind === "rich")
+      .map((part) => [part.key, { ...memory.get(`${stateKey}:${part.key}`) }]),
+  );
+}
+
 const submissions = new RichSubmissionController(memory);
 
 function RichSendAction({ node, text, receiptKey, ready, style, buttonTextStyle }: {
@@ -145,8 +165,8 @@ type Props = {
   source: string;
   complete: boolean;
   stateKey: string;
-  renderMedia?: (node: RichNode) => ReactNode;
-  renderMarkdown: (source: string, id: string) => ReactNode;
+  renderMedia?: (node: RichNode, visible: boolean) => ReactNode;
+  renderMarkdown: (source: string, id: string, visible: boolean) => ReactNode;
 };
 export function RichAnswer(props: Props) {
   const { user } = useAuth();
@@ -191,7 +211,7 @@ function RichDocumentView({
   const apply = (node: RichNode) => {
     memory.set(stateKey, richAction(node, values));
   };
-  const render = (id: string, inherited: TextStyle = {}): ReactNode => {
+  const render = (id: string, inherited: TextStyle = {}, visible = true): ReactNode => {
     const node = doc.nodes.get(id);
     if (!node) return null;
     const visual = richVisualStyle(node, palette);
@@ -226,7 +246,7 @@ function RichDocumentView({
       viewStyle.minWidth = rootWidth
         ? Math.min(viewStyle.minWidth, rootWidth)
         : undefined;
-    const result = renderContent(id, textStyle);
+    const result = renderContent(id, textStyle, visible);
     if (!isValidElement(result)) return result;
     const element = result as ReactElement<{
       style?: StyleProp<ViewStyle | TextStyle>;
@@ -235,7 +255,7 @@ function RichDocumentView({
       style: [element.props.style, viewStyle],
     });
   };
-  const renderContent = (id: string, textStyle: TextStyle): ReactNode => {
+  const renderContent = (id: string, textStyle: TextStyle, visible: boolean): ReactNode => {
     const styledText = (base: TextStyle): TextStyle => {
       const size = Number(textStyle.fontSize ?? base.fontSize);
       const line = textStyle.lineHeight;
@@ -280,13 +300,20 @@ function RichDocumentView({
       );
     const bind = richString(node, "bind", id),
       label = richString(node, "label");
+    const selected = node.kind === "tabs"
+      ? node.children.includes(String(values[bind])) ? String(values[bind]) : node.children[0]
+      : undefined;
+    // Hidden controls retain their mounted state. Media preparation follows the
+    // entire ancestor path, including nested layouts and expanded inner details.
+    const childVisible = (child: string) => visible && (node.kind === "details"
+      ? Boolean(values[bind]) : node.kind === "tabs" ? selected === child : true);
     const children = node.children.map((child) => (
-      <Fragment key={child}>{render(child, textStyle)}</Fragment>
+      <Fragment key={child}>{render(child, textStyle, childVisible(child))}</Fragment>
     ));
     if (["image", "video", "audio"].includes(node.kind) && renderMedia)
       return (
         <View style={styles.content}>
-          {renderMedia(node)}
+          {renderMedia(node, visible)}
           {richString(node, "caption") ? (
             <Text style={styles.caption}>{richString(node, "caption")}</Text>
           ) : null}
@@ -296,7 +323,7 @@ function RichDocumentView({
     if (md !== null)
       return (
         <View style={styles.content}>
-          {renderMarkdown(md, id)}
+          {renderMarkdown(md, id, visible)}
           {richString(node, "caption") ? (
             <Text style={styles.caption}>{richString(node, "caption")}</Text>
           ) : null}
@@ -348,7 +375,7 @@ function RichDocumentView({
           <AnswerLayout
             node={node}
             palette={palette}
-            renderChild={(child) => render(child, textStyle)}
+            renderChild={(child) => render(child, textStyle, childVisible(child))}
           />
         );
       case "stat":
@@ -456,9 +483,6 @@ function RichDocumentView({
           </View>
         );
       case "tabs": {
-        const selected = node.children.includes(String(values[bind]))
-          ? String(values[bind])
-          : node.children[0];
         return (
           <View style={styles.stack}>
             <View style={styles.row}>
@@ -477,7 +501,7 @@ function RichDocumentView({
                 key={child}
                 style={selected !== child ? styles.hidden : undefined}
               >
-                {render(child, textStyle)}
+                {render(child, textStyle, childVisible(child))}
               </View>
             ))}
           </View>

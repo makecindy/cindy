@@ -34,9 +34,11 @@ export function registerGrokLoginTools(
       return errorPayload('AUTH_FAILED', '无法完成 Grok 授权，请稍后重试。');
     }
   };
+  // Listed through ask_owner (kind connect, service grok); this name stays callable for saved calls.
   registry.register({
     name: 'start_grok_device_login',
     category: 'auth',
+    hidden: true,
     description:
       '用户要求连接 Grok / SuperGrok 时启动设备码登录。返回 xAI 授权页和短码；请把两者展示给用户，让用户在授权页输入短码。浏览器自动回调是设置页中的另一种登录方式。短码由 Cindy 发给用户，不要求用户把它贴回聊天，也不返回长期凭证。随后可用 get_grok_login_status 查询结果。',
     inputShape: {},

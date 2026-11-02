@@ -1,6 +1,7 @@
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
+import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -47,6 +48,7 @@ export function projectSessionRuntimeControl(
   const control = getSessionRuntimeControlSnapshot(sessionId);
   const effective = control.effectiveOverride ?? baseline;
   return {
+    agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
     providerId: effective.providerId,
     // The legacy wire axis is string-compatible; the profile preserves null.
@@ -56,6 +58,7 @@ export function projectSessionRuntimeControl(
     runtimeBaseline: baseline,
     runtimeEffective: effective,
     runtimePending: control.pending,
+    runtimeBaselineRecoveryPending: false,
   };
 }
 

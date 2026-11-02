@@ -22,7 +22,7 @@ import type { BotProfile } from './botStore';
 
 interface Props {
   bot: RemoteBot;
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onBack: () => void;
   onDeleted: () => void;

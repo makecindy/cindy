@@ -14,13 +14,22 @@ function outline(role: string, content: unknown, agentMeta: unknown = null, raw 
   } finally { db.close(); }
 }
 
-function stamp(content: string) {
+function stamp(content: string | null) {
   const db = new DatabaseSync(':memory:');
   try {
     db.exec('CREATE TABLE messages (content TEXT)');
     db.prepare('INSERT INTO messages VALUES (?)').run(content);
     const query = new SQLiteSyncDialect().sqlToQuery(historyOutlineContentStamp());
-    return db.prepare(`SELECT ${query.sql} AS stamp FROM messages`).get(...query.params as string[])!.stamp as string;
+    return db.prepare(`SELECT ${query.sql} AS stamp FROM messages`).get(...query.params as string[])!.stamp as string | null;
+  } finally { db.close(); }
+}
+
+function legacyStamp(content: string | null): string | null {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE messages (content TEXT)');
+    db.prepare('INSERT INTO messages VALUES (?)').run(content);
+    return db.prepare("SELECT length(content) || ':' || substr(content, -24) AS stamp FROM messages").get()!.stamp as string | null;
   } finally { db.close(); }
 }
 
@@ -44,8 +53,31 @@ describe('SQLite history outline', () => {
     const summary = JSON.stringify('build summary');
     const full = JSON.stringify(`build summary\n${'full log line\n'.repeat(50000)}`);
     expect(stamp(summary)).not.toBe(stamp(full));
-    expect(stamp(full).length).toBeLessThan(64);
+    expect(stamp(full)?.length).toBeLessThan(256);
     expect(stamp(JSON.stringify('结果：完成'))).toBe(stamp(JSON.stringify('结果：完成')));
+  });
+  // The byte-length prototype missed the first pair: its character count changes
+  // while its UTF-8 byte count and suffix stay equal. Exercise the production SQL,
+  // including SQLite's embedded-NUL behavior, rather than duplicating it in JS.
+  it('does not weaken the character-based invalidation contract across UTF-8 and text boundaries', () => {
+    const tail = 'q'.repeat(120);
+    const pairs = [
+      [`ab${tail}`, `é${tail}`],
+      [`${tail}中文`, `${tail}中义`],
+      [`${'😀'.repeat(23)}a`, `${'😀'.repeat(24)}`],
+      [`${'😀'.repeat(24)}`, `${'😀'.repeat(23)}😁`],
+      [`${'e\u0301'.repeat(30)}${tail}`, `${'e\u0301'.repeat(29)}e${tail}`],
+      [JSON.stringify({ result: '完成😀', detail: `${tail}a` }), JSON.stringify({ result: '完成😀', detail: `${tail}b` })],
+      [`plain text ${tail}a`, `plain text ${tail}b`],
+    ];
+    for (const [before, after] of pairs) {
+      expect(legacyStamp(before)).not.toBe(legacyStamp(after));
+      expect(stamp(before)).not.toBe(stamp(after));
+    }
+    // SQLite's text functions stop at NUL, so these retain the exact legacy path.
+    for (const content of [null, '', `prefix\u0000${'😀'.repeat(30)}`]) {
+      expect(stamp(content)).toBe(legacyStamp(content));
+    }
   });
   it('does not return folded thinking, tool outputs or file bodies to the main thread', () => {
     const body = 'private heavy body '.repeat(100000);

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,6 +10,8 @@ import {
   useOwnRemoteProviders,
   type OwnRemoteProvider,
 } from '../OwnRemoteProviders';
+import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -80,6 +82,118 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+// Test value: settings used to mix shared-out providers with ordinary groups. Exercise the real
+// classification hook through local/manage-share summaries; existing row tests have no sharing state.
+// Minimal input: two host summaries, a late old-account response, hidden events and an old host.
+// Tier: unit; in-memory responses and fake timers, with no network or real waiting.
+describe('useOwnedProviderShares', () => {
+  let originalApi: Window['electronAPI'];
+  let changed: () => void;
+  const classified = (...providerIds: string[]) => ({ ready: true, providerIds });
+  const local = vi.fn();
+  const remote = vi.fn();
+
+  beforeEach(() => {
+    originalApi = window.electronAPI;
+    setDataOwnerGeneration('owner-1', 1);
+    local.mockReset().mockResolvedValue(classified('anthropic'));
+    remote.mockReset().mockResolvedValue(classified('openai'));
+    window.electronAPI = {
+      ...originalApi,
+      providerShare: { command: local, onOwnedChanged: (listener: () => void) => {
+        changed = listener;
+        return () => undefined;
+      } },
+      providerGroup: { command: remote },
+    } as unknown as Window['electronAPI'];
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    window.electronAPI = originalApi;
+    setDataOwnerGeneration(null, 0);
+  });
+
+  it('keeps each computer’s classification separate and updates only the changed host', async () => {
+    const { result } = renderHook(() => useOwnedProviderShares(['mini-a', 'mini-a']));
+    await waitFor(() => expect(result.current.size).toBe(2));
+    expect([...result.current.get(null)!]).toEqual(['anthropic']);
+    expect([...result.current.get('mini-a')!]).toEqual(['openai']);
+    expect(remote).toHaveBeenCalledExactlyOnceWith({
+      action: 'remote-manage', deviceId: 'mini-a',
+      request: { action: 'manage-share', command: { action: 'shared-provider-ids' } },
+    });
+
+    local.mockResolvedValue(classified());
+    await act(async () => changed());
+    expect([...result.current.get(null)!]).toEqual([]);
+    expect([...result.current.get('mini-a')!]).toEqual(['openai']);
+  });
+
+  it('retains a known classification on read failure and rejects an old account’s late response', async () => {
+    const { result, rerender } = renderHook(() => useOwnedProviderShares([]));
+    await waitFor(() => expect(result.current.get(null)?.has('anthropic')).toBe(true));
+    local.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => changed());
+    expect(result.current.get(null)?.has('anthropic')).toBe(true);
+
+    let finish!: (value: unknown) => void;
+    local.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => changed());
+    local.mockResolvedValue({ ready: true, providerIds: [] });
+    setDataOwnerGeneration('owner-2', 2);
+    rerender();
+    expect(result.current.size).toBe(0);
+    await act(async () => finish(classified('anthropic')));
+    await waitFor(() => expect(result.current.has(null)).toBe(true));
+    expect([...result.current.get(null)!]).toEqual([]);
+  });
+
+  // Greptile discussion_r4408622288: OWNED_CHANGED previously kept querying while hidden.
+  it('pauses event and timer reads while hidden, then refreshes the visible classification', async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const { result } = renderHook(() => useOwnedProviderShares(['mini-a']));
+    await act(async () => undefined);
+    expect(result.current.get(null)?.has('anthropic')).toBe(true);
+    local.mockClear().mockResolvedValue(classified());
+    remote.mockClear();
+    visibility.mockReturnValue('hidden');
+    await act(async () => {
+      changed();
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(local).not.toHaveBeenCalled();
+    expect(remote).not.toHaveBeenCalled();
+    visibility.mockReturnValue('visible');
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect([...result.current.get(null)!]).toEqual([]);
+    expect(remote).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies an old computer without renewing its 60-second fast-poll window every 30 seconds', async () => {
+    vi.useFakeTimers();
+    remote.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] Update the computer'))
+      .mockResolvedValue({ ready: true, shares: [{ providerId: 'openai', members: [{ status: 'paused' }] }] });
+    const { result } = renderHook(() => useOwnedProviderShares(['mini-a']));
+    await act(async () => undefined);
+    expect(result.current.get('mini-a')?.has('openai')).toBe(true);
+    expect(remote).toHaveBeenCalledTimes(2);
+    remote.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(89_999));
+    expect(remote).not.toHaveBeenCalled();
+    remote.mockResolvedValue({ ready: true, shares: [] });
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(remote).toHaveBeenCalledExactlyOnceWith({
+      action: 'remote-manage', deviceId: 'mini-a',
+      request: { action: 'manage-share', command: { action: 'owned', range: 'month' } },
+    });
+    expect([...result.current.get('mini-a')!]).toEqual([]);
+  });
+});
 
 describe('useOwnRemoteProviders', () => {
   it.each([

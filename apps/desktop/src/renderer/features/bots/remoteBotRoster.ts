@@ -13,6 +13,8 @@ export interface RemoteBot {
   sessionId: string | null;
   online: boolean;
   connectionKnown?: boolean;
+  teammateActivity?: { phase: string };
+  needsAttention?: boolean;
   generation?: { phase: WorkingPhase; startedAt: number | null };
   lastReplyAt?: number;
   readAt?: number;
@@ -96,6 +98,9 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
       lastReplyAt: typeof display.lastReplyAt === 'number' && Number.isFinite(display.lastReplyAt) && display.lastReplyAt >= 0 ? display.lastReplyAt : undefined,
       followingSessionIds: remoteBotTaskIds(item.links, 'following'),
+      teammateActivity: typeof record(display.teammateActivity).phase === 'string'
+        ? { phase: record(display.teammateActivity).phase as string } : undefined,
+      needsAttention: ['warning', 'critical'].includes(String(record(display.status).tone)),
       online: true,
       connectionKnown: true,
       ...(typeof record(display.generation).phase === 'string' ? { generation: {

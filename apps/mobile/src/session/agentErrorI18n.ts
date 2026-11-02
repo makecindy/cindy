@@ -1,17 +1,23 @@
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-export { requiresAgentErrorConfigurationChange } from '@cindy/maker-shared/error-redaction';
+import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
+
+export function requiresAgentErrorConfigurationChange(message: string): boolean {
+  return message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]') || requiresConfigurationChange(message);
+}
 
 /**
  * Mobile history errors and recovery-less live failures share this guidance.
  * Retrying cannot fix missing host credentials, a lost Codex thread or content
  * encrypted for a different provider. Desktop has additional local-context gates.
  */
-export function describeNonRetryableAgentError(text: string): string | null {
+export function describeNonRetryableAgentError(text: string, reason?: unknown): string | null {
+  if (text.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return i18n.t('session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED');
   const authGuidance = describeAgentAuthError(text);
   if (authGuidance) return authGuidance;
   if (/thread not found/i.test(text)) return i18n.t('session.tail.codexThreadLost');
+  if (isRemoteCompactEncryptedContentError(text, reason)) return null;
   if (/invalid_encrypted_content/i.test(text)) return i18n.t('session.tail.encryptedContentInvalid');
   return null;
 }
@@ -65,7 +71,9 @@ export function parseMobileToolLoopErrorDetails(value: unknown): MobileToolLoopE
 export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
+  message = '',
 ): string | null {
+  if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
   if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
   if (reason !== 'tool_use_loop_detected') return null;
@@ -85,6 +93,7 @@ export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): strin
 
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
 export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
+  if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const limitReason = /\[REMOTE_AGENT_BUSY\] \[(DEVICE_LIMIT|TOTAL_LIMIT)\]/.exec(message)?.[1];
   if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
   const parsed = parseAgentErrorCode(message);
@@ -103,6 +112,7 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
  * Unknown codes return null so the caller keeps its own fallback instead of "reply failed".
  */
 export function remoteActionErrorI18nKey(message: string): string | null {
+  if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const code = parseAgentErrorCode(message)?.code;
   const key = code ? `session.remoteError.${code}` : null;
   return key && i18n.exists(key) ? key : null;

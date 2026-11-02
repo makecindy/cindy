@@ -99,6 +99,7 @@ export function projectRecentMobileWorkActivities(
 export function projectMobileWorkActivities(
   children: readonly MobileWorkChildItem[],
   isStreaming: boolean,
+  preserveRepeatedReads = false,
 ): MobileWorkActivityProjection {
-  return projectWorkActivities(children.map(projectableChild), isStreaming);
+  return projectWorkActivities(children.map(projectableChild), isStreaming, preserveRepeatedReads);
 }

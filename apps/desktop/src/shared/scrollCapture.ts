@@ -82,6 +82,7 @@ function matchSampledFrames(previous: RegionScreenshotBitmap, next: RegionScreen
   }
   const rowErrors = Array.from({ length: height }, (_, y) => errorAt(previous, next, y, y, columns));
   if (rowErrors.every((error) => error < 2)) return { kind: 'same' };
+  const mostlyStationary = rowErrors.filter((error) => error < 2).length / height >= 0.9;
   let header = 0;
   let footer = 0;
   const fixedLimit = Math.floor(height / 3);
@@ -102,10 +103,15 @@ function matchSampledFrames(previous: RegionScreenshotBitmap, next: RegionScreen
     for (let sample = 0; sample < rows; sample++) {
       const y = start + Math.floor((sample / rows) * overlap);
       sum += errorAt(previous, next, y + offset, y, columns);
-      // Errors are nonnegative. Once a reliable candidate exists, an offset
-      // already outside its ambiguity margin can neither win nor invalidate it.
-      // Keep searching all offsets, but stop reading rows for this loser.
-      if (bestScore <= 3 && sum / rows > bestScore + Math.max(0.15, bestScore * 0.5)) break;
+      // Errors are nonnegative: this partial mean is a lower bound. An accepted
+      // score is <= 3 and its largest ambiguity margin is 1.5, so a candidate
+      // already above 4.5 cannot win or invalidate any accepted match. Prune it
+      // even before finding a winner (especially valuable for unrelated frames).
+      // Keep full scores for mostly-stationary frames: their zero-motion winner
+      // may intentionally be accepted above 3, so its ordering still matters.
+      const cutoff = bestScore <= 3 ? bestScore + Math.max(0.15, bestScore * 0.5)
+        : mostlyStationary ? Infinity : 4.5;
+      if (sum / rows > cutoff) break;
     }
     const score = sum / rows;
     candidates.push({ offset, score });
@@ -117,7 +123,7 @@ function matchSampledFrames(previous: RegionScreenshotBitmap, next: RegionScreen
     const reverse = matchSampledFrames(next, previous, false);
     return reverse.kind === 'append' ? { ...reverse, kind: 'prepend', offset: -reverse.offset } : { kind: 'unmatched' };
   }
-  if (best?.offset === 0 && (best.score <= 3 || rowErrors.filter((error) => error < 2).length / height >= 0.9)) return { kind: 'same' };
+  if (best?.offset === 0 && (best.score <= 3 || mostlyStationary)) return { kind: 'same' };
   if (!best || best.offset <= 0 || best.score > 3) return { kind: 'unmatched' };
   const rival = candidates.find((candidate) => Math.abs(candidate.offset - best.offset) > 2);
   // White space dilutes the mean error on text pages. Compare relative confidence:

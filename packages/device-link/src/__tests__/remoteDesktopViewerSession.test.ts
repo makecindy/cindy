@@ -72,7 +72,7 @@ it("an uncertain release blocks takeover until a heartbeat reconciles and releas
     enabled: false,
   });
 });
-it("stop cancels a pending start and cleans up the returned lease without reopening", async () => {
+it.each([false, true])("stop preserves lock=%s when cleaning up a cancelled pending start", async (lockScreen) => {
   const f = fixture();
   let finish!: (value: unknown) => void;
   const started = deferred<void>();
@@ -85,13 +85,17 @@ it("stop cancels a pending start and cleans up the returned lease without reopen
   );
   const connection = f.session.connect({ isCurrent: () => true });
   await started.promise;
-  const stopping = f.session.stop();
+  const stopping = f.session.stop(lockScreen);
+  // A second ordinary cleanup cannot undo the earlier lock requirement.
+  const secondStop = f.session.stop();
   finish({ lease: "late" });
   await expect(connection).rejects.toThrow("DESKTOP_VIDEO_STOPPED");
   await stopping;
+  await secondStop;
   expect(f.request.mock.calls.at(-1)?.[0]).toEqual({
     op: "stop",
     lease: "late",
+    ...(lockScreen ? { lockScreen: true } : {}),
   });
 });
 

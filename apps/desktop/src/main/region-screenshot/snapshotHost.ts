@@ -4,7 +4,6 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 
 import { createLogger } from '../logger';
@@ -25,6 +24,9 @@ import type { RegionRect, RegionScreenshotBitmap } from '../../shared/regionScre
 const log = createLogger('region-screenshot:snapshot');
 const exec = promisify(execFile);
 const REQUEST_TIMEOUT_MS = 600;
+const MAX_FRAME_PIXELS = 32_000_000;
+// Old helpers reply with one base64 JSON line. Bound that compatibility path too.
+const MAX_REPLY_LINE_BYTES = Math.ceil(MAX_FRAME_PIXELS * 4 / 3) * 4 + 65536;
 
 export interface SnapshotWindow {
   /** Windows: HWND; macOS: CGWindowID。只在本次会话内使用。 */
@@ -32,6 +34,7 @@ export interface SnapshotWindow {
   pid: number | null;
   /** Windows 为物理像素, macOS 为全局 DIP; [left, top, right, bottom]。 */
   rect: [number, number, number, number];
+  snapRects?: [number, number, number, number][];
 }
 
 const binaryName =
@@ -123,10 +126,18 @@ export function resolveSnapshotBinary(waitForBuild = true): Promise<string | nul
 interface Pending {
   resolve: (value: Record<string, unknown> | null) => void;
   timer: ReturnType<typeof setTimeout>;
+  frameEdge?: number;
 }
 
 /** 一次截图会话内的识别程序进程。所有请求失败都返回空结果, 不抛错。 */
 export class SnapshotHelper {
+  /** Resolve through input-transparent overlays, but only within the captured windows. */
+  async scrollTarget(candidates: readonly SnapshotWindow[], x: number, y: number): Promise<SnapshotWindow | null> {
+    const response = await this.request({ op: 'scroll-target', x, y });
+    return candidates.find(({ handle, pid, rect }) => handle === response?.hwnd && pid === response?.pid
+      && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]) ?? null;
+  }
+
   /** One bounded wheel step in the captured window; never an arbitrary input bridge. */
   async scroll(window: SnapshotWindow, x: number, y: number, delta: number): Promise<boolean> {
     const response = await this.request({ op: 'scroll', hwnd: window.handle, pid: window.pid, x, y, delta });
@@ -135,6 +146,9 @@ export class SnapshotHelper {
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
+  private lineChunks: Buffer[] = [];
+  private lineBytes = 0;
+  private binary: { message: Record<string, unknown>; pixels: Buffer; received: number } | null = null;
 
   static async start(waitForBuild = true): Promise<SnapshotHelper> {
     const helper = new SnapshotHelper();
@@ -161,12 +175,52 @@ export class SnapshotHelper {
         if (this.child === child) this.dispose();
       });
       child.stderr.resume();
-      createInterface({ input: child.stdout })
-        .on('error', fail)
-        .on('line', (line) => this.onLine(line));
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (this.child === child) this.onData(chunk);
+      });
+      child.stdout.on('end', () => {
+        if (this.child === child) this.dispose();
+      });
     } catch (error) {
       log.warn('snapshot helper spawn threw', { error });
       this.child = null;
+    }
+  }
+
+  /** JSON line, optionally followed by exactly byteLength raw BGRA bytes.
+   * Never repeatedly concatenate a growing frame or decode pixels as text. */
+  private onData(chunk: Buffer): void {
+    let offset = 0;
+    while (offset < chunk.length && this.child) {
+      if (this.binary) {
+        const frame = this.binary;
+        const size = Math.min(chunk.length - offset, frame.pixels.length - frame.received);
+        chunk.copy(frame.pixels, frame.received, offset, offset + size);
+        frame.received += size;
+        offset += size;
+        if (frame.received === frame.pixels.length) {
+          this.binary = null;
+          this.resolveResponse({ ...frame.message, pixels: frame.pixels });
+        }
+        continue;
+      }
+      const newline = chunk.indexOf(10, offset);
+      const end = newline === -1 ? chunk.length : newline;
+      const part = chunk.subarray(offset, end);
+      this.lineBytes += part.length;
+      if (this.lineBytes > MAX_REPLY_LINE_BYTES) {
+        this.dispose();
+        return;
+      }
+      if (newline === -1) {
+        this.lineChunks.push(part);
+        return;
+      }
+      const line = this.lineChunks.length === 0 ? part : Buffer.concat([...this.lineChunks, part], this.lineBytes);
+      this.lineChunks = [];
+      this.lineBytes = 0;
+      offset = newline + 1;
+      this.onLine(line.toString('utf8'));
     }
   }
 
@@ -179,6 +233,25 @@ export class SnapshotHelper {
     } catch {
       return;
     }
+    if (message.encoding === 'bgra') {
+      const entry = this.pending.get(typeof message.id === 'number' ? message.id : NaN);
+      const { width, height, byteLength } = message;
+      // Invalid binary framing cannot be skipped: the following pixels would
+      // otherwise be interpreted as another request's JSON response.
+      if (!entry?.frameEdge || !validFrameSize(width, height, entry.frameEdge)
+        || byteLength !== (width as number) * (height as number) * 4) {
+        this.dispose();
+        return;
+      }
+      // Exact, unpooled backing storage: a view crossing IPC must not expose
+      // another reply's bytes. Publish only after every byte has been received.
+      this.binary = { message, pixels: Buffer.allocUnsafeSlow(byteLength as number), received: 0 };
+      return;
+    }
+    this.resolveResponse(message);
+  }
+
+  private resolveResponse(message: Record<string, unknown>): void {
     const id = typeof message.id === 'number' ? message.id : NaN;
     const entry = this.pending.get(id);
     if (!entry) return;
@@ -196,7 +269,10 @@ export class SnapshotHelper {
         // 顺序协议不能取消 native 当前调用; 超时后结束本次 helper，避免旧查询排队。
         this.dispose();
       }, timeoutMs);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, {
+        resolve, timer,
+        ...(payload.op === 'frame' && typeof payload.edge === 'number' ? { frameEdge: payload.edge } : {}),
+      });
       try {
         child.stdin.write(`${JSON.stringify({ ...payload, id })}\n`, (error) => {
           if (error && this.child === child) this.dispose();
@@ -213,24 +289,52 @@ export class SnapshotHelper {
     const windows: SnapshotWindow[] = [];
     for (const raw of list) {
       if (!raw || typeof raw !== 'object') continue;
-      const { hwnd, pid, rect } = raw as Record<string, unknown>;
+      const { hwnd, pid, rect, snapRects } = raw as Record<string, unknown>;
       if (typeof hwnd !== 'number' || !isRectTuple(rect)) continue;
-      windows.push({ handle: hwnd, pid: typeof pid === 'number' ? pid : null, rect });
+      windows.push({ handle: hwnd, pid: typeof pid === 'number' ? pid : null, rect,
+        ...(Array.isArray(snapRects) ? { snapRects: snapRects.slice(0, 256).filter(isRectTuple)
+          .filter((r) => r[0] >= rect[0] && r[1] >= rect[1] && r[2] <= rect[2] && r[3] <= rect[3]) } : {}),
+      });
     }
     return windows;
   }
 
+  /** Resolve only captured targets; an unknown native hit is an occluder, not a reason to look below it. */
+  async windowAt(
+    windows: readonly SnapshotWindow[], x: number, y: number, exclude: readonly number[],
+  ): Promise<SnapshotWindow | null> {
+    const contains = ({ rect }: SnapshotWindow) => x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3];
+    if (process.platform === 'darwin') {
+      const response = await this.request({ op: 'window-at', x, y, exclude });
+      if (typeof response?.hwnd === 'number') {
+        return windows.find((window) => window.handle === response.hwnd && contains(window)) ?? null;
+      }
+    }
+    // Windows already excludes click-through windows during enumeration. Old
+    // native helpers and unavailable helpers retain rectangle-only snapping.
+    return windows.find(contains) ?? null;
+  }
+
   /** 指针下的界面元素 (由内到外), 坐标系同 {@link SnapshotWindow.rect}。 */
-  async elements(window: SnapshotWindow, x: number, y: number): Promise<SnapshotWindow['rect'][]> {
+  async elements(window: SnapshotWindow, x: number, y: number): Promise<{
+    rects: SnapshotWindow['rect'][]; preferredRect?: SnapshotWindow['rect'];
+  }> {
     const response = await this.request({
       op: 'elements',
       hwnd: window.handle,
+      rect: window.rect,
       ...(window.pid !== null ? { pid: window.pid } : {}),
       x: Math.round(x),
       y: Math.round(y),
     });
     const rects = Array.isArray(response?.rects) ? response.rects : [];
-    return rects.filter(isRectTuple);
+    const preferred = response?.preferredRect;
+    const valid = (rect: unknown): rect is SnapshotWindow['rect'] => isRectTuple(rect)
+      && rect[0] <= x && x < rect[2] && rect[1] <= y && y < rect[3];
+    return {
+      rects: rects.filter(valid),
+      ...(valid(preferred) ? { preferredRect: preferred } : {}),
+    };
   }
 
   /** macOS: 截图前的前台应用进程号, 结束后把焦点还给它。 */
@@ -266,19 +370,32 @@ export class SnapshotHelper {
 
   /** Windows capture in the current user session; no elevated desktop broker. */
   async capture(rect: RegionRect, edge: number): Promise<RegionScreenshotBitmap | null> {
-    const response = await this.request({ op: 'frame', ...rect, edge }, 1500);
-    if (!response || typeof response.pixels !== 'string') return null;
+    // Opt-in keeps new native helpers compatible with older hosts; old helpers
+    // ignore encoding and continue returning their existing base64 JSON reply.
+    const response = await this.request({ op: 'frame', ...rect, edge, encoding: 'bgra' }, 1500);
+    if (!response) return null;
     const { width, height } = response;
-    if (typeof width !== 'number' || typeof height !== 'number' || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > edge || height > edge || width * height > 32_000_000) return null;
-    if (response.pixels.length > Math.ceil(width * height * 4 / 3) * 4) return null;
-    const bytes = Buffer.from(response.pixels, 'base64');
+    if (typeof width !== 'number' || typeof height !== 'number' || !validFrameSize(width, height, edge)) return null;
+    let bytes: Buffer;
+    if (Buffer.isBuffer(response.pixels)) bytes = response.pixels;
+    else if (typeof response.pixels === 'string') {
+      if (response.pixels.length > Math.ceil(width * height * 4 / 3) * 4) return null;
+      bytes = Buffer.from(response.pixels, 'base64');
+    } else return null;
     if (bytes.length !== width * height * 4) return null;
-    return { width, height, data: new Uint8Array(bytes) };
+    return {
+      width, height,
+      data: bytes.buffer instanceof ArrayBuffer && bytes.byteLength === bytes.buffer.byteLength
+        ? new Uint8Array(bytes.buffer) : new Uint8Array(bytes),
+    };
   }
 
   dispose(): void {
     const child = this.child;
     this.child = null;
+    this.binary = null;
+    this.lineChunks = [];
+    this.lineBytes = 0;
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
       entry.resolve(null);
@@ -293,6 +410,12 @@ export class SnapshotHelper {
       }
     }
   }
+}
+
+function validFrameSize(width: unknown, height: unknown, edge: number): boolean {
+  return typeof width === 'number' && typeof height === 'number'
+    && Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0
+    && width <= edge && height <= edge && width * height <= MAX_FRAME_PIXELS;
 }
 
 function isRectTuple(value: unknown): value is [number, number, number, number] {

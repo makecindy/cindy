@@ -257,8 +257,7 @@ import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
   projectFilterIncludes,
-  mergeVisibleReorder,
-  normalizeManualPinnedOrder,
+  buildManualPinnedReorder,
 } from './hooks/helpers/sidebarFilterCore';
 import {
   activePinnedSidebarEntryIds,
@@ -740,13 +739,13 @@ export function CCAgentSidebarUpper() {
       );
       const comparisonKey = (entryId: string) =>
         pinnedSidebarEntryComparisonKey(entryId, localPlatform);
-      const baseOrder = normalizeManualPinnedOrder(
+      const { baseOrder, order } = buildManualPinnedReorder(
         filter.manualPinnedOrder,
         fullActivePinnedIds,
+        visibleNewOrder,
         comparisonKey,
       );
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+      void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -1214,7 +1213,7 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: { inputHandoff: true; inputHandoffRequestId?: string }) => {
       const session = findSessionNotificationSession(sessionId, [
         sessionsRef.current,
         allSessionsForNotificationRef.current,
@@ -1237,7 +1236,8 @@ function ExpandedView({
           projectDraftSessionTitle(session.title, unnamedLabelRef.current),
           leadSession ? projectDraftSessionTitle(leadSession.title, unnamedLabelRef.current) : null,
         );
-        sendSessionEventNotification(sessionId, title, kind);
+        if (options) sendSessionEventNotification(sessionId, title, kind, options);
+        else sendSessionEventNotification(sessionId, title, kind);
         return;
       }
       // /review 审查任务不单独通知:结果回到来源任务,由来源任务的轮次收尾通知。
@@ -1249,6 +1249,7 @@ function ExpandedView({
         sendSessionEventNotification(sessionId, title, kind, {
           remoteDevice: !!session.deviceLinkDeviceId,
           remoteDeviceId: session.deviceLinkDeviceId,
+          ...options,
         });
         return;
       }
@@ -1257,7 +1258,8 @@ function ExpandedView({
         const botTitle = await botOwnedSessionNotificationTitle(sessionId);
         // 伙伴群专线不发系统通知,确认请求在群聊里提示(docs/product-rules/bot-group-chat.md §3)。
         if (botTitle === BOT_GROUP_LANE_SESSION) return;
-        sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
+        if (options) sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind, options);
+        else sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
       })();
     },
     [],
@@ -1271,7 +1273,7 @@ function ExpandedView({
     [fireSessionNotification],
   );
   const handleSessionNeedsReply = useCallback(
-    (sessionId: string) => fireSessionNotification(sessionId, 'needs-reply'),
+    (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => fireSessionNotification(sessionId, 'needs-reply', options),
     [fireSessionNotification],
   );
 
@@ -2157,13 +2159,13 @@ function ExpandedView({
       );
       const comparisonKey = (entryId: string) =>
         pinnedSidebarEntryComparisonKey(entryId, localPlatform);
-      const baseOrder = normalizeManualPinnedOrder(
+      const { baseOrder, order } = buildManualPinnedReorder(
         filter.manualPinnedOrder,
         fullActivePinnedIds,
+        visibleNewOrder,
         comparisonKey,
       );
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+      void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -2443,7 +2445,6 @@ function ExpandedView({
     if (onScheduleMatch || onNewMakerMatch) handleClearSelection();
   }, [onScheduleMatch, onNewMakerMatch, handleClearSelection]);
 
-  const [linkingCodexProject, setLinkingCodexProject] = useState<string | null>(null);
 
   // 远程会话的已读回执有两类首发即失的场景,都靠本 memo 的 key 变化驱动重跑补发:
   //  1. 恢复 / 深链直开:effect 先于 remoteProjectsStore 完成 sessionId→deviceId 起源
@@ -2829,39 +2830,11 @@ function ExpandedView({
     [handleClearSelection, navigate, selectedDialogueDeviceResolution],
   );
 
-  const handleLinkCodexProject = useCallback(
-    async (project: ProjectNode) => {
-      if (linkingCodexProject) return;
-      setLinkingCodexProject(project.projectKey);
-      try {
-        const result = await window.electronAPI.localDb.sessionImport.linkCodexProject(
-          project.workingDir,
-        );
-        if (result.inserted > 0 || result.updated > 0) {
-          toast.success(
-            t('ccAgent.sidebar.projectAction.syncCodexDone', {
-              inserted: result.inserted,
-              updated: result.updated,
-            }),
-          );
-          emitRefresh();
-        } else if (result.matched > 0) {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexAlreadyLinked'));
-        } else {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexNone'));
-        }
-      } catch (err) {
-        log.error('[link codex project]', err);
-        toast.error(
-          t('ccAgent.sidebar.projectAction.syncCodexFailed', {
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      } finally {
-        setLinkingCodexProject(null);
-      }
+  const handleImportFromTools = useCallback(
+    (project: ProjectNode) => {
+      navigate(`/settings?tab=import&project=${encodeURIComponent(project.workingDir)}`);
     },
-    [linkingCodexProject, t],
+    [navigate],
   );
 
   /* ---- Project 行内的 Open Explorer 按钮：在系统文件管理器中打开 workingDir ----
@@ -3902,8 +3875,7 @@ function ExpandedView({
                       onCreateInProject={handleCreateInProject}
                       onOpenConversationSearch={handleOpenConversationSearch}
                       onOpenInExplorer={handleOpenInExplorer}
-                      onLinkCodexProject={handleLinkCodexProject}
-                      linkingCodexProject={linkingCodexProject === project.projectKey}
+                      onImportFromTools={handleImportFromTools}
                       onBrowseFiles={handleBrowseFiles}
                       onArchiveAll={handleArchiveAllInProject}
                     />
@@ -3962,8 +3934,7 @@ function ExpandedView({
                   onCreateInProject={handleCreateInProject}
                   onOpenConversationSearch={handleOpenConversationSearch}
                   onOpenInExplorer={handleOpenInExplorer}
-                  onLinkCodexProject={handleLinkCodexProject}
-                  linkingCodexProject={linkingCodexProject}
+                  onImportFromTools={handleImportFromTools}
                   onBrowseFiles={handleBrowseFiles}
                   onArchiveAll={handleArchiveAllInProject}
                   onSearchDialogues={handleSearchDialogues}

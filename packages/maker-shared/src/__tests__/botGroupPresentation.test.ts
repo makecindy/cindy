@@ -9,10 +9,36 @@ import {
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
+  botGroupSidebarPlanPreview,
   chatGroupMembership,
   botGroupNewMessageCount,
+  botGroupActivityAt,
+  latestBotGroupMessage,
 } from '../botGroupPresentation.js';
-import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupPlanView } from '../botGroupChat.js';
+import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+
+describe('group list activity', () => {
+  it('keeps creation as a floor without treating settings edits as activity', () => {
+    const group = { createdAt: 20, updatedAt: 100, lastMessage: null };
+    expect(botGroupActivityAt(group)).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 10 } })).toBe(20);
+    expect(botGroupActivityAt({ ...group, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: NaN, lastMessage: { createdAt: 30 } })).toBe(30);
+    expect(botGroupActivityAt({ createdAt: 20, lastMessage: { createdAt: NaN } })).toBe(20);
+  });
+
+  it('selects topics and shared notices by exact server position without mutating the snapshot', () => {
+    const main = { seq: '9007199254740992', deleted: false, threadRootId: null };
+    const topic = { ...main, seq: '9007199254740993', threadRootId: 'root' };
+    const joined = { ...main, seq: '9007199254740994', origin: 'system' };
+    const deleted = { ...main, seq: '9007199254740995', deleted: true };
+    const messages = Object.freeze([main, deleted, topic]);
+    expect(latestBotGroupMessage(messages)).toBe(topic);
+    expect(latestBotGroupMessage([joined, ...messages])).toBe(joined);
+    expect(latestBotGroupMessage([deleted])).toBeUndefined();
+    expect(latestBotGroupMessage([])).toBeUndefined();
+  });
+});
 
 // Unit: history browsing needs an actionable count; old-page loads and repeated pushes are not arrivals.
 it('counts only new messages from other people and companions below the observed tail', () => {
@@ -104,8 +130,8 @@ describe('public failure snapshot decoder', () => {
       code, planId: 'plan', updatedAt: Date.parse(row.updated_at) });
     expect(JSON.stringify(view)).not.toContain(row.detail);
   });
-  it.each([{ status: 'running' }, { conversation_id: 'foreign' }, { epoch: NaN }, { epoch: -1 }, { source_message_id: null }])
-    ('rejects inapplicable or malformed execution rows: %j', invalid => {
+  it.each([{ status: 'running' }, { conversation_id: 'foreign' }, { epoch: NaN }, { epoch: -1 }, { source_message_id: null }])(
+    'rejects inapplicable or malformed execution rows: %j', invalid => {
       expect(readBotGroupExecutionFailure({ ...row, ...invalid }, 'room')).toBeNull();
     });
   it('uses a fixed fallback for unknown categories and drops invalid timestamps', () => {
@@ -122,6 +148,37 @@ const plan = (overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView => ({
     { position: 1, botId: 'b', botName: 'B', task: 'two', status: 'pending' },
   ],
   ...overrides,
+});
+
+// Test value
+// - Production entry and observable result: botGroupSidebarPlanPreview() chooses the running
+//   sidebar strip, a terminal step label, or the latest-message fallback.
+// - Bug / rule basis: #7084; the plan-level running status must not outlive its current step.
+// - Existing coverage gap: composer and follow-up tests exist, but no sidebar preview branch did.
+// - Minimal failing input: a running open plan whose current step is no longer running; unit tier.
+describe('sidebar plan activity follows the current step', () => {
+  const summary = (
+    status: BotGroupOpenPlanSummary['status'],
+    currentStepStatus: BotGroupPlanStepStatus | null,
+  ): BotGroupSummary => ({
+    members: [{ botId: 'a', name: 'A' }],
+    planningBotId: null,
+    organizerBotId: 'a',
+    openPlan: {
+      id: 'p1', status, currentStep: 0, stepCount: 2, currentBotName: 'A', currentStepStatus,
+    },
+  } as BotGroupSummary);
+
+  it.each([
+    ['running', 'running', { kind: 'running', botName: 'A', step: 1, total: 2 }],
+    ['running', 'done', { kind: 'step-done', botName: 'A' }],
+    ['running', 'failed', { kind: 'step-failed', botName: 'A' }],
+    ['running', 'pending', null],
+    ['waiting', 'done', { kind: 'step-done', botName: 'A' }],
+    ['waiting', 'failed', { kind: 'step-failed', botName: 'A' }],
+  ] as const)('maps plan %s with %s current step', (status, currentStepStatus, expected) => {
+    expect(botGroupSidebarPlanPreview(summary(status, currentStepStatus))).toEqual(expected);
+  });
 });
 
 describe('bot group copy variants (shared by desktop and phone)', () => {
