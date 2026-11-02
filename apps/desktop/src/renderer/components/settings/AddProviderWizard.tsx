@@ -32,7 +32,7 @@ import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
-import { presetCandidateRoute, presetModelCandidate, presetSupplementalModels } from '../../../shared/providerModelCandidates';
+import { presetCandidateRoute, presetModelCandidate, presetRouteHasInterfaceProfiles, presetSupplementalModels } from '../../../shared/providerModelCandidates';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   isLocalRuntimeBetaProviderId,
@@ -71,6 +71,7 @@ import type {
   CustomProviderConfig,
   ProviderModelDiscoverySource,
   ProviderModelRouteConfig,
+  ProviderRuntimeModelConfig,
   ProviderPreset,
   ProviderView,
 } from '@cindy/model-providers';
@@ -478,6 +479,7 @@ export function AddProviderWizard({
   >(new Map());
 
   const [modelRegistry, setModelRegistry] = useState<ModelRegistry>();
+  const [catalogReady, setCatalogReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -487,9 +489,10 @@ export function AddProviderWizard({
         if (!cancelled) {
           setModelRegistry(r.modelRegistry);
           setPresets(withSpeechApiPresets(r.presets));
+          setCatalogReady(true);
         }
       })
-      .catch(() => { if (!cancelled) setPresets(withSpeechApiPresets([])); });
+      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets([])); setCatalogReady(true); } });
     return () => {
       cancelled = true;
     };
@@ -970,7 +973,7 @@ export function AddProviderWizard({
 
   // ── 预设:进入 Step 3 时自动拉取模型 ─────────────────────────────────────
   const startFetch = useCallback(async () => {
-    if (!sel || sel.kind !== 'preset') return;
+    if (!catalogReady || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const agents = configuredPresetAgents(preset);
     const editableBaseUrlsValid = agents.every((agent) => {
@@ -1098,10 +1101,6 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
-    // Old catalogs have no interface declarations to consult. Keep their
-    // established discovery behavior, including the split-inventory protection.
-    const hasInterfaceProfiles = modelRegistry?.schemaVersion === 6
-      && modelRegistry.interfaceProfiles?.some(profile => profile.providerId === preset.id);
     const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
       .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
       .map(([url]) => url));
@@ -1205,10 +1204,12 @@ export function AddProviderWizard({
       const confirmedRoutes = new Set<string>();
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
+        const runtimeRoute = presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls));
+        const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, modelRegistry, runtimeRoute);
         for (const m of models) {
           const existing = next.get(m.id);
           const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
-            presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)),
+            runtimeRoute,
             route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
@@ -1295,7 +1296,7 @@ export function AddProviderWizard({
       failed: !results.some((r) => r.ok),
       empty: !results.some((r) => r.models.length > 0),
     });
-  }, [sel, apiKey, presetBaseUrls, detected, entry, modelRegistry]);
+  }, [sel, apiKey, presetBaseUrls, detected, entry, modelRegistry, catalogReady]);
 
   /**
    * 零推荐模型的本机代理（例如 LiteLLM）若 `/models` 不可用或返回空清单，仍允许用户
@@ -1418,11 +1419,13 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel } =
+            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
-              ...(m.interfaceIds?.[agent] ? { interfaceId: m.interfaceIds[agent] } : {}),
+              // An automatic catalog pin must not override an explicit draft API or route.
+              ...(!draftModel.interfaceId && !draftModel.api && !draftModel.piApi && !draftModel.route
+                && m.interfaceIds?.[agent] ? { interfaceId: m.interfaceIds[agent] } : {}),
               id: m.id,
               name: m.name,
               // Selecting a model follows native-engine defaults; it is not an
@@ -1556,6 +1559,7 @@ export function AddProviderWizard({
     });
   const presetCanContinue =
     sel?.kind === 'preset' &&
+    catalogReady &&
     presetBaseUrlsValid &&
     (!presetNeedsApiKey || apiKey.trim().length > 0 || (detected?.catalog?.ok === true && apiKey === detected.apiKey
       && presetRuntimeBaseUrl(sel.preset, detected.agent, presetBaseUrls) === detected.preset.runtimes[detected.agent]?.baseUrl));
@@ -2311,13 +2315,17 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel } = saved ?? {};
-                      return { ...selectedModel, id, name: model.name,
+                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
+                        && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
+                        ...selectedModel, id, name: model.name,
                         discoveredMetadata: model.discoveredMetadata?.[target] ?? saved?.discoveredMetadata,
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
                   runtimes[target] = { ...original, baseUrl: targetBase,
+                    // Interface references need their product identity on both save paths.
+                    ...(models.some(model => model.interfaceId) ? { catalogPresetId: original.catalogPresetId ?? sel.preset.id } : {}),
                     models: modelsAfterProviderEndpointEdit(models, original.baseUrl, targetBase),
                   };
                   if (target === agent || keys[target] === detected.apiKey) keys[target] = apiKey;

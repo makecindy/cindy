@@ -23,6 +23,16 @@ export function presetCandidateRoute(preset: ProviderPreset, agent: AgentKind, b
   };
 }
 
+/** Coverage belongs to this endpoint and wire language, including withdrawn
+ * profiles. A partially migrated product must retain its other legacy runtimes. */
+export function presetRouteHasInterfaceProfiles(
+  preset: ProviderPreset, registry: ModelRegistry | undefined, route: ProviderModelRouteConfig,
+): boolean {
+  return registry?.schemaVersion === 6 && (registry.interfaceProfiles ?? []).some(profile =>
+    profile.providerId === preset.id && providerWireProtocolForApi(profile.api) === route.wireProtocol
+    && [...profile.inputBaseUrls, profile.baseUrl].some(url => cleanUrl(url) === cleanUrl(route.baseUrl)));
+}
+
 /** Combine inventory evidence with the existing interface resolver. A shared
  * inventory alone does not declare a second protocol; explicit denials must not
  * become an invitation to fall back to the older offline inventory. */
@@ -45,19 +55,21 @@ export function presetModelCandidate(
     profile.providerId === preset.id && (!profile.modelIds || profile.modelIds.includes(model.id))
     && [...profile.inputBaseUrls, profile.baseUrl].some(url => cleanUrl(url) === cleanUrl(runtimeRoute.baseUrl))) : [];
   const choices = availableModelInterfaces(registry, preset.id, model.id, runtimeRoute.baseUrl, agent);
+  const sourceCovered = profiles.some(profile => providerWireProtocolForApi(profile.api) === sourceRoute.wireProtocol);
+  const sourceAvailable = choices.some(choice => choice.route.wireProtocol === sourceRoute.wireProtocol);
   const explicitRoute = sourceRoute.requestPath ? sourceRoute : runtimeRoute.requestPath ? runtimeRoute : undefined;
   if (explicitRoute) {
-    if ((requireDeclaration || hasBinding || profiles.length > 0) && !choices.some(choice => choice.route.wireProtocol === explicitRoute.wireProtocol)) return;
+    if ((requireDeclaration || hasBinding || sourceCovered) && !choices.some(choice => choice.route.wireProtocol === explicitRoute.wireProtocol)) return;
     return sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
   }
-  const selected = choices.find(choice => choice.preferred) ?? choices[0];
+  const selected = choices.find(choice => choice.preferred) ?? (hasBinding ? choices[0] : undefined);
   if (selected) {
     // Auto is an existing reference, not a saved API/URL override. Non-default
     // interfaces need an explicit reference so Chat-only models remain runnable.
     return { ...model, interfaceId: selected.preferred ? 'auto' : selected.profileId };
   }
-  if (hasBinding || profiles.length) return;
-  if (requireDeclaration && !(isOpenRouterModelsUrl(preset.runtimes[agent]?.modelsUrl ?? '')
+  if (hasBinding || (sourceCovered && !sourceAvailable)) return;
+  if (requireDeclaration && !sourceAvailable && !(isOpenRouterModelsUrl(preset.runtimes[agent]?.modelsUrl ?? '')
     && /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(runtimeRoute.baseUrl))) return;
   return sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
 }
@@ -81,8 +93,7 @@ export function presetSupplementalModels(
   const candidates = new Map<string, ProviderRuntimeModelConfig>();
   // A global V6 registry may still leave this product on its legacy Pi adapter.
   // Declared (including retired) profiles keep the stricter interface resolver.
-  const hasInterfaceProfiles = registry?.schemaVersion === 6
-    && registry.interfaceProfiles?.some(profile => profile.providerId === preset.id);
+  const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, registry, route);
   for (const source of sources) {
     const protocol = agent === 'pi' && !hasInterfaceProfiles ? undefined : source.wireProtocol;
     for (const model of providerModelsForRoute(source.baseUrl, protocol)) {

@@ -106,6 +106,22 @@ describe('supplemental preset candidates', () => {
       .toEqual(expect.arrayContaining([expect.objectContaining({ id: model.id, execution: { pi: { api: 'mistral-conversations' } } })]));
   });
 
+  // A generic profile preferred for another engine is not the direct source's
+  // default. Exercise the bundled proxy and final runtime projection, not mocks.
+  it('keeps direct LiteLLM Pi discovery on Chat when only CC has a preferred profile', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'litellm')!;
+    const model = { id: 'private-new-model', name: 'Private' };
+    const candidate = presetModelCandidate(preset, 'pi', model, BUNDLED_CATALOG.modelRegistry,
+      presetCandidateRoute(preset, 'pi'))!;
+    expect(candidate).toEqual(model);
+    const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
+      pi: presetConnectionRuntime(preset, 'pi', [candidate]),
+    } }, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(provider.models.pi![0]).not.toHaveProperty('interfaceId');
+    expect(provider.models.pi![0]).not.toHaveProperty('route');
+    expect(provider.routing.pi).toMatchObject({ upstream: 'http://127.0.0.1:4000/v1', wireProtocol: 'openai-chat' });
+  });
+
   it('preserves the legacy Pi mixed-API inventory without a V6 registry', () => {
     const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'opencode-go')!);
     preset.runtimes.pi!.models = [];
