@@ -32,6 +32,7 @@ import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
+import { presetCandidateRoute, presetModelCandidate, presetSupplementalModels } from '../../../shared/providerModelCandidates';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   isLocalRuntimeBetaProviderId,
@@ -58,7 +59,6 @@ import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTa
 
 import {
   PROVIDER_MEDIA_FIELDS,
-  providerModelsForRoute,
   isOpenRouterModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -67,6 +67,7 @@ import {
 } from '@cindy/model-providers';
 import type {
   AgentKind,
+  ModelRegistry,
   CustomProviderConfig,
   ProviderModelDiscoverySource,
   ProviderModelRouteConfig,
@@ -471,16 +472,22 @@ export function AddProviderWizard({
         >;
         /** 附加目录发现出的模型级路由；主 runtime 目录发现的模型保持缺省路由。 */
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
+        interfaceIds?: Partial<Record<AgentKind, string>>;
       }
     >
   >(new Map());
+
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistry>();
 
   useEffect(() => {
     let cancelled = false;
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) setPresets(withSpeechApiPresets(r.presets));
+        if (!cancelled) {
+          setModelRegistry(r.modelRegistry);
+          setPresets(withSpeechApiPresets(r.presets));
+        }
       })
       .catch(() => { if (!cancelled) setPresets(withSpeechApiPresets([])); });
     return () => {
@@ -991,6 +998,7 @@ export function AddProviderWizard({
           Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
         >;
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
+        interfaceIds?: Partial<Record<AgentKind, string>>;
       }
     >();
     for (const agent of agents) {
@@ -1020,14 +1028,16 @@ export function AddProviderWizard({
       const runtime = preset.runtimes[agent]!;
       if (runtime.requestPath) continue;
       const baseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
-      const protocol = runtime.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'pi' ? 'openai-chat' : 'openai-responses');
-      for (const model of providerModelsForRoute(baseUrl, agent === 'pi' ? undefined : protocol)) {
+      for (const model of presetSupplementalModels(preset, agent, modelRegistry, baseUrl)) {
         const existing = initial.get(model.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
         } else {
           initial.set(model.id, { name: model.name, checked: false, recommended: false, agents: [agent] });
         }
+        const candidate = initial.get(model.id)!;
+        if (model.route) candidate.routes = { ...candidate.routes, [agent]: model.route };
+        if (model.interfaceId) candidate.interfaceIds = { ...candidate.interfaceIds, [agent]: model.interfaceId };
       }
     }
     // Suggestions add no account membership until the user finishes this wizard.
@@ -1088,6 +1098,9 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
+    const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
+      .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
+      .map(([url]) => url));
     const results = await Promise.all(
       agents.flatMap((agent) => {
         const originalRuntime = preset.runtimes[agent];
@@ -1185,13 +1198,18 @@ export function AddProviderWizard({
         const userModels = new Set(Object.values(detected?.config.runtimes ?? {}).flatMap(runtime => runtime?.models.map(model => model.id) ?? []));
         for (const [id] of next) if (!available.has(id) && !userModels.has(id)) next.delete(id);
       }
+      const confirmedRoutes = new Set<string>();
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
         for (const m of models) {
           const existing = next.get(m.id);
+          const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
+            presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)),
+            route, preservePresetOwnership || (!!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
+          if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
             const mergedAgents =
-              !preservePresetOwnership && !existing.agents.includes(agent)
+              candidate && !existing.agents.includes(agent)
                 ? [...existing.agents, agent]
                 : existing.agents;
             // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
@@ -1201,17 +1219,18 @@ export function AddProviderWizard({
               existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
             const presetOwnsModel =
               preset.runtimes[agent]?.models.some((model) => model.id === m.id) === true;
-            const discoveredRoute =
-              route &&
-              !presetOwnsModel &&
-              !defaultDiscoveredModels.has(`${agent}\u0000${m.id}`) &&
-              !existing.routes?.[agent]
-                ? route
-                : undefined;
+            const discoveryKey = `${agent}\u0000${m.id}`;
+            const configuredRoute = detected?.config.runtimes[agent]?.models.find(model => model.id === m.id)?.route;
+            // A confirmed online route replaces an offline suggestion, while
+            // imported routes, main-source hits and earlier sources keep priority.
+            const updateRouting = !!candidate && !presetOwnsModel && !configuredRoute
+              && !confirmedRoutes.has(discoveryKey)
+              && (!route || !defaultDiscoveredModels.has(discoveryKey));
+            if (updateRouting) confirmedRoutes.add(discoveryKey);
             if (
               mergedAgents !== existing.agents ||
               backfillWindow ||
-              discoveredRoute ||
+              updateRouting ||
               existing.name !== m.name ||
               m.discoveredCost ||
               m.discoveredMetadata || existing.speechReference
@@ -1235,12 +1254,14 @@ export function AddProviderWizard({
                 ...(backfillWindow
                   ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
                   : {}),
-                ...(discoveredRoute
-                  ? { routes: { ...existing.routes, [agent]: discoveredRoute } }
-                  : {}),
+                ...(updateRouting ? {
+                  routes: { ...existing.routes, [agent]: candidate?.route },
+                  interfaceIds: { ...existing.interfaceIds, [agent]: candidate?.interfaceId },
+                } : {}),
               });
             }
-          } else if (!preservePresetOwnership) {
+          } else {
+            confirmedRoutes.add(`${agent}\u0000${m.id}`);
             next.set(m.id, {
               name: m.name,
               ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),
@@ -1256,7 +1277,8 @@ export function AddProviderWizard({
               ...(m.contextWindow !== undefined
                 ? { contextWindows: { [agent]: m.contextWindow } }
                 : {}),
-              ...(route ? { routes: { [agent]: route } } : {}),
+              ...(candidate?.route ? { routes: { [agent]: candidate.route } } : {}),
+              ...(candidate?.interfaceId ? { interfaceIds: { [agent]: candidate.interfaceId } } : {}),
             });
           }
         }
@@ -1269,7 +1291,7 @@ export function AddProviderWizard({
       failed: !results.some((r) => r.ok),
       empty: !results.some((r) => r.models.length > 0),
     });
-  }, [sel, apiKey, presetBaseUrls, detected, entry]);
+  }, [sel, apiKey, presetBaseUrls, detected, entry, modelRegistry]);
 
   /**
    * 零推荐模型的本机代理（例如 LiteLLM）若 `/models` 不可用或返回空清单，仍允许用户
@@ -1352,6 +1374,7 @@ export function AddProviderWizard({
         discoveredMetadata: v.discoveredMetadata,
         discoveredCosts: v.discoveredCosts,
         routes: v.routes,
+        interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
       }));
     if (!selected.some(model => model.checked)) {
@@ -1395,6 +1418,7 @@ export function AddProviderWizard({
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
+              ...(m.interfaceIds?.[agent] ? { interfaceId: m.interfaceIds[agent] } : {}),
               id: m.id,
               name: m.name,
               // Selecting a model follows native-engine defaults; it is not an

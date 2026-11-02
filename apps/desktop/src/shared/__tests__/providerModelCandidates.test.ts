@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderPreset } from '@cindy/model-providers';
+import { presetCandidateRoute, presetModelCandidate, presetSupplementalModels } from '../providerModelCandidates';
+import { presetConnectionRuntime } from '../presetConnectionRuntime';
+
+// Unit: exact supplemental-model evidence through production candidate selection
+// and saved runtime projection. The old wizard only tested per-protocol lists.
+const id = 'deepseek-v4-flash-vision-exp';
+function fixture() {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+  for (const rt of Object.values(preset.runtimes)) rt!.models = rt!.models.filter(m => m.id !== id);
+  return { preset, registry: structuredClone(BUNDLED_CATALOG.modelRegistry!), model: { id, name: id } };
+}
+
+describe('supplemental preset candidates', () => {
+  it('uses exact declared APIs for all engines without changing recommendations', () => {
+    const { preset, registry } = fixture();
+    const before = structuredClone(preset);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(presetSupplementalModels(preset, agent, registry).find(m => m.id === id))
+        .toMatchObject({ id, interfaceId: 'auto' });
+    }
+    expect(preset).toEqual(before);
+  });
+
+  it.each(['retired', 'empty', 'requires', 'duplicate'] as const)('does not revive a %s declaration from offline inventory', kind => {
+    const { preset, registry } = fixture();
+    const entry = { id: 'test/vision', name: 'Vision', ...(kind === 'retired' ? { status: 'retired' as const } : {}),
+      routes: [{ providerId: preset.id, modelId: id, agents: ['claude-code' as const],
+        interfaces: kind === 'empty' ? [] : [{ profileId: 'deepseek-anthropic-messages',
+          ...(kind === 'requires' ? { requires: ['future-v99'] } : {}) }] }] };
+    registry.models.push(entry);
+    if (kind === 'duplicate') registry.models.push({ ...entry, id: 'test/duplicate' });
+    expect(presetSupplementalModels(preset, 'claude-code', registry).some(m => m.id === id)).toBe(false);
+  });
+
+  it('does not bypass missing required behavior via an explicit discovery path', () => {
+    const { preset, registry, model } = fixture();
+    for (const profile of registry.interfaceProfiles!.filter(p => p.providerId === preset.id)) {
+      profile.requires = ['future-v99'];
+    }
+    const route = presetCandidateRoute(preset, 'claude-code');
+    expect(presetModelCandidate(preset, 'claude-code', model, registry, route,
+      { ...route, requestPath: '/tenant/infer' })).toBeUndefined();
+  });
+
+  it('pins a Chat-only interface through JSON saving and real runtime projection', () => {
+    const { preset, registry, model } = fixture();
+    registry.models.push({ id: 'test/vision', name: 'Vision', routes: [{ providerId: preset.id,
+      modelId: id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+    const candidate = presetModelCandidate(preset, 'claude-code', model, registry, presetCandidateRoute(preset, 'claude-code'))!;
+    expect(candidate.interfaceId).toBe('deepseek-openai-completions');
+    const saved = JSON.parse(JSON.stringify({ id: 'test', name: 'Test', runtimes: {
+      'claude-code': presetConnectionRuntime(preset, 'claude-code', [candidate]),
+    } }));
+    expect(buildUserProvider(saved, { presets: [preset], modelRegistry: registry }).models['claude-code']![0])
+      .toMatchObject({ api: 'openai-completions', route: { wireProtocol: 'openai-chat' } });
+  });
+
+  it('keeps one saved automatic choice live across a default change, while an explicit choice stays pinned', () => {
+    const { preset, registry, model } = fixture();
+    const candidate = presetModelCandidate(preset, 'claude-code', model, registry, presetCandidateRoute(preset, 'claude-code'))!;
+    const saved = JSON.parse(JSON.stringify({ id: 'test', name: 'Test', runtimes: {
+      'claude-code': presetConnectionRuntime(preset, 'claude-code', [candidate,
+        { ...model, id: 'explicit-model', interfaceId: 'deepseek-anthropic-messages' }]),
+    } }));
+    const before = JSON.stringify(saved);
+    const project = () => buildUserProvider(saved, { presets: [preset], modelRegistry: registry }).models['claude-code']!;
+    expect(project()[0].api).toBe('anthropic-messages');
+    registry.interfaceProfiles!.find(p => p.id === 'deepseek-anthropic-messages')!.defaultFor = [];
+    registry.interfaceProfiles!.find(p => p.id === 'deepseek-openai-completions')!.defaultFor = ['claude-code', 'pi'];
+    expect(project()[0].api).toBe('openai-completions');
+    expect(project()[1].api).toBe('anthropic-messages');
+    expect(JSON.stringify(saved)).toBe(before);
+  });
+
+  it('does not lend official declarations to a custom host or erase a discovery request path', () => {
+    const { preset, registry, model } = fixture();
+    expect(presetSupplementalModels(preset, 'claude-code', registry, 'https://tenant.example')).toEqual([]);
+    const route = presetCandidateRoute(preset, 'claude-code');
+    const source = { ...route, requestPath: '/tenant/infer' };
+    expect(presetModelCandidate(preset, 'claude-code', model, registry, route, source, true))
+      .toEqual({ ...model, route: source });
+    preset.runtimes['claude-code']!.requestPath = '/tenant/infer';
+    expect(presetSupplementalModels(preset, 'claude-code', registry)).toEqual([]);
+  });
+
+  it('keeps direct dynamic discovery without treating a shared inventory as cross-protocol proof', () => {
+    const preset: ProviderPreset = { id: 'test', name: 'Test', runtimes: {
+      'claude-code': { baseUrl: 'https://tenant.example', models: [] },
+    } };
+    const model = { id: 'new-model', name: 'New' };
+    const route = presetCandidateRoute(preset, 'claude-code');
+    expect(presetModelCandidate(preset, 'claude-code', model, undefined, route)).toEqual(model);
+    expect(presetModelCandidate(preset, 'claude-code', model, undefined, route, route, true)).toBeUndefined();
+  });
+
+  it('preserves the legacy Pi mixed-API inventory without a V6 registry', () => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'opencode-go')!);
+    preset.runtimes.pi!.models = [];
+    const models = presetSupplementalModels(preset, 'pi', undefined);
+    expect(models.some(m => m.id === 'gpt-5.6-luna')).toBe(true);
+    expect(models.some(m => m.id === 'grok-4.6')).toBe(true);
+  });
+});

@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
 
 const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
@@ -54,6 +54,8 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   hasProviderLogo: () => false,
   ProviderLogoMark: () => null,
 }));
+
+import retainedDeepSeek from './fixtures/deepseek-retained-catalog.json';
 
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
@@ -341,6 +343,99 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+// Unit reproduction of #8204: use the unchanged bundled DeepSeek preset and
+// original reported model. Keep the current bundled preset as a control; the
+// historical compact preset is a separate fixture, not a claim about live data.
+it.each([
+  ['bundled', 'offline'], ['bundled', 'shared-discovery'],
+  ['historical-compact', 'offline'], ['historical-compact', 'shared-discovery'],
+  ['split-compact-fixture', 'shared-discovery'],
+] as const)(
+  'reproduction: retains declared CC membership for DeepSeek Vision Exp (%s, %s)',
+  async (catalogKind, discovery) => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const id = 'deepseek-v4-flash-vision-exp';
+    if (catalogKind !== 'bundled') {
+      for (const runtime of Object.values(preset.runtimes)) {
+        runtime!.models = runtime!.models.filter(m => ['deepseek-flash', 'deepseek-v4-pro'].includes(m.id));
+      }
+    }
+    if (catalogKind === 'split-compact-fixture') {
+      // Separate constructed boundary: different per-engine inventories sharing
+      // one modelsUrl activate preservePresetOwnership. This is not live data.
+      preset.runtimes['claude-code']!.models = preset.runtimes['claude-code']!.models.slice(0, 1);
+    }
+    expect(preset.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(catalogKind === 'bundled');
+    // Control: the production runtime resolver already accepts this exact model
+    // through the product's active declaration when CC membership is present.
+    const projected = buildUserProvider({ id: 'reproduction', name: 'Reproduction', runtimes: {
+      'claude-code': { catalogPresetId: preset.id, baseUrl: preset.runtimes['claude-code']!.baseUrl,
+        models: [{ id, name: id }] },
+    } }, { presets: [preset], modelRegistry: registry });
+    expect(projected.models['claude-code']![0]).toMatchObject({
+      id, api: 'anthropic-messages', route: { baseUrl: 'https://api.deepseek.com/anthropic' },
+    });
+    const response = { presets: [preset], modelRegistry: registry };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue(response);
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(discovery === 'offline'
+      ? { ok: false }
+      : { ok: true, models: [{ id, name: 'DeepSeek V4 Flash Vision Exp' }] });
+    renderWizard(preset.id);
+    await screen.findByDisplayValue('DeepSeek');
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-reproduction-fake' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const name = await screen.findByText('DeepSeek V4 Flash Vision Exp');
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    const row = name.closest('button')!;
+    expect.soft(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
+    fireEvent.click(row);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+    expect(saved.runtimes['claude-code']?.models.map((m: { id: string }) => m.id)).toContain(id);
+    const reloaded = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+    expect(reloaded.models['claude-code']?.find(m => m.id === id)).toMatchObject({
+      api: 'anthropic-messages', route: { baseUrl: 'https://api.deepseek.com/anthropic' },
+    });
+  },
+);
+
+// Unit: replay the public declaration retained by the actual instance, including
+// its Pi Messages base (the earlier compact fixture used a different Pi base).
+it('retained remote catalog keeps Vision Exp CC membership after merging', async () => {
+  const snapshot = JSON.stringify({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset], modelRegistry: retainedDeepSeek.registry });
+  parseCatalog(snapshot);
+  const loaded = await loadCatalogWithSource({ url: 'https://retained-catalog.example/catalog' }, {
+    fetchText: async () => snapshot,
+  });
+  expect(loaded.source).toBe('remote');
+  expect(loaded.catalog.modelRegistry?.updatedAt).toBe(BUNDLED_CATALOG.modelRegistry?.updatedAt);
+  const preset = loaded.catalog.presets!.find(p => p.id === 'deepseek')!;
+  const id = 'deepseek-v4-flash-vision-exp';
+  expect(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(true);
+  expect(preset.runtimes['claude-code']!.models.map(m => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+  expect(preset.runtimes.pi!.baseUrl).toBe('https://api.deepseek.com/anthropic');
+  const response = { presets: [preset], modelRegistry: loaded.catalog.modelRegistry };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue(response);
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: false });
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-reproduction-fake' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('button')!;
+  // The unchanged hint must disappear because the actual membership is fixed.
+  expect(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
+  fireEvent.click(row);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(saved.runtimes.codex!.models.some(m => m.id === id)).toBe(true);
+  expect(saved.runtimes.pi?.models.some(m => m.id === id) ?? false).toBe(true);
+  expect(saved.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(true);
 });
 
 describe('AddProviderWizard — preset 直达', () => {
