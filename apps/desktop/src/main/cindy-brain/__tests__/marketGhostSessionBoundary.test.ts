@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Regression guards for the market Node-authorization/session-switch race.
@@ -119,7 +119,7 @@ describe('market Ghost session boundary', () => {
     expect(leaseBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
   });
 
-  it('captures before async inspection but leases only after Node authorization', () => {
+  it('captures before async inspection but leases only after install consent revalidation', () => {
     const installStart = source.indexOf(
       'export async function installOrUpdateMarketGhostPackage(',
     );
@@ -132,14 +132,18 @@ describe('market Ghost session boundary', () => {
     const captureIndex = body.indexOf(
       'const mutationOwner = captureGhostMutationOwner();',
     );
-    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath)');
+    // PR #7924 adds a stored-release source argument; the owner/consent order is unchanged.
+    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath,');
+    const consentIndex = body.indexOf('assertGhostInstallConsent(');
     const leaseIndex = body.indexOf(
       'releaseMutation = beginGhostMutation(mutationOwner);',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
+    expect(inspectIndex).toBeGreaterThan(-1);
     expect(captureIndex).toBeLessThan(inspectIndex);
-    expect(leaseIndex).toBeGreaterThan(inspectIndex);
+    expect(consentIndex).toBeGreaterThan(inspectIndex);
+    expect(leaseIndex).toBeGreaterThan(consentIndex);
     expect(body).toContain('releaseMutation?.();');
   });
 
@@ -203,6 +207,80 @@ describe('market Ghost session boundary', () => {
     expect(source).toContain('assertGhostRelocationIdle(fromPart);');
     expect(source).toContain('if (sourceChanged) assertGhostRelocationIdle(instanceId);');
     expect(source).toContain('if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));');
+  });
+
+  // Codex 4431200348: a handoff stored but not yet dispatched must hold off a
+  // source change, or its copies move to the archive key under the call. Unit, real gate.
+  it('blocks relocation while a stored handoff has not finished dispatch', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { assertGhostRelocationIdle } = createGhostProductionCallbacks<{ assertGhostRelocationIdle(part: string): void }>(
+      { functions: ['assertGhostRelocationIdle'] },
+    )({
+      hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
+      fsSlotSingleton: null, networkSlotSingleton: null,
+      handoffStoreSingleton: { isBusy: (part: string) => part === 'busy' },
+    });
+    expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
+    expect(() => assertGhostRelocationIdle('idle')).not.toThrow();
+  });
+
+  // Codex 4431230310: the idle check passes before awaits inside the move, so new
+  // handoffs must be refused for the whole source change. Unit, real wrapper + store.
+  it('refuses new handoff holds from before the idle check until relocation ends', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { GhostHandoffStore } = await import('../handoffStore.js');
+    const store = new GhostHandoffStore({ root: () => '/unused' });
+    const during: Array<unknown> = [];
+    const { relocateGhostUserData } = createGhostProductionCallbacks<{
+      relocateGhostUserData(from: string, to: string): Promise<void>;
+    }>({ functions: ['relocateGhostUserData'] })({
+      getGhostHandoffStore: () => store,
+      relocateIdleGhostUserData: async () => {
+        during.push(store.hold('old'), store.hold('archive'));
+        throw new Error('move failed');
+      },
+    });
+    await expect(relocateGhostUserData('old', 'archive')).rejects.toThrow('move failed');
+    expect(during).toEqual([null, null]);
+    expect(store.hold('old')).toBeTypeOf('function');
+  });
+
+  // Codex 4431705287: a settings delete must not race the folder move of a source change.
+  // Unit, real IPC callback + real store on a temp root.
+  it('holds the instance for a settings delete and refuses one during a source change', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { GhostHandoffStore } = await import('../handoffStore.js');
+    const { GHOST_HANDOFF_REF_RE } = await import('../../../shared/ghost.js');
+    const nodeFs = await import('node:fs');
+    const os = await import('node:os');
+    const nodePath = await import('node:path');
+    const root = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'ghost-handoff-delete-'));
+    try {
+      const store = new GhostHandoffStore({ root: () => root });
+      const [first, second] = await store.import('art', [
+        { name: 'a.csv', bytes: new TextEncoder().encode('1') }, { name: 'b.csv', bytes: new TextEncoder().encode('2') },
+      ], () => {});
+      const busy: boolean[] = [];
+      const remove = store.delete.bind(store);
+      vi.spyOn(store, 'delete').mockImplementation((...args) => { busy.push(store.isBusy('art')); return remove(...args); });
+      const { handoffDelete } = createGhostProductionCallbacks<{ handoffDelete(event: unknown, id: unknown, ref: unknown): Promise<unknown> }>({
+        callbacks: { handoffDelete: ['ipcMain.handle', 'ghosts:handoff-delete'] },
+      })({
+        assertTrustedAppRendererEvent: () => {}, handoffStorageKey: () => 'art', GHOST_HANDOFF_REF_RE,
+        getGhostHandoffStore: () => store,
+        throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+      });
+
+      const unblock = store.blockForRelocation(['art']);
+      await expect(handoffDelete({}, 'art', first!.ref)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      unblock();
+      await expect(handoffDelete({}, 'art', second!.ref)).resolves.toEqual({ existed: true });
+      expect(busy).toEqual([true]);
+      expect(store.isBusy('art')).toBe(false);
+      expect((await store.list('art')).map((file) => file.name)).toEqual(['a.csv']);
+    } finally {
+      nodeFs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('allows explicit local replacement and detaches market routing before landing', () => {

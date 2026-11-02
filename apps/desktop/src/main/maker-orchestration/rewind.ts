@@ -41,7 +41,6 @@ import type { RewindFilesResult } from '@cindy/maker-core';
 
 import { createLogger } from '../logger';
 import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
-import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { isCodexNativeThreadStart, resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {
   buildCodexFileRewindPlan,
@@ -1038,9 +1037,5 @@ export async function commitRewindAtMessage(
     throw new Error('Rewind session 更新后查询失败');
   }
   const session = sessionToCamel({ ...row, messageCount: 0 });
-  // session-git-pr-context:rewind 软删消息后重算 PR 引用——只出现在被
-  // 回滚段里的 PR 不该再挂在会话徽标上。fire-and-forget,失败仅 warn。
-  // 放在返回值查询之后，避免辅助重算抢占主流程的 DB 读路径。
-  void recomputePrRefsForSession(sessionId).catch(() => undefined);
   return session;
 }

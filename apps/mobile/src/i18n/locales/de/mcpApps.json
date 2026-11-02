@@ -1,0 +1,13 @@
+{
+  "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
+  "retry": "Neu laden",
+  "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
+  "updateRequired": "Dieser Computer unterstützt MCP Apps noch nicht. Aktualisiere Cindy auf diesem Computer und versuch es erneut.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "Gesendet von $t(mcpApps.appName) „{{name}}“",
+  "serverId": "MCP Server ID: {{id}}",
+  "exitFullscreen": "Vollbild beenden",
+  "mobileUpdateRequired": "Aktualisiere Cindy auf diesem Smartphone, um diese Karte zu öffnen.",
+  "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen"
+}

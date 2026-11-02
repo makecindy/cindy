@@ -11,6 +11,8 @@ import { providerShareGuestPeer, type ProviderShareOwned, type RemoteAgentFastPo
 
 const state = vi.hoisted(() => ({
   owner: 'test',
+  stopHost: () => Promise.resolve(),
+  hostHandler: null as null | { handle(controller: string, raw: unknown): Promise<unknown> },
   config: null as ProviderGroupConfig | null,
   subscription: true,
   old: new Set<string>(),
@@ -90,7 +92,9 @@ vi.mock('../../device-link/providerShareUsageStore.js', async (original) => ({
 }));
 vi.mock('../../remote-agent/host/runHost.js', () => ({
   createRemoteAgentHost: (deps: RemoteAgentHostDeps) => { state.hostDeps = deps; return {
-    dispose() {}, issueDirectGroupSwitchToken: () => randomUUID(),
+    dispose: state.stopHost,
+    handle: async () => ({ version: 1 }),
+    issueDirectGroupSwitchToken: () => randomUUID(),
   }; },
 }));
 vi.mock('../../remote-agent/controller/runClient.js', () => ({
@@ -114,7 +118,7 @@ vi.mock('../guestRelay.js', () => ({
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => state.owner, isDataOwnerBroadcastScopeCurrent: () => true,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({ setRemoteAgentHandler() {} }));
+vi.mock('../../device-link/dispatch.js', () => ({ setRemoteAgentHandler(handler: typeof state.hostHandler) { state.hostHandler = handler; } }));
 vi.mock('../../device-link/providerShareReshare.js', () => ({ handleProviderShareReshare() {}, providerShareReshareAllows() {} }));
 vi.mock('../reshareRuntime.js', () => ({ providerGroupReshare: {} }));
 vi.mock('../runtime.js', () => ({ getProviderGroupOwnerScope: () => state.owner }));
@@ -190,6 +194,7 @@ const { createProviderShareUsageStore } = await import('../../device-link/provid
 const { installRemoteAgentHost, disposeRemoteAgentHost } = await import('../../remote-agent/host/service.js');
 let sequence = 0;
 beforeEach(() => {
+  state.stopHost = () => Promise.resolve();
   state.self = 'self';
   state.direct = false;
   state.planDevice = 'one';
@@ -258,6 +263,37 @@ function failAllocationAt(stage: 'Fast' | 'commit' | 'register') {
   else vi.spyOn(state.usage!, stage === 'commit' ? 'commitDirectReceiptRoute' : 'registerDirectReceiptRoute')
     .mockRejectedValue(Error('journal write failed'));
 }
+
+// #7976: service reinstall must fence the old filesystem cleanup, including
+// an intermediate host that is disposed before that cleanup finishes (unit).
+it('waits for retired hosts before dispatching and rejects an obsolete replacement', async () => {
+  let release!: () => void;
+  const cleaning = new Promise<void>(resolve => { release = resolve; });
+  state.stopHost = () => cleaning;
+  await installDirectHost();
+  disposeRemoteAgentHost();
+  state.stopHost = () => Promise.resolve();
+  await installDirectHost();
+  const obsolete = state.hostHandler!.handle('controller', { op: 'caps' }).catch(error => error);
+  disposeRemoteAgentHost();
+  await installDirectHost();
+  let completed = false;
+  const request = state.hostHandler!.handle('controller', { op: 'caps' }).then(result => {
+    completed = true;
+    return result;
+  });
+  try {
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    release();
+    await expect(request).resolves.toEqual({ version: 1 });
+    expect(await obsolete).toMatchObject({ message: expect.stringContaining('REMOTE_AGENT_UNAVAILABLE') });
+  } finally {
+    release();
+    await Promise.all([request, obsolete]);
+  }
+});
 
 // Unit / real installed O callbacks + durable journal. Previously only active
 // 30-minute receipts were tested: expiry/restart could send a native ID to M2.

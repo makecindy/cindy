@@ -15,7 +15,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -166,7 +166,7 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
   }),
 }));
 
-import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import {
   agentDeviceModelMemoryAccessors,
@@ -220,6 +220,39 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+// #8010, unit/jsdom: B can use A and a share absent from A's received list.
+// Previous cases only tested a third computer read directly by the controller.
+it.each(['device-a', 'share:b-only'])('reads %s from B and preserves the selected execution location', async (source) => {
+  const key = 'model-catalog:' + JSON.stringify(['device-b', source]);
+  catalogs.byDevice[key] = catalogs.byDevice['device-c'];
+  try {
+    const { onRelocate } = renderControlledTaskPanel({
+      devices: [{ deviceId: source, name: 'Source on B' }],
+      selectedDeviceId: null,
+      catalogHostDeviceId: 'device-b',
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'C Open · Source on B' })); });
+    expect(within(list()).getByText('C Model')).toBeTruthy();
+    expect(within(list()).queryByText('C Hidden Model')).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('C Model').closest('[data-unified-anchor]')!);
+    });
+    // Selecting this source must never normalize A to null (which would execute on B).
+    expect(onRelocate).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'c-model', agentDevice: { deviceId: source, name: 'Source on B' },
+    }));
+    cleanup();
+    // The closed trigger must resolve the same metadata, not report an unknown model.
+    render(<ModelSelector
+      modelId="c-model" effort="high" currentProviderId="c-open" vendorKey="cc"
+      deviceId={key} onModelChange={vi.fn()} onEffortChange={vi.fn()}
+    />);
+    expect(screen.getByText('C Model')).toBeTruthy();
+  } finally {
+    delete catalogs.byDevice[key];
+  }
 });
 
 // PR #6830 / Greptile r4359506145: existing panel cases inject remoteAgent directly,

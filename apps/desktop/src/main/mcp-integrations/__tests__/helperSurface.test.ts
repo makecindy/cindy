@@ -37,19 +37,19 @@ describe('classifyHelperSurface', () => {
 });
 
 
-describe('personal author tools reuse the helper surface', () => {
+describe('resolveHelperSurface', () => {
   const ordinary = { source: 'user', botId: null, botRole: null, status: 'active', remoteHostId: null, pluginOwned: 0, retainedPlugin: 0, isWorker: 0 };
   function db(row: typeof ordinary) {
-    return { queryOne: vi.fn().mockResolvedValue(row) } as unknown as Pick<DbClient, 'queryOne' | 'drizzle'>;
+    return { queryOne: vi.fn().mockResolvedValue(row) } as unknown as Pick<DbClient, 'queryOne'>;
   }
-  it.each([0, 1])('restricts plugin-owned tasks and their Workers (worker=%s)', async (isWorker) => {
-    await expect(resolveHelperSurface(db({ ...ordinary, pluginOwned: 1, retainedPlugin: 1, isWorker }), 'session', () => ({ executing: true, input: { clientId: 'plugin-task:request', originKind: 'plugin' } }))).resolves.toBe('restricted');
+  it.each([0, 1])('gives plugin-owned tasks and their Workers the default surface (worker=%s)', async (isWorker) => {
+    await expect(resolveHelperSurface(db({ ...ordinary, pluginOwned: 1, retainedPlugin: 1, isWorker }), 'session')).resolves.toBe('default');
   });
-  it('keeps revoked-but-still-executing plugin input restricted', async () => {
-    await expect(resolveHelperSurface(db({ ...ordinary, retainedPlugin: 1, isWorker: 1 }), 'worker', () => ({ executing: true, input: { clientId: 'plugin-task:request', originKind: 'orca' } }))).resolves.toBe('restricted');
+  it('uses the ordinary surface for a Worker even after its creating plugin loses control', async () => {
+    await expect(resolveHelperSurface(db({ ...ordinary, retainedPlugin: 1, isWorker: 1 }), 'worker')).resolves.toBe('default');
   });
   it('does not exclude ordinary user Workers or automation', async () => {
-    await expect(resolveHelperSurface(db({ ...ordinary, isWorker: 1 }), 'worker', () => ({ executing: true, input: { clientId: 'orca-input', originKind: 'orca' } }))).resolves.toBe('default');
-    await expect(resolveHelperSurface(db(ordinary), 'scheduled', () => ({ executing: true, input: { clientId: 'automation-input', autoResume: true } }))).resolves.toBe('default');
+    await expect(resolveHelperSurface(db({ ...ordinary, isWorker: 1 }), 'worker')).resolves.toBe('default');
+    await expect(resolveHelperSurface(db(ordinary), 'scheduled')).resolves.toBe('default');
   });
 });

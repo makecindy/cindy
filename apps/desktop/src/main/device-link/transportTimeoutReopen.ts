@@ -41,6 +41,8 @@ export interface TransportTimeoutReopenLoop {
   cancel(deviceId: string): void;
   /** 终止全部循环(relay 断开 / 停机)。 */
   dispose(): void;
+  /** 只终止匹配设备的循环:某条连接断开时,另一条连接上的 peer 不受影响。 */
+  disposeWhere(matches: (deviceId: string) => boolean): void;
   /** 测试观察点:该设备是否有循环在跑。 */
   isActive(deviceId: string): boolean;
 }
@@ -189,6 +191,9 @@ export function createTransportTimeoutReopenLoop(
     },
     dispose(): void {
       for (const deviceId of [...entries.keys()]) removeCurrent(deviceId);
+    },
+    disposeWhere(matches: (deviceId: string) => boolean): void {
+      for (const deviceId of [...entries.keys()]) if (matches(deviceId)) removeCurrent(deviceId);
     },
     isActive(deviceId: string): boolean {
       return entries.has(deviceId);

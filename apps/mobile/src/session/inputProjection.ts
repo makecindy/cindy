@@ -12,7 +12,8 @@ import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSessio
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { i18n } from '@/i18n';
-import { resolveSystemLocale } from '@/i18n/locale';
+import { isClassicalLocale, resolveSystemLocale } from '@/i18n/locale';
+import { currentClassicalStyle } from '@/i18n/classicalStyleStore';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -170,11 +171,13 @@ export function buildQueuedTextMessage(
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
+  const classicalStyle = isClassicalLocale(uiLanguage) ? currentClassicalStyle() : undefined;
 
   return {
     clientId,
     text: trimmed,
     uiLanguage,
+    ...(classicalStyle ? { classicalStyle } : {}),
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),

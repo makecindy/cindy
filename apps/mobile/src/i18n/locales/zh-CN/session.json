@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "管理 PR 链接",
+    "hint": "顶栏最多显示 3 个，固定的 PR 优先显示",
+    "empty": "粘贴 GitHub PR 链接即可添加",
+    "removed": "已移除 {{count}} 个",
+    "legacy": "未确认的历史引用：{{count}}",
+    "addLabel": "添加 PR 链接",
+    "add": "添加 PR",
+    "loading": "正在读取…",
+    "restore": "恢复 PR",
+    "pin": "固定到顶栏",
+    "unpin": "取消固定",
+    "pinLimit": "最多固定 3 个 PR",
+    "reorderHint": "按 Alt+↑/↓ 在已固定或未固定组内调整顺序。",
+    "dragHandle": "拖动排序 {{repo}} #{{number}}",
+    "remove": "移除 PR",
+    "errors": {
+      "duplicate": "此 PR 已关联；已移除的链接可在列表中恢复",
+      "notFound": "找不到此 PR，或没有访问权限",
+      "invalidUrl": "请输入有效的 GitHub PR 链接",
+      "reorderFailed": "顺序没有保存，请重试",
+      "verifyFailed": "无法验证 PR，请检查 GitHub 登录与访问权限",
+      "unsupported": "这台电脑的版本暂不支持管理 PR 链接",
+      "failed": "无法更新 PR 链接"
+    },
+    "moveUp": "上移"
+  },
   "paneResize": {
     "label": "分栏宽度",
     "hint": "左右拖动可调整两栏宽度"
@@ -181,7 +208,7 @@
       },
       "actionCopy": {
         "pending": "先处理待处理请求，处理后输入区会恢复。",
-        "archived": "任务已归档，恢复后才能继续发送。",
+        "archived": "任务已归档，发送消息会自动取消归档。",
         "deleted": "任务已删除，不能继续操作。",
         "queuePaused": "队列已暂停，可在队列面板继续执行。"
       }
@@ -424,7 +451,7 @@
     "copyLinkAction": "复制任务链接",
     "unpin": "取消置顶",
     "pin": "置顶",
-    "restore": "恢复",
+    "restore": "取消归档",
     "archive": "归档",
     "deleteAction": "删除任务",
     "deleteConversation": "删除任务",
@@ -562,6 +589,7 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续，请新建任务。",
+    "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
@@ -758,5 +786,17 @@
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在编辑消息",
+    "discard": "放弃编辑消息",
+    "stopTimeout": "等待任务停止超时，请稍后重试",
+    "queueNotEmpty": "任务有排队中的消息，先发送或移除队列内容后再编辑",
+    "notLast": "任务里已有更新的消息，这条不再是最后一条，无法编辑重发",
+    "failed": "编辑重发失败，请重试",
+    "noPriorAssistant": "这条消息前面还没有 AI 回复，电脑端当前版本暂不支持编辑；更新电脑端 Cindy 后再试。",
+    "uploadsPending": "还有附件正在上传，等上传完成后再编辑消息。",
+    "rollbackHint": "发送将撤销上一轮对 {{count}} 个文件的改动",
+    "conversationOnlyHint": "发送不会恢复项目文件，上一轮的文件改动会保留"
   }
 }

@@ -72,7 +72,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
   Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
-  正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
+  正文。取消会中止本次 HTTP 等待，并通过独立、限时的请求尽力发送 `notifications/cancelled`；
+  不重放调用，也不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
   启动失败、传输断开、请求超时或已建立的 MCP session 返回 404 后，下一次定向发现／调用
   按服务重新 initialize + tools/list，复用既有启动期限；并发等待共享一次握手，取消只退出

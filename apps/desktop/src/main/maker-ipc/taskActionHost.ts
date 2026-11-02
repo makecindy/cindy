@@ -52,7 +52,8 @@ export function teammateTurnPrincipal(facts: {
   if (facts.groupOwner) return 'owner';
   if (facts.laneRequesterIsOwner !== undefined) return facts.laneRequesterIsOwner ? 'owner' : 'autonomous';
   if (facts.ownerInput || facts.ownerContinuation) return 'owner';
-  // Built-in routines (follow-up, Todo check) are Host templates, not an owner's standing instruction.
+  // Built-in routines (follow-up, nightly learning) and the daily Todo check, which keeps its legacy
+  // `builtin-` id, are Host-started runs, not an owner's standing instruction.
   if (facts.scheduleId?.startsWith('routine-') && !facts.scheduleId.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX))
     return 'entrusted';
   return 'autonomous';
@@ -118,7 +119,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
   capturePermissionRequest(sessionId: string, taskId: string): Promise<TaskActionTarget | null>;
   captureRoutine(botId: string, id: string, forExecution?: boolean): Promise<TaskActionRoutineSnapshot | undefined>;
   getSessionWorkDir(sessionId: string): Promise<string | undefined>;
-  getScheduleDefinition(id: string, hookInstallation?: { workingDir?: string }): Promise<TaskActionScheduleDefinition | null>;
+  getScheduleDefinition(id: string, hookInstallation?: { workingDir?: string }, device?: string): Promise<TaskActionScheduleDefinition | null>;
 }): ToolCallAuthorizer {
   return isolateTaskActionAuthorizer(async (call) => {
     // Per invocation: a concurrent automatic call must never inherit owner evidence.
@@ -240,11 +241,12 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const hookInstallation = call.server === 'cindy_scheduler' && call.tool === 'schedule_set_pre_run_hook'
           ? { workingDir: typeof args.workingDir === 'string' ? args.workingDir : undefined } : undefined;
         const scheduleIdArg = hookInstallation ? args.scheduleId : args.id;
+        const scheduleDevice = call.server === 'cindy_scheduler' && typeof args.device === 'string' ? args.device : undefined;
         const scheduleId = principal === 'autonomous' && runtimePermissionApplies &&
-          (hookInstallation || call.server === 'cindy_scheduler' && (!args.device || args.device === 'local') &&
+          (hookInstallation || call.server === 'cindy_scheduler' &&
             ['schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) && typeof scheduleIdArg === 'string'
           ? scheduleIdArg : undefined;
-        const schedule = scheduleId ? await deps.getScheduleDefinition(scheduleId, hookInstallation) : undefined;
+        const schedule = scheduleId ? await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice) : undefined;
         const scheduleSignature = JSON.stringify(schedule);
         const readDelegation = async (rechecking = false) => {
           if (
@@ -378,6 +380,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           principal,
           ...(routine && routineBotId && routineId
             ? { routine: { botId: routineBotId, id: routineId, revision: routine.revision } } : {}),
+          ...(schedule?.mutationGuard ? { scheduleGuard: schedule.mutationGuard } : {}),
           delegated: !!delegation || !!orcaTeam,
           assertDeliveryCurrent,
           assertCurrentSync,
@@ -387,7 +390,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
             await assertDeliveryCurrent();
             if ((helperInstallation || helperCreation) && await deps.getSessionWorkDir(sessionId) !== helperWorkDir)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-            if (scheduleId && JSON.stringify(await deps.getScheduleDefinition(scheduleId, hookInstallation)) !== scheduleSignature)
+            if (scheduleId && JSON.stringify(await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice)) !== scheduleSignature)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             if (routineExecution && routineBotId && routineId &&
               JSON.stringify((await deps.captureRoutine(routineBotId, routineId, true))?.details) !== routineSignature)
@@ -401,6 +404,9 @@ export function createDesktopTaskActionAuthorizer(deps: {
         // routine instructions can become the standing grant for later routine runs.
         const risk = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
           routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule }) : undefined;
+        const scheduleForConfirmation = schedule
+          ? (({ mutationGuard: _mutationGuard, ...display }) => display)(schedule)
+          : undefined;
         if (risk && runtimePermissionApplies) {
           await scope.assertCurrent();
           const confirmed = await deps.confirm(sessionId, call.tool, structuredClone(call.args),
@@ -408,8 +414,8 @@ export function createDesktopTaskActionAuthorizer(deps: {
               : helperInstallation ? { details: { installation: { workingDir: helperWorkDir ?? null } } }
               : helperCreation ? { details: { execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions', workingDir: helperWorkDir ?? null } } }
               : risk === 'command' && taskActionStartsIndependentAgent(call, schedule)
-                ? { details: { ...(schedule ? { schedule } : {}), execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' } } }
-              : schedule ? { details: { schedule } }
+                ? { details: { ...(scheduleForConfirmation ? { schedule: scheduleForConfirmation } : {}), execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' } } }
+              : scheduleForConfirmation ? { details: { schedule: scheduleForConfirmation } }
               : (call.tool === 'routine_run_now' || risk === 'resume') && routine?.details
                 ? { details: routine.details } : {}) });
           if (!confirmed) {

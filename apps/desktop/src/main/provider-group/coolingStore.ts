@@ -90,9 +90,9 @@ function mergeCooling(
   return merged;
 }
 
-/** 合并写入(调用方只给还没到期的)；写不下去只记日志，本次运行照常避开。 */
-export function writeProviderGroupCooling(cooling: ProviderGroupPersistedCooling): void {
-  void store.updateAtomic((current) => normalize({ cooling: mergeCooling(current.value.cooling, cooling) })).catch((error: unknown) => {
+/** 合并写入；返回实际落盘完成信号，后台调用仍可忽略，失败只记日志。 */
+export function writeProviderGroupCooling(cooling: ProviderGroupPersistedCooling): Promise<void> {
+  return store.updateAtomic((current) => normalize({ cooling: mergeCooling(current.value.cooling, cooling) })).then(() => undefined).catch((error: unknown) => {
     log.warn('provider group: saving cooldowns failed', { error: error instanceof Error ? error.message : String(error) });
   });
 }

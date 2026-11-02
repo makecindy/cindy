@@ -83,6 +83,8 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
+    // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
+    ...(options.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: options.ghostRosterSnapshot } : {}),
     ...(options.permissionMode ? { permissionMode: options.permissionMode as StartSessionOptions['permissionMode'] } : {}),
     ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
     ...(options.displayReasoning ? { displayReasoning: options.displayReasoning as StartSessionOptions['displayReasoning'] } : {}),
@@ -117,6 +119,9 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
 }
 
 let host: RemoteAgentHost | null = null;
+// resetMaker can install a replacement while the previous host is still deleting
+// its shadow workspaces. Preserve that boundary across repeated resets.
+let hostDisposal: Promise<void> = Promise.resolve();
 let stopFastPolicySync: (() => void) | undefined;
 let stopDirectRouteWatch: (() => void) | undefined;
 let stopDirectModelWatch: (() => void) | undefined;
@@ -249,6 +254,7 @@ export function createProviderShareMemberPurger(options: {
 
 export function installRemoteAgentHost(options: { getMaker: () => Maker; userDataDir: string }): void {
   if (host) return;
+  const previousHostDisposal = hostDisposal;
   const usage = installProviderShareUsageStore(options.userDataDir);
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
@@ -1445,7 +1451,11 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   });
   stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
-    handle: (controller, raw) => current.handle(controller, raw),
+    handle: async (controller, raw) => {
+      await previousHostDisposal;
+      if (host !== current) throw new Error('[REMOTE_AGENT_UNAVAILABLE] remote agent host has been replaced');
+      return current.handle(controller, raw);
+    },
     abortAll: (reason) => {
       void current.abortAll(reason);
     },
@@ -1486,7 +1496,7 @@ export function disposeRemoteAgentHost(): void {
   stopFastPolicySync?.();
   stopFastPolicySync = undefined;
   setRemoteAgentHandler(null);
-  host?.dispose();
+  if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
   void flushProviderShareUsage();

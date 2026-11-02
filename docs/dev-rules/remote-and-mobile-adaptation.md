@@ -77,8 +77,9 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 
 产品规则见 [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。三种形态的落点：
 
-- **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；`request_input_handoff`
-  在带 `remoteHostId` 的任务里返回 `CAPABILITY_NOT_AVAILABLE`，由 Agent 改为直接告诉主人需要什么。
+- **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；带 `remoteHostId` 的任务里
+  `ask_owner` 不列出 fill／scan，直接调用（含旧名 `request_input_handoff`）返回 `CAPABILITY_NOT_AVAILABLE`，
+  由 Agent 改为直接告诉主人需要什么。
 - **设备互联远程控制**：卡片快照随既有交互推送（`kind: "input_handoff"`）到所有控制端；交还、取消、
   停留、刷新、接手、看画面等**不带值**的决定走既有 `resolveInteraction`；**带值**的提交与截图只走插件
   授权 v3 加密交换（`plugin-oauth:submit-input` / `plugin-oauth:open-input-picture` /
@@ -225,7 +226,10 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
-首次收尾再回收。新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
+首次收尾再回收。`dispose()` 返回同一份清理完成 Promise，包含正在启动的任务与巡检已开始的删除；
+服务重建后先等待前一 host 的清理，再派发新请求，等待期间再次重建的旧入口不再接单。
+这只约束本进程 Maker 重置后的 host 交接，不重连共享链路、不改变线上协议。
+新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 
@@ -402,6 +406,17 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    Lead 的未消费派活，保留用户消息；覆盖混排、消费竞态、丢回执、重启及其它控制端。
 
 ## 共享恢复与请求策略
+
+Desktop 同账号互控的双向请求共用一个 peer 链路。对端 relay 重连清掉订阅登记后，
+可能由任一端先发起建链；仅监听本端出站 accept 会遗漏“对端先开链”的恢复。
+出站握手确认，以及同账号入站 link-open 通过权限检查并成功发送 accept 后，都按
+目标 peer 请求重放本端仍持有的订阅。复用现有订阅调度器的串行、合并与退避，
+实际发送前继续复验当前引用、目标权限和关闭代次；无订阅快照的 peer 不发请求。
+入站触发沿用 ordinary peer 通知，不扩大供应商分享或共享任务访客的权限方向；
+不重启共享 relay、不重放其他 peer。入站 accept 尚待确认时，发送路径仍可复用
+既有单飞建链完成恢复，不把 accept 已发出误当成双向业务已经就绪。
+接线与注册恢复回归见 Desktop `deviceLinkVoiceCredentialBootstrap.test.ts`，
+入站准入边界见 `deviceLinkDispatch.test.ts`。
 
 Desktop 向曾协商可靠传输、当前发送链路未就绪的设备发起新 invoke、订阅或响应性探测时，
 先复用该设备既有的单飞建链入口，再发送请求。轻量列表也适用，避免请求尚未写出就反复

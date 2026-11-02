@@ -165,11 +165,8 @@ describe('buildByokProvider model types', () => {
 });
 
 
-it.each([
-  ['openai-responses', ['codex', 'pi']],
-  ['anthropic-messages', ['claude-code', 'pi']],
-  ['openai-completions', ['pi']],
-] as const)('keeps managed model enablement separate from %s compatibility', (nativeApi, enabled) => {
+it.each(['openai-responses', 'anthropic-messages', 'openai-completions'] as const)(
+  'enables every engine door the managed gateway serves for a %s model', (nativeApi) => {
   const model = { ...chatModel, nativeApi, defaultEnabled: true,
     maxOutputTokens: 32000, supportsFastMode: false,
     agents: ['claude-code', 'codex', 'pi'] as Array<'claude-code' | 'codex' | 'pi'>,
@@ -178,8 +175,9 @@ it.each([
   };
   const provider = buildByokProvider({ provider: { id: 'byok-a', name: 'Enterprise',
     connectionRevision: 1, models: [model] }, credential });
-  for (const agent of model.agents)
-    expect(provider.models[agent]?.[0]?.defaultEnabled).toBe((enabled as readonly string[]).includes(agent));
+  // LiteLLM serves Messages and Responses for every backend; only Cindy's local conversion stays off by default.
+  expect(Object.fromEntries(model.agents.map(agent => [agent, provider.models[agent]?.[0]?.defaultEnabled])))
+    .toEqual({ 'claude-code': true, codex: true, pi: true });
   expect(byokNativeConfigs([provider])[0]?.runtimes.pi?.models[0]).toMatchObject({
     nativeApi, maxOutputTokens: 32000, supportsFastMode: false,
   });

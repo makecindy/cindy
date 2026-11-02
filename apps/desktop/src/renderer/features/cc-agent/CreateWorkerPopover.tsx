@@ -1,4 +1,5 @@
 import { WorkerProjectField, useWorkerProjectSelection } from './WorkerProjectField';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import { ORCA_REMOTE_WORKER_MODELS_CHANNEL } from '@cindy/device-link';
 import { orcaWorkflowsForDevice } from '@/lib/makerTransport';
 import type { WorkerWorktreeRequest } from '../../../shared/orca-worker-project';
@@ -167,6 +168,7 @@ export interface CreateWorkerPopoverProps {
    * 传了且任务所在电脑支持时，模型面板左侧栏列出这些远程供应商；缺省 = 不提供(SSH 等)。
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
+  catalogHostDeviceId?: string;
 }
 
 export function CreateWorkerPopover({
@@ -183,6 +185,7 @@ export function CreateWorkerPopover({
   executionDevicesEnabled = false,
   leadAgentDeviceId,
   remoteAgentDevices,
+  catalogHostDeviceId,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -221,6 +224,7 @@ export function CreateWorkerPopover({
   // 远程控制的 Lead 读它所在的电脑，选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑走。
   const workerHostDeviceId = executionDeviceId ?? leadDeviceId;
   const deviceId = agentDeviceId ?? workerHostDeviceId ?? undefined;
+  const catalogDeviceId = modelCatalogKey(deviceId, executionDeviceId ? undefined : catalogHostDeviceId);
   const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
   const agentDevices = executionDeviceId
     ? executionAgentDevices?.deviceId === executionDeviceId ? executionAgentDevices.devices : []
@@ -232,12 +236,12 @@ export function CreateWorkerPopover({
   const remoteDirInvalid =
     !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
 
-  const ccCaps = useAgentCapabilities('claude-code', deviceId);
-  const codexCaps = useAgentCapabilities('codex', deviceId);
-  const piCaps = useAgentCapabilities('pi', deviceId);
-  const pickerAgents = useModelPickerAgents(agent, deviceId);
+  const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
+  const piCaps = useAgentCapabilities('pi', catalogDeviceId);
+  const pickerAgents = useModelPickerAgents(agent, catalogDeviceId);
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceId);
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
   // Agent 在另一台电脑运行时只能用那台允许被远程调用的供应商(那台是最终裁决方)。
   const providers = useMemo(
     () =>
@@ -751,12 +755,13 @@ export function CreateWorkerPopover({
       agentLocationSelectable && agentDevices && (agentDevices.length > 0 || !!executionDeviceId)
         ? {
             devices: agentDevices,
+            catalogHostDeviceId: executionDeviceId ? undefined : catalogHostDeviceId,
             selectedDeviceId: agentDeviceId,
             ...(workerHostDeviceId ? { homeDeviceId: workerHostDeviceId } : { localModelMemory: LOCAL_WORKER_MODEL_MEMORY }),
             deviceModelMemory: agentDeviceModelMemoryAccessors,
           }
         : undefined,
-    [agentDeviceId, agentLocationSelectable, workerHostDeviceId, agentDevices, executionDeviceId],
+    [agentDeviceId, agentLocationSelectable, workerHostDeviceId, agentDevices, executionDeviceId, catalogHostDeviceId],
   );
   const agentDeviceName = agentDeviceId
     ? (agentDevices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
@@ -1077,7 +1082,7 @@ export function CreateWorkerPopover({
                 onModelChange={updateModel}
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
-                deviceId={deviceId}
+                deviceId={catalogDeviceId}
                 {...(remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
                   ? { remoteAgent: remoteAgentOptions }
                   : {})}

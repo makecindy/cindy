@@ -7,16 +7,18 @@
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
- * - 只有 debugger 才能做的(导出 PDF、整页/元素/后台标签截图、配方适配器的原始协议命令)
- *   按需使用:用户在扩展里授权一次后,扩展只在这些动作期间临时接上调试(Chrome 会显示
- *   提示条),做完即断开;未授权时明确告诉模型请用户开启,绝不悄悄换目标。旧版扩展只有
- *   基础读取与交互,同样明确拒绝并提示更新;
+ * - 只有 debugger 才能做的(导出 PDF、整页/元素/后台标签截图、配方适配器的原始协议命令)做不了:
+ *   Chrome 不允许把它声明成可选权限,发布版扩展没有它。能力表如实报告,截图退回可视区域,
+ *   其余明确告诉模型改用专用浏览器需由用户决定,绝不悄悄换目标。旧版扩展只有基础读取与交互,
+ *   同样明确拒绝并提示更新;
  * - 每个作业都经桥接校验地址,结果脱敏后才回到这里;不设站点名单(2026-10-30 决定)。
  *
  * 寻址:这里维护 targetId ↔ {连接, tabId, url} 的映射。新版扩展按 tabId 寻址;
  * 旧版扩展按精确 URL 寻址,页面在两次调用之间跳转时报 PAGE_CHANGED,不猜新页。
  */
 
+import { randomUUID } from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { RecipeBrowserSessions } from '@cindy/browser-control-runtime';
@@ -26,7 +28,7 @@ import type {
   BrowserExtensionClientInfo,
   BrowserExtensionJobResult,
 } from '../../browser-extension/bridge.js';
-import { readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
+import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
 import type { BackendRequest, BackendResult, BrowserBackend } from './types.js';
 
 export interface UserBrowserPageControl {
@@ -80,7 +82,10 @@ export const USER_BROWSER_CAPABILITIES = Object.freeze({
   rawProtocol: false,
 });
 
-/** 扩展从这个版本起与专用浏览器对齐;pdf 与原始协议按需借用 debugger(需用户授权一次)。 */
+/**
+ * 扩展从这个版本起与专用浏览器对齐。pdf 与原始协议除外:它们要 Chrome 的 debugger,而 Chrome 不允许
+ * 把它声明成可选权限,发布版扩展没有这项能力(2026-11-01 实测 permissions.request 直接拒绝)。
+ */
 export const USER_BROWSER_PARITY_VERSION = '0.4.43';
 export const USER_BROWSER_PARITY_CAPABILITIES = Object.freeze({
   evaluate: true,
@@ -89,20 +94,22 @@ export const USER_BROWSER_PARITY_CAPABILITIES = Object.freeze({
   upload: true,
   dialog: true,
   console: true,
-  pdf: true,
+  pdf: false,
   focus: true,
   close: true,
   trustedInput: false,
   pointer: true,
-  rawProtocol: true,
+  rawProtocol: false,
 });
 
 export function extensionSupportsParity(version: string | null | undefined): boolean {
   return extensionAtLeast(version, USER_BROWSER_PARITY_VERSION);
 }
 
-/** Extensions from this version upload by path through Chrome's debugger, without the ~30 MB transfer bound. */
-export const USER_BROWSER_PATH_UPLOAD_VERSION = '0.4.56';
+/** Extensions from this version take files too large for one job in pieces, without the ~30 MB transfer bound. */
+export const USER_BROWSER_CHUNKED_UPLOAD_VERSION = '0.4.61';
+/** Extensions from this version list every iframe in a snapshot and route refs to the frame that holds them. */
+const USER_BROWSER_FRAMES_VERSION = '0.4.61';
 /** Extensions from this version read and fill password, payment and one-time-code fields like any field. */
 export const USER_BROWSER_SENSITIVE_FIELDS_VERSION = '0.4.57';
 
@@ -166,16 +173,17 @@ function outdated(action: BackendRequest['action'], what: string): BackendResult
   );
 }
 
-/**
- * Bytes per upload the extension can take as data (its job validation caps base64 at 40 million
- * characters). Newer extensions also get the paths and let Chrome read the files through the debugger,
- * so larger batches work there once the user has allowed the debugger.
- */
+/** Bytes per upload that fit one job (the extension's job validation caps base64 at 40 million characters). */
 const UPLOAD_BATCH_BYTES_MAX = 30_000_000;
-function uploadTooLarge(action: BackendRequest['action']): BackendResult {
+/** One piece of a larger upload. All pieces wait in the page's memory, which bounds the whole batch. */
+const UPLOAD_CHUNK_BYTES = 4_000_000;
+const UPLOAD_CHUNKED_BYTES_MAX = 1024 * 1024 * 1024;
+function uploadTooLarge(action: BackendRequest['action'], chunked: boolean): BackendResult {
   return actionFailed(
     action,
-    `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_PATH_UPLOAD_VERSION} 或更新版本(之后经 Chrome 调试接口按文件位置上传,不受此限),或分批上传`,
+    chunked
+      ? '上传文件总大小超过 1 GB,文件要先放进页面内存,扩展处理不了这么大。请告知用户在页面上手动选择文件,或分批上传'
+      : `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本(之后分块传输,最大 1 GB),或分批上传`,
     'BROWSER_RUNTIME_INVALID_REQUEST',
   );
 }
@@ -468,12 +476,8 @@ export class UserBrowserBackend implements BrowserBackend {
           ? 'BROWSER_RUNTIME_UNAVAILABLE'
           : 'BROWSER_RUNTIME_ACTION_FAILED',
       message:
-        error === 'DEBUGGER_NOT_ALLOWED'
-          ? `${error}:这一步需要 Chrome 的调试功能,用户还没有允许。${
-              job.grantPageOpened === true
-                ? '扩展已在用户的 Chrome 里打开说明页'
-                : '说明页刚才已经打开过'
-            },请告诉用户在那里点「开启」(Chrome 会请用户确认一次;使用时 Chrome 顶部会短暂显示调试提示),确认后再重试。用户拒绝就不要重试,也不要自行改用其他浏览器。`
+        error === 'DEBUGGER_NOT_ALLOWED' || error === 'DEBUGGER_UNAVAILABLE'
+          ? `${error}:这一步需要 Chrome 的调试接口,Cindy 扩展没有这项能力(Chrome 不允许扩展按需申请)。不要重试,也不要让用户去找开启入口;请告知用户这一步可以改用 Cindy 专用浏览器(external),由用户决定,不要自行切换。`
           : `${error}:${message}`,
       data: {
         error,
@@ -925,10 +929,16 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!gate.ok) return gate.result;
     const located = await this.locate(req.action, gate.control, req.targetId, req.profile);
     if (!located.ok) return located.result;
-    if (req.frame) return unsupported(req.action, '按 frame 快照');
+    // From this version a snapshot already includes what every iframe shows, and refs work across them.
+    const framesIncluded = extensionAtLeast(
+      this.connectedClients(gate.control).find((c) => c.id === located.record.clientId)?.version,
+      USER_BROWSER_FRAMES_VERSION,
+    );
+    if (req.frame && !framesIncluded) return unsupported(req.action, '按 frame 快照');
     const maxChars = Math.min(30000, Math.max(256, req.maxChars ?? 6000));
     const job = await this.pageJob(gate.control, located.record, 'snapshot', {
       maxChars,
+      ...(framesIncluded && typeof req.limit === 'number' ? { limit: Math.min(req.limit, 500) } : {}),
       ...(typeof req.selector === 'string' ? { selector: req.selector } : {}),
     });
     if (!job.ok) return this.failureResult(req.action, job);
@@ -968,6 +978,10 @@ export class UserBrowserBackend implements BrowserBackend {
       snapshot,
       stats: { lines: lines.length, chars: snapshot.length, refs: refCount, interactive: refCount },
       truncated: cut,
+      ...(cut
+        ? { note: '快照被截断,后面还有内容:加大 maxChars / limit,或用 selector 限定区域(例如 [role=main])后再读。没读到不代表页面上没有。' }
+        : {}),
+      ...(req.frame ? { frameNote: '这里的快照已包含所有 iframe 的内容,不需要 frame 参数;ref 可直接用于操作。' } : {}),
       untrusted_content: true,
     });
   }
@@ -1355,45 +1369,97 @@ export class UserBrowserBackend implements BrowserBackend {
       typeof sessionId === 'string' && sessionId && this.opts.resolveUploadRoots
         ? await this.opts.resolveUploadRoots(sessionId)
         : [];
-    const paths = await resolveUploadFiles(req.paths, roots);
+    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX);
     let total = 0;
     for (const file of paths) total += (await fs.stat(file)).size;
-    // Newer extensions get the checked paths and have Chrome read the files through the debugger, with
-    // no transfer bound; the bytes go along only when they fit, as the fallback without the debugger.
-    const byPath = extensionAtLeast(
+    const chunked = extensionAtLeast(
       this.connectedClients(gate.control).find((c) => c.id === record.clientId)?.version,
-      USER_BROWSER_PATH_UPLOAD_VERSION,
+      USER_BROWSER_CHUNKED_UPLOAD_VERSION,
     );
-    const withBytes = total <= UPLOAD_BATCH_BYTES_MAX;
-    if (!byPath && !withBytes) return uploadTooLarge(req.action);
+    const ref = req.inputRef ?? req.ref;
+    const inputTarget = ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' };
+    if (total > UPLOAD_BATCH_BYTES_MAX) {
+      if (!chunked || total > UPLOAD_CHUNKED_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      return this.uploadInChunks(req, gate.control, record, inputTarget, paths, roots);
+    }
     const files: Array<{ name: string; data: string; mimeType: string }> = [];
     let read = 0;
-    for (const file of withBytes ? paths : []) {
+    for (const file of paths) {
       // Read from the descriptor that was checked, so a file swapped for a link after the check
       // cannot pull bytes from outside the allowed roots. One file at a time bounds memory.
       const bytes = readRecipeInputFileSync(file, roots);
       read += bytes.length;
-      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action);
+      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action, chunked);
       files.push({
         name: path.basename(file),
         data: bytes.toString('base64'),
         mimeType: UPLOAD_MIME[path.extname(file).toLowerCase()] ?? '',
       });
     }
-    if (byPath) {
-      // Chrome opens the files by path itself (no transfer bound), so this is the one place the check
-      // and the read are apart. Check again just before handing the paths over to keep that gap small;
-      // accepted trade-off (2026-10-30): the debugger route is weaker than reading the bytes here.
-      const again = await resolveUploadFiles(paths, roots);
-      if (again.some((file, i) => file !== paths[i]))
-        return actionFailed(req.action, '上传文件在检查后发生了变化,请重试', 'BROWSER_RUNTIME_INVALID_REQUEST');
-    }
-    const ref = req.inputRef ?? req.ref;
-    const job = await this.pageJob(gate.control, record, 'upload', {
-      ...(ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' }),
-      ...(withBytes ? { files } : {}),
-      ...(byPath ? { paths } : {}),
+    const job = await this.pageJob(gate.control, record, 'upload', { ...inputTarget, files });
+    if (!job.ok) return this.failureResult(req.action, job);
+    return actionOk(req.action, {
+      backend: this.kind,
+      targetId: record.targetId,
+      files: job.files,
     });
+  }
+
+  /** 超过一个作业放得下的文件分块交给扩展,全部到齐后才放进页面的文件输入框。 */
+  private async uploadInChunks(
+    req: BackendRequest,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    inputTarget: { ref?: string; selector?: string },
+    paths: string[],
+    roots: string[],
+  ): Promise<BackendResult> {
+    const transfer = randomUUID();
+    const step = (extra: Record<string, unknown>) =>
+      this.pageJob(control, record, 'upload', { ...inputTarget, transfer, ...extra });
+    const begun = await step({
+      op: 'begin',
+      chunkFiles: paths.map((file) => ({
+        name: path.basename(file),
+        mimeType: UPLOAD_MIME[path.extname(file).toLowerCase()] ?? '',
+      })),
+    });
+    if (!begun.ok) return this.failureResult(req.action, begun);
+    const buffer = Buffer.alloc(UPLOAD_CHUNK_BYTES);
+    let total = 0;
+    try {
+      for (const [index, file] of paths.entries()) {
+        // Every piece comes from the descriptor that was checked, as with the whole-file route.
+        const descriptor = openRecipeInputFileSync(file, roots, UPLOAD_CHUNKED_BYTES_MAX);
+        try {
+          for (let offset = 0; ; ) {
+            const count = fsSync.readSync(descriptor, buffer, 0, buffer.length, offset);
+            if (!count) break;
+            offset += count;
+            total += count;
+            if (total > UPLOAD_CHUNKED_BYTES_MAX) {
+              void step({ op: 'abort' }).catch(() => {});
+              return uploadTooLarge(req.action, true);
+            }
+            const sent = await step({
+              op: 'chunk',
+              file: index,
+              data: buffer.subarray(0, count).toString('base64'),
+            });
+            if (!sent.ok) {
+              void step({ op: 'abort' }).catch(() => {});
+              return this.failureResult(req.action, sent);
+            }
+          }
+        } finally {
+          fsSync.closeSync(descriptor);
+        }
+      }
+    } catch (error) {
+      void step({ op: 'abort' }).catch(() => {});
+      throw error;
+    }
+    const job = await step({ op: 'finish' });
     if (!job.ok) return this.failureResult(req.action, job);
     return actionOk(req.action, {
       backend: this.kind,

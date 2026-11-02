@@ -19,6 +19,10 @@
   <a href="https://cindy.cn">中国大陆官网</a> &nbsp;·&nbsp; <a href="https://cindy.app">国际版官网</a>
 </p>
 
+<p align="center">
+  <a href=".github/assets/star-history/trending-2026-10-26.png">★ GitHub Trending #1 · 2026.10.26</a>
+</p>
+
 Cindy 是一个**开源、开箱即用的 AI Agent**。连接你的多台电脑与手机，把熟悉的
 Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙伴。
 
@@ -89,6 +93,21 @@ Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙
 · [中国大陆定价](https://cindy.cn/pricing) · [国际版定价](https://cindy.app/pricing)
 
 Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.md)。
+
+<h3 align="center">好吧，是有一点受欢迎。</h3>
+
+<p align="center">
+  <a href="https://github.com/makecindy/cindy/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark-mobile.svg">
+      <source media="(max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light-mobile.svg">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light.svg">
+      <img src=".github/assets/star-history/stars-light.svg" width="100%" alt="Cindy 的 GitHub Star 趋势">
+    </picture>
+  </a>
+</p>
+<p align="center"><sub>每一颗星，都有好好记着。</sub></p>
 
 ---
 

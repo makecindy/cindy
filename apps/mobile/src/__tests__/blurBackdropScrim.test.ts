@@ -68,9 +68,9 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     }
   });
 
-  it('ImageLightbox 保持纯黑背板(媒体查看器惯例,不进遮罩口径)', () => {
+  it('ImageLightbox 使用主题表面背板，不叠加弹层遮罩', () => {
     const src = readTextLf(resolve(process.cwd(), 'src/session/ImageLightbox.tsx'), 'utf8');
-    expect(src).toContain("backgroundColor: '#000000'");
+    expect(src).toContain("backgroundColor: colors.surface");
     expect(src).not.toContain('colors.overlay');
   });
 });

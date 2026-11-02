@@ -33,6 +33,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 const unreadMock = vi.hoisted(() => ({ ordinary: false }));
+const reviewMock = vi.hoisted(() => ({ updates: [] as Array<{ unread: boolean; status: string }> }));
+vi.mock('@/contexts/PluginReviewUpdatesContext', () => ({ usePluginReviewUpdates: () => reviewMock }));
 vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useAnyGhostUnread: () => unreadMock.ordinary }));
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
@@ -72,6 +74,7 @@ beforeEach(() => {
   authMock.owner = 'owner-1';
   installedMock.ghosts = [{ manifest: { id: 'bundled' } }];
   unreadMock.ordinary = false;
+  reviewMock.updates = [];
   localStorage.removeItem('sidebar-navigation:apps:v1');
   navigationTesting.resetArrivals();
   setSidebarNavigationPrefs(OWNER, {
@@ -749,4 +752,14 @@ describe('Plugins joining the sidebar', () => {
     expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations']);
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);
   });
+});
+
+// Sidebar/rail must show the same result semantics as the author's detail, using
+// existing AttentionDot tokens. Previously only rejection selected error (unit).
+it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the result tone for an unread %s event', status => {
+  reviewMock.updates = [{ status, unread: true }];
+  render(<Harness initialPath="/cc-agent/session-1" />);
+  const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
+  expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
 });

@@ -2027,6 +2027,51 @@ describe('CodexAgent permissions', () => {
     await handle.close();
   });
 
+  // L09: public stop handles must notify the Main hook only after interrupt ACK.
+  // Unit tier; a deferred ACK distinguishes capture, success, rejection and late confirmation.
+  it.each(['graceful', 'abort'] as const)('%s stop cancels captured App calls only after ACK', async mode => {
+    const ack = deferred<Record<string, never>>();
+    const cancel = vi.fn();
+    const prepareCodexMcpToolCancellation = vi.fn(() => cancel);
+    const agent = new CodexAgent(createDeps({}, { prepareCodexMcpToolCancellation }));
+    const host = installFakeHost(agent, method => {
+      if (method === Method.TurnStart) return { turn: { id: 'stop-turn' } };
+      if (method === Method.TurnInterrupt) return ack.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'stop-task', sessionInstanceId: 'stop-instance',
+      model: 'gpt-5.5', workingDir: '/repo', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'long turn' });
+      const stop = mode === 'graceful' ? handle.requestGracefulStop!() : handle.abort();
+      expect(prepareCodexMcpToolCancellation).toHaveBeenCalledWith({
+        sessionId: 'stop-task', sessionInstanceId: 'stop-instance', threadId: 'start-thread-id',
+      });
+      expect(cancel).not.toHaveBeenCalled();
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, { threadId: 'start-thread-id', turnId: 'stop-turn' });
+      ack.resolve({});
+      await stop;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally { await handle.close(); }
+  });
+
+  it('rejected interrupt never cancels captured App calls', async () => {
+    const cancel = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { prepareCodexMcpToolCancellation: () => cancel }));
+    installFakeHost(agent, method => {
+      if (method === Method.TurnStart) return { turn: { id: 'stop-turn' } };
+      if (method === Method.TurnInterrupt) return Promise.reject(new Error('interrupt rejected'));
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'stop-task', sessionInstanceId: 'stop-instance',
+      model: 'gpt-5.5', workingDir: '/repo', permissionMode: 'auto' });
+    try {
+      await handle.send({ type: 'user', content: 'long turn' });
+      await expect(handle.requestGracefulStop!()).rejects.toThrow('interrupt rejected');
+      expect(cancel).not.toHaveBeenCalled();
+    } finally { await handle.close(); }
+  });
+
   it('advertises distinct Ask, Auto, and Full access modes', () => {
     const agent = new CodexAgent(createDeps());
     expect(agent.capabilities.permissionModes?.map((mode) => mode.id)).toEqual([
@@ -5978,6 +6023,24 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
+  // Only the native saved-provider refusal permits branching history. Similar
+  // wording, authentication failures and a wrong process route stay errors.
+  it.each([
+    { code: -32600, data: undefined },
+    { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
+    { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_openai' } },
+    { code: -32000, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_gateway', currentModelProvider: 'cindy_openai' } },
+  ])('does not fork history for a non-matching native refusal ($code, $data)', async (error) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) throw Object.assign(new Error('This chat uses another provider'), error);
+      return undefined;
+    }, { codexProxyActive: true, remoteCompactionProviderId: 'cindy_openai' });
+    await expect(agent.startSession({ sessionId: 'resume-provider-refusal', model: 'gpt-6.1-sol', providerId: 'openai',
+      workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111' })).rejects.toThrow();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadFork)).toHaveLength(0);
+  });
+
   it('selects one generic custom Provider identity for every eligible Responses model', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
@@ -6956,10 +7019,9 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('keeps global Cindy prompts and discovery context out of a Bot thread', async () => {
     const getGhostRosterPrompt = vi.fn(() => 'GLOBAL GHOST ROSTER');
-    const getContactsPromptState = vi.fn(() => 'enabled' as const);
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'GLOBAL CINDY HOST PROMPT' },
-      { getGhostRosterPrompt, getContactsPromptState },
+      { getGhostRosterPrompt },
     ));
     const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
 
@@ -6996,7 +7058,6 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(params.developerInstructions).not.toContain('GLOBAL GHOST ROSTER');
     expect(params.developerInstructions).not.toContain('GLOBAL USER PROMPT');
     expect(getGhostRosterPrompt).not.toHaveBeenCalled();
-    expect(getContactsPromptState).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -11326,6 +11387,18 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       await handle.close();
     });
+    it('does not replace the provider process while native child work is running', async () => {
+      const { host, handle, events } = await start();
+      host.getThreadHandlers()!.itemStarted!({ threadId: nativeId, turnId: 'turn-1', item: {
+        type: 'collabAgentToolCall', id: 'spawn-running-child', tool: 'spawnAgent', status: 'inProgress',
+        senderThreadId: nativeId, receiverThreadIds: ['running-child'], prompt: 'Continue work', agentsStates: {},
+      } });
+      compact(host);
+      fail(host);
+      await waitForExpectation(() => expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true));
+      expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+      await handle.close();
+    });
     it.each(['usageLimitExceeded', 'sessionBudgetExceeded'] as const)('does not switch for exhausted %s', async (codexErrorInfo) => {
       const { host, handle } = await start();
       compact(host);
@@ -11637,7 +11710,7 @@ describe('CodexAgent MCP thread context hooks', () => {
             (event) =>
               event.type === 'error' &&
               (event.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
-              (event.data as { reason?: string }).reason === 'context-overflow',
+              (event.data as { reason?: string }).reason === 'remote-compact-encrypted-content',
           ),
         ).toBe(true);
       });
@@ -17412,6 +17485,81 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(true);
     expect(notices.some((message) => message.includes('not a user rejection'))).toBe(true);
     if (action !== 'close') await handle.close();
+  });
+
+  // Native exec/patch approvals discard reasons; verify both the model input and UI result.
+  it.each(['commandExecution', 'fileChange'] as const)('delivers %s denial feedback without changing user authority', async (kind) => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block', reason: 'Keep the existing document.' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent, method => {
+      if (method === Method.TurnStart) return { turn: { id: 'feedback-turn' } };
+      if (method === Method.TurnSteer) return { turnId: 'feedback-turn' };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'feedback-session', model: 'gpt-5.5',
+      providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const events: AgentEvent[] = [];
+    const collect = (async () => { for await (const event of handle.events()) events.push(event); })();
+    await handle.send({ type: 'user', content: 'Update my notes.' });
+    const handlers = host.getThreadHandlers()!;
+    const params = { threadId: 'start-thread-id', turnId: 'feedback-turn', itemId: 'blocked-item' };
+    const changes = [{ path: '/repo/notes.tex', kind: { type: 'update' }, diff: '+new notes' }];
+    const approval = kind === 'commandExecution'
+      ? handlers.commandExecutionApproval!({ ...params, command: 'python3 rewrite.py', cwd: '/repo' })
+      : handlers.fileChangeApproval!({ ...params, changes });
+    await expect(approval).resolves.toEqual({ decision: 'decline' });
+    const steers = host.request.mock.calls.filter(([method]) => method === Method.TurnSteer);
+    expect(steers).toHaveLength(1);
+    expect(steers[0]?.[1]).toMatchObject({ threadId: params.threadId, expectedTurnId: params.turnId,
+      input: [{ type: 'text', text: expect.stringContaining('Cindy Auto-review denied this tool call: Keep the existing document.') }] });
+    handlers.itemCompleted?.({ threadId: params.threadId, turnId: params.turnId,
+      item: { id: params.itemId, type: kind, status: 'declined', command: 'python3 rewrite.py', changes, aggregatedOutput: '' } });
+    await handlers.commandExecutionApproval!({ ...params, itemId: 'second-item', command: 'python3 check.py', cwd: '/repo' });
+    expect(reviewer.mock.calls[1]?.[0].userIntent).toEqual(reviewer.mock.calls[0]?.[0].userIntent);
+    await handle.close();
+    await collect;
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool_result_full', data: expect.objectContaining({
+      toolUseId: params.itemId, isError: true, fullText: expect.stringContaining('Keep the existing document.'),
+    }) }));
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+  });
+
+  it.each(['user', 'system', 'feedback-failed', 'turn-ended'] as const)('preserves permission provenance and lifecycle: %s', async (scenario) => {
+    const review = deferred<{ verdict: 'block'; reason: string }>();
+    const reviewer = vi.fn<AutoReviewDelegate>(() => scenario === 'turn-ended'
+      ? review.promise : Promise.resolve({ verdict: scenario === 'feedback-failed' ? 'block' : 'ask', reason: 'Review reason' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    const host = installFakeHost(agent, method => {
+      if (method === Method.TurnStart) return { turn: { id: 'feedback-lifecycle' } };
+      if (method === Method.TurnSteer) {
+        if (scenario === 'feedback-failed') throw new Error('RPC acknowledgement lost');
+        return { turnId: 'feedback-lifecycle' };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'feedback-lifecycle', model: 'gpt-5.5',
+      providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    handle.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny',
+      reason: scenario === 'system' ? 'interaction_timeout' : 'Do not change this document.' }));
+    await handle.send({ type: 'user', content: 'Inspect my notes.' });
+    const handlers = host.getThreadHandlers()!;
+    const approval = handlers.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'feedback-lifecycle',
+      itemId: 'denial', command: 'python3 rewrite.py', cwd: '/repo' });
+    if (scenario === 'turn-ended') {
+      await waitForExpectation(() => expect(reviewer).toHaveBeenCalledOnce());
+      handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'feedback-lifecycle', status: 'completed', items: [] } });
+      review.resolve({ verdict: 'block', reason: 'Late review' });
+    }
+    await expect(approval).resolves.toEqual({ decision: 'decline' });
+    const steers = host.request.mock.calls.filter(([method]) => method === Method.TurnSteer);
+    expect(steers).toHaveLength(scenario === 'turn-ended' ? 0 : 1);
+    if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
+    if (scenario === 'system') {
+      expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      expect(JSON.stringify(steers)).not.toContain('User denied');
+    }
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    await handle.close();
   });
 
   it('keeps a real user deny distinct from a missing confirmation', async () => {

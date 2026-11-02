@@ -31,6 +31,7 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { hostedStartOptions } from '../host/service';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -1237,6 +1238,30 @@ describe('remote agent round trip', () => {
   });
 
   // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.
+  // 插件工具经隧道回到本机：花名册按本机真实工作目录现算，经 open 带到 Agent 的启动选项。
+  // 空花名册也要带到，否则对方会回退到它自己的插件。
+  it('brings this computer\'s plugin roster, even an empty one, to the agent computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const roster of ['TASK COMPUTER GHOST ROSTER', '']) {
+        const ghostRosterPrompt = vi.fn(() => roster);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+          ghostRosterPrompt, captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `roster-${roster.length}`, workingDir: project, model: 'm',
+        } });
+        expect(ghostRosterPrompt).toHaveBeenCalledWith(project);
+        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot).toBe(roster);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
   it('sends the persisted image clear generation when opening a remote run', async () => {
     const host = createHost();
     const base = makeDeps(host);
