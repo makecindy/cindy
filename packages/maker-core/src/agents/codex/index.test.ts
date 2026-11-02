@@ -16435,6 +16435,43 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(String((notices[0].data as { message?: string }).message)).toContain('User instructions changed');
   });
 
+  it('Auto MCP reports a delegated authorization failure with the host’s fixed reason', async () => {
+    // The delegated task lost its Host authorization before the review started,
+    // so the resolver puts a fixed authorizationError into the prepared request.
+    // That sentence is host copy without user data, so it may reach the
+    // diagnostic/UI channel — but only when it is marked as a policy reason.
+    // Unmarked, the notice falls back to a generic "blocked" line and the user
+    // never learns the call died because the delegation was revoked.
+    const review = Object.assign(vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' })), {
+      prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => ({
+        ...request,
+        authorizationError: 'Plugin or task Auto authorization is no longer active.',
+      })),
+    });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'authorization-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'authorization-error', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const events: AgentEvent[] = [];
+    const collect = (async () => { for await (const event of handle.events()) events.push(event); })();
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'authorization-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call',
+        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { action: 'run' } } },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    expect(result.action).toBe('decline');
+    // The delegate never runs: the Host fence already refused the delegation.
+    expect(review).not.toHaveBeenCalled();
+    await handle.close();
+    await collect;
+    const notices = events.filter((event) => event.type === 'error'
+      && String((event.data as { message?: string }).message).includes('[MCP_APPROVAL_AUTO_BLOCKED]'));
+    expect(notices).toHaveLength(1);
+    expect(String((notices[0].data as { message?: string }).message)).toContain('Plugin or task Auto authorization is no longer active.');
+  });
+
   it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'ambiguous-with-params', 'other-turn', 'other-server', 'ghost-call'] as const)(
     'uses the same MCP approval evidence for policy and display: %s', async (source) => {
       const policy = vi.fn((context: { serverName: string; toolName?: string }) =>

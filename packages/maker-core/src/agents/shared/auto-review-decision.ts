@@ -295,7 +295,13 @@ export interface AutoReviewRequest {
     workingDir: string;
     authorizationRevision: string;
   };
-  /** A recognized delegation whose current authority could not be established. */
+  /**
+   * A recognized delegation whose current authority could not be established.
+   *
+   * 宿主固定文案（唯一生产者是 desktop 的 `createPluginTaskReviewResolver`，那里是
+   * 一组写死的句子），**不得**放模型或插件的自由文本：这条会带 `policyReason` 进诊断
+   * 与 UI 通道。
+   */
   authorizationError?: string;
   action: ReviewableAction;
   /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
@@ -321,9 +327,10 @@ export async function withAutoReviewContext(
   try {
     const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
     if (prepared.authorizationError) {
-      // Host-authored text: not a fixed policy sentence, so it stays out of
-      // diagnostics like model free text does.
-      return { verdict: 'block', reason: prepared.authorizationError };
+      // 宿主固定文案（见 authorizationError 的契约），不含用户数据：标 policyReason
+      // 才能进诊断/UI 通道。缺标会被当成模型自由文本过滤掉，用户只看到一句通用
+      // 「被拦截」，不知道是授权失效。
+      return { verdict: 'block', reason: prepared.authorizationError, policyReason: true };
     }
     const fingerprint = JSON.stringify(prepared);
     const decision = await evaluate(prepared);
