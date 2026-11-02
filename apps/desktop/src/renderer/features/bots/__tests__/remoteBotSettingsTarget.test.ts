@@ -66,6 +66,25 @@ it('accepts a same-model choice once through a host that declares the operation'
   expect(profiles.get()).not.toHaveProperty('acceptModelSelection');
 });
 
+it('rereads a version conflict even when a concurrent refresh was discarded during the first save', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  let finish!: (result: unknown) => void;
+  host.invoke.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const saving = target.profile.update('bot-1', { acceptModelSelection: true });
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await profiles.refresh();
+  expect(profiles.get()?.currentVersion).toBe(1);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  finish(refused('PRECONDITION_FAILED', 'Profile changed'));
+  await expect(saving).rejects.toSatisfy(error => extractIpcError(error)?.code === 'PRECONDITION_FAILED');
+  expect(profiles.get()?.currentVersion).toBe(2);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 3 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(4).input).toMatchObject({ op: 'profile.acceptModelSelection', args: { expectedVersion: 2 } });
+});
+
 it('keeps actual model changes usable on older hosts but refuses unsupported same-model acceptance', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));

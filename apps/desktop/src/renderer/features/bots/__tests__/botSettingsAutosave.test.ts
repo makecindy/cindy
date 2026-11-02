@@ -444,6 +444,19 @@ describe('createBotSettingsAutosave flush & failure', () => {
 
 
 describe('settings changes preserve independently joined capabilities', () => {
+  it('preserves an unacknowledged same-model choice while adopting unrelated host edits', () => {
+    const saved = payload();
+    const incoming = payload({ name: 'Host name', skills: ['host-skill'],
+      capabilities: capabilities({ model: 'host-model', modelChain: [{ ...saved.capabilities.modelChain[0]!, model: 'host-model' }] }) });
+    const next = reconcileBotSettingsDraft(saved, saved, incoming, true);
+    expect(next.name).toBe('Host name');
+    expect(next.skills).toEqual(['host-skill']);
+    expect(next.capabilities.model).toBe(saved.capabilities.model);
+    expect(next.capabilities.modelChain).toEqual(saved.capabilities.modelChain);
+    expect(botSettingsChanges(saved, saved, true, true).capabilities).toMatchObject({ model: saved.capabilities.model });
+    expect(botSettingsChanges(saved, saved)).toEqual({});
+  });
+
   it('does not resend capability selections when only the name changes', () => {
     expect(botSettingsChanges(payload(), payload({ name: 'Updated' }))).toEqual({ name: 'Updated' });
   });

@@ -9,6 +9,7 @@ import type { ConversationSearchResponse } from '../../../shared/conversationSea
 import type { BotSkillSummary } from '../../../shared/botSkill';
 import type { BotSettingsOp } from '../../../shared/botRemoteSettings';
 import { createIpcError } from '../../../shared/ipc-errors';
+import { extractIpcError } from '../../utils/ipcError';
 import { normalizeDbProfile, type BotProfile, type BotProfileUpdatePatch } from './botStore';
 import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from './botSettingsTarget';
 import { invokeBotSettings, splitProfilePatch } from './remoteBotSettingsClient';
@@ -99,7 +100,8 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
           // A large patch goes in several requests: when an earlier one is already saved on the
           // computer, `before` is no longer what it holds, so the page starts again from what it has.
           let reread: unknown = null;
-          if (saved > 0) reread = await invokeBotSettings(deviceId, 'profile.get', botId).catch(() => null);
+          if (saved > 0 || extractIpcError(error)?.code === 'PRECONDITION_FAILED')
+            reread = await invokeBotSettings(deviceId, 'profile.get', botId).catch(() => null);
           if (reread && normalizeDbProfile((reread as { profile?: unknown }).profile)) adopt(reread);
           else {
             profile = before;

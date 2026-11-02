@@ -208,7 +208,7 @@ export function BotSettings({
       savingProfileRef.current = true;
       try {
         await target.profile.update(bot.id, {
-          ...botSettingsChanges(savedSettingsRef.current, payload, true),
+          ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
           ...(modelSelection ? { acceptModelSelection: true } : {}),
         });
         savedSettingsRef.current = payload;
@@ -308,6 +308,7 @@ export function BotSettings({
               skills: selectedSkills,
             },
             incoming,
+            autosave.hasPendingModelSelection(),
           )
         : incoming;
     botIdentityRef.current = bot.id;

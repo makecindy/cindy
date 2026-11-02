@@ -539,6 +539,26 @@ describe('Bot settings profile consolidation', () => {
     })));
   });
 
+  it('keeps a same-model choice through a failed save and a newer host profile', async () => {
+    vi.useFakeTimers();
+    const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
+    const config = (route: BotModelRoute) => capabilities({ ...route, modelChain: [route], modelChainOverride: [route],
+      modelOverride: { model: route.model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode } });
+    let rejectSave!: (error: Error) => void;
+    mocks.updateBotProfile.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const view = renderSettings({ capabilities: config(primary) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    view.rerender(<BotSettings bot={bot({ currentVersion: 2, skills: ['release-check'],
+      capabilities: config({ ...primary, model: 'host-changed' }) })} onBack={view.onBack} onOpenSession={view.onOpenSession} />);
+    await act(async () => { rejectSave(new Error('Profile changed')); });
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe(primary.model);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.autosave.retry' })); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({ acceptModelSelection: true,
+      capabilities: expect.objectContaining({ modelChainOverride: [primary] }) }));
+  });
+
   it('keeps a long description inside the single editable field', () => {
     const long = 'x'.repeat(500);
     renderSettings({ description: long });

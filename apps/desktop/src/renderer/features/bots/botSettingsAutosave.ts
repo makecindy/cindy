@@ -134,12 +134,18 @@ export function botSettingsPayloadEqual(a: BotSettingsPayload, b: BotSettingsPay
 }
 
 /** Send only edited fields, preserving capabilities joined concurrently by the companion. */
-export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettingsPayload, includeCapabilityBaseline = false): BotProfileUpdatePatch {
+export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettingsPayload, includeCapabilityBaseline = false, modelSelection = false): BotProfileUpdatePatch {
   const { capabilities, ...values } = next;
   const changed = Object.fromEntries(Object.entries(values).filter(([key, value]) =>
     !capabilityValueEqual(value, previous[key as keyof typeof values])));
   const capabilityChanges = Object.fromEntries(Object.entries(capabilities).filter(([key, value]) =>
     !capabilityValueEqual(value, previous.capabilities[key as keyof BotCapabilities])));
+  // Preserve the route the user picked, even if a concurrent profile read has
+  // moved the saved primary while an unchanged selection is awaiting retry.
+  if (modelSelection) {
+    for (const key of ['modelChain', 'modelChainOverride', 'modelOverride', 'harness', 'model', 'providerId', 'effort', 'fastMode'] as const)
+      capabilityChanges[key] = capabilities[key];
+  }
   const capabilityBaseline = {
     ...('skills' in changed ? { skills: previous.skills } : {}),
     ...('mcpServers' in capabilityChanges ? { mcpServers: previous.capabilities.mcpServers } : {}),
@@ -159,9 +165,10 @@ export function reconcileBotSettingsDraft(
   baseline: BotSettingsPayload,
   draft: BotSettingsDraft,
   incoming: BotSettingsPayload,
+  modelSelection = false,
 ): BotSettingsDraft {
   const normalized = normalizeBotSettingsPayload(draft, baseline.name);
-  const changes = botSettingsChanges(baseline, normalized);
+  const changes = botSettingsChanges(baseline, normalized, false, modelSelection);
   // Text that only differs from the saved copy by surrounding whitespace is the
   // user mid-typing (a trailing space or new line); keep it instead of the trimmed copy.
   const typedWhitespace = Object.fromEntries(BOT_SETTINGS_TEXT_FIELDS
@@ -217,6 +224,7 @@ export interface BotSettingsAutosaveHandle {
   cancel(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
+  hasPendingModelSelection(): boolean;
 }
 
 export function createBotSettingsAutosave(
@@ -342,5 +350,6 @@ export function createBotSettingsAutosave(
       clearTimer();
     },
     isDirty,
+    hasPendingModelSelection: () => modelSelectionRevision !== savedModelSelectionRevision,
   };
 }
