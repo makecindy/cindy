@@ -1,12 +1,16 @@
+/** @vitest-environment jsdom */
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildGhostPluginSettingsThemeCss,
+  buildGhostMainViewThemeCss,
   buildGhostSettingsThemeCss,
   buildGhostThemeCss,
   buildGhostThemeVarsBlock,
   createGhostThemeInjector,
   isSafeGhostThemeValue,
+  observeHostTheme,
   type ThemeInjectableWebview,
 } from '../ghostPanelTheme';
 
@@ -24,6 +28,57 @@ function mockWebview(): ThemeInjectableWebview & {
 
 /** 让 insertCSS 的 then 回调落地。 */
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+// Regression: Sites' main-view document hid the wallpaper. Existing tests cover
+// theme strings, not the applied canvas or wallpaper-only updates. Unit tier:
+// exercise the production injector + observer with unchanged light/dark tokens,
+// and verify computed document/control backgrounds across off -> on -> off.
+it.each(['light', 'dark'])('main-view canvas follows wallpaper without fading controls (%s)', async (scheme) => {
+  const frame = document.createElement('iframe');
+  document.body.append(frame);
+  const guest = frame.contentWindow!;
+  guest.document.head.innerHTML = '<style>html, body { background-color: rgb(30, 30, 30); } input { background-color: rgb(60, 60, 60); }</style>';
+  guest.document.body.innerHTML = '<input>';
+  document.documentElement.style.colorScheme = scheme;
+  let key = 0;
+  const styles = new Map<string, HTMLStyleElement>();
+  const injector = createGhostThemeInjector({
+    async insertCSS(css) {
+      const style = guest.document.createElement('style');
+      style.textContent = css;
+      guest.document.head.append(style);
+      const id = String(++key);
+      styles.set(id, style);
+      return id;
+    },
+    async removeInsertedCSS(id) { styles.get(id)?.remove(); styles.delete(id); },
+  }, buildGhostMainViewThemeCss);
+  const unobserve = observeHostTheme(injector.inject);
+  const background = (element: Element) => guest.getComputedStyle(element).backgroundColor;
+  try {
+    injector.onDomReady();
+    await flush();
+    const canvas = guest.document.documentElement;
+    const body = guest.document.body;
+    const input = body.querySelector('input')!;
+    const original = [background(canvas), background(body), background(input)];
+    document.documentElement.setAttribute('data-wallpaper-active', 'true');
+    await flush();
+    expect(background(canvas)).toBe('rgba(0, 0, 0, 0)');
+    expect(background(body)).toBe('rgba(0, 0, 0, 0)');
+    expect(background(input)).toBe(original[2]);
+    expect(styles.size).toBe(1);
+    document.documentElement.removeAttribute('data-wallpaper-active');
+    await flush();
+    expect([background(canvas), background(body), background(input)]).toEqual(original);
+  } finally {
+    unobserve();
+    injector.dispose();
+    frame.remove();
+    document.documentElement.removeAttribute('data-wallpaper-active');
+    document.documentElement.style.colorScheme = '';
+  }
+});
 
 describe('createGhostThemeInjector · webview 主题注入状态机', () => {
   it('token 文本没变就不重复灌(换肤监听误触发去重)', async () => {
@@ -97,7 +152,7 @@ describe('isSafeGhostThemeValue · 注入值合法性守卫(纵深防御)', () =
 });
 
 /**
- * 本测试文件跑 node 环境:变量块读 :root 的 getComputedStyle 打桩即可,断言
+ * 以下变量块用例只需将 :root 的 getComputedStyle 打桩,断言
  * 对象只是基线字符串(fallback 链写法),与 DOM 无关。
  *
  * classList 必须一并打桩:readHostColorScheme 在 computed color-scheme 缺失或

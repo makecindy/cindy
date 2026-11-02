@@ -149,6 +149,15 @@ export function buildGhostThemeCss(): string {
   ].join('\n');
 }
 
+/** Main views share the host wallpaper canvas; controls keep their theme surfaces. */
+export function buildGhostMainViewThemeCss(): string {
+  const css = buildGhostThemeCss();
+  if (document.documentElement.getAttribute('data-wallpaper-active') !== 'true') return css;
+  // Only clear the document canvas, never surface tokens: plugins also use those
+  // tokens for inputs, cards and dialogs. Keep any author-provided background image.
+  return `${css}\nhtml, body { background-color: transparent !important; }`;
+}
+
 /**
  * 设置区 webview 的注入 CSS(GhostSettingsWebview 用):变量块同面板,
  * 基线背景改用设置卡片色——guest 与它所嵌的宿主卡片无缝同色,而不是
@@ -172,14 +181,14 @@ export function buildGhostPluginSettingsThemeCss(): string {
 }
 
 /**
- * 订阅主机主题变化(root 上 class / style / data-theme 任一变动)。
+ * 订阅主机主题和壁纸开关变化。
  * 返回取消订阅函数。
  */
 export function observeHostTheme(onChange: () => void): () => void {
   const observer = new MutationObserver(onChange);
   observer.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['class', 'style', 'data-theme'],
+    attributeFilter: ['class', 'style', 'data-theme', 'data-wallpaper-active'],
   });
   return () => observer.disconnect();
 }
