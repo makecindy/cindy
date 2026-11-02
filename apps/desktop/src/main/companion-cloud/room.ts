@@ -113,7 +113,7 @@ const ROOM_SEARCH_TIMEOUT_MS = 8_000;
 
 /** Keyword search of companions' rooms (the server matches substrings); newest first. One slow room only costs itself. */
 export async function searchCompanionRooms(api: CompanionApi, companions: Array<{ id: string; externalId: string; name: string; room: () => Promise<string> }>,
-  query: string, limit: number, filter: CompanionRoomSearchFilter = {}, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
+  query: string, filter: CompanionRoomSearchFilter = {}, timeoutMs = ROOM_SEARCH_TIMEOUT_MS): Promise<CompanionRoomSearchResult> {
   const result: CompanionRoomSearchResult = { hits: [], failed: [], incomplete: false };
   const keeps = (view: CompanionTranscriptMessage) => !!view.text && (!filter.roles || filter.roles.includes(view.role))
     && (filter.fromMs == null || view.createdAt >= filter.fromMs) && (filter.toMs == null || view.createdAt < filter.toMs);
@@ -149,6 +149,5 @@ export async function searchCompanionRooms(api: CompanionApi, companions: Array<
     } finally { done = true; clearTimeout(timer); }
   }));
   result.hits.sort((a, b) => b.createdAt - a.createdAt);
-  if (result.hits.length > limit) { result.hits.length = limit; result.incomplete = true; }
   return result;
 }

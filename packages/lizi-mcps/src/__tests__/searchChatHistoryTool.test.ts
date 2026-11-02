@@ -261,7 +261,7 @@ describe('search_chat_history cloud companion rooms', () => {
 
   it('adds what companions on other computers said, and says which rooms it could not read', async () => {
     const { payload, searchCompanionRooms } = await call({ teammate_id: 'bot_a', from: '1970-01-01T00:00:01.000Z' }, { session: 's1' });
-    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', limit: 10, callerSessionId: 's1', teammateId: 'bot_a',
+    expect(searchCompanionRooms).toHaveBeenCalledWith({ query: 'brew', callerSessionId: 's1', teammateId: 'bot_a',
       roles: ['user', 'assistant'], fromMs: 1_000, toMs: null });
     expect(payload.cloud_incomplete).toBe(true);
     expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['m1']);
@@ -291,6 +291,12 @@ describe('search_chat_history cloud companion rooms', () => {
     const split = JSON.parse(((await registry.call('search_chat_history', { query: 'brew' })).content[0] as { text: string }).text);
     expect(split.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['p1', 'p2', 'p3']);
     expect(split.cloud_continue_to).toBe(new Date(9_000).toISOString());
+
+    const short = (id: string, createdAt: number) => ({ ...room, messageId: id, createdAt });
+    parts = [short('n1', 9_000), short('n2', 9_000), short('n3', 9_000), short('older', 8_000)];
+    const counted = JSON.parse(((await registry.call('search_chat_history', { query: 'brew', limit: 2 })).content[0] as { text: string }).text);
+    expect(counted.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['n1', 'n2', 'n3']);
+    expect(counted.cloud_continue_to).toBe(new Date(9_000).toISOString());
   });
 
   it('stays local for a remote query, a scoped caller, later pages and filters the room cannot honor', async () => {

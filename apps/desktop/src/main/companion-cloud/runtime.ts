@@ -86,7 +86,7 @@ export interface CompanionCloudRuntime {
   roomIdFor: (botId: string) => string | null;
   isDirectRoom: (roomId: string) => boolean;
   /** Search the rooms of companions that run on another computer; this computer already holds its own. */
-  searchOtherRooms: (query: string, options: { teammateId?: string; limit: number; filter?: CompanionRoomSearchFilter }) => Promise<CompanionRoomSearchResult>;
+  searchOtherRooms: (query: string, options: { teammateId?: string; filter?: CompanionRoomSearchFilter }) => Promise<CompanionRoomSearchResult>;
   /** One full upload + mirror pass (tests and explicit refresh). */
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
@@ -819,11 +819,11 @@ export function startCompanionCloud(input: {
       return true;
     },
 
-    searchOtherRooms(query, { teammateId, limit, filter }) {
+    searchOtherRooms(query, { teammateId, filter }) {
       const others = (input.actors?.() ?? []).filter(actor => actor.kind === 'bot' && !actor.disabled && actor.homeDeviceId
         && actor.homeDeviceId !== input.selfDeviceId && (!teammateId || actor.externalId === teammateId));
       return searchCompanionRooms(input.api, others.map(actor => ({ id: actor.id, externalId: actor.externalId, name: actor.name,
-        room: () => mirror.ensureRoom(actor.externalId, actor.id, actor.name) })), query, limit, filter);
+        room: () => mirror.ensureRoom(actor.externalId, actor.id, actor.name) })), query, filter);
     },
 
     async transcript(botId, before) {

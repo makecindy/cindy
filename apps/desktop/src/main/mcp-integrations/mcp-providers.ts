@@ -1419,10 +1419,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           try { const result = await searchChatHistoryHybrid(args); return { ok: true, result }; }
           catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
-        searchCompanionRooms: async ({ callerSessionId, query, teammateId, limit, roles, fromMs, toMs }) => {
+        searchCompanionRooms: async ({ callerSessionId, query, teammateId, roles, fromMs, toMs }) => {
           // 共享任务里的访客不是账号本人，不能经 Agent 读主人和伙伴的对话。
           const runtime = isSessionSharedTaskActive(callerSessionId) ? null : activeCompanionCloud();
-          return runtime ? runtime.searchOtherRooms(query, { limit, filter: { roles, fromMs, toMs }, ...(teammateId ? { teammateId } : {}) }) : null;
+          return runtime ? runtime.searchOtherRooms(query, { filter: { roles, fromMs, toMs }, ...(teammateId ? { teammateId } : {}) }) : null;
         },
         // get_task_digest:一件任务的短摘要(本机或 deviceId::sessionId 只读)。
         taskDigest: async (args) => {

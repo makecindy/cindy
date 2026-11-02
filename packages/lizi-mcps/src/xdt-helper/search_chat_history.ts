@@ -204,11 +204,11 @@ export function registerSearchChatHistoryTool(
       const cloud = callerSessionId && deps.history.searchCompanionRooms && (offset ?? 0) === 0
         && scope.sessionIds === null && !workdir && !agent_kind && !args.source
         && effectiveRoles.some((role) => role === 'user' || role === 'assistant')
-        ? await deps.history.searchCompanionRooms({ query: query.trim(), limit, callerSessionId, fromMs, toMs,
+        ? await deps.history.searchCompanionRooms({ query: query.trim(), callerSessionId, fromMs, toMs,
           roles: effectiveRoles.filter((role): role is 'user' | 'assistant' => role === 'user' || role === 'assistant'),
           ...(args.teammate_id ? { teammateId: args.teammate_id } : {}) }).catch(() => null)
         : null;
-      const cloudPage = cloud ? cloudHitsPage(cloud.hits) : null;
+      const cloudPage = cloud ? cloudHitsPage(cloud.hits, limit) : null;
       return okPayload({
         ...(cloudPage?.hits.length ? { cloud_hits: cloudPage.hits } : {}),
         ...(cloud?.incomplete || cloudPage?.continueTo ? { cloud_incomplete: true } : {}),
@@ -275,16 +275,16 @@ export function registerSearchChatHistoryTool(
   });
 }
 
-/** 与本机结果同一预算：不截断单条，放不下的留给下一次（hits 按时间从新到旧）。 */
+/** 按条数和字节分页，与本机结果同一预算：不截断单条，放不下的留给下一次（hits 按时间从新到旧）。 */
 const CLOUD_PAGE_BUDGET_BYTES = 64 * 1024;
-function cloudHitsPage(hits: NonNullable<Awaited<ReturnType<NonNullable<XdtHelperHistoryDeps['searchCompanionRooms']>>>>['hits']) {
+function cloudHitsPage(hits: NonNullable<Awaited<ReturnType<NonNullable<XdtHelperHistoryDeps['searchCompanionRooms']>>>>['hits'], limit: number) {
   const page: Array<Omit<(typeof hits)[number], 'createdAt'> & { createdAt: string }> = [];
   let bytes = 0;
   for (const hit of hits) {
     const entry = { ...hit, createdAt: new Date(hit.createdAt).toISOString() };
     bytes += Buffer.byteLength(JSON.stringify(entry));
     // 长消息分成多段时时间相同，续读按时间切（to 不含），所以同一时间的段不能拆开。
-    if (page.length && bytes > CLOUD_PAGE_BUDGET_BYTES && entry.createdAt !== page.at(-1)!.createdAt) {
+    if (page.length && (bytes > CLOUD_PAGE_BUDGET_BYTES || page.length >= limit) && entry.createdAt !== page.at(-1)!.createdAt) {
       return { hits: page, continueTo: page.at(-1)!.createdAt };
     }
     page.push(entry);

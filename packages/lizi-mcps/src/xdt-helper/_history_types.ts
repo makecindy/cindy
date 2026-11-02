@@ -264,7 +264,6 @@ export interface XdtHelperHistoryDeps {
   searchCompanionRooms?: (args: {
     query: string;
     teammateId?: string;
-    limit: number;
     callerSessionId: string;
     roles: Array<'user' | 'assistant'>;
     fromMs: number | null;
