@@ -6180,6 +6180,14 @@ const registerIpcHandlers = () => {
           },
         })
         .finally(() => authCredentialRecovery.request());
+      // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
+      // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
+      // 以后台完成的那次登录为准。
+      const markAuthMilestone = (s: authManager.AuthState) => {
+        if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+      };
+      markAuthMilestone(state);
+      void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
       // Plugin downloads/reconciliation retain their owner-scoped retries, but
       // must not delay AuthContext starting the owner DB or showing the app.
       authManager.requestStableOwnerPostCommit('auth-initialize');
