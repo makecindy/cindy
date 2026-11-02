@@ -229,7 +229,7 @@ function event(
   return { type, source: 'codex', data, ...extra } as AgentEvent;
 }
 
-function harness() {
+function harness(agentKind: 'codex' | 'pi' = 'codex') {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -242,7 +242,7 @@ function harness() {
   const ended = deferred();
   const handle = {
     id: 'provider',
-    agentKind: 'codex',
+    agentKind,
     model: 'test-model',
     send: vi.fn(async () => {}),
     close: vi.fn(async () => {
@@ -256,7 +256,7 @@ function harness() {
   } as unknown as AgentSessionHandle;
   const session = new Session({
     id: 'task',
-    agentKind: 'codex',
+    agentKind,
     workDir: '/unused',
     handle,
     capabilities: {} as never,
@@ -1136,6 +1136,23 @@ describe('production Session event pipeline', () => {
       null,
       'error-row',
     );
+    await h.dispose();
+  });
+
+  it.each([{ agentKind: 'pi', recovered: true }, { agentKind: 'pi', recovered: false }, { agentKind: 'codex', recovered: false }] as const)('claims a first request-body 413 only for Pi (%s)', async ({ agentKind, recovered }) => {
+    const h = harness(agentKind);
+    const claim = vi.fn((_sessionId: string, _turn: unknown, recoverable: boolean) =>
+      recoverable ? 'claimed' as const : 'idle' as const);
+    const tryRecover = vi.fn(async () => recovered);
+    (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = { claim, tryRecover };
+    const errorData = { message: '413 Failed to buffer the request body: length limit exceeded' };
+    h.emit(event('error', errorData, { source: agentKind }));
+    expect(claim).toHaveBeenCalledWith('task', { instanceId: undefined, generation: undefined }, agentKind === 'pi');
+    expect(tryRecover).toHaveBeenCalledTimes(agentKind === 'pi' ? 1 : 0);
+    if (agentKind === 'pi') expect(effects.fn('broadcast')).not.toHaveBeenCalled();
+    await microtasks();
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
+    expect(effects.fn('reserveTurnErrorPersistId')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
     await h.dispose();
   });
 
