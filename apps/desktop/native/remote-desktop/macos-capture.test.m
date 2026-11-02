@@ -129,13 +129,20 @@ static void testCaptureLifetime(void) {
 static void testFirstDisplayQueryDoesNotHang(const char *self) {
   pid_t pid = 0;
   const char *args[] = {self, "--display-probe", NULL};
-  assert(posix_spawn(&pid, self, NULL, NULL, (char *const *)args, environ) == 0);
+  // Keep spawn out of assert(): under NDEBUG the assert would drop the call
+  // entirely, leaving pid == 0 and kill(0, ...) would signal the whole
+  // process group instead of just the child.
+  int spawnErr = posix_spawn(&pid, self, NULL, NULL, (char *const *)args, environ);
+  if (spawnErr != 0 || pid <= 0) {
+    fprintf(stderr, "FAIL first display query: spawn failed (%d)\n", spawnErr);
+    exit(1);
+  }
   int status = 0, ticks = 0;
   for (;;) {
     pid_t r = waitpid(pid, &status, WNOHANG);
     if (r == pid) break;
     if (ticks++ >= 50) { // 5s budget: a hung display query fails here.
-      kill(pid, SIGKILL);
+      if (pid > 0) kill(pid, SIGKILL);
       waitpid(pid, &status, 0);
       fprintf(stderr, "FAIL first display query: fresh process hung\n");
       exit(1);
