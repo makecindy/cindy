@@ -76,6 +76,10 @@ describe('renderExpertMarkdown', () => {
     const md = renderExpertMarkdown(valid({ model: 'strong', memory: true, description: 'Says "hi": always' }));
     expect(md).not.toMatch(/^tools:/m);
     expect(md).toMatch(/^agent: hermes$/m);
+    // One line per field, even for a long description (hand-editable, no folded block).
+    const long = renderExpertMarkdown(valid({ description: 'Writes short UK B2B cold emails for facility managers, under 120 words with one clear ask.' }));
+    expect(long).toMatch(/^description: .*one clear ask\.'?$/m);
+    expect(long).not.toContain('>-');
     const dir = path.join(root, 'x');
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, 'expert.md'), md);

@@ -19,6 +19,7 @@ ADR 0005 calls for an expert creator: an expert whose one tool drafts a new expe
   - The tool is a fourth list, `HERMES_BRIDGE_EXPERT_SERVERS`.
   - It is mounted only for a Hermes session started as an expert whose `expert.md` lists `tools: [draft_expert]`. For a fresh session, the pending pick counts.
   - Every call re-checks the session's bound expert, so reaching the route without that binding fails closed.
+  - Hermes keeps one `config.yaml` that every session home copies, so the shim *registration* lists every server any session may use (amended 2026-11-02 after the live run, where one session's start removed another's tool). Per-session exposure is the bridge mount: an unmounted server is refused at connect, the shim exits, and Hermes lists no tools for it.
 - **Pi is unchanged:**
   - The server rides the shared bridge as a "Hermes-only" provider (`setHermesOnlyBridgeProviders`), so it is served no matter which agent starts the bridge.
   - Pi never mounts it.

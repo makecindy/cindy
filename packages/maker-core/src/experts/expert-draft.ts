@@ -122,7 +122,8 @@ export function renderExpertMarkdown(draft: ExpertDraft): string {
     memory: draft.memory,
     ...(draft.tags.length > 0 ? { tags: draft.tags } : {}),
   };
-  const text = matter.stringify(`${draft.prompt}\n`, data);
+  // lineWidth -1: one line per field, so the owner can hand-edit it (no folded `>-` blocks).
+  const text = matter.stringify(`${draft.prompt}\n`, data, { lineWidth: -1 } as Parameters<typeof matter.stringify>[2]);
   return text.endsWith('\n') ? text : `${text}\n`;
 }
 

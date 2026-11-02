@@ -227,7 +227,18 @@ export function createHermesBridgePreparer(deps: HermesBridgeHostDeps) {
         ),
         deps.expertCreator?.(info.sessionId) ?? false,
       );
-      await syncHermesShimRegistrations(deps.registration, shimPath, exposed);
+      // config.yaml is shared by every Hermes session (each session home copies it per turn), so
+      // it lists every server any session may use: per-session lists here would let one session's
+      // start remove another running session's tools (found live in 3.8). Each session is limited
+      // by its mounts below instead: the bridge refuses an unmounted server at connect, the shim
+      // exits, and Hermes lists no tools for it.
+      const registered = selectHermesBridgeServers(
+        lease.serverNames,
+        deps.optedInGatedServers?.() ?? new Set(),
+        true,
+        true,
+      );
+      await syncHermesShimRegistrations(deps.registration, shimPath, registered);
 
       // Freeze the per-project policy now (Pi does the same): later Settings
       // changes do not affect this running session; the bridge re-checks it on

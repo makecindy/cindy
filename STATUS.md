@@ -10,6 +10,17 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.8b live run (owner): Approve ✅; shared-config bug found and fixed (`unit-tested`)
+
+- First try: tool missing. Cause: the dev app had not been restarted after checking out the branch, so main ran old code (the header label is 3.2a code and worked). After a restart, `grep cindy_experts` showed the shim in `~/.hermes-cindy/config.yaml` and the session home.
+- **Approve ✅ `live-proven`:** Expert Creator, `deepseek-v4-pro`, Full access, brief "UK B2B cold emails for facility managers, under 120 words, one clear ask" → card with the full draft → Approve → "Saved. \"UK FM Cold Email Writer\" is now in the expert picker". New task as that expert (`hermes-default`): wrote the email in role (89 words, one 15-minute-call ask, placeholders, flagged missing details, invented nothing). `ls ~/.cindy-harness/experts` showed only the new `uk-fm-cold-email-writer` added.
+- **Bug found:** the creator's next turn said `draft_expert` was gone. Cause: `config.yaml` is shared by every Hermes session (each session home copies it per turn), and the cold-email task's start re-synced the shim list without `cindy_experts`. Fix: `hermesBridgeHost.ts` registers every server any session may use (`selectHermesBridgeServers(..., true, true)`); each session stays limited by its frozen mounts (`RUNTIME_MCP_NAMES_KEY`): the bridge answers 403 at connect, the shim exits, Hermes lists no tools. Same latent case fixed for `cindy_orca` (a non-collab session could drop a running lead's tools). Tests: the 3.8 bridge test now uses one shared config across two sessions and asserts the creator keeps its tool and the other session gets 403; the Orca collab-off test asserts 403 instead of "not registered". Mutation (sync back to per-session list) fails both.
+- **YAML:** `renderExpertMarkdown` uses `lineWidth: -1` so a long description stays on one line (was folded `>-`); +1 assertion, mutation-checked.
+- ADR 0007 amended (registration vs mounts). Debt: context banner over-reports for `deepseek-v4-pro` (368%/266% vs footer 60%/43%).
+- **Open:** Reject path live run; Approve again after the fix in a session where another Hermes task started in between. Gates for this commit not run in the cloud (budget; owner: "just push it, I'll run the shards"). Handoff for the next (local) session: `docs/handoff/2026-11-02-laptop-handoff.md`.
+
+---
+
 ## 2026-11-02 — ROADMAP 3.8a: expert creator (`unit-tested`)
 
 **Changes (ADR 0007):**
