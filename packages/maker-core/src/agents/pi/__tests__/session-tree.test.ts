@@ -107,11 +107,24 @@ describe('pi session tree adapter', () => {
   // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
   // before resending; missing it resends the same image history and the task stops at
   // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
-  it('classifies a gateway body-size rejection as too large', () => {
+  // The two spellings are asserted separately so dropping either alternative fails here;
+  // the combined production payload is covered end-to-end by the gateway-400 mode in
+  // pi-provider-routing.test.ts.
+  it('classifies the BadRequest.TooLarge error type as too large', () => {
     const rejected = {
       type: 'message', message: {
         role: 'assistant', stopReason: 'error', content: [],
-        errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216","type":"BadRequest.TooLarge","param":null,"code":null}}',
+        errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}',
+      },
+    };
+    expect(piRetryBranch(retryTree([rejected]), '0')).toEqual({ parentId: null, requestTooLarge: true });
+  });
+
+  it('classifies the max-bytes message wording as too large', () => {
+    const rejected = {
+      type: 'message', message: {
+        role: 'assistant', stopReason: 'error', content: [],
+        errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}',
       },
     };
     expect(piRetryBranch(retryTree([rejected]), '0')).toEqual({ parentId: null, requestTooLarge: true });
