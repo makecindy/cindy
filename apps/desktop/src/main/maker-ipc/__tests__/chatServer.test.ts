@@ -89,6 +89,7 @@ import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatche
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
+import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 
 describe('splitChatMessageText', () => {
   it('breaks at the last line before the limit, else at the limit, never inside a surrogate pair', () => {
@@ -483,27 +484,50 @@ describe('Chat Server result delivery and refresh', () => {
       expect(writes).toEqual([]);
     }
   });
-  // Group avatar regression: exercise the production manage entry, real image
-  // validation and HTTP payload, with only the network/image decoder faked.
-  it.each([true, false])('saves a personal notification mode as the human member with capability=%s', async supported => {
-    const reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null as string | null }];
+  // Notification preferences use the same save/refresh path as existing personal settings.
+  it.each([['mentions', true], ['none', true], ['all', true], ['mentions', false]] as const)(
+    'saves %s as the human member through the existing preference flow with capability=%s', async (mode, supported) => {
+    const disk = new Map<string, ChatHistoryState>();
+    deps.chatHistoryStore = () => ({ read: async room => structuredClone(disk.get(room)),
+      write: async (room, state) => { if (state) disk.set(room, structuredClone(state)); else disk.delete(room); } });
+    const reads = [{ thread_key: 'main', read_seq: '7', following: false, muted: mode === 'all', notification_scope: mode === 'all' ? 'mentions' : null as string | null }];
+    const inputMessageId = '90000000-0000-4000-8000-000000000008';
+    const message = { id: inputMessageId, seq: '8', authorId: selfId, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'After setting' }], createdAt: new Date().toISOString(), threadRootId: null, deleted: false };
     fixture.handle.mockImplementation((route, method, body) => {
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupNotificationSettings: 1 } : {} } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '8', changes: [] } };
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
         { id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role: 'member' },
-      ], messages: [], reads, cursor: '7' } };
-      if (route.endsWith('/read') && method === 'POST') { reads[0].notification_scope = body.notificationMode; return { body: { readSeq: '7', muted: false, notificationScope: body.notificationMode } }; }
+      ], messages: [message], reads, cursor: '8' } };
+      if (route.endsWith('/read') && method === 'POST') {
+        if (body.notificationMode) { if (body.notificationMode !== 'none') reads[0].notification_scope = body.notificationMode; reads[0].muted = body.notificationMode === 'none'; }
+        if (BigInt(body.readSeq) > BigInt(reads[0].read_seq)) reads[0].read_seq = body.readSeq;
+        return { body: { readSeq: reads[0].read_seq, following: false, muted: reads[0].muted, notificationScope: reads[0].notification_scope } };
+      }
       return response(route);
     });
-    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'notifications', mode: 'mentions' } });
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'notifications', mode } });
     expect(result.ok).toBe(supported);
     const writes = fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/read') && method === 'POST');
-    expect(writes).toEqual(supported ? [[`/conversations/${roomId}/read`, 'POST', { operationId: expect.any(String), readSeq: '0', notificationMode: 'mentions' }]] : []);
+    expect(writes).toEqual(supported ? [[`/conversations/${roomId}/read`, 'POST', { operationId: expect.any(String), readSeq: '0', notificationMode: mode }]] : []);
     expect(fixture.requests.filter(r => r.url.endsWith('/read')).every(r => !r.actor)).toBe(true);
     const detail = await service.getGroup(roomId);
     expect(detail.ok && detail.group.supportsNotificationSettings).toBe(supported);
-    if (supported) expect(detail.ok && detail.group.notificationMode).toBe('mentions');
+    if (supported) {
+      expect(detail.ok && detail.group.notificationMode).toBe(mode);
+      expect((await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: inputMessageId } })).ok).toBe(true);
+      // Without a live subscription the action may authorize with a snapshot;
+      // its acknowledged read must not make the following projection refetch it.
+      const snapshots = fixture.handle.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length;
+      const afterRead = await service.getGroup(roomId);
+      expect(afterRead.ok && afterRead.group.notificationMode).toBe(mode);
+      expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/snapshot'))).toHaveLength(snapshots);
+    }
   });
+  // Group avatar regression: exercise the production manage entry, real image
+  // validation and HTTP payload, with only the network/image decoder faked.
   it.each(['set', 'reset', 'keep', 'invalid', 'unsupported', 'upload-failure', 'account-change'] as const)(
     'keeps group avatar %s scoped to the current room and account', async mode => {
       let currentAccount = true;

@@ -1613,7 +1613,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   async function writeReadState<T = unknown>(roomId: string, data: Record<string, unknown>): Promise<T> {
     const value = await api<T>(`/conversations/${roomId}/read`, 'POST', data);
     const cache = history();
-    const ordinaryRead = data.following === undefined && data.muted === undefined && data.markedUnread === undefined;
+    const ordinaryRead = data.following === undefined && data.muted === undefined && data.markedUnread === undefined
+      && data.notificationMode === undefined;
     const applied = ordinaryRead && await cache?.readState(roomId,
       value && typeof value === 'object' ? { ...value, threadRootId: data.threadRootId ?? null } : value, true);
     // Legacy/malformed receipts and preference changes retain authoritative metadata refresh.
