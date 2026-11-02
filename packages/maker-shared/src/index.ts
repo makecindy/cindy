@@ -12,6 +12,7 @@ export * from './fileBrowser.js';
 export * from './fileBrowserGrid.js';
 export * from './filePreview.js';
 export * from './filePresentation.js';
+export * from './model3d.js';
 export * from './fixtures.js';
 export * from './deviceLinkContract.js';
 export * from './errorRedaction.js';

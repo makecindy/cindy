@@ -13200,6 +13200,7 @@
       "openModelFailed": "Falha ao abrir modelo",
       "modelLoading": "Carregando modelo 3D…",
       "modelLoadFailed": "Falha ao carregar modelo 3D",
+      "modelTooLarge": "Este modelo 3D é grande demais para pré-visualizar",
       "videoCopied": "Vídeo copiado",
       "copyVideo": "Copiar vídeo",
       "revealVideo": "Mostrar vídeo na pasta",

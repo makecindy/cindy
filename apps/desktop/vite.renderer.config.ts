@@ -364,7 +364,15 @@ const rendererConfig = {
     // 这些文件小于默认阈值 4096B,不加此回调 Vite 会默认内联。
     // 注意本项目 Vite 5.4 不支持 `?no-inline` import query(Vite 6+ 才有),
     // 只能走这条配置;返回 undefined = 其余资产维持默认阈值行为。
-    assetsInlineLimit: (filePath: string) =>
-      /-worklet\.js$/.test(filePath) ? false : undefined,
+    //
+    // 反过来,Draco 解码器的 wasm(three 自带,约 190KB)必须**内联**:打包后的
+    // Renderer 以 file:// 加载,页面不能 fetch 本地资源文件,独立的 .wasm 资源取不到。
+    // 内联成 data URL 后由 renderer/lib/model3d/dracoDecoder.ts 解码、转 blob: URL 交给
+    // 3D 查看器。只匹配这一个文件,其余资产维持默认阈值。
+    assetsInlineLimit: (filePath: string) => {
+      if (/-worklet\.js$/.test(filePath)) return false;
+      if (/[\\/]draco_decoder\.wasm$/.test(filePath)) return true;
+      return undefined;
+    },
   },
 };

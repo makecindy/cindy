@@ -21,17 +21,17 @@
  *     cwd's separator style.
  */
 
+import { MODEL3D_FORMATS } from '@cindy/maker-shared/model3d';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
-/** 3D model extension whitelist. .glb/.gltf open the in-app ModelLightbox;
- *  .fbx is classified as model too but activates as reveal-in-Finder (no
- *  in-app FBX preview, and openPath would hit macOS Preview's misleading
- *  "damaged file" dialog). Must be checked BEFORE the text fallback in
- *  classifyMarkdownHref — .gltf is JSON underneath and would otherwise be
- *  swallowed by 'text-local'. */
-export const MODEL_EXT_RE = /\.(glb|gltf|fbx)(\?.*)?$/i;
+/** 3D model extension whitelist, derived from maker-shared so the recognised formats
+ *  cannot drift from the rest of the app. Every recognised format opens the in-app
+ *  ModelLightbox (mivo-model-viewer). Must be checked BEFORE the text fallback in
+ *  classifyMarkdownHref — .gltf is JSON, .obj / .dae / .stl(ascii) are text underneath
+ *  and would otherwise be swallowed by 'text-local'. ZIP is not a model. */
+export const MODEL_EXT_RE = new RegExp(`\\.(${MODEL3D_FORMATS.join('|')})(\\?.*)?$`, 'i');
 /** Has any 1-10 char file extension (e.g. `.tsx`, `.md`, `.txt`). */
 const HAS_EXT_RE = /\.[a-z0-9]{1,10}(\?.*)?$/i;
 /** Windows absolute path: `C:\foo` or `C:/foo`. */

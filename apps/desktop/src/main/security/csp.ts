@@ -118,7 +118,7 @@ export function buildContentSecurityPolicy(ctx: CspContext): string {
   // Refresh injects an inline preamble). Future hardening: move drawio into an
   // isolated <iframe sandbox> with its own CSP so prod can drop 'unsafe-eval'.
   //
-  // 'wasm-unsafe-eval' (both): @google/model-viewer's DRACO / KTX2 decoders
+  // 'wasm-unsafe-eval' (both): mivo-model-viewer's DRACO / KTX2 decoders
   // compile WebAssembly; this token permits ONLY wasm compilation.
   const scriptSrc = isDev
     ? ["'self'", "'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'"]
@@ -127,9 +127,9 @@ export function buildContentSecurityPolicy(ctx: CspContext): string {
   // connect-src: most backend traffic goes through main over IPC, but the
   // renderer DOES make a few direct exits — TapDB analytics XHR to
   // https://e.tapdb.com (cn) / https://e.tapdb.ap-sg.tapapis.com (global),
-  // model-viewer decoder fetches to https://www.gstatic.com,
-  // and <model-viewer> fetch()-ing models over the xdt-model: / cindy-media:
-  // schemes (mivo 老缓存与媒体总仓 GLB 各走各的协议). https: covers the first
+  // the model viewer's DRACO decoder fetch to https://www.gstatic.com,
+  // and the viewer fetch()-ing managed GLBs over cindy-media:. xdt-model: is the
+  // frozen legacy mivo cache scheme, kept readable for old addresses. https: covers the first
   // two; the privileged schemes are listed explicitly (a privileged scheme
   // is its own origin and does not match https:/'self'). Allowing https:/wss:
   // is also a non-breaking hedge for any future direct fetch — safe because a

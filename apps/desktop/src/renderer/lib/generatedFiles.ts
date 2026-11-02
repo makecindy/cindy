@@ -51,6 +51,11 @@ export interface GeneratedFileRef {
   artifact?: DocumentArtifactMetadata;
   /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
   artifactConfirmed?: boolean;
+  /**
+   * 本轮里有多少次工具调用写出了这个路径(≥2 才出现)。同名文件被再次导出 / 覆盖时递增,
+   * 让依赖文件内容的展示(例如 3D 模型缩略图)知道要重新取;路径本身没变,别的信号看不出来。
+   */
+  revision?: number;
 }
 
 export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
@@ -366,6 +371,7 @@ export function collectGeneratedFiles(
       if (prev) {
         if (prev.source === 'command' && source === 'tool') prev.source = 'tool';
         if (toolReady) delete prev.ready;
+        prev.revision = (prev.revision ?? 1) + 1;
         return;
       }
       byKey.set(key, {
