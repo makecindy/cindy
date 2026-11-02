@@ -98,6 +98,71 @@ mountPage({ render: () => <div>Worker finished</div> });`);
   assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
+// PDF preview imports its worker as a URL. E2E tier: verify raw asset bytes,
+// compare/changed tracking and actual module-worker loading (including MIME).
+test('serves URL imports as assets and tracks them across revisions', async () => {
+  const asset = path.join(dir, 'url-worker.mjs');
+  const source = 'self.postMessage(typeof document === "undefined" ? 23 : -1);';
+  await writeFile(asset, source);
+  const file = await entry('url-worker', `
+import workerUrl from './url-worker.mjs?url';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+await new Promise<void>((resolve, reject) => {
+  const worker = new Worker(workerUrl, { type: 'module' });
+  worker.onerror = reject;
+  worker.onmessage = ({ data }) => { worker.terminate(); data === 23 ? resolve() : reject(new Error('Wrong URL worker result')); };
+});
+
+const pdf = await import(pdfWorkerUrl);
+if (!pdf.WorkerMessageHandler) throw new Error('PDF worker asset missing');
+mountPage({ render: () => <div>URL workers loaded</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(asset));
+  assert.ok(scanned.inputs.some(input => input.endsWith('pdf.worker.min.mjs')));
+  const bundle = await buildPage(definition);
+  const emitted = [...bundle.files.values()].find(value => value.body.toString() === source);
+  assert.ok(emitted, 'URL imports must preserve the original bytes');
+  assert.equal(emitted.contentType, 'text/javascript');
+  const alternate = await buildPage(definition, {
+    has: file => file === asset,
+    get: file => file === asset ? source.replace('23', '24') : undefined,
+    resolve: () => undefined,
+  });
+  assert.notEqual(bundle.fingerprints.get(asset), alternate.fingerprints.get(asset));
+  assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+});
+
+// E2E: the real settings route previously crashed on import.meta.glob. Verify
+// executed catalog imports, input discovery, and the older revision's membership.
+test('loads eager default globs and preserves compare membership', async () => {
+  const first = path.join(dir, 'one.settings-search.ts');
+  const added = path.join(dir, 'two.settings-search.ts');
+  await writeFile(first, 'export default { title: "First" };');
+  await writeFile(added, 'export default { title: "Second" };');
+  const file = await entry('eager-glob', `
+type Entry = { title: string };
+const modules = import.meta.glob<Entry>('./**/*.settings-search.ts', { eager: true, import: 'default' });
+if (Object.values(modules).map(item => item.title).join(',') !== 'First,Second') throw new Error('Glob catalog mismatch');
+mountPage({ render: () => <div>{Object.values(modules).map(item => item.title).join(',')}</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(first));
+  assert.ok(scanned.inputs.includes(added));
+  const before = await buildPage(definition, {
+    atRef: new Set([file, first]),
+    has: candidate => candidate === first,
+    get: candidate => candidate === first ? 'export default { title: "Original" };' : undefined,
+    resolve: () => undefined,
+  });
+  assert.ok(before.fingerprints.has(first));
+  assert.equal(before.fingerprints.has(added), false);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+});
+
 test('one run reports each failure kind on its own variant', async () => {
   const file = await entry(
     'matrix',

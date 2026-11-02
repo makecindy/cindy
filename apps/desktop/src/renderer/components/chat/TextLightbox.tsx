@@ -21,6 +21,7 @@ import {
   useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
+import { isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
 import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -258,13 +259,21 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const overlay = overlayRef.current;
+      if (!overlay || isLightboxCovered(overlay)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        // Rendered Markdown delegates find to FindInPageBar, including its
+        // refusal while video or a nested preview owns the foreground.
+        if (renderable.kind === 'markdown' && !showSource) return;
         e.preventDefault();
         e.stopImmediatePropagation();
         setShowSource(true);
         setSearch(true);
         return;
       }
+      if (e.key === 'Escape' && (
+        isPreviewPopupKeyEvent(e, overlay) || overlay.contains(document.fullscreenElement)
+      )) return;
       if (e.key === 'Escape' && search) {
         e.preventDefault();
         setSearch(false);
@@ -276,7 +285,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     };
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
-  }, [handleClose, search]);
+  }, [handleClose, search, renderable.kind, showSource]);
 
   // F6: Scroll lock on the message stream's scroll container.
   // Same selector ImageLightbox uses; keeping it in sync prevents the page

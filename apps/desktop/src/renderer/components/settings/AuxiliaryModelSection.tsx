@@ -1,3 +1,4 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 /** Settings → Personalization: one ordered chain for short auxiliary text. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -158,17 +159,17 @@ export function AuxiliaryModelSection() {
     <div className="flex flex-col gap-[14px]">
       <div className="flex flex-col gap-1">
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.auxiliaryModels.title')}
+          {t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
         </h2>
         <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.auxiliaryModels.description')}
+          {t(personalizationDetailsSettings.auxiliaryModelsTitle.descriptionKey)}
         </p>
       </div>
 
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="flex items-center justify-between gap-4 px-4 py-4">
           <div className="min-w-0 flex-1 text-14 font-medium text-[var(--text-primary)]">
-            {t('settings.auxiliaryModels.title')}
+            {t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
           </div>
           <div className="flex min-w-0 max-w-full items-center justify-end gap-2">
             {showCustom ? (
@@ -190,8 +191,8 @@ export function AuxiliaryModelSection() {
               onValueChange={(value) => selectMode(value as AuxiliaryModelMode)}
               disabled={pending}
             >
-              <Select.Trigger
-                aria-label={t('settings.auxiliaryModels.title')}
+              <Select.Trigger data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
+                aria-label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
                 className={cn(
                   'flex h-9 w-[220px] max-w-full min-w-0 shrink items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
                   'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
@@ -259,6 +260,7 @@ export function AuxiliaryModelSection() {
         {showCustom ? (
           <>
             {SLOT_I18N.map((slotKey, index) => {
+              const definition = slotKey === 'preferred' ? personalizationDetailsSettings.auxiliaryModelsPreferredLabel : slotKey === 'fallback1' ? personalizationDetailsSettings.auxiliaryModelsFallback1Label : personalizationDetailsSettings.auxiliaryModelsFallback2Label;
               const pin = activeModels[index];
               const selectedByOtherSlot = new Set(
                 activeModels.filter((entry, slotIndex) => slotIndex !== index && entry),
@@ -274,10 +276,10 @@ export function AuxiliaryModelSection() {
                   <div className="flex items-center justify-between gap-4 px-4 py-4">
                     <div className="min-w-0 flex-1">
                       <div className="text-14 font-medium text-[var(--text-primary)]">
-                        {t(`settings.auxiliaryModels.${slotKey}.label`)}
+                        {t(definition.titleKey)}
                       </div>
                       <p className="mt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-                        {t(`settings.auxiliaryModels.${slotKey}.description`)}
+                        {t(definition.descriptionKey)}
                       </p>
                     </div>
                     <div className="w-[min(100%,320px)] shrink-0">

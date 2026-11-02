@@ -1,3 +1,5 @@
+import { generalSettings } from './GeneralSettings.settings-search';
+import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search';
 /**
  * WindowBehaviorSection — 「应用行为」section:本机相关的应用级开关。
  *
@@ -74,7 +76,7 @@ function BehaviorRow({
         {note}
       </div>
 
-      <Switch
+      <Switch data-setting-id={generalSettings.windowBehavior.id}
         checked={checked}
         onCheckedChange={onCheckedChange}
         aria-label={ariaLabel}
@@ -141,12 +143,12 @@ export function WindowBehaviorSection() {
       key: 'keep-awake',
       node: (
         <BehaviorRow
-          id="settings-search-settings-devices-keepAwake"
-          label={t('settings.devices.keepAwake')}
-          hint={t('settings.devices.keepAwakeHint')}
+          id={windowBehaviorSettings.devicesKeepAwake.targetId}
+          label={t(windowBehaviorSettings.devicesKeepAwake.titleKey)}
+          hint={t(windowBehaviorSettings.devicesKeepAwake.descriptionKey)}
           checked={keepAwake}
           onCheckedChange={(v) => void setKeepAwake(v)}
-          ariaLabel={t('settings.devices.keepAwake')}
+          ariaLabel={t(windowBehaviorSettings.devicesKeepAwake.titleKey)}
         />
       ),
     },
@@ -157,13 +159,13 @@ export function WindowBehaviorSection() {
       key: 'login-item',
       node: (
         <BehaviorRow
-          id="settings-search-login-item"
-          label={t('settings.windowBehavior.loginItem.label')}
-          hint={t('settings.windowBehavior.loginItem.hint')}
+          id={windowBehaviorSettings.loginItemLabel.targetId}
+          label={t(windowBehaviorSettings.loginItemLabel.titleKey)}
+          hint={t(windowBehaviorSettings.loginItemLabel.descriptionKey)}
           checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
           disabled={!loginItem.state?.available || loginItem.busy}
           onCheckedChange={(enabled) => void loginItem.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.loginItem.label')}
+          ariaLabel={t(windowBehaviorSettings.loginItemLabel.titleKey)}
           note={
             <div
               className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]"
@@ -188,13 +190,13 @@ export function WindowBehaviorSection() {
       key: 'menubar',
       node: (
         <BehaviorRow
-          id="settings-search-menubar"
-          label={t('settings.windowBehavior.menubar.label')}
-          hint={t('settings.windowBehavior.menubar.hint')}
+          id={windowBehaviorSettings.menubarLabel.targetId}
+          label={t(windowBehaviorSettings.menubarLabel.titleKey)}
+          hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
           checked={menubar.state?.enabled === true}
           disabled={menubar.busy}
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.menubar.label')}
+          ariaLabel={t(windowBehaviorSettings.menubarLabel.titleKey)}
         />
       ),
     });
@@ -206,18 +208,18 @@ export function WindowBehaviorSection() {
       node: (
         <div className="cindy-segmented-row px-4 py-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-windowBehavior-closeBehavior-label"
+            <p id={windowBehaviorSettings.closeBehaviorLabel.targetId}
               className={SETTINGS_ROW_LABEL_CLASS}
               style={{ letterSpacing: '0.12px' }}
             >
-              {t('settings.windowBehavior.closeBehavior.label')}
+              {t(windowBehaviorSettings.closeBehaviorLabel.titleKey)}
             </p>
             <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t('settings.windowBehavior.closeBehavior.hint')}
+              {t(windowBehaviorSettings.closeBehaviorLabel.descriptionKey)}
             </p>
           </div>
 
-          <SegmentedControl
+          <SegmentedControl data-setting-id={windowBehaviorSettings.closeBehaviorLabel.id}
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
             value={closeBehavior}
             onValueChange={setCloseBehavior}
@@ -236,9 +238,9 @@ export function WindowBehaviorSection() {
       key: 'activation-click',
       node: (
         <BehaviorRow
-          id="settings-search-activation-click"
-          label={t('settings.windowBehavior.swallowActivationClickLabel')}
-          hint={t('settings.windowBehavior.swallowActivationClickHint')}
+          id={windowBehaviorSettings.swallowActivationClickLabel.targetId}
+          label={t(windowBehaviorSettings.swallowActivationClickLabel.titleKey)}
+          hint={t(windowBehaviorSettings.swallowActivationClickLabel.descriptionKey)}
           note={
             isMac ? (
               <p className={SETTINGS_ROW_HINT_CLASS}>

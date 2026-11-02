@@ -1,0 +1,150 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import {
+  inspectSettingsControls,
+  indexedSettingsTextKeys,
+  registeredDefinitionExports,
+} from "../check-settings-search.mjs";
+
+// Guard runner behavior: an unregistered new switch previously passed every catalog
+// check. In-memory TSX inputs exercise the real checker, including trusted-base
+// allowances; no filesystem/Git fixtures or source-string assertions (unit tier).
+// configuration-and-overrides.md §6; standalone local node:test run: 0.19s.
+const registered = new Set(["./Page.settings-search#settings"]);
+const imports = `import { useSettingDefinition } from './useSettingDefinition';
+import { settings } from './Page.settings-search';`;
+const bound = `${imports}
+function Page() { const item = useSettingDefinition(settings.enabled);
+return <Switch {...item.controlProps} checked={true} />; }`;
+
+describe("settings search coverage gate", () => {
+  it("catches a new label even when the legacy control opening is unchanged", () => {
+    const old = "const page = <Switch checked={true} />;";
+    const source = old + "const label = t('settings.newFeature.label');";
+    assert.equal(inspectSettingsControls(source, old).length, 1);
+    assert.deepEqual(
+      inspectSettingsControls(
+        source,
+        old,
+        new Set(),
+        new Set(["settings.newFeature.label"]),
+      ),
+      [],
+    );
+  });
+  it("blocks new controls and permits only unchanged legacy occurrences", () => {
+    const old = "const page = <Switch checked={true} />;";
+    assert.equal(inspectSettingsControls(old).length, 1);
+    assert.deepEqual(inspectSettingsControls(old, old), []);
+    assert.equal(inspectSettingsControls(old + old, old).length, 1);
+    assert.equal(
+      inspectSettingsControls(old.replace("true", "false"), old).length,
+      1,
+    );
+  });
+  it("requires a definition that is registered, not just an arbitrary spread", () => {
+    assert.deepEqual(inspectSettingsControls(bound, "", registered), []);
+    assert.equal(inspectSettingsControls(bound).length, 1);
+    assert.equal(
+      inspectSettingsControls(
+        bound.replace("item.controlProps", "unbound.controlProps"),
+        "",
+        registered,
+      ).length,
+      1,
+    );
+  });
+  it("checks direct bindings and reusable rows with conditional registered definitions", () => {
+    // Large pages retain their existing t() interpolation; their controls still need
+    // a catalog-backed definition. A same-named unregistered import must not pass.
+    const direct = `${imports}\nconst row = <Select.Trigger data-setting-id={settings.enabled.id} />;`;
+    assert.deepEqual(inspectSettingsControls(direct, "", registered), []);
+    assert.equal(inspectSettingsControls(direct).length, 1);
+    const conditional = `${imports}\nfunction Row({ local }) {
+      const definition = local ? settings.local : settings.web;
+      const item = useSettingDefinition(definition);
+      return <SegmentedControl {...item.controlProps} />;
+    }`;
+    assert.deepEqual(inspectSettingsControls(conditional, "", registered), []);
+    assert.equal(
+      inspectSettingsControls(
+        conditional.replace("settings.local", "unregistered.local"),
+        "",
+        registered,
+      ).length,
+      1,
+    );
+    const extra = direct + "\nconst unbound = <VoiceInputSelect />;";
+    assert.equal(inspectSettingsControls(extra, extra, registered).length, 1);
+  });
+  it("keeps migrated files strict even when a new control existed at the Git base", () => {
+    const source = bound + "\nconst extra = <Input />;";
+    assert.equal(inspectSettingsControls(source, source, registered).length, 1);
+    assert.equal(
+      inspectSettingsControls("const extra = <Input />;", source, registered)
+        .length,
+      1,
+    );
+  });
+  it("recognizes aliased controls and native form controls", () => {
+    assert.equal(
+      inspectSettingsControls(
+        "import { Switch as Toggle } from '@/components/ui/switch'; const x = <Toggle />;",
+      ).length,
+      1,
+    );
+    assert.equal(
+      inspectSettingsControls("const x = <><input /><select /><textarea /></>;")
+        .length,
+      3,
+    );
+  });
+  it("allows an explicit ordinary-action reason, but not a blank exemption", () => {
+    assert.deepEqual(
+      inspectSettingsControls(
+        '<Button data-settings-search-action="Cancel editing this connection" />',
+      ),
+      [],
+    );
+    assert.equal(
+      inspectSettingsControls('<Button data-settings-search-action="" />')
+        .length,
+      1,
+    );
+  });
+  it("requires named definitions to feed the discovered default module", () => {
+    const declaration =
+      "export const settings = defineSettings({ enabled: {} });";
+    assert.deepEqual([...registeredDefinitionExports(declaration)], []);
+    assert.deepEqual(
+      [
+        ...registeredDefinitionExports(
+          declaration + "export default { entries: Object.values(settings) };",
+        ),
+      ],
+      ["settings"],
+    );
+    assert.deepEqual(
+      [
+        ...registeredDefinitionExports(
+          declaration +
+            "export default { unrelated: Object.values(settings), entries: [] };",
+        ),
+      ],
+      [],
+    );
+  });
+  it("does not count unused definitions as searchable text", () => {
+    const definitions =
+      "export const settings = defineSettings({ enabled: { titleKey: 'settings.new.label' } });";
+    assert.deepEqual([...indexedSettingsTextKeys(definitions)], []);
+    assert.deepEqual(
+      [
+        ...indexedSettingsTextKeys(
+          definitions + "export default { entries: Object.values(settings) };",
+        ),
+      ],
+      ["settings.new.label"],
+    );
+  });
+});

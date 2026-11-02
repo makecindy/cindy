@@ -103,7 +103,15 @@ it.each(['pending', 'invalid'])('keeps the diagram %s state closable', async (ph
     await vi.runOnlyPendingTimersAsync();
   });
   const button = screen.getByRole('button', { name: i18n.t('chat.lightbox.close') });
-  if (phase === 'pending') fireEvent.keyDown(document.body, { key: 'Escape' });
+  if (phase === 'pending') {
+    // FocusScope can open the toolbar tooltip on entry. Its Escape must not
+    // also close the document (the real Chromium regression found both firing).
+    if (screen.queryByRole('tooltip')) {
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(close).not.toHaveBeenCalled();
+    }
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+  }
   else fireEvent.click(button);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(250);

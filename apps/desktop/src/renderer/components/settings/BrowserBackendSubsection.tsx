@@ -9,6 +9,8 @@
  * 使用统一的 SegmentedControl 呈现设置单选状态。
  */
 
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, CheckCircle2, Download, Puzzle, RefreshCw } from 'lucide-react';
 
@@ -97,17 +99,18 @@ export function BrowserBackendSubsection({
   userBrowserSetupBusy = false,
 }: BrowserBackendSubsectionProps) {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(additionalSettings.browserTarget);
   const embeddedHealth =
     active === 'rsb-webview' && health?.active === 'rsb-webview' ? health : null;
   // 「我的浏览器」只有连接状态可报,没有可恢复的宿主侧控制连接。
   const userBrowserHealth =
     active === 'user-browser' && health?.active === 'user-browser' ? health : null;
   return (
-    <div className="border-t border-[var(--settings-theme-card-border)]">
+    <div {...setting.anchorProps} className="border-t border-[var(--settings-theme-card-border)]">
       <div className="cindy-segmented-row px-4 py-[14px]">
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-12 font-medium leading-[1.4] text-[var(--settings-section-title)]">
-            {t('settings.computerUse.browserBackend.title')}
+            {setting.title}
           </p>
           {/* 选中哪个就介绍哪个,切换时一起变。 */}
           <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]" aria-live="polite">
@@ -115,21 +118,12 @@ export function BrowserBackendSubsection({
           </p>
         </div>
         <SegmentedControl<BackendKind>
+          {...setting.controlProps}
           value={active}
           disabled={pending}
           onValueChange={onSelect}
-          aria-label={t('settings.computerUse.browserBackend.title')}
-          options={[
-            {
-              value: 'rsb-webview',
-              label: t('settings.computerUse.browserBackend.rsbWebview.title'),
-            },
-            { value: 'external', label: t('settings.computerUse.browserBackend.external.title') },
-            {
-              value: 'user-browser',
-              label: t('settings.computerUse.browserBackend.userBrowser.title'),
-            },
-          ]}
+          aria-label={setting.title}
+          options={setting.options}
         />
       </div>
       {embeddedHealth ? (
@@ -157,6 +151,7 @@ export function BrowserBackendSubsection({
             </span>
           </div>
           <Button
+            data-settings-search-action="Reconnect the selected browser"
             variant="secondary"
             loading={recovering}
             type="button"
@@ -204,6 +199,7 @@ export function BrowserBackendSubsection({
           </div>
           {onSetUpUserBrowser ? (
             <Button
+              data-settings-search-action="Repair the selected browser connection"
               variant="secondary"
               type="button"
               loading={userBrowserSetupBusy}

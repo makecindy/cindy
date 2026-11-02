@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createInstance, type TFunction } from 'i18next';
 import { TAB_IDS, TAB_LABEL_KEY } from '@/lib/tabLabels';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
+import en from '../../../i18n/locales/en/common.json';
+
 
 import {
   buildSettingsSearchDocuments,
@@ -27,6 +30,66 @@ const translations: Record<string, string> = {
 };
 
 const t = ((key: string) => translations[key] ?? key) as unknown as TFunction;
+
+// Regression: visible settings were absent from the hand-maintained catalog; Chinese
+// compound queries and common names also returned no results. Exercise the production
+// search with real locales (unit tier), rather than checking source strings.
+
+const searchI18n = createInstance();
+await searchI18n.init({ lng: 'zh-CN', fallbackLng: 'en', resources: {
+  'zh-CN': { translation: zhCN }, en: { translation: en },
+} });
+const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membershipKind: 'personal' } as const;
+
+describe('settings discoverability regressions', () => {
+  it.each([
+    ['LSP', 'general.lsp'],
+    ['Beta', 'general.betaChannel'],
+    ['提问导航', 'personalization.messageNavRail'],
+    ['语义索引', 'personalization.chatEmbedding'],
+    ['静默重试', 'personalization.silentRetry'],
+    ['我的浏览器', 'computerUse.browserTarget'],
+    ['恢复默认布局', 'appearance.layout'],
+    ['对话工作区', 'storage.dialogueDirectory'],
+    ['伙伴默认模型', 'general.botModel'],
+    ['供应商组', 'providers.sharing'],
+    ['字体大小', 'settings.appearance.font.uiSize.label'],
+    ['自动更新', 'settings.about.autoUpdateLabel'],
+    ['开机启动', 'settings.windowBehavior.loginItem.label'],
+    ['语音快捷键', 'settings.voiceInput.shortcut.label'],
+    ['Ctrl+Enter', 'settings.composer.sendShortcut.label'],
+    ['唐诗', 'general.classicalLanguage'],
+    ['鸿蒙字体', 'settings.appearance.font.uiFamily.label'],
+    ['全速', 'settings.agentResource.preset'],
+    ['Qwen 实时 ASR', 'voiceInput.customAsrProtocol'],
+    ['系统默认浏览器', 'settings.linkOpen.web.label'],
+  ])('finds %s without opening the page first', (query, id) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    expect(searchSettings(documents, query).map(({ entry }) => entry.id)).toContain(id);
+  });
+
+  it('respects platform capabilities and requires every Chinese search word', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, {
+      ...searchContext, mode: 'local', supportsBetaUpdateChannel: false,
+    });
+    expect(searchSettings(documents, 'Beta').map(({ entry }) => entry.id)).not.toContain('general.betaChannel');
+    expect(searchSettings(documents, '语义索引')).toEqual([]);
+    expect(searchSettings(documents, '语音 不存在的设置')).toEqual([]);
+    expect(searchSettings(documents, '!!!')).toEqual([]);
+  });
+
+  it('indexes shortcut definitions with their own navigation targets', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    const result = searchSettings(documents, '截图').find(({ entry }) => entry.id === 'shortcuts.region-screenshot');
+    expect(result?.entry.targetId).toBe('settings-shortcut-region-screenshot');
+  });
+
+  it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
+    const result = searchSettings(documents, shortcut).find(({ entry }) => entry.id === 'settings.composer.sendShortcut.label');
+    expect(result?.title).toBe(searchI18n.t('settings.composer.sendShortcut.label', { shortcut }));
+  });
+});
 
 describe('settings search catalog', () => {
   it('normalizes mixed-width and repeated whitespace', () => {
@@ -149,6 +212,7 @@ describe('settings search catalog', () => {
           entry.sectionKey,
           entry.descriptionKey,
           ...(entry.keywordKeys ?? []),
+          ...(entry.options ?? []).map(({ labelKey }) => labelKey),
         ].filter((key): key is string => Boolean(key))) {
           expect(
             instance.exists(key) && typeof instance.t(key) === 'string',
@@ -170,35 +234,6 @@ describe('settings search catalog', () => {
           language + ': ' + document.entry.id,
         ).toBe(true);
       }
-    }
-  });
-
-  it('points to existing anchors and covers every search anchor', () => {
-    const sources = import.meta.glob<string>('../**/*.tsx', {
-      query: '?raw',
-      eager: true,
-      import: 'default',
-    });
-    const source = Object.entries(sources)
-      .filter(([path]) => !path.includes('__tests__') && !path.endsWith('/SettingsSearchBox.tsx'))
-      .map(([, text]) => text)
-      .join();
-    const targets = new Set(
-      SETTINGS_SEARCH_ENTRIES.flatMap((entry) => [entry.targetId, entry.fallbackTargetId]),
-    );
-    for (const target of targets) {
-      // The shared WeChat component selects its anchor at runtime. Its catalog target
-      // and companion isolation are checked against real DOM in WechatBotSection.test.tsx.
-      if (target === 'personal-im-wechat') continue;
-      if (target) {
-        const dynamicProviderAnchor =
-          /^cindy-im-(slack|telegram|x)$/.test(target) &&
-          source.includes('id={\`cindy-im-\${provider}\`}');
-        expect(source.includes('id="' + target + '"') || dynamicProviderAnchor, target).toBe(true);
-      }
-    }
-    for (const [, target] of source.matchAll(/id="(settings-search-[^"]+)"/g)) {
-      expect(targets.has(target), target).toBe(true);
     }
   });
 

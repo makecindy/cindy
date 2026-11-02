@@ -5,6 +5,11 @@ Vite、main、登录、数据库、模型或插件，也不碰正式 Cindy 的�
 自检，以及人工快速看一个页面。何时用它、何时必须回到完整 Desktop，见
 [`desktop-development.md`「按改动选择验证方式」](../../../../docs/dev-rules/desktop-development.md)。
 
+构建保留 `?worker` 的真实 Worker 和 `?url` 的原始资源。设置搜索目录使用的
+`import.meta.glob('./**/*.settings-search.ts', { eager: true, import: 'default' })`
+会展开为真实静态导入，参与受影响页面扫描与指纹计算；`--compare` 按各自 Git 版本的
+文件集合展开，不能把当前新增定义混进旧版。其它 glob 形式会明确报错，不静默漏项。
+
 ```sh
 pnpm ui:check --changed --theme all                      # 本分支改动涉及的页面，全部场景
 pnpm ui:check --page device-picker --locale all          # 五种语言
