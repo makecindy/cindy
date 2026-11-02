@@ -126,6 +126,7 @@
     "report:design-colors": "node scripts/hardcoded-color-audit.mjs --report",
     "check:design-inventory": "node scripts/design-inventory.mjs --check",
     "design:inventory": "node scripts/design-inventory.mjs",
+    "design:inventory:report": "node scripts/design-inventory.mjs --report",
     "i18n:glossary-doc": "node scripts/generate-glossary-doc.mjs",
     "check:brand-terminology": "node scripts/brand-terminology-guard.mjs",
     "check:endpoints": "node scripts/check-endpoint-literals.mjs",
