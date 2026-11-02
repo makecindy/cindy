@@ -10,10 +10,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { eq } from 'drizzle-orm';
 import { manageSessionPrs } from '../../git-context/manageSessionPrs';
-import { messages, sessionPrRefs, sessions } from '../schema';
+import { messages, migrationMeta, sessionPrRefs, sessions } from '../schema';
 import {
   managePrRefs,
   listPrRefs,
+  recordPrRefsForMessage,
+  recordPrRefsForImportedMessages,
+  recomputePrRefsForSession,
+  ensurePrRefsBackfill,
 } from '../../git-context/prRefsStore';
 
 const h = vi.hoisted(() => ({ client: null as unknown, changed: vi.fn() }));
@@ -25,7 +29,7 @@ vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: 
 const sqlite = new Database(':memory:');
 const db = drizzle(sqlite);
 h.client = { drizzle: db };
-for (const table of [sessions, messages, sessionPrRefs] as SQLiteTable[]) {
+for (const table of [sessions, messages, sessionPrRefs, migrationMeta] as SQLiteTable[]) {
   const config = getTableConfig(table);
   sqlite.exec(
     `CREATE TABLE "${config.name}" (${config.columns.map((c) => `"${c.name}" ${c.getSQLType()}${c.primary ? ' PRIMARY KEY' : ''}`).join(', ')})`,
@@ -40,7 +44,8 @@ const add = (number: number) =>
     verify,
   );
 beforeEach(() => {
-  sqlite.exec('DELETE FROM sessions; DELETE FROM messages; DELETE FROM session_pr_refs;');
+  h.client = { drizzle: db };
+  sqlite.exec('DELETE FROM sessions; DELETE FROM messages; DELETE FROM session_pr_refs; DELETE FROM migration_meta;');
   db.insert(sessions)
     .values({
       id: 's',
@@ -59,6 +64,7 @@ describe('manual PR management', () => {
   it('keeps removed links out of active reads until explicit restore', async () => {
     const [ref] = await add(1);
     await managePrRefs('s', { action: 'remove', id: ref.id }, verify);
+    await recordPrRefsForMessage({ sessionId: 's', role: 'assistant', content: ref.url, createdAt: 10 });
     await expect(add(1)).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(await listPrRefs('s')).toEqual([]);
     const removed = await managePrRefs('s', { action: 'list' }, verify);
@@ -76,6 +82,45 @@ describe('manual PR management', () => {
     expect(await managePrRefs('s', { action: 'list' }, verify)).toHaveLength(1);
     await add(2);
     expect(await listPrRefs('s')).toMatchObject([{ id: ref.id, associationSource: 'explicit' }]);
+  });
+
+  // Regression: explicit-only mode dropped fresh PRs and missed messages after v1 backfill.
+  // Exercise production scan/import/backfill with real SQLite; metadata-only tests missed visibility.
+  it('recovers missed visible messages even after the old backfill completed, once per database', async () => {
+    db.insert(migrationMeta).values({ key: 'git_context_pr_refs_backfill_v1', value: 'done' }).run();
+    db.update(sessions).set({ clearedAt: 10 }).where(eq(sessions.id, 's')).run();
+    for (const [id, role, createdAt, rewindAt] of [
+      ['1', 'assistant', 20, null], ['2', 'user', 30, null],
+      ['3', 'tool_result', 40, null], ['4', 'assistant', 5, null],
+      ['5', 'assistant', 50, 60], ['6', 'assistant', 70, null],
+    ] as const) {
+      db.insert(messages).values({ id, clientId: id, sessionId: 's', role,
+        content: JSON.stringify(`https://github.com/example/repo/pull/${id}`), createdAt, rewindAt }).run();
+    }
+    const [removed] = await add(6);
+    await managePrRefs('s', { action: 'remove', id: removed.id }, verify);
+    await ensurePrRefsBackfill();
+    expect((await listPrRefs('s')).map(r => r.prNumber)).toEqual([2, 1]);
+    expect(await listPrRefs('s')).toMatchObject([
+      { associationSource: 'explicit', associationOrigin: 'message', manuallyAdded: false },
+      { associationSource: 'explicit', associationOrigin: 'message', manuallyAdded: false },
+    ]);
+    const first = await listPrRefs('s');
+    h.client = { drizzle: db }; // reopening the same database must use the persisted marker
+    await ensurePrRefsBackfill();
+    expect(await listPrRefs('s')).toEqual(first);
+  });
+
+  it('imports mentions and preserves an explicitly adopted automatic link through clear', async () => {
+    const url = 'https://github.com/example/repo/pull/7';
+    await recordPrRefsForImportedMessages('s', [
+      { role: 'assistant', content: url, createdAt: 20 },
+      { role: 'tool_result', content: 'https://github.com/example/repo/pull/8', createdAt: 30 },
+    ]);
+    expect(await listPrRefs('s')).toMatchObject([{ prNumber: 7, manuallyAdded: false }]);
+    await add(7);
+    await recomputePrRefsForSession('s'); // no surviving messages: only explicit adoption survives
+    expect(await listPrRefs('s')).toMatchObject([{ prNumber: 7, manuallyAdded: true, associationOrigin: 'ui' }]);
   });
 
   it('public selectors validate pagination before mutation and preserve repeated detach', async () => {
