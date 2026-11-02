@@ -1,10 +1,11 @@
 /**
- * list_machines 的数据来源（docs/product-rules/cindy-machines.md）：账号下的电脑加这台电脑配置的 SSH 主机。
+ * list_machines 的数据来源（docs/product-rules/cindy-machines.md）：账号下的电脑加这台电脑配置的 SSH 主机，都带实时资源。
  * 只暴露情况，不替 Agent 判断、排序或过滤；看不到的如实写明原因，不从结果里消失。
  */
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { MACHINE_STATUS_CHANNEL, parseMachineStatus, type MachineStatus } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
+import { parseSshStatus } from './sshStatus.js';
 
 export type MachineAvailability =
   | 'available'
@@ -41,6 +42,13 @@ export interface SshMachine {
   port: number;
   user: string;
   connection: string;
+  /** reachable：读到了；unreachable：连不上或超时；unreadable：连上了，但那台跑不了这段命令（例如 Windows）。 */
+  availability: 'reachable' | 'unreachable' | 'unreadable';
+  os: string | null;
+  arch: string | null;
+  status: MachineStatus | null;
+  /** 连不上时的错误码，便于判断是认证还是网络。 */
+  errorCode?: string;
 }
 
 export interface MachineDirectory {
@@ -58,34 +66,53 @@ export interface MachineDirectoryDeps {
   readLocal(): Promise<MachineStatus>;
   /** 读不到设备列表时，这台电脑叫什么。 */
   selfName(): string;
-  listSsh(): Promise<SshMachine[]>;
+  listSsh(): Promise<Array<Pick<SshMachine, 'kind' | 'id' | 'hostname' | 'port' | 'user' | 'connection'>>>;
+  /** 在那台主机上跑只读状态命令，返回输出；连不上时抛错。 */
+  readSsh(id: string): Promise<string>;
   /** 传输层等多久算这次没问到：一台卡住不能拖住其他机器。 */
   probeTimeoutMs?: number;
 }
 
+const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+/** SSH 可能要新建连接，比问一台已连着的电脑慢。 */
+const SSH_PROBE_TIMEOUT_MS = 8_000;
+
+const withTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('[INVOKE_TIMEOUT]')), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+};
+
+async function probeSsh(host: Awaited<ReturnType<MachineDirectoryDeps['listSsh']>>[number], deps: MachineDirectoryDeps): Promise<SshMachine> {
+  const empty = { os: null, arch: null, status: null };
+  try {
+    const parsed = parseSshStatus(await withTimeout(deps.readSsh(host.id), deps.probeTimeoutMs ?? SSH_PROBE_TIMEOUT_MS));
+    return parsed
+      ? { ...host, availability: 'reachable', os: parsed.os, arch: parsed.arch, status: parsed.status }
+      : { ...host, availability: 'unreadable', ...empty };
+  } catch (error) {
+    const code = /^\[([A-Z_]+)\]/.exec(message(error))?.[1];
+    return { ...host, availability: 'unreachable', ...empty, ...(code ? { errorCode: code } : {}) };
+  }
+}
 
 async function probe(device: DeviceLinkDeviceView, deps: MachineDirectoryDeps): Promise<Pick<ComputerMachine, 'availability' | 'status'>> {
   if (device.isSelf) return { availability: 'available', status: await deps.readLocal() };
   if (!device.online) return { availability: 'offline', status: null };
   if (!device.remoteControlEnabled) return { availability: 'remote_control_off', status: null };
   if (!device.controlEnabled) return { availability: 'control_off', status: null };
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const value = await Promise.race([
-      deps.invokeStatus(device.deviceId),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('[INVOKE_TIMEOUT]')), deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
-      }),
-    ]);
+    const value = await withTimeout(deps.invokeStatus(device.deviceId), deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
     const status = parseMachineStatus(value);
     return status ? { availability: 'available', status } : { availability: 'update_required', status: null };
   } catch (error) {
     return { availability: message(error).includes('CHANNEL_NOT_ALLOWED') ? 'update_required' : 'unreachable', status: null };
-  } finally { clearTimeout(timer); }
+  }
 }
-
-const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineDirectory> {
   const listed = await deps.listDevices().then(devices => ({ devices }), (error: unknown) => ({ error: message(error) }));
@@ -109,7 +136,7 @@ export async function listMachines(deps: MachineDirectoryDeps): Promise<MachineD
       osVersion: device.deviceInfo?.osVersion ?? null,
       ...await probe(device, deps),
     }))),
-    deps.listSsh().then(hosts => ({ hosts }), (error: unknown) => ({ error: message(error) })),
+    deps.listSsh().then(async hosts => ({ hosts: await Promise.all(hosts.map(host => probeSsh(host, deps))) }), (error: unknown) => ({ error: message(error) })),
   ]);
   return {
     computers,

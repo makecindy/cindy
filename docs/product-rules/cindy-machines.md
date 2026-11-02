@@ -38,12 +38,14 @@
   一台卡住按传输超时算 `unreachable`，不拖住其他机器。手机不在其中。
 - 每项独立失败，读不到是 `null`，不用近似值冒充。macOS 的可用内存取 `vm_stat` 的空闲、非活跃与预读页之和，
   因为 `os.freemem()` 不含可回收缓存，会把健康的电脑读成内存见底。
-- SSH 主机只列这台电脑配置的，不带实时资源：读取要建连接，必须走 `ssh_exec` 及其权限，不能经只读工具绕过。工具结果附现成命令。
+- SSH 主机列这台电脑配置的，同样带实时资源（2026-11-02 用户裁决）。命令写死、只读、不接受输入，风险等同读本机状态，不走 `ssh_exec` 审批；
+  只用已配置的密钥或 ssh-agent，不弹密码框。各主机并行读取，连不上按 `unreachable` 带错误码，能连上但跑不了命令（如 Windows）为 `unreadable`，都不拖住其他机器。
+  会连接配置里的每台主机，读取后连接留在连接池。其他电脑上配置的 SSH 主机不在其中。
 
 ## 4. 实现位置
 
 - 协议：`packages/device-link/src/machineStatus.ts`，登记于 `allowlist.ts`（不进共享任务访客白名单）。
-- Desktop：`apps/desktop/src/main/machines/`（`localStatus.ts` 读本机，`directory.ts` 汇总），
+- Desktop：`apps/desktop/src/main/machines/`（`localStatus.ts` 读本机，`sshStatus.ts` 读 SSH，`directory.ts` 汇总），
   工具接线在 `mcp-integrations/mcp-providers.ts`，channel 处理在 `maker-ipc/register.ts`。
 - 工具：`packages/lizi-mcps/src/xdt-helper/list_machines.ts`。
 

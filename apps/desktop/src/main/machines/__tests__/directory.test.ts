@@ -22,6 +22,7 @@ const deps = (devices: DeviceLinkDeviceView[], invokeStatus: MachineDirectoryDep
   readLocal: async () => status,
   selfName: () => 'this-mac',
   listSsh: async () => [],
+  readSsh: async () => '',
   probeTimeoutMs: 5,
 });
 const byId = async (input: MachineDirectoryDeps) =>
@@ -30,15 +31,17 @@ const byId = async (input: MachineDirectoryDeps) =>
 describe('list_machines directory', () => {
   it('still reports this computer and SSH when the account device list cannot be read', async () => {
     const ssh = { kind: 'ssh' as const, id: 'nas', hostname: 'nas.local', port: 22, user: 'me', connection: 'disconnected' };
+    const unreachable = { ...ssh, availability: 'unreachable', os: null, arch: null, status: null, errorCode: 'SSH_CONNECT_FAILED' };
     const result = await listMachines({
       ...deps([], async () => status),
       listDevices: async () => { throw new Error('UNAUTHORIZED'); },
       listSsh: async () => [ssh],
+      readSsh: async () => { throw new Error('[SSH_CONNECT_FAILED] refused'); },
     });
     expect(result.computersError).toBe('UNAUTHORIZED');
     expect(result.computers.map(item => [item.name, item.isSelf, item.availability, item.status?.cpu.logicalCores]))
       .toEqual([['this-mac', true, 'available', 16]]);
-    expect(result.ssh).toEqual([ssh]);
+    expect(result.ssh).toEqual([unreachable]);
   });
 
   it('reads the live status of this computer and of reachable ones, and leaves phones out', async () => {
@@ -68,6 +71,20 @@ describe('list_machines directory', () => {
     const invokeStatus = vi.fn((id: string) => id === 'stuck' ? new Promise(() => undefined) : Promise.resolve(status));
     expect(await byId(deps([device({ deviceId: 'self', isSelf: true }), device({ deviceId: 'stuck' }), device({ deviceId: 'ok' })], invokeStatus)))
       .toEqual({ self: 'available', stuck: 'unreachable', ok: 'available' });
+  });
+
+  it('reads each SSH host without one stuck or foreign host holding up the rest', async () => {
+    const host = (id: string) => ({ kind: 'ssh' as const, id, hostname: id, port: 22, user: 'me', connection: 'disconnected' });
+    const { ssh } = await listMachines({
+      ...deps([], async () => status),
+      listSsh: async () => [host('nas'), host('stuck'), host('windows')],
+      readSsh: (id) => id === 'stuck' ? new Promise(() => undefined)
+        : Promise.resolve(id === 'nas' ? 'os=Linux\narch=x86_64\ncores=4\nMemTotal: 1024 kB\nMemAvailable: 512 kB\nload=0.02\ndisk=100 40\n' : 'not recognized'),
+    });
+    expect(ssh.map(item => [item.id, item.availability, item.status?.memory.availableBytes])).toEqual([
+      ['nas', 'reachable', 512 * 1024], ['stuck', 'unreachable', undefined], ['windows', 'unreadable', undefined],
+    ]);
+    expect(ssh[0]!.status?.disk).toEqual({ freeBytes: 40 * 1024, totalBytes: 100 * 1024 });
   });
 
   it('says so when SSH hosts could not be read instead of reporting none', async () => {

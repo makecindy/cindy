@@ -27,7 +27,6 @@ describe('list_machines', () => {
     const result = await call('list_machines');
     expect(list).toHaveBeenCalledWith({ callerSessionId: 's1' });
     expect(result).toMatchObject({ ok: true, machines });
-    expect(result.ssh_note).toContain('ssh_exec');
   });
 
   it('passes a host refusal through instead of an empty list', async () => {

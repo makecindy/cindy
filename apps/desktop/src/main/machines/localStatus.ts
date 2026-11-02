@@ -8,6 +8,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 import { powerMonitor } from 'electron';
 import type { MachineStatus } from '@cindy/device-link';
+import { parseVmStatAvailableBytes } from './sshStatus.js';
 
 const run = promisify(execFile);
 const CPU_SAMPLE_MS = 200;
@@ -30,14 +31,6 @@ async function busyPercent(): Promise<number | null> {
   const after = cpuTimes();
   const total = after.total - before.total;
   return total > 0 ? Math.round((1 - (after.idle - before.idle) / total) * 100) : null;
-}
-
-/** macOS 的 os.freemem() 只算完全空闲的页，不含可回收的缓存，会把健康的电脑读成内存见底。 */
-export function parseVmStatAvailableBytes(output: string): number | null {
-  const pageSize = Number(/page size of (\d+) bytes/.exec(output)?.[1]);
-  const pages = (name: string) => Number(new RegExp(`^Pages ${name}:\\s+(\\d+)\\.`, 'm').exec(output)?.[1]);
-  const available = (pages('free') + pages('inactive') + pages('speculative')) * pageSize;
-  return Number.isFinite(available) ? available : null;
 }
 
 async function availableMemory(): Promise<number | null> {

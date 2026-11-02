@@ -2,6 +2,7 @@ import { hostname } from 'node:os';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { listMachines, type MachineDirectoryDeps } from '../machines/directory.js';
 import { readLocalMachineStatus } from '../machines/localStatus.js';
+import { SSH_STATUS_COMMAND } from '../machines/sshStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { reportTaskDelivery } from '../bot-autonomy/hub.js';
@@ -1260,6 +1261,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             listSsh: async () => (await (await loadRemoteSsh()).getRemoteSshPoolHydrated()).list().map(({ config, status }) => ({
               kind: 'ssh' as const, id: config.id, hostname: config.hostname, port: config.port, user: config.user, connection: status,
             })),
+            readSsh: async (id) => {
+              const remoteSsh = await loadRemoteSsh();
+              await remoteSsh.ensureRemoteHostReady(id);
+              const remote = (await remoteSsh.getRemoteSshPoolHydrated()).get(id);
+              if (!remote) throw new Error('[SSH_HOST_NOT_FOUND]');
+              return (await remote.exec(SSH_STATUS_COMMAND, { timeoutMs: 8_000, label: `list_machines(${id})`, maxOutputBytes: 64 * 1024 })).stdout;
+            },
           });
           return { ok: true as const, machines };
         },

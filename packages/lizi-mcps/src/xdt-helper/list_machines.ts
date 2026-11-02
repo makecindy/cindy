@@ -12,8 +12,6 @@ export interface ListMachinesCallbacks {
   list(params: { callerSessionId: string }): Promise<ControlResult<{ machines: unknown }, string>>;
 }
 
-const SSH_STATUS_COMMAND = 'uname -sm; nproc 2>/dev/null || sysctl -n hw.ncpu; uptime; free -b 2>/dev/null || vm_stat; df -k ~';
-
 export function registerListMachinesTool(
   registry: XdtHelperToolRegistry,
   deps: { getSessionContext: () => LiziMcpSessionContext; callbacks: ListMachinesCallbacks },
@@ -21,17 +19,14 @@ export function registerListMachinesTool(
   registry.register({
     name: LIST_MACHINES_TOOL_NAME,
     category: 'cindy',
-    description: "List the machines on this account right now: every computer signed in to it (with live CPU, available memory, disk, idle time, power and running task count) and the SSH hosts configured on this computer. Use it whenever the user mentions their machines, or work may need another computer, more resources, or a different system. Computers that cannot be read stay in the list with an availability reason: offline; remote_control_off (that computer has not allowed control: turn it on there); control_off (this computer turned off controlling it: turn it on here in Settings > Remote connections); update_required (its Cindy is too old to report); unreachable (online, but it did not answer this time). Phones are not included. It reports facts and picks nothing: decide yourself which machine fits. To run work on a computer use create_worker with its device_id; for an SSH host use cindy_ssh ssh_exec.",
+    description: "List the machines on this account right now: every computer signed in to it (with live CPU, available memory, disk, idle time, power and running task count) and the SSH hosts configured on this computer (with live CPU count, load, available memory and disk). Use it first whenever the user asks about their machines or SSH hosts (online status, memory, disk, load), or work may need another computer, more resources, or a different system; it already reads all of them in one call, so do not run ssh or read ~/.ssh yourself for this. Computers that cannot be read stay in the list with an availability reason: offline; remote_control_off (that computer has not allowed control: turn it on there); control_off (this computer turned off controlling it: turn it on here in Settings > Remote connections); update_required (its Cindy is too old to report); unreachable (online, but it did not answer this time). SSH hosts report availability reachable, unreachable (with errorCode) or unreadable (connected, but it cannot run the status command, e.g. Windows). Phones are not included. It reports facts and picks nothing: decide yourself which machine fits. To run work on a computer use create_worker with its device_id; for an SSH host use cindy_ssh ssh_exec.",
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', 'An active task is required');
       const result = await deps.callbacks.list({ callerSessionId });
       if (!result.ok) return errorPayload(result.errorCode, result.message);
-      return okPayload({
-        machines: result.machines,
-        ssh_note: `SSH hosts are listed without live resources, because reading them needs a connection that goes through ssh_exec and its permission. To read one: ssh_exec with \`${SSH_STATUS_COMMAND}\`.`,
-      });
+      return okPayload({ machines: result.machines });
     },
   });
 }
