@@ -238,7 +238,8 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                 ) : null}
                 {view.botContextId && target.kind === 'local' && botImConnectionGuestAccessSupported(im) ? (
                   <BotChannelGuestAccess api={im} view={view} botId={bot.id} botName={bot.name} onApplied={apply}
-                    engineConfinesGuests={bot.capabilities.harness !== 'pi'} />
+                    guestEngineLimit={bot.capabilities.harness === 'pi' ? 'pi'
+                      : bot.capabilities.modelChain?.[0]?.agentDeviceId ? 'remote' : null} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}

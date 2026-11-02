@@ -43,13 +43,16 @@ interface GuestRow {
   name: string | null;
 }
 
-export function BotChannelGuestAccess({ api, view, botId, botName, onApplied, engineConfinesGuests = true }: {
+export function BotChannelGuestAccess({ api, view, botId, botName, onApplied, guestEngineLimit = null }: {
   api: BotImConnectionApi | null;
   view: BotImConnectionView;
   botId: string;
   botName: string;
-  /** Pi cannot keep a guest inside its project; bound guests are refused there. */
-  engineConfinesGuests?: boolean;
+  /**
+   * Why the teammate's engine cannot keep a guest inside its project (Pi, or an
+   * engine on another computer); bound guests are refused there.
+   */
+  guestEngineLimit?: 'pi' | 'remote' | null;
   onApplied: (next: BotImConnectionListPayload) => void;
 }) {
   const { t } = useBotTranslation();
@@ -119,9 +122,10 @@ export function BotChannelGuestAccess({ api, view, botId, botName, onApplied, en
       <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.guests.hint', { name: botName })}
       </p>
-      {!engineConfinesGuests ? (
+      {guestEngineLimit ? (
         <p role="note" className="text-12 leading-[1.5] text-[var(--text-danger)]">
-          {t('bots.channels.guests.engineUnsupported', { name: botName })}
+          {t(guestEngineLimit === 'pi' ? 'bots.channels.guests.engineUnsupported' : 'bots.channels.guests.engineRemote',
+            { name: botName })}
         </p>
       ) : null}
       {failed !== null ? (

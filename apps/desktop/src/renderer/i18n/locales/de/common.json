@@ -11377,7 +11377,8 @@
         "loadFailed": "Gäste konnten nicht geladen werden",
         "saveFailed": "Nicht gespeichert. Versuche es erneut.",
         "refusedNotice": "🔒 Dieser Bot ist für dich noch nicht freigegeben.",
-        "engineUnsupported": "{{name}} läuft mit Pi, das einen Gast nicht auf sein Projekt beschränken kann: Gäste mit Projekt werden abgelehnt. Stelle {{name}} auf Claude oder Codex um, um sie zu bedienen."
+        "engineUnsupported": "{{name}} läuft mit Pi, das einen Gast nicht auf sein Projekt beschränken kann: Gäste mit Projekt werden abgelehnt. Stelle {{name}} auf Claude oder Codex um, um sie zu bedienen.",
+        "engineRemote": "{{name}} läuft auf einem anderen Computer, der einen Gast nicht auf sein Projekt beschränken kann: Gäste mit Projekt werden abgelehnt. Lass {{name}} auf diesem Computer laufen, um sie zu bedienen."
       },
       "add": {
         "button": "Plattform hinzufügen",

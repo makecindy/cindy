@@ -11377,7 +11377,8 @@
         "loadFailed": "Couldn't load guests",
         "saveFailed": "Not saved. Try again.",
         "refusedNotice": "🔒 This bot isn't open to you yet.",
-        "engineUnsupported": "{{name}} runs on Pi, which cannot keep a guest inside its project: guests bound to a project are refused. Switch {{name}} to Claude or Codex to serve them."
+        "engineUnsupported": "{{name}} runs on Pi, which cannot keep a guest inside its project: guests bound to a project are refused. Switch {{name}} to Claude or Codex to serve them.",
+        "engineRemote": "{{name}} runs on another computer, which cannot keep a guest inside its project: guests bound to a project are refused. Run {{name}} on this computer to serve them."
       },
       "add": {
         "button": "Add platform",

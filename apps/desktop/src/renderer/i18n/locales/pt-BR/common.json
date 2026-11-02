@@ -11471,7 +11471,8 @@
         "loadFailed": "Não foi possível carregar os convidados",
         "saveFailed": "Não salvo. Tente novamente.",
         "refusedNotice": "🔒 Este bot ainda não está disponível para você.",
-        "engineUnsupported": "{{name}} funciona com Pi, que não consegue limitar um convidado ao projeto dele: convidados vinculados a um projeto são recusados. Mude {{name}} para Claude ou Codex para atendê-los."
+        "engineUnsupported": "{{name}} funciona com Pi, que não consegue limitar um convidado ao projeto dele: convidados vinculados a um projeto são recusados. Mude {{name}} para Claude ou Codex para atendê-los.",
+        "engineRemote": "{{name}} funciona em outro computador, que não consegue limitar um convidado ao projeto dele: convidados vinculados a um projeto são recusados. Faça {{name}} funcionar neste computador para atendê-los."
       },
       "add": {
         "button": "Adicionar plataforma",
