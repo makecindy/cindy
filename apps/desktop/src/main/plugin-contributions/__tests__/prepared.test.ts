@@ -228,3 +228,10 @@ it('keeps operation-owned packages without consuming the eight preview slots', a
     await Promise.all(ids.map(id => prepared.releasePreparedContribution(id)));
   }
 });
+
+// Unit: a newly submitted package must still be rejected, with its actionable
+// UI resource reason. Previously prepare hid all validation errors behind a generic message.
+it('reports invalid UI resources before preparing a new contribution', async () => {
+  harness.inspect.mockResolvedValueOnce({ rejection: { code: 'file-invalid', reason: 'mcpApps.ui.resources 文件 ui/page.html 必须是包内普通文件且不超过 4194304 字节' } });
+  await expect(prepared.prepareInstalledContribution('hello')).rejects.toThrow('mcpApps.ui.resources 文件 ui/page.html');
+});

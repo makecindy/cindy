@@ -1,3 +1,4 @@
+import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerTaskDeliveryTool, type TaskDeliveryCallbacks } from './xdt-helper/report_task_delivery.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
@@ -9,9 +10,10 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
  *  - 通用工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
- *    异步提问使用独立的 ask_user_question_async 入口，以便 harness 验证根代理身份。
+ *    找主人（选择、亲自输入、扫码、连接账号）使用独立的 ask_owner 入口，以便 harness 验证根代理身份。
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
- *    - 'auth'    : 由 Host 保存凭证的供应商授权；代输入(request_input_handoff)
+ *    - 'auth'    : MCP 设置表单（request_mcp_setup）与 Grok 设备码状态、取消；旧名
+ *                  request_input_handoff / start_grok_device_login 不再列出，仍可经 call_tool 调用
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
  *                  search_chat_history / get_task_digest)
@@ -39,7 +41,15 @@ import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import { jsonObjectArg } from './json-object-arg.js';
-import { registerAsyncQuestionTool, supportsAsyncQuestionTool, type AskUserQuestionAsyncCallback } from './xdt-helper/ask_user_question_async.js';
+import {
+  ASK_OWNER_TOOL_NAME,
+  askOwnerDescription,
+  askOwnerInputShape,
+  askOwnerKinds,
+  registerAskOwnerTool,
+  type AskOwnerDeps,
+  type AskUserQuestionAsyncCallback,
+} from './xdt-helper/ask_owner.js';
 import { stringArrayParam } from './xdt-helper/_array-param.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -80,6 +90,7 @@ import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
 import type { SendToRemoteSessionCallback, SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
   AuthorizeSkillLearningCallback,
@@ -99,6 +110,7 @@ import {
   withCindyGatedBotToolDescriptions,
   type BotCapabilityCallbacks,
 } from './xdt-helper/bot_capabilities.js';
+import { registerTeammateSkillReader, teammateDeniedTools } from './xdt-helper/teammate_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
@@ -124,8 +136,8 @@ export type {
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
 
 const D_LIST_TOOLS =
-  `探索当前任务获准的 ${BRAND_NAME} 能力：登录、验证码、二维码交接查 auth；` +
-  '其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
+  `探索当前任务获准的 ${BRAND_NAME} 能力。要主人选择、亲自输入账号密码验证码、扫码或连接账号时直接用 ask_owner，不经这里；` +
+  '查询 PR、CI 与评审变化用 github 类目；查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
   '调用 list_tools 为当前任务返回的一个具体工具。不要猜工具名，也不要把它当成通用命令入口。';
@@ -140,7 +152,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -148,9 +160,10 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引。本机。`,
-  auth: '本机窗口的账号、密码、验证码、二维码交给主人填写或扫码（request_input_handoff）；MCP 设置表单（request_mcp_setup）；Grok 设备码授权。',
-  control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改仅本机。',
+  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
+  auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
+  control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+  github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建只在本机。',
@@ -245,12 +258,15 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
+  /** Tools of system Skills this teammate turned off (teammate_skills.ts). */
+  deniedTools?: ReadonlySet<string>;
 }
 
 function toolAllowed(
   allow: HelperSurfaceAllow,
   tool: { name: string; category: string },
 ): boolean {
+  if (allow.deniedTools?.has(tool.name)) return false;
   if (!allow.categories) return true;
   return allow.categories.has(tool.category);
 }
@@ -440,10 +456,8 @@ function registerStartSessionTaskEntry(
             ...(result.completionDestination ? { completion_destination: result.completionDestination } : {}),
             guidance:
               (result.completionDestination === 'group'
-                ? 'This task lives in this group: its card is being posted here, and anything it needs confirmed plus its final result are sent here as your own messages (only if the group can no longer take them do they go to your owner privately). Tell the group briefly what you started; do not claim the card or result is already here. '
-                : result.completionDestination === 'private'
-                  ? 'This older group cannot carry task messages: anything the task needs confirmed and its final result go to your owner\'s private chat with you, not here. Tell the group briefly what you started and that the result will reach your owner privately. '
-                  : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
+                ? 'This task lives in the group or thread where it started: its card is being posted there, and anything it needs confirmed plus its final result are sent there as your own messages. If the original group or thread cannot receive the result, the full result is kept in the task with a delivery-failed notice; it is never redirected to private chat. Tell the group briefly what you started; do not claim the card or result is already here. '
+                : '') + "The task card tracks progress and the host handles result delivery to the original conversation. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -759,6 +773,7 @@ export type ControlDispatchOutcome =
 // ── Factory ────────────────────────────────────────────────────────────────
 
 export interface XdtHelperMcpDeps {
+  github?: GithubToolCallbacks;
   getSessionProject?: import('./xdt-helper/get_current_session_id.js').GetCurrentSessionIdDeps['getSessionProject'];
   logger?: LiziMcpLogger;
   appUpdate?: AppUpdateCallbacks;
@@ -775,6 +790,11 @@ export interface XdtHelperMcpDeps {
   }) => Promise<'default' | 'bot' | 'bot-main' | 'restricted'>;
   /** Live caller/account check for all tasks; the tool list itself never changes mid-session. */
   authorizeCall?: ToolCallAuthorizer;
+  /**
+   * System Skills the calling teammate turned off (`todo` / `routine` / `follow`). Their tools are
+   * denied at call time and left out of new tool listings; the core prompt stops naming them.
+   */
+  resolveSystemSkillsOff?: (input: { sessionId: string }) => Promise<readonly string[]>;
   runtimeCapabilities?: (
     context: import('./types.js').LiziMcpSessionContext,
     query: import('./xdt-helper/get_capabilities.js').RuntimeCapabilityQuery,
@@ -858,6 +878,11 @@ export interface XdtHelperMcpDeps {
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
+  /**
+   * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
+   * scan_importable_sessions / import_sessions / get_session_import_status 会被注册。
+   */
+  sessionImport?: SessionImportCallbacks;
 }
 
 /**
@@ -901,11 +926,16 @@ export function createXdtHelperMcpServer(
     if (surface === 'bot' || surface === 'bot-main') {
       // Companion identity adds self-management, not a narrower ordinary tool surface.
       const categories = remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories;
-      return { categories: new Set([...categories, 'bots']) };
+      const off = deps.resolveSystemSkillsOff
+        ? await deps.resolveSystemSkillsOff({ sessionId }).catch(() => [] as readonly string[])
+        : [];
+      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off) };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
   };
+
+  if (deps.github) registerGithubTools(registry, deps.github, () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry, deps.runtimeCapabilities
@@ -972,6 +1002,12 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.sessionImport) {
+    registerSessionImportTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.sessionImport,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
@@ -1064,6 +1100,12 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       callbacks: deps.botCapabilities,
     });
+    registerTeammateSkillReader(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      systemSkillsOff: deps.resolveSystemSkillsOff
+        ? ({ callerSessionId }) => deps.resolveSystemSkillsOff!({ sessionId: callerSessionId })
+        : undefined,
+    });
   }
   if (deps.botRoutines) {
     registerBotRoutineTools(registry, deps.botRoutines,
@@ -1089,23 +1131,45 @@ export function createXdtHelperMcpServer(
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
-  // A dedicated tool identity lets native Claude enforce root-only provenance
-  // before MCP dispatch. Do not expose an alias through the generic call_tool.
-  const questionTools: Tool[] = [];
-  if (deps.askUserQuestionAsync) {
-    const questions = new XdtHelperToolRegistry();
-    registerAsyncQuestionTool(questions, () => resolveLiziMcpSessionContext(sessionCtx), deps.askUserQuestionAsync);
-    const definition = questions.get('ask_user_question_async')!;
-    const inputSchema = z.strictObject(definition.inputShape);
-    server.registerTool(definition.name, { description: definition.description, inputSchema }, async (args) => {
-      if (!(await allowedSurface()).categories?.has('cindy')) {
-        return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Question UI is unavailable for this task.');
-      }
-      return questions.call(definition.name, args);
-    });
-    questionTools.push({ name: definition.name, description: definition.description,
-      inputSchema: z.toJSONSchema(inputSchema) as Tool['inputSchema'] });
+  // ask_owner: the one listed way to have the owner choose, type what only they
+  // may, scan a sign-in code or connect an account. A dedicated tool identity
+  // lets native Claude enforce root-only provenance before MCP dispatch. Do not
+  // expose an alias through the generic call_tool.
+  const askOwnerDeps: AskOwnerDeps = {
+    ...(deps.askUserQuestionAsync ? { ask: deps.askUserQuestionAsync } : {}),
+    ...(deps.inputHandoff ? { inputHandoff: deps.inputHandoff } : {}),
+    ...(deps.grokLogin ? { grokLogin: deps.grokLogin } : {}),
+  };
+  const hasAskOwner = !!(deps.askUserQuestionAsync || deps.inputHandoff || deps.grokLogin);
+  if (hasAskOwner) {
+    const owner = new XdtHelperToolRegistry();
+    registerAskOwnerTool(
+      owner,
+      () => resolveLiziMcpSessionContext(sessionCtx),
+      askOwnerDeps,
+      async () => (await allowedSurface()).categories,
+    );
+    const definition = owner.get(ASK_OWNER_TOOL_NAME)!;
+    // Pi lists registered tools as they are; describe the kinds its host wired.
+    const wired = askOwnerKinds({ agentKind: sessionCtx.agentKind, workingDir: '' }, askOwnerDeps, null);
+    server.registerTool(definition.name, {
+      description: askOwnerDescription(wired, { agentKind: sessionCtx.agentKind }),
+      inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => owner.call(definition.name, args));
   }
+  // Request-time listing: Codex shares one HTTP server across sessions, and each
+  // task only sees the kinds its harness and helper surface allow.
+  const askOwnerListing = async (): Promise<Tool[]> => {
+    if (!hasAskOwner) return [];
+    const context = resolveLiziMcpSessionContext(sessionCtx);
+    const kinds = askOwnerKinds(context, askOwnerDeps, (await allowedSurface()).categories);
+    if (kinds.length === 0) return [];
+    return [{
+      name: ASK_OWNER_TOOL_NAME,
+      description: askOwnerDescription(kinds, context),
+      inputSchema: z.toJSONSchema(z.strictObject(askOwnerInputShape(kinds))) as Tool['inputSchema'],
+    }];
+  };
 
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
@@ -1117,7 +1181,7 @@ export function createXdtHelperMcpServer(
         description: definition.description, inputSchema: z.strictObject(definition.inputShape),
       }, async (args) => {
         const allowed = await allowedSurface();
-        if (!allowed.categories?.has('bots')) {
+        if (!allowed.categories?.has('bots') || !toolAllowed(allowed, definition)) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
         const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -1148,10 +1212,12 @@ export function createXdtHelperMcpServer(
       const allowed = await allowedSurface();
       return { tools: [
         ...entryTools,
-        ...(allowed.categories?.has('cindy') && supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
-          ? questionTools : []),
+        ...(await askOwnerListing()),
         ...(allowed.categories?.has('bots')
-          ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
+          ? withCindyGatedBotToolDescriptions(
+            botTools.filter((tool) => !allowed.deniedTools?.has(tool.name)),
+            cindyAvailableForSession(sessionCtx),
+          ) : []),
       ] };
     });
   }

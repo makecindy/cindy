@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "O Cindy precisa de acesso ao microfone para a entrada por voz em sessões remotas.",
+    "NSCameraUsageDescription": "O Cindy precisa de acesso à câmera para anexar fotos a sessões remotas.",
+    "NSPhotoLibraryUsageDescription": "O Cindy precisa de acesso à biblioteca de fotos para mostrar fotos e capturas de tela recentes e permitir anexá-las rapidamente."
+  }
+}

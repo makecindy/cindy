@@ -1,3 +1,4 @@
+import { BotGroupProcess } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
 import type { ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
@@ -34,6 +35,7 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { showConfirm } from '@/platform/chrome';
+import { X } from 'lucide-react-native';
 import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
 import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -76,9 +78,9 @@ import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
-import { fontWeight, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
   BOT_GROUP_MESSAGE_AVATAR_SIZE,
@@ -180,6 +182,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const chat = useBotGroupChat(host, groupId, threadRootId);
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
+  const stopPendingRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
   const [settings, setSettings] = useState(false);
   const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
   const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
@@ -515,6 +519,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     stickToBottom.current = true;
     const quote = replyTo;
     try {
+      if (input.mentions.allBots && !group?.supportsMentionAudiences) throw new Error('ALL_BOTS_MENTION_DISABLED');
       await chat.act('send', {
         text: input.text,
         mentions: input.mentions,
@@ -533,7 +538,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   };
 
   const stop = async () => {
+    if (stopPendingRef.current) return;
+    stopPendingRef.current = true; setStopping(true);
     try { await chat.act('stop'); } catch (error) { report(error, 'groupChat.composer.stopFailed'); }
+    finally { stopPendingRef.current = false; setStopping(false); }
   };
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -572,7 +580,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       working={group?.round.status === 'running'} />}
     title={threadRootId ? t('groupChat.thread.title') : title}
     accessory={nativeHeader ? undefined : threadFollow}
-    subtitle={threadRootId ? title : memberLine}
+    subtitle={!threadRootId && group?.round.status === 'running' ? t('groupChat.list.running') : threadRootId ? title : memberLine}
     identityLabel={[title, memberLine, memberNames].filter(Boolean).join(', ')}
     identityHint={t('groupChat.settings.open')}
     controlsReady={!!group}
@@ -665,6 +673,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onPlanAction={(action, planId) => void runPlanAction(action, planId)}
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           />
+      {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        onError={message => { if (message) Alert.alert(message); }} /> : null}
       </ScrollView>
       </MessageListVisibilityContext.Provider>
       {newMessageCount > 0 || mask.mentions.length > 0 ? <View style={styles.newMessages} accessibilityLiveRegion="polite">
@@ -691,15 +701,18 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       </View>)}
       </ScrollView> : null}
       {!imageSelectionActive && replyTo ? <View style={styles.replyDraft}>
-        <View style={styles.flex}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
-        <MainWindowActionButton density="compact" action={{ label: t('message.quote.remove'), onPress: () => setReplyTo(null), testID: 'botGroup.cancelReply' }} />
+        <View style={styles.replyDraftBody}><BotGroupQuote display={resolveBotGroupQuote(replyTo, group.messages)} onPress={() => locateMessage(replyTo.messageId)} /></View>
+        <Pressable accessibilityRole="button" accessibilityLabel={t('message.quote.remove')}
+          onPress={() => setReplyTo(null)} style={styles.replyDraftClose} testID="botGroup.cancelReply">
+          <View pointerEvents="none" style={styles.replyDraftCloseIcon}>
+            <X color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          </View>
+        </Pressable>
       </View> : null}
-      {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
-        onError={message => { if (message) Alert.alert(message); }} /> : null}
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         running={!threadRootId && group.round.status === 'running'} planState={threadRootId ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
@@ -723,7 +736,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       {body}
     </>}
     {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
-      onMask={mask.state ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
+      mask={mask} onMask={mask.state ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
       act={actFromSettings} onClose={() => setSettings(false)}
       onRefresh={chat.reload}
       onClosed={() => { if (openMaskAfterSettings.current) { openMaskAfterSettings.current = false; setMaskSettings(true); } if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
@@ -804,7 +817,8 @@ export function BotGroupTimeline({
   const continueId = continuableRoundEndId(messages, group.round);
   const timeGroups = collectBotMessageTimeGroups(messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })));
   const allLabel = t('groupChat.mention.all');
-  const mentionLabels = useMemo(() => [allLabel, ...group.members.map((member) => member.name)], [allLabel, group.members]);
+  const allBotsLabel = t('groupChat.mention.allBots');
+  const mentionLabels = useMemo(() => [allLabel, allBotsLabel, ...group.members.map((member) => member.name)], [allLabel, allBotsLabel, group.members]);
   const running = !threadRootId && group.round.status === 'running';
   const memberById = new Map(group.members.map((member) => [member.botId, member]));
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
@@ -855,7 +869,7 @@ export function BotGroupTimeline({
         {!threadRootId && groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
         {firstNew !== undefined && index === firstNew && firstNew > firstReply ? <View style={styles.newReplyBoundary}><View style={styles.newReplyLine} /><Text style={styles.newReplyDivider}>{t('groupChat.thread.newRepliesDivider')}</Text></View> : null}
         <CompanionEntering id={key} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
-        <BotGroupTimelineItem footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
+        <BotGroupTimelineItem groupId={group.id} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
         {onOpenThread && !message.threadRootId && !message.threadShare ?
           <BotGroupThreadEntry message={message} identityFor={identityFor} onPress={() => onOpenThread(message)} />
         : null}
@@ -908,9 +922,10 @@ export function BotGroupTimeline({
 }
 
 function BotGroupTimelineItem({
-  message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
+  groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
   plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
 }: {
+  groupId: string;
   message: BotGroupMessageView;
   footer?: ReactNode;
   onRetrySource?: () => void;
@@ -974,12 +989,11 @@ function BotGroupTimelineItem({
   </> : null;
   if ((!message.threadShare || authoredShare) && message.kind === 'message' && message.authorKind === 'user' && message.isSelf !== false) {
     // Older computers send no attachments; a message with only attachments has no bubble.
-    const bubble = content.trim().length > 0 || attachments.length === 0;
+    const bubble = !!quoteDisplay || content.trim().length > 0 || attachments.length === 0;
     // G3: the 1:1 user bubble, including its compact density for one short line.
-    const compact = content.length <= COMPACT_BUBBLE_MAX_CHARS && !content.includes('\n');
+    const compact = !quoteDisplay && content.length <= COMPACT_BUBBLE_MAX_CHARS && !content.includes('\n');
     return <View style={styles.userRow} testID="botGroup.message.user">
       <View style={styles.userColumn}>
-        {quoteDisplay ? <BotGroupQuote display={quoteDisplay} align="right" onPress={onLocateQuote} /> : null}
         <View style={styles.userMessageContent}>
           {renderAttachments('right')}
           {bubble ? <View style={[
@@ -987,7 +1001,10 @@ function BotGroupTimelineItem({
             compact && styles.userBubbleCompact,
             userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
           ]} testID="botGroup.message.userBubble">
-            <BotGroupUserText content={content} mentionLabels={mentionLabels} />
+            {quoteDisplay ? <View style={styles.userQuote}>
+              <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} />
+            </View> : null}
+            {content.trim() ? <BotGroupUserText content={content} mentionLabels={mentionLabels} /> : null}
           </View> : null}
         </View>
         {shareFooter}{footer}
@@ -1013,6 +1030,8 @@ function BotGroupTimelineItem({
         {isRoot ? <Text style={styles.threadCaption}>{t('groupChat.thread.root')}</Text> : null}
         {isPlanCard ? <BotGroupOrganizerTag /> : null}
       </View>}
+      {message.process && message.process.groupId === groupId ? <BotGroupProcess process={message.process} owned={member?.isOwned === true}
+        deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
       {isPlanCard
         ? <BotGroupPlanCard plan={plan} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
@@ -1047,7 +1066,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   newMessages: { position: 'absolute', bottom: spacing.md, alignSelf: 'center', maxWidth: '90%' },
   newMessagesButton: { backgroundColor: colors.surfaceElevated },
   locatedMessage: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container },
-  replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  replyDraft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container, marginHorizontal: spacing.md, marginBottom: spacing.xs,
+    paddingLeft: spacing.md, paddingRight: spacing.xs, paddingVertical: spacing.sm },
+  replyDraftClose: { alignItems: 'center', justifyContent: 'center', height: 44, width: 44 },
+  replyDraftCloseIcon: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceChip,
+    borderRadius: radius.pill, height: 26, width: 26 },
+  replyDraftBody: { flex: 1, minWidth: 0 },
+  userQuote: { alignSelf: 'stretch', marginBottom: spacing.xs },
   pendingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: spacing.sm },
   pendingText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   floatingHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },

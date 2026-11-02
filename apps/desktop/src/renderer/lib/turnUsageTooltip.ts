@@ -17,6 +17,8 @@ export interface TurnUsageTooltipInput {
   costUsd?: number;
   isEstimate?: boolean;
   title?: string;
+  /** Costs already appear in the shared model/channel panel. */
+  usageOnly?: boolean;
 }
 
 function formatPercent(value: number | null): string | null {
@@ -129,6 +131,7 @@ export function buildTurnUsageTooltipLines({
   costUsd,
   isEstimate = false,
   title,
+  usageOnly = false,
 }: TurnUsageTooltipInput): string[] {
   const lines: string[] = [];
   if (title) lines.push(title);
@@ -137,7 +140,7 @@ export function buildTurnUsageTooltipLines({
     : typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0
       ? formatTurnCostUsd(costUsd)
       : null;
-  if (formattedCost) {
+  if (formattedCost && !usageOnly) {
     lines.push(t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
       cost: formattedCost,
     }));
@@ -145,7 +148,7 @@ export function buildTurnUsageTooltipLines({
   // 按模型成本明细: 仅在 ≥2 个模型时展开 (单模型已由下方 modelLine 表达)。
   // 让用户一眼看到「主 agent + subagent (如 Task 工具跑的 Haiku) 各花了多少」。
   const perModelCost = details.perModelCost;
-  const showBreakdown = Array.isArray(perModelCost) && perModelCost.length >= 2;
+  const showBreakdown = !usageOnly && Array.isArray(perModelCost) && perModelCost.length >= 2;
   if (showBreakdown) {
     lines.push(t('usageDetails.costBreakdownHeader'));
     for (const m of perModelCost) {
@@ -181,7 +184,7 @@ export function buildTurnUsageTooltipLines({
     lines.push(t('usageDetails.timeLine', { duration: turnDuration }));
   }
   // 已展开按模型明细时不再重复笼统的「N 个模型」行。
-  if (!showBreakdown) {
+  if (!showBreakdown && !usageOnly) {
     const model = modelLabel(details, t);
     if (model) lines.push(t('usageDetails.modelLine', { model }));
   }
@@ -190,7 +193,7 @@ export function buildTurnUsageTooltipLines({
     lines.push(t('usageDetails.suggestionLine', { suggestion: suggestionText }));
   }
   // 无金额时交代一句,避免「只有 token、没有钱」被读成事实缺失；这一层不猜测具体原因。
-  if (!formattedCost) {
+  if (!formattedCost && !usageOnly) {
     lines.push(t('usageDetails.noBilledCost'));
   }
   return lines;

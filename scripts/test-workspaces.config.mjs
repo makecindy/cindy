@@ -119,6 +119,8 @@ const mobileGuardInclude = [
   'src/auth/__tests__/xdOrgBetaWiring.test.ts',
   // CSP must be applied at the WebView and download call sites, not only in its helper.
   'src/__tests__/htmlPreviewCsp.test.ts',
+  // Whole-repo static scan of text colours (five neutral tiers, placeholders); reads production sources.
+  'src/__tests__/textColorDiscipline.test.ts',
   'src/auth/__tests__/loginHandoffState.test.ts',
   'src/__tests__/accountDeletion.test.ts',
   'src/__tests__/androidSessionInteractionParity.test.tsx',
@@ -279,6 +281,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/makerExperimentalThemeContract.test.ts',
   'src/renderer/__tests__/iconButtonTooltips.test.ts',
   'src/renderer/__tests__/modalSurfaceContract.test.ts',
+  // Existing project-picker source assertions enforce cross-file routing/design contracts.
+  'src/renderer/__tests__/newMakerProjectPicker.test.ts',
   'src/renderer/__tests__/orcaWorkflowRoute.test.ts',
   'src/renderer/__tests__/projectsSidebarSection.test.ts',
   'src/renderer/__tests__/remoteWorkerCreationContext.test.ts',

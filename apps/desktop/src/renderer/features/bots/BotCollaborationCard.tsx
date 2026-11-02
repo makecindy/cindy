@@ -301,6 +301,16 @@ export function BotTaskCard({
   // differ from the Bot's main task: the frozen receipt records it, the live card reads the
   // child session's. The surrounding chat's directory is only the last resort.
   const workingDir = frozen?.workingDir ?? session?.workingDir ?? fileContext.workingDir;
+  // The result is the child's: a confirmed-local chat does not make a child that runs on another
+  // device (or over SSH, or with a conflicting origin) local, and its directory must not be
+  // searched on this machine. Until the child's row has loaded its ownership is unknown.
+  const childLocalConfirmed =
+    fileContext.localConfirmed === true &&
+    session !== null &&
+    !ref.sourceDeviceId &&
+    !ref.originConflict &&
+    !session?.deviceLinkDeviceId &&
+    !session?.remoteHostId;
   const canOpen = Boolean(childSessionId) && !ref.originConflict;
   const canAddNote = state === 'running' && Boolean(childSessionId) && !ref.sourceDeviceId && !frozen;
   const resultLabel =
@@ -480,7 +490,12 @@ export function BotTaskCard({
         >
           <SessionQuickSendProvider value={null}>
             <ChatSessionFileProvider
-              value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
+              value={{
+                ...fileContext,
+                workingDir,
+                sessionId: childSessionId ?? undefined,
+                localConfirmed: childLocalConfirmed,
+              }}
             >
               {resultText ? (
                 <MarkdownRenderer

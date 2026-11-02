@@ -1,0 +1,355 @@
+{
+  "localLogs": {
+    "upload": "Enviar logs",
+    "uploadResult": {
+      "unavailable": "O envio de logs está indisponível nesta versão.",
+      "consentRequired": "Aceite a Política de Privacidade antes de enviar logs.",
+      "empty": "Nenhum log recente. Ative a gravação e reproduza o problema primeiro.",
+      "failed": "Falha no envio. Os logs continuam salvos neste celular."
+    },
+    "title": "Logs de depuração",
+    "record": "Gravar logs",
+    "export": "Exportar logs",
+    "clear": "Limpar logs",
+    "busy": "Processando…",
+    "failed": "Não foi possível salvar ou compartilhar os logs. Tente novamente.",
+    "clearHint": "Excluir os logs de diagnóstico salvos?",
+    "cancel": "Cancelar",
+    "uploadCopied": "Logs enviados. Código {{code}} copiado",
+    "uploadSucceeded": "Logs enviados. Código {{code}}",
+    "footer": "Os logs ficam neste celular por até 7 dias ou 8 MB e nunca são enviados automaticamente. Os logs exportados não incluem o texto das conversas nem credenciais; os envios incluem apenas registros de execução filtrados e informações de versão."
+  },
+  "title": "Configurações",
+  "appearance": {
+    "title": "Aparência",
+    "modeLabel": "Modo de aparência",
+    "options": {
+      "system": "Seguir o sistema",
+      "light": "Claro",
+      "dark": "Escuro"
+    },
+    "saveFailed": "Falha ao salvar o modo de aparência. A configuração anterior será restaurada após reiniciar.",
+    "userBubble": {
+      "title": "Cor do balão das minhas mensagens",
+      "presets": "Cor",
+      "default": "Padrão",
+      "peach": "Primeiro rascunho",
+      "yellow": "Amanhecer",
+      "sage": "Faísca",
+      "blue": "Paisagem dos sonhos",
+      "lavender": "Gato noturno",
+      "red": "Coleira vermelha",
+      "custom": "Cor personalizada",
+      "hue": "Matiz",
+      "preview": "Prévia da mensagem",
+      "sampleUser": "Me ajude a organizar as ideias de hoje.",
+      "sampleAssistant": "Claro, vamos organizar suas ideias juntos.",
+      "hint": "Adapta-se aos modos claro e escuro para manter o texto legível. Salvo apenas neste dispositivo.",
+      "customHint": "Arraste a faixa de cores para escolher um matiz. Adapta-se aos modos claro e escuro; salvo apenas neste dispositivo.",
+      "saveFailed": "A cor foi aplicada por enquanto, mas não pôde ser salva.",
+      "retry": "Tentar novamente",
+      "cancel": "Cancelar",
+      "reset": "Restaurar padrão",
+      "apply": "Aplicar",
+      "hex": "Valor da cor"
+    }
+  },
+  "language": {
+    "title": "Idioma",
+    "hint": "Usado na interface e nos relatórios de erro da IA. As outras respostas seguem sua mensagem ou o idioma solicitado.",
+    "options": {
+      "system": "Seguir o sistema",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "Escrita e estilo",
+      "hint": "A IA responde no estilo escolhido. Com “Respostas habituais”, a interface continua em chinês clássico e as respostas seguem seu idioma.",
+      "scriptAriaLabel": "Escrita do chinês clássico",
+      "styleAriaLabel": "Estilo de resposta da IA",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Prosa clássica (padrão)",
+        "tang-poetry": "Poesia Tang",
+        "song-ci": "Ci dos Song",
+        "yuan-qu": "Qu dos Yuan",
+        "chu-ci": "Chuci",
+        "parallel-prose": "Prosa paralela",
+        "pre-qin": "Mestres pré-Qin",
+        "historian": "Estilo do Grande Historiador",
+        "ming-qing-essay": "Ensaios Ming–Qing",
+        "plain": "Respostas habituais"
+      }
+    }
+  },
+  "version": {
+    "sectionTitle": "Versão",
+    "updateMethodInApp": "As atualizações são instaladas no app e aplicadas após reiniciá-lo.",
+    "updateMethodPackage": "Baixe e instale a nova versão para atualizar.",
+    "updateMethodUnavailable": "Versões de desenvolvimento não podem ser atualizadas pelo app.",
+    "checkAction": "Verificar atualizações",
+    "testFlightCheckAction": "Verificar atualizações de conteúdo",
+    "checking": "Verificando",
+    "checkingAccessibility": "Verificando atualizações",
+    "testFlightCheckingAccessibility": "Verificando atualizações de conteúdo",
+    "testFlightUpdateManaged": "Instale novas versões de teste pelo TestFlight.",
+    "testFlightNoContentUpdate": "Nenhuma atualização de conteúdo disponível.",
+    "testFlightContentUpdateUnavailable": "Esta versão não pode verificar atualizações de conteúdo.",
+    "googlePlayUpdateManaged": "Atualize para novas versões pelo Google Play.",
+    "googlePlayNoContentUpdate": "Nenhuma atualização de conteúdo disponível.",
+    "googlePlayContentUpdateUnavailable": "Esta versão não pode verificar atualizações de conteúdo.",
+    "bundleUpdateFound": "Atualização do pacote do app disponível",
+    "upToDate": "Já está atualizado",
+    "bundleUpToDateNoOta": "Atualizado. Esta versão não oferece suporte a atualizações dinâmicas.",
+    "downloadedRestarting": "Atualização baixada, reiniciando",
+    "downloadedRestartRequired": "Atualização baixada. Feche completamente e reabra o app para aplicá-la.",
+    "bundleCheckFailed": "Não foi possível verificar atualizações do pacote do app. Tente novamente mais tarde.",
+    "checkFailedDetail": "Falha ao verificar atualizações: {{detail}}",
+    "checkFailed": "Falha ao verificar atualizações. Tente novamente mais tarde.",
+    "currentLabel": "Versão atual",
+    "pairedDesktopLabel": "Versão do computador pareado"
+  },
+  "betaChannel": {
+    "title": "Canal beta",
+    "badge": "Beta",
+    "description": "Receba antecipadamente as próximas atualizações do cliente. As atualizações de conteúdo são baixadas na próxima verificação de atualizações e entram em vigor após reiniciar o app.",
+    "saveFailed": "Falha ao salvar a configuração do canal beta",
+    "unavailable": "O canal beta está indisponível — não foi possível acessar o servidor de atualizações beta."
+  },
+  "notifications": {
+    "sectionTitle": "Notificações",
+    "taskDone": "Notificações de mensagens e tarefas",
+    "taskDoneHint": "Receba notificações de mensagens de conversas e tarefas concluídas, com falha ou que precisam da sua resposta.",
+    "permissionDenied": "Permita notificações do Cindy nas configurações do sistema.",
+    "unregisterQueued": "Desativado. O cancelamento do registro será concluído quando você voltar a ficar online.",
+    "preview": "Mostrar prévias das conversas",
+    "background": "Manter a conversa conectada em segundo plano",
+    "backgroundActive": "Recebendo mensagens de conversas em segundo plano",
+    "backgroundStop": "Parar de receber",
+    "backgroundHint": "A conexão em segundo plano funciona sem o Google e exibe uma notificação permanente. Você pode interrompê-la nessa notificação.",
+    "googleUnavailable": "As notificações push do Google estão indisponíveis. Ative a conexão de conversas em segundo plano para receber mensagens."
+  },
+  "about": {
+    "sectionTitle": "Sobre este celular",
+    "deviceName": "Nome do dispositivo",
+    "deviceNameDetail": "Exibido na lista de autorizações do computador.",
+    "platform": "Plataforma",
+    "editAccessibility": "Editar {{label}}"
+  },
+  "relay": {
+    "online": "Conectado ao Relay",
+    "connecting": "Conectando ao Relay",
+    "stopped": "Retransmissor desconectado",
+    "lastSynced": "Última sincronização: {{time}}",
+    "canSync": "As sessões remotas podem ser sincronizadas.",
+    "reconnectHint": "As sessões remotas retomarão as assinaturas automaticamente quando a rede for restabelecida.",
+    "resumeHint": "A conexão é retomada quando você volta ao app ou entra novamente."
+  },
+  "header": {
+    "notSignedIn": "Login não realizado",
+    "thisPhone": "Este celular"
+  },
+  "debug": {
+    "sectionTitle": "Depuração / Desenvolvedor",
+    "userId": "ID do usuário",
+    "notSynced": "Não sincronizado",
+    "deviceId": "ID do dispositivo",
+    "initializing": "Inicializando",
+    "authServer": "Servidor de autenticação",
+    "authRegion": "Região de login"
+  },
+  "devServerEnvironment": {
+    "title": "Ambiente do servidor",
+    "description": "Afeta apenas o backend ao qual o CindyDev se conecta",
+    "accessibility": "Trocar ambiente do servidor",
+    "options": {
+      "dev": "Dev",
+      "release": "Produção"
+    },
+    "confirmTitle": "Trocar para {{environment}}?",
+    "confirmBody": "A troca encerra sua sessão e reinicia o app.",
+    "cancel": "Cancelar",
+    "switchAction": "Trocar",
+    "switching": "Trocando",
+    "switchFailed": "Não foi possível trocar o ambiente do servidor. Tente novamente."
+  },
+  "updateInfo": {
+    "embedded": "Com o pacote do app",
+    "embeddedFallback": "Com o pacote do app (OTA não aplicada)",
+    "unknown": "Desconhecido",
+    "source": "Origem em execução",
+    "sourceEmbedded": "Integrada (com o pacote do app)",
+    "sourceEmergencyFallback": "Integrada (inicialização de emergência; OTA não aplicada)",
+    "sourceOta": "Atualização OTA",
+    "updateId": "ID da atualização",
+    "updatedAt": "Atualizado em",
+    "channel": "Canal",
+    "runtime": "Runtime",
+    "otaMarker": "Marcador OTA",
+    "emergencyLaunch": "Inicialização de emergência",
+    "emergencyLaunchYes": "Sim (a OTA não pode ser aplicada nesta execução)",
+    "otaVersion": "Versão OTA"
+  },
+  "legal": {
+    "sectionTitle": "Informações legais",
+    "privacyPolicy": "Política de Privacidade",
+    "userAgreement": "Contrato do usuário",
+    "view": "Ver",
+    "openPrivacyPolicy": "Abrir a política de privacidade",
+    "openUserAgreement": "Abrir o contrato do usuário",
+    "appFilingNumber": "Número de registro do app",
+    "analytics": "Estatísticas de uso",
+    "analyticsHint": "Ajuda a entender as inicializações e a retenção. Envia informações do dispositivo, como modelo, sistema operacional e versão do app, um identificador do dispositivo e, após o login, o ID da sua conta; nunca conversas, arquivos ou prompts.",
+    "analyticsSaveFailed": "Não foi possível salvar esta configuração; ela pode ser revertida após reiniciar.",
+    "analyticsReset": "Restaurar padrão",
+    "analyticsResetAction": "Redefinir"
+  },
+  "account": {
+    "logoutConfirmTitle": "Sair?",
+    "logoutConfirmRunning": "Algumas sessões ainda estão em execução. Elas continuam no computador, mas este celular deixa de recebê-las e controlá-las, e todas as contas e cópias locais salvas neste celular são apagadas.",
+    "logoutHint": "Apaga todas as contas e a cópia remota neste celular. As sessões no computador não são afetadas.",
+    "logout": "Sair",
+    "loggingOut": "Saindo",
+    "loggingOutAccessibility": "Saindo"
+  },
+  "copyRow": {
+    "action": "Copiar",
+    "done": "Copiado",
+    "accessibility": "Copiar {{label}}"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "Dicionário de voz",
+    "label": "Ver dicionário",
+    "hint": "Edite o dicionário em um computador; ele é sincronizado automaticamente. Apenas leitura neste celular.",
+    "openAccessibility": "Ver dicionário de voz",
+    "screenTitle": "Dicionário de voz",
+    "entryCount": "{{count}} termos",
+    "aliasSeparator": ", ",
+    "aliases": "Frequentemente reconhecido como: {{aliases}}",
+    "refresh": "Atualizar",
+    "refreshing": "Atualizando…",
+    "refreshAccessibility": "Atualizar dicionário",
+    "readOnlyHint": "Visualize no celular; adicione ou remova entradas em um computador.",
+    "offlineHint": "Seus computadores estão offline. Exibindo o último dicionário sincronizado.",
+    "noDesktops": "Entre na mesma conta em um computador para sincronizar seu dicionário."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "Não foi possível salvar a alteração. Tente novamente.",
+    "title": "Reconhecer minha voz",
+    "sectionTitle": "Filtro de impressão vocal",
+    "label": "Reconhecer minha voz",
+    "entryHint": "Silencia outras pessoas durante a entrada de voz. Sua impressão vocal permanece neste celular.",
+    "openAccessibility": "Abrir configurações de reconhecimento da minha voz",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Silencia outras pessoas durante a entrada de voz para transcrever apenas sua fala; falas sobrepostas à sua não podem ser totalmente removidas. Sua impressão vocal é criptografada neste celular e nunca é enviada nem sincronizada.",
+    "unsupported": "Esta versão do app não oferece suporte a impressões vocais. Atualize para a versão mais recente.",
+    "model": {
+      "title": "Modelo de reconhecimento",
+      "needed": "O primeiro uso baixa um modelo de reconhecimento de cerca de {{size}}. Recomendamos usar Wi-Fi.",
+      "download": "Baixar modelo de reconhecimento",
+      "downloading": "Baixando ({{done}} / {{total}})",
+      "cancel": "Cancelar download",
+      "retry": "Baixar novamente",
+      "failed": {
+        "network": "Falha ao baixar o modelo de reconhecimento. Verifique sua conexão e tente novamente.",
+        "disk": "Não foi possível salvar o modelo de reconhecimento. Verifique o espaço livre no celular e tente novamente.",
+        "checksum": "O modelo de reconhecimento baixado falhou na verificação. Tente novamente.",
+        "unavailable": "O modelo de reconhecimento está indisponível no momento. Tente novamente mais tarde."
+      }
+    },
+    "profile": {
+      "title": "Impressão vocal",
+      "missing": "Nenhuma impressão vocal ainda",
+      "missingHint": "Grave sua impressão vocal para ativar o filtro.",
+      "enrolled": "Impressão vocal gravada",
+      "enrolledAt": "Gravada em {{date}}",
+      "enroll": "Gravar impressão vocal",
+      "reenroll": "Gravar novamente",
+      "delete": "Excluir impressão vocal",
+      "deleteConfirm": {
+        "title": "Excluir impressão vocal?",
+        "description": "A entrada de voz deixará de filtrar outras pessoas até você gravar sua impressão vocal novamente.",
+        "confirm": "Excluir",
+        "cancel": "Cancelar"
+      }
+    },
+    "strictness": {
+      "label": "Rigor",
+      "hint": "Um filtro mais rigoroso bloqueia mais vozes, mas também pode cortar suas palavras em locais barulhentos.",
+      "restoreDefault": "Restaurar padrão",
+      "options": {
+        "relaxed": "Flexível",
+        "standard": "Padrão",
+        "strict": "Rigoroso"
+      }
+    },
+    "enroll": {
+      "description": "Leia os {{clips}} trechos abaixo com sua voz normal. Cada gravação dura até {{seconds}} segundos; pare a gravação ao terminar de ler. Grave no local onde costuma usar a entrada de voz, sem outras pessoas falando.",
+      "step": "Trecho {{current}} de {{total}}",
+      "record": "Começar a ler",
+      "stop": "Parar gravação",
+      "rerecord": "Gravar este novamente",
+      "recording": "Gravando… restam {{seconds}} segundos",
+      "saving": "Criando impressão vocal…",
+      "submit": "Concluir",
+      "cancel": "Cancelar",
+      "passages": {
+        "p1": "Esta manhã vou revisar o plano da semana e, à tarde, vou listar as perguntas que precisamos discutir e enviá-las para que todos possam ler antes.",
+        "p2": "Se o tempo estiver bom amanhã, podemos sair um pouco mais cedo, comprar frutas e lanches no caminho e almoçar no parque.",
+        "p3": "Por favor, deixe este texto mais conciso, mantenha os números e as conclusões principais e depois resuma os pontos centrais em três a cinco frases."
+      },
+      "errors": {
+        "too_short": "Pouca fala foi detectada no trecho {{index}}. Grave-o novamente.",
+        "no_embedding": "Não foi possível extrair uma impressão vocal do trecho {{index}}. Grave-o novamente.",
+        "inconsistent": "O trecho {{index}} não parece ser da mesma pessoa que os demais; outra voz ou ruído pode ter sido captado. Grave-o novamente.",
+        "models_missing": "O download do modelo de reconhecimento ainda não terminou. Tente novamente em instantes.",
+        "storage_unavailable": "O chaveiro do sistema está indisponível, então a impressão vocal não pode ser armazenada de forma criptografada. Tente novamente mais tarde.",
+        "failed": "Não foi possível criar a impressão vocal. Tente novamente.",
+        "microphone": "Não é possível usar o microfone. Verifique a permissão do microfone e tente novamente.",
+        "noAudio": "Nenhum som foi captado pelo microfone. Verifique-o e tente novamente."
+      },
+      "stepChoice": "Trecho {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Não gravado",
+        "recorded": "Gravado",
+        "retry": "Gravar novamente",
+        "recording": "Gravando"
+      },
+      "rerecordStep": "Gravar trecho {{index}} novamente",
+      "readHint": "Comece quando estiver pronto. Pare a gravação ao terminar de ler.",
+      "otherClipsKept": "Suas outras gravações foram mantidas."
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "Nome do dispositivo",
+    "placeholder": "Nome do celular",
+    "resetAccessibility": "Restaurar o nome padrão do celular",
+    "emptyError": "O nome do dispositivo não pode ficar vazio.",
+    "deviceInitializing": "O dispositivo ainda está inicializando. Tente novamente mais tarde.",
+    "restoredDefault": "Nome padrão restaurado.",
+    "resetAction": "Restaurar nome padrão",
+    "clearAccessibility": "Limpar nome",
+    "discardTitle": "Descartar alterações?",
+    "discardBody": "Suas alterações no nome do dispositivo não foram salvas.",
+    "discardConfirm": "Descartar alterações",
+    "keepEditing": "Continuar editando"
+  },
+  "developer": {
+    "title": "Desenvolvedor",
+    "identity": "Identificadores",
+    "updateInfo": "Informações da atualização"
+  }
+}

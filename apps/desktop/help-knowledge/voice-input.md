@@ -18,7 +18,7 @@ Voice input lets you dictate instead of typing. The recognized text goes into th
 
 - **Service source → Voice service** — **Cindy official service** (default; uses your Cindy sign-in) or **Custom voice service** (choose a recognition model that uses its own credentials, or **Custom realtime ASR** with your own WebSocket URL, model, and API key; **Test connection** checks it). When you're not signed in, use a custom service.
 - **Basics:**
-  - **Language** — **Auto** (default) / Simplified Chinese / Traditional Chinese / English / Japanese / Korean. The China edition defaults to Simplified Chinese. There's no free-form locale field.
+  - **Language** — **Auto** (default) / Simplified Chinese / Traditional Chinese / English / Japanese / Korean / Spanish. The China edition defaults to Simplified Chinese. There's no free-form locale field.
   - **Microphone** — **Auto** (system default) or a specific device.
   - **Shortcut** — click to record a new one: a key combination, a standalone F1–F24 key, or (macOS) holding Left/Right Command, Option, Control, or Fn. **Clear** removes it. Cindy rejects shortcuts that conflict with system or common editing shortcuts.
 - **Refinement:**
@@ -31,7 +31,7 @@ Voice input lets you dictate instead of typing. The recognized text goes into th
   - **Mute during voice input** (on by default) — temporarily mutes system audio and restores it afterwards. The start cue finishes before muting, and capture isn't interrupted. Not supported on Linux.
   - **Fast voice activation** (off by default) — keeps the microphone ready briefly after use so recording starts about 100 ms sooner; the mic is released after 30 minutes without use.
   - **Sound cues** (on by default) — short sounds when voice input starts and ends.
-- **Voiceprint filter → Recognize my voice** (off by default) — record your voiceprint (read three short passages) so only your voice is transcribed. The first use downloads a recognition model. **Strictness**: Relaxed / Standard / Strict. The voiceprint stays encrypted on this computer.
+- **Voiceprint filter → Recognize my voice** (off by default) — record your voiceprint (read three short passages) so only your voice is transcribed. The first use downloads a recognition model. **Strictness**: Relaxed / Standard / Strict. While recording, a short **Ignored someone else's voice** note appears each time a stretch of speech is filtered out; if your own words keep getting dropped, lower the strictness or record the voiceprint again. The voiceprint stays encrypted on this computer.
 - **Usage** — duration, count, and estimated cost, plus **Recent transcripts** you can copy or delete.
 
 **Permissions (macOS):**

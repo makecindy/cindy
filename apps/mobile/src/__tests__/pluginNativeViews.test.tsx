@@ -1188,3 +1188,17 @@ it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery re
   rerender({ ...p, managementNotice: undefined });
   expect(container.textContent).not.toContain("Result unconfirmed");
 });
+
+/* 依据：三端展示同一份页面权限 facts；最小输入：ui purpose + app 工具列表；tier: unit。 */
+it('renders UI capability purpose, trust and complete Host permission details in the existing confirmation sheet', () => {
+  const state = { outcome: 'confirmation', online: true, busy: false, receipt: { consent: {
+    requestId: 'request', origin: 'local-file', initiator: 'user', purpose: 'ui-capability', trust: 'unverified',
+    facts: { kind: 'install', ghostId: 'planner', name: 'Planner', version: '1', permissions: [
+      { key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi', detail: 'planner.html\napi.example.org\nsave_plan, open_plan' },
+    ] },
+  } } } as any;
+  const { container } = mount(PluginManagementConfirmation, { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: 'Mac' });
+  for (const fact of ['plugins.uiApproval.purpose', 'plugins.management.trust.unverified', 'planner.html', 'api.example.org', 'save_plan, open_plan'])
+    expect(container.textContent).toContain(fact);
+  expect(container.textContent).not.toContain('plugins.notice.taskCapability');
+});

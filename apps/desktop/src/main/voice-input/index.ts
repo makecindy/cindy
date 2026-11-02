@@ -1894,7 +1894,7 @@ export function registerVoiceInputIpc(): void {
     // Reuse dictation's opt-in setting, local enrollment and strictness. A new
     // microphone run (including unmute) reads current settings; ASR rotation
     // keeps the same gate. No separate companion voiceprint or audio storage.
-    createAudioGate: () => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings()),
+    createAudioGate: (onFiltered) => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), onFiltered),
     updateSettings: patch => voiceInputDataStore.updateSettings(patch),
     hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
     createProvider: async () => {
@@ -2392,7 +2392,9 @@ export function registerVoiceInputIpc(): void {
     });
 
     // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
-    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), () => {
+      if (runId) emit({ type: 'speaker-filtered', runId });
+    });
     const controller = new VoiceInputController({
       asr: provider,
       refiner,

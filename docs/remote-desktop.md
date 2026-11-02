@@ -541,6 +541,46 @@ does not guarantee focus isolation: the driver may temporarily change applicatio
 or window focus. Cindy does not currently verify restoration of the original
 focused window or text field, and does not force focus back after an action.
 
+## X11 keyboard and mouse control
+
+X11 hosts retain Electron's existing screen-capture path and use the bundled
+Linux input helper's XTest backend. The native `--x11 --check` probe opens the
+current desktop's authenticated X connection and checks XTest without injecting
+input. No root service, `xhost` change or remote X listener is installed. A
+Wayland session with `DISPLAY` set is still Wayland; XWayland never enables this
+backend. Missing display credentials or XTest support does not advertise control.
+
+The existing host opt-ins, peer revocation, expiring control lease, serialized
+batch acknowledgements and input ownership apply unchanged. Pointer coordinates
+are normalized within the selected monitor, then mapped to X root pixels. Uniform
+DPI scaling and negative monitor origins are supported; mixed scaling is rejected
+rather than guessed. Changed monitor geometry releases control before further
+input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
+wheel axes are supported, with accumulated small wheel deltas.
+
+Unicode text uses an unused, unpressed X keycode with a temporary symbol mapping;
+the exact mapping is restored before acknowledgement. It does not overwrite the
+clipboard. Text batches contain at most 64 code points to bound the paced native
+input within the heartbeat deadline. This sends input to the focused X client;
+application/IME handling is separate from native event delivery. EOF, SIGTERM
+and the six-second heartbeat deadline release held keys and buttons. X11 capture,
+lock-screen support and other optional features are not broadened by this backend.
+
+Unsupported keyboard/mouse control has a distinct localized error on desktop
+and mobile; it no longer suggests toggling permissions or fixing the network.
+Wire operations and payloads are unchanged: official and self-hosted relays keep
+forwarding the same opaque input requests. Older viewers can use the X11 host
+without a new capability field; only the host needs the native backend update.
+
+Explicit native integration (requires `Xvfb` and the built input helper):
+`python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
+It creates its own authenticated X server and tests pointer coordinates, mouse
+buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
+and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
+the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
+and the unsupported-input message. Full Air-to-GX102 UI validation remains a
+separate acceptance step after installing a build containing this change.
+
 ## Wayland capture lifetime
 
 On Hyprland with the system `/usr/bin/grim` executable, Cindy uses native screencopy
@@ -582,7 +622,7 @@ be truncated by Chromium’s Wayland text handling even with a correct keysym. O
 compositors keep their existing view-only portal path.
 
 Linux native builds require `cc`, `pkg-config`, `wayland-scanner`, and development
-headers for `wayland-client`, `xkbcommon`, `json-c`, `libturbojpeg`, and `libpng`; packaged builds include
+headers for `wayland-client`, `xkbcommon`, `json-c`, `x11`, `xtst`, `libturbojpeg`, and `libpng`; packaged builds include
 the helpers and require the corresponding shared libraries. In development it is
 compiled into the existing userData native cache. Missing support keeps viewing
 available and does not advertise control. Native parser checks (no compositor or
@@ -648,7 +688,7 @@ video without another picker, then stop sharing and verify capture terminates.
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
 Forge builds and packages them through the existing tools signing paths. Linux
-Hyprland uses the Wayland virtual input helper described above; other Linux
+Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend. Other Linux
 paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
@@ -1003,6 +1043,27 @@ Remaining platform adapters are explicitly separate:
 
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
+
+### macOS zero frames: check `replayd` before blaming Cindy
+
+Every macOS capture path runs through the system `replayd` service. When the host
+offer fails after about 4 seconds, the push-frame window reports
+`DESKTOP_VIDEO_UNAVAILABLE` (empty first frame) and an `SCStream` starts
+successfully but delivers 0 frames, suspect a wedged `replayd` first. On
+2026-10-15 a Mac Studio (macOS 27.0.1) had one that had been running for 7 days
+and was flooding the log with `SCRemoteQueue_EnqueueSampleBuffer: Cannot Enqueue
+on an invalid remoteQueue` / `Client terminated the queue`; every
+ScreenCaptureKit capture started and produced nothing. Check with a minimal SCK
+capture or `/usr/bin/log stream --predicate 'process == "replayd"'` (`log` is a
+zsh builtin, use the absolute path). `kill -9` the user-session `replayd` —
+SIGTERM is ignored and launchd restarts it — after which the first frame arrives
+in about 0.3 s. A healthy `replayd` also delivers frames in the locked session
+with window exclusion. An earlier revision of PR #6112 added a lock-screen
+fallback and an unlock-restart chain on measurements taken while `replayd` was
+wedged; both were dropped before merge, and the merged PR only fixes first-frame
+reliability and records the wedged `replayd` as the direct cause. Do not conclude
+"the system API does not work in state X" before confirming the matching system
+service is healthy.
 
 ### Windows system service
 

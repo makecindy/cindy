@@ -12,7 +12,8 @@
  *   (含切走之后迟到、仍拿着旧地址的请求);
  * - 凭证只在内存里,不进日志、诊断与路由状态。
  */
-import { setDeviceLinkApiBaseOverride } from '@/config/env';
+import { isSharedTaskMediaKey } from '@cindy/device-link';
+import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 
 export interface SelfHostedRelayRoute {
   relayId: string;
@@ -38,6 +39,11 @@ export interface SelfHostedRelaySigning {
   ownerPublicKey: string;
   /** 本机签名私钥种子(base64url)。 */
   seed: string;
+}
+
+/** 媒体接口地址:共享任务附件只存在于官方存储,其余对象跟随当前中转。 */
+export function deviceLinkMediaApiBaseUrl(key: unknown): string {
+  return isSharedTaskMediaKey(key) ? getOfficialDeviceLinkApiBaseUrl() : DEVICE_LINK_API_BASE_URL;
 }
 
 export type SelfHostedRelayAuthorization =

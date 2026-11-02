@@ -15,9 +15,10 @@ import type {
   ScriptCapability,
   ScriptExecutionConfig,
   PreRunHookRunResult,
+  PreRunPluginConfig,
   ScheduleMutationGuard,
 } from '../types.js';
-import { SCRIPT_CAPABILITIES } from '../types.js';
+import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
 import type { ChildRunInput, ScheduleRunner } from '../interfaces/schedule-runner.js';
@@ -149,6 +150,11 @@ export interface SchedulerOptions {
    * 命中时 create/update 会把任务归一成对话任务(清 workingDir + workspaceKind='dialogue')。
    */
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  /**
+   * 保存插件前置检查时把插件解析为实例 id;插件不可选时抛错。由 host 注入(引擎不认识插件)。
+   * 未注入时拒绝新设插件前置检查,已保存的不受影响。
+   */
+  resolvePreRunPlugin?: (pluginId: string) => string;
   /**
    * Host-owned validation for a persisted bound-session target. The scheduler
    * calls it before CRUD persistence and again immediately before every fire,
@@ -395,6 +401,7 @@ export class Scheduler extends EventEmitter {
 
   private readonly notifyForcedFailureHook?: SchedulerOptions['notifyForcedFailure'];
   private readonly isManagedWorkspaceDir?: (dir: string) => boolean;
+  private readonly resolvePreRunPlugin?: (pluginId: string) => string;
   private readonly validateTargetSession?: SchedulerOptions['validateTargetSession'];
   private readonly passive: boolean;
   private lastDbSyncAt = 0;
@@ -441,6 +448,7 @@ export class Scheduler extends EventEmitter {
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_MS;
     this.generateId = opts.generateId ?? defaultGenerateId;
     this.isManagedWorkspaceDir = opts.isManagedWorkspaceDir;
+    this.resolvePreRunPlugin = opts.resolvePreRunPlugin;
     this.validateTargetSession = opts.validateTargetSession;
     this.notifyForcedFailureHook = opts.notifyForcedFailure;
     this.passive = opts.passive ?? false;
@@ -1492,6 +1500,7 @@ export class Scheduler extends EventEmitter {
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
       preRunHook: input.preRunHook ?? undefined,
+      preRunPlugin: this.resolveNewPreRunPlugin(normalizePreRunPlugin(input.preRunPlugin) ?? undefined),
       agentDeviceId: input.agentDeviceId ?? undefined,
       executionMode: input.executionMode ?? 'agent',
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
@@ -1536,6 +1545,12 @@ export class Scheduler extends EventEmitter {
     });
   }
 
+  private resolveNewPreRunPlugin(plugin: PreRunPluginConfig | undefined): PreRunPluginConfig | undefined {
+    if (!plugin) return undefined;
+    if (!this.resolvePreRunPlugin) throw new Error('Plugin pre-run checks are not available');
+    return { ...plugin, pluginId: this.resolvePreRunPlugin(plugin.pluginId) };
+  }
+
   private async updateUnlocked(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
     if ((patch as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     patch = this.normalizeManagedWorkingDir(patch);
@@ -1562,6 +1577,13 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    if (Object.prototype.hasOwnProperty.call(patch, 'preRunPlugin')) {
+      const next = normalizePreRunPlugin(patch.preRunPlugin) ?? undefined;
+      // 只在换了插件时校验:插件后来被停用,用户仍能改出错处理或别的字段。
+      updates.preRunPlugin = next && next.pluginId !== existing.preRunPlugin?.pluginId
+        ? this.resolveNewPreRunPlugin(next)
+        : next;
+    }
     assertScheduleMutationGuard(expected, existing);
     // Old clients can rename an automation without losing its route. A model edit,
     // however, must carry the location once one has been explicitly selected.

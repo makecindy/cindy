@@ -1,3 +1,9 @@
+import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from '@/components/chat/AttachmentCollection';
+import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
+import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
 /**
  * 群聊消息的附件（docs/product-rules/bot-group-chat.md §3.1），主群时间线与 Thread 共用。
  *
@@ -16,7 +22,11 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import type { BotGroupAttachment } from '../../../shared/botGroupChat';
-import { botGroupAttachmentRows, type BotGroupAttachmentSlot, type BotGroupPendingSlot } from './botGroupAttachments';
+import {
+  botGroupAttachmentRows,
+  type BotGroupAttachmentSlot,
+  type BotGroupPendingSlot,
+} from './botGroupAttachments';
 
 export function BotGroupMessageAttachments({
   attachments,
@@ -36,11 +46,23 @@ export function BotGroupMessageAttachments({
   const renderSlot = (slot: BotGroupAttachmentSlot) => {
     const name = slot.attachment.name || untitled;
     if (slot.kind === 'image') {
-      return <ChatImageView key={slot.attachment.id} src={slot.url} filename={name} variant="user-attached" />;
+      return (
+        <ChatImageView
+          key={slot.attachment.id}
+          src={slot.url}
+          filename={name}
+          variant="user-attached"
+        />
+      );
     }
     if (slot.kind === 'pending') {
       return slot.image ? (
-        <ImageMissingPlaceholder key={slot.attachment.id} filename={name} status={slot.state} className="w-[280px] max-w-full" />
+        <ImageMissingPlaceholder
+          key={slot.attachment.id}
+          filename={name}
+          status={slot.state}
+          className="w-[280px] max-w-full"
+        />
       ) : (
         <PendingAttachmentChip key={slot.attachment.id} state={slot.state} name={name} />
       );
@@ -56,31 +78,76 @@ export function BotGroupMessageAttachments({
       />
     );
   };
+  const gallery = rows
+    .flatMap((row) => (row.kind === 'picture' ? [row.slot] : row.slots))
+    .flatMap((slot) =>
+      slot.kind === 'image' ? [{ src: slot.url, galleryId: slot.attachment.id }] : [],
+    );
+  const collection: AttachmentCollectionItem[] = rows
+    .flatMap((row) => (row.kind === 'picture' ? [row.slot] : row.slots))
+    .flatMap((slot): AttachmentCollectionItem[] =>
+      slot.kind === 'pending'
+        ? []
+        : [
+            {
+              id: slot.attachment.id,
+              name: slot.attachment.name || untitled,
+              source: slot.kind === 'image' ? slot.url : slot.path,
+              kind:
+                slot.kind === 'image'
+                  ? 'image'
+                  : attachmentPreviewKind(slot.attachment.name || slot.path),
+              media: slot.kind === 'image',
+            },
+          ],
+    );
   return (
-    <div
-      data-testid="bot-group-message-attachments"
-      className={cn('flex min-w-0 max-w-full flex-col gap-2', align === 'end' ? 'items-end' : 'items-start')}
-    >
-      {rows.map((row) => row.kind === 'picture' ? renderSlot(row.slot) : (
-        <div key={`chips:${row.slots[0]!.attachment.id}`}
-          className={cn('flex max-w-full flex-wrap items-end gap-1.5', align === 'end' ? 'justify-end' : 'justify-start')}>
-          {row.slots.map(renderSlot)}
+    <AttachmentCollectionContext.Provider value={collection}>
+      <ImageGalleryContext.Provider value={gallery}>
+        <div
+          data-testid="bot-group-message-attachments"
+          className={cn(
+            'flex min-w-0 max-w-full flex-col gap-2',
+            align === 'end' ? 'items-end' : 'items-start',
+          )}
+        >
+          {rows.map((row) =>
+            row.kind === 'picture' ? (
+              renderSlot(row.slot)
+            ) : (
+              <div
+                key={`chips:${row.slots[0]!.attachment.id}`}
+                className={cn(
+                  'flex max-w-full flex-wrap items-end gap-1.5',
+                  align === 'end' ? 'justify-end' : 'justify-start',
+                )}
+              >
+                {row.slots.map(renderSlot)}
+              </div>
+            ),
+          )}
+          {textPreview ? (
+            <TextLightbox
+              filePath={textPreview.path}
+              fileName={textPreview.name}
+              triggerRef={chipRef}
+              onClose={() => setTextPreview(null)}
+            />
+          ) : null}
         </div>
-      ))}
-      {textPreview ? (
-        <TextLightbox
-          filePath={textPreview.path}
-          fileName={textPreview.name}
-          triggerRef={chipRef}
-          onClose={() => setTextPreview(null)}
-        />
-      ) : null}
-    </div>
+      </ImageGalleryContext.Provider>
+    </AttachmentCollectionContext.Provider>
   );
 }
 
 /** A file that is not on this computer yet: the same chip shape, not openable, with its state. */
-function PendingAttachmentChip({ state, name }: { state: BotGroupPendingSlot['state']; name: string }) {
+function PendingAttachmentChip({
+  state,
+  name,
+}: {
+  state: BotGroupPendingSlot['state'];
+  name: string;
+}) {
   const { t } = useTranslation();
   const loading = state === 'loading';
   const status = t(loading ? 'bots.groupChat.files.loading' : 'bots.groupChat.files.unavailable');

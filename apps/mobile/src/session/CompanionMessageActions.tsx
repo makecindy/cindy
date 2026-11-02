@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { ChatReplyIcon } from '@/components/ChatReplyIcon';
 import { NativePullDownMenu, usesNativePullDownMenu, type NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
-import { useTheme, spacing } from '@/theme';
+import { useTheme, spacing, radius } from '@/theme';
 import { fontWeight, lineHeight, typeScale } from '@/theme/tokens';
 
 /** §3 menu-item role: 16/22 medium. */
@@ -24,12 +24,14 @@ export function CompanionMessageActions({ user, copied, copying, disabled, onCop
   // Desktop exposes this existing composer action as Reply in companion chats.
   const reply = actions.find(action => action.id === 'add-to-chat');
   const menuActions = actions.filter(action => action.id !== 'add-to-chat');
-  const hit = { width: 44, height: 44, alignItems: 'center' as const, justifyContent: 'center' as const };
+  // Align the 14pt glyph with the body while preserving a 44pt touch target.
+  // Own bubbles have 12pt padding plus a border; assistant bodies have no inset.
+  const hit = ({ pressed }: { pressed: boolean }) => ({ width: 44, height: 44, borderRadius: radius.pill, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: pressed ? colors.surfaceChip : 'transparent', opacity: disabled ? 0.5 : 1 });
   const more = <Pressable style={hit} disabled={disabled} accessibilityRole="button" accessibilityState={{ disabled }} accessibilityLabel={t('message.renderer.moreActions')} testID="companion.messageMore" onPress={() => { if (!usesNativePullDownMenu()) setOpen(true); }}>
     <Ellipsis size={iconSize.sm} color={colors.textSecondary} />
   </Pressable>;
-  return <View style={{ flexDirection: 'row', justifyContent: user ? 'flex-end' : 'flex-start' }} testID="companion.messageActions">
-    {!user && onCopy ? <Pressable style={hit} disabled={disabled || copying} accessibilityRole="button" accessibilityLabel={t(copied ? 'message.renderer.copyStateCopied' : 'message.renderer.copyStateCopy')} onPress={onCopy} testID="message.copyButton">
+  return <View style={{ flexDirection: 'row', justifyContent: user ? 'flex-end' : 'flex-start', marginTop: spacing.xs, ...(user ? { marginRight: spacing.md + 1 - (44 - iconSize.sm) / 2 } : { marginLeft: -(44 - iconSize.sm) / 2 }) }} testID="companion.messageActions">
+    {onCopy ? <Pressable style={hit} disabled={disabled || copying} accessibilityRole="button" accessibilityLabel={t(copied ? 'message.renderer.copyStateCopied' : 'message.renderer.copyStateCopy')} onPress={onCopy} testID="message.copyButton">
       {copied ? <Check size={iconSize.sm} color={colors.textSecondary} /> : <Copy size={iconSize.sm} color={colors.textSecondary} />}
     </Pressable> : null}
     {reply ? <Pressable style={hit} disabled={disabled || reply.disabled} accessibilityRole="button"

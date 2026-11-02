@@ -556,10 +556,11 @@ describe('Shared create project picker', () => {
   // 投影 Pi。创建入口必须按 maker:list-available-agents(runtime 注册结果)过滤,否则一路创建到
   // requireAgent 的 not-registered。远程草稿以被控端注册结果为准(hook 传 deviceId 走隧道)。
   it('gates the vendor switcher by runtime-registered agents (list-available-agents)', () => {
-    // hook 用权威的 runtime 注册来源,而非模型目录;远程走 device-link 隧道。
+    // #8010：runtime 注册结果经目录路由读取，才能遵循任务宿主的来源权限。
+    // 原有直接 dl.invoke 约束会绕过宿主作用域；仍需保留本机与远程两个入口。
     expect(availableAgentsHookSource).toContain('api.listAvailableAgents()');
     expect(availableAgentsHookSource).toContain(
-      "dl.invoke(deviceId, 'maker:list-available-agents', [])",
+      "invokeModelCatalog(dl, deviceId, 'maker:list-available-agents', [])",
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");

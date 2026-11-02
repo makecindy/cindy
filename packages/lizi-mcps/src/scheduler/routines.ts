@@ -86,6 +86,10 @@ export function registerRoutineTools(
         z.object({ kind: z.literal('none') }),
       ]).optional().describe('Final delivery: default companion/direct displays the result without another model call. companion/process asks the companion to process it only when requested. im uses an id from routine_delivery_targets. none keeps only the independent task. Omission preserves saved choices; silent checks still suppress idle delivery.'),
       silentWhenIdle: z.boolean().optional().describe('Set true for checks: no routine chatter, report only when needed via schedule_notify_current_run. Reminders and scheduled delivery default to false. Preserve existing user choices.'),
+      preRunPlugin: z.object({
+        pluginId: z.string().min(1).max(512),
+        onFailure: z.enum(['allow', 'skip', 'block']),
+      }).nullable().optional().describe('Plugin pre-run check: before each run, ask this plugin (id from ghost_list) whether to run; it may allow, skip this time, or stop, never approve on the owner\'s behalf. The plugin must be enabled, declare the routine pre-run check, and be allowed by the owner. onFailure applies when it does not answer, errors, or is unavailable: allow runs anyway, skip skips this time, block stops and records a failure. Runs before preRunHook. null removes; omission preserves.'),
       preRunHook: z.object({
         command: z.string().min(1).max(32000),
         timeoutMs: z.number().int().positive().optional(),

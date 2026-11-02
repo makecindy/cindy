@@ -1,3 +1,4 @@
+import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

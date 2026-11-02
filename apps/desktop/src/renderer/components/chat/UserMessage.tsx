@@ -86,7 +86,7 @@ import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
-import { BubbleHoverToolbar, MessageActionBar } from './MessageActionBar';
+import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -1277,7 +1277,7 @@ export function UserMessage({
 
   const attachmentsInBubble =
     simplifiedBotConversation && !editing && !orcaCommunication && !hookSource && (hasImages || hasFiles);
-  // 伙伴私聊：操作栏挂在气泡左侧、悬停浮出（与群聊同一 BubbleHoverToolbar）；没有气泡时仍在下方。
+  // 伙伴私聊：常用操作始终在气泡下方，保留群聊原图标与菜单。
   const bubbleActions = simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
     && Boolean(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble);
   // 私聊话题：只有本机伙伴主对话里、主人自己发的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
@@ -1295,7 +1295,7 @@ export function UserMessage({
       align={hookSource ? 'left' : 'right'}
       hovered={hovered}
       simplifiedBotConversation={simplifiedBotConversation}
-      compact={bubbleActions}
+      companionFooter={bubbleActions}
       replyAction={dmThread && bubbleActions ? {
         onClick: dmThread.open,
         label: dmThread.thread
@@ -1763,7 +1763,6 @@ export function UserMessage({
                         {fileAttachmentNodes}
                       </div>
                     )}
-                    {bubbleActions && <BubbleHoverToolbar side="left">{messageActions}</BubbleHoverToolbar>}
                   </ChatBubble>
                 )}
                 {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
@@ -1788,7 +1787,7 @@ export function UserMessage({
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
-                {!bubbleActions && messageActions}
+                {messageActions}
                 {dmThread?.thread ? (
                   <BotDmThreadPreview align="right" thread={dmThread.thread} bot={dmThread.bot}
                     unread={dmThread.unread} onOpen={dmThread.open} />

@@ -12,6 +12,133 @@ const image = {
 };
 
 describe("conversation share images", () => {
+  // Unit #8085 review r4429685137: live video-site previews are web pages,
+  // not native media bytes. Exercise the export queue and HTML fallback; the
+  // existing media tests only cover direct files. One page plus one MP4 proves
+  // that skipping web decoding preserves both the placeholder and file covers.
+  it("keeps a YouTube placeholder without sending the page to the video decoder", async () => {
+    const page = "https://youtu.be/glW1pXWebnY";
+    const clip = "https://media.invalid/clip.mp4";
+    const body = "```cindy-ui\n" + [
+      { version: 1, seq: 1, op: "create", id: "site", kind: "video", props: { src: page, caption: "Site video" } },
+      { seq: 2, op: "create", id: "clip", kind: "video", props: { src: clip } },
+    ].map(value => JSON.stringify(value)).join("\n") + "\n```";
+    const load = vi.fn(async () => image);
+    const messages = await prepareConversationShareImages([{ clientId: "v", kind: "assistant", body }], load);
+    expect(load).toHaveBeenCalledExactlyOnceWith(clip, "video");
+    expect(messages[0]?.images?.has(page)).toBe(false);
+    const colors = { ...lightColors, background: lightColors.surface, codeSurface: lightColors.chatCodeSurface,
+      inlineCode: lightColors.chatInlineCodeText, syntax: {} };
+    const html = buildConversationShareHtml({ selectedMessages: messages, allShareableIds: ["v"], colors, contentWidth: 390 });
+    expect(html).toContain("Site video");
+    expect(html.match(/<circle/g)).toHaveLength(2);
+    expect(html).not.toContain(page);
+    expect(html).toContain(image.uri);
+  });
+  // Unit regression #8085: image Markdown parsing drops the supported xdt-video
+  // scheme. A visible legacy video must reach the video decoder directly.
+  it("loads legacy video sources without the image protocol whitelist", async () => {
+    const url = "xdt-video://open?path=%2Fwork%2Fclip.mp4";
+    const body = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "v", kind: "video", props: { src: url } }) + "\n```";
+    const load = vi.fn(async () => image);
+    const [message] = await prepareConversationShareImages([{ clientId: "v", kind: "assistant", body }], load);
+    expect(load).toHaveBeenCalledExactlyOnceWith(url, "video");
+    expect(message?.images?.get(url)).toEqual(image);
+  });
+  // Unit: repeated video frames consume the same per-occurrence bitmap budget
+  // as images, even though their decoder request is deduplicated by URL.
+  it("charges every occurrence of a repeated video cover", async () => {
+    const url = "xdt-video://open?path=%2Fwork%2Fclip.mp4";
+    const body = "```cindy-ui\n" + [0, 1, 2].map(index => JSON.stringify({ version: 1, seq: index + 1, op: "create", id: `v${index}`, kind: "video", props: { src: url } })).join("\n") + "\n```";
+    const load = vi.fn(async () => ({ ...image, width: 2000, height: 2000 }));
+    const [message] = await prepareConversationShareImages([{ clientId: "v", kind: "assistant", body }], load);
+    expect(load).toHaveBeenCalledExactlyOnceWith(url, "video");
+    expect(message?.images?.size).toBe(0);
+  });
+  // Unit regression: sharing a visible cindy-ui video used to export only its alt
+  // text. Exercise preparation and both real exporters, including hidden tabs.
+  it.each([lightColors, darkColors])(
+    "keeps visible video covers and play marks in both exporters",
+    async (theme) => {
+      const url = "cindy-media://blobs/clip.mp4";
+      const body =
+        "```cindy-ui\n" +
+        [
+          { version: 1, seq: 1, op: "create", id: "tabs", kind: "tabs" },
+          { seq: 2, op: "create", id: "shown", parent: "tabs", kind: "stack" },
+          { seq: 3, op: "create", id: "hidden", parent: "tabs", kind: "stack" },
+          {
+            seq: 4,
+            op: "create",
+            id: "clip",
+            parent: "shown",
+            kind: "video",
+            props: { src: url, alt: "A video", caption: "Our clip" },
+          },
+          {
+            seq: 5,
+            op: "create",
+            id: "secret",
+            parent: "hidden",
+            kind: "video",
+            props: { src: "cindy-media://hidden.mp4" },
+          },
+        ]
+          .map((operation) => JSON.stringify(operation))
+          .join("\n") +
+        "\n```";
+      const load = vi.fn(async () => image);
+      const messages = await prepareConversationShareImages(
+        [{ clientId: "v", kind: "assistant", body }],
+        load,
+      );
+      expect(load).toHaveBeenCalledExactlyOnceWith(url, "video");
+      const colors = {
+        ...theme,
+        background: theme.surface,
+        codeSurface: theme.chatCodeSurface,
+        inlineCode: theme.chatInlineCodeText,
+        syntax: {},
+      };
+      const html = buildConversationShareHtml({
+        selectedMessages: messages,
+        allShareableIds: ["v"],
+        colors,
+        contentWidth: 390,
+      });
+      expect(html).toContain(image.uri);
+      expect(html).toContain("<circle");
+      expect(html).not.toContain(url);
+      expect(html).not.toContain("hidden.mp4");
+      const svg = buildConversationShareSvgLayout({
+        messages,
+        allShareableIds: ["v"],
+        colors,
+        width: 390,
+      });
+      expect(svg.images).toHaveLength(1);
+      expect(svg.images[0]?.uri).toBe(image.uri);
+      expect(
+        svg.bubbles
+          .flatMap((bubble) => bubble.vectors ?? [])
+          .flatMap((vector) => vector.vector.shapes)
+          .some((shape) => shape.type === "circle"),
+      ).toBe(true);
+      const fallback = buildConversationShareHtml({
+        selectedMessages: messages.map((message) => ({
+          ...message,
+          images: new Map(),
+        })),
+        allShareableIds: ["v"],
+        colors,
+        contentWidth: 390,
+      });
+      expect(fallback).toContain("<circle");
+      expect(fallback).toContain("Our clip");
+      expect(fallback).not.toContain(url);
+    },
+  );
+
   it("lets free workers advance across messages while the first source is stalled", async () => {
     const finishes = new Map<string, (value: typeof image | null) => void>();
     let active = 0;

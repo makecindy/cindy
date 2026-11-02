@@ -5,7 +5,7 @@
     "official": "{{appName}} 官方中转",
     "switchToOfficial": "切回官方中转",
     "officialHint": "设备之间经 {{appName}} 官方中转连接。要改用自建中转，在中转所在的电脑上显示加入二维码，用手机相机扫码加入。",
-    "selfHostedHint": "设备之间经自建中转 {{address}} 连接；登录、模型等仍使用 {{appName}} 官方服务。",
+    "selfHostedHint": "设备之间经自建中转 {{address}} 连接；登录、模型和共享任务等仍使用 {{appName}} 官方服务。",
     "removedHint": "这台手机已被移出中转，或中转已停用。可以切回官方中转，或在电脑上重新加入。",
     "credentialMissingHint": "这台手机上找不到中转凭证。请在电脑上重新加入，或切回官方中转。",
     "confirmTitle": "切回官方中转？",
@@ -21,7 +21,7 @@
   "join": {
     "title": "加入中转",
     "checking": "正在连接中转…",
-    "body": "加入后，这台手机经这个中转连接你的电脑；登录、模型等仍使用 {{appName}} 官方服务。使用自建中转时，这台手机收不到电脑上的任务通知。",
+    "body": "加入后，这台手机经这个中转连接你的电脑；登录、模型和共享任务等仍使用 {{appName}} 官方服务。使用自建中转时，这台手机收不到电脑上的任务通知。",
     "switchNote": "加入后会从「{{current}}」切换到这个中转。",
     "action": "加入",
     "pairingCodeLabel": "配对码",

@@ -139,6 +139,7 @@ import {
   type RemoteAgentSelectorOptions,
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
+import type { PluginModelsPickerProps } from './PluginModelsSection';
 import {
   enqueueEffortChange,
   getEffortChangeCoordinator,
@@ -159,6 +160,7 @@ import {
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
+  relocationDescriptionKey,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
@@ -381,6 +383,7 @@ import {
 } from '@/state/agentDeviceModelMemory';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { controlledTaskAgentLocationReadable } from '@/lib/controlledTaskAgentLocation';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -408,6 +411,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -594,6 +598,7 @@ interface ChatInputProps {
    * 被控电脑的草稿)只在那台支持远程 Agent 时传;SSH 任务不传。
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
+  catalogHostDeviceId?: string;
   /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
@@ -651,6 +656,8 @@ interface ChatInputProps {
   /** Optional local companion call action, separate from one-shot dictation. */
   onStartVoiceConversation?: () => void;
   voiceConversationDisabled?: boolean;
+  /** Why the voice button is unavailable, when the reason is a call elsewhere. */
+  voiceConversationDisabledReason?: string;
   voiceConversationActive?: boolean;
   /**
    * F-QUEUE-DEFER: un-dispatched messages (rendered above the input by
@@ -901,6 +908,8 @@ interface ChatInputProps {
   collaboration?: CollaborationMenuConfig;
   /** Persistent teammates available as structured message targets in this task. */
   botMentions?: readonly ComposerBotMention[];
+  /** 新任务的「让插件选」(只有新任务草稿传)。 */
+  pluginModels?: PluginModelsPickerProps;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -1264,6 +1273,7 @@ export function ChatInput({
   agentDeviceId: _agentDeviceId,
   agentDeviceName = null,
   remoteAgentDevices,
+  catalogHostDeviceId,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -1284,6 +1294,7 @@ export function ChatInput({
   onBeforeVoiceInputStart,
   onStartVoiceConversation,
   voiceConversationDisabled = false,
+  voiceConversationDisabledReason,
   voiceConversationActive = false,
   pendingQueue,
   queueExpanded = false,
@@ -1342,6 +1353,7 @@ export function ChatInput({
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
+  pluginModels,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -1366,7 +1378,7 @@ export function ChatInput({
     !remoteHostId &&
     !sharedGuest &&
     remoteAgentDevices !== undefined &&
-    (!sessionId ||
+    (!sessionId || !!catalogHostDeviceId ||
       controlledTaskAgentLocationReadable({
         agentDeviceId: _agentDeviceId,
         pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
@@ -1394,7 +1406,7 @@ export function ChatInput({
     [sessionId, messages],
   );
   /** 模型目录所在的电脑:Agent 在另一台电脑运行时是那台;否则远程任务在被控电脑,本机任务在本机。 */
-  const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;
+  const catalogDeviceId = modelCatalogKey(effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined, catalogHostDeviceId);
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
@@ -2254,6 +2266,7 @@ export function ChatInput({
       remoteAgentDevices.length > 0
         ? {
             devices: remoteAgentDevices,
+            catalogHostDeviceId,
             selectedDeviceId: agentDeviceId,
             ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
             ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
@@ -2267,6 +2280,7 @@ export function ChatInput({
       taskComputerModelMemory,
       remoteHostId,
       remoteAgentDevices,
+      catalogHostDeviceId,
       agentDeviceId,
     ],
   );
@@ -3415,6 +3429,8 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // Only the composer that owns the run explains why someone else's words are missing.
+  const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
@@ -3575,12 +3591,14 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
-      // 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
+      // 文档预览 / 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        event.target instanceof Element &&
-        event.target.closest('[role="alertdialog"], [data-morph-side]')
+        (getTextPreviewSearchHost() || (
+          event.target instanceof Element &&
+          event.target.closest('[role="alertdialog"], [data-morph-side]')
+        ))
       ) {
         return;
       }
@@ -7723,12 +7741,13 @@ export function ChatInput({
   ]);
 
   // ── 远程 Agent · 已建任务:选另一台电脑(或本机)目录里的模型 = 把 Agent 挪过去 ──────────
-  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地,交接摘要接续)。换电脑
-  // 同样续接不了原生会话,复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
+  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地)。同引擎优先复制原生记录,
+  // 跨引擎或分享来源走交接摘要;复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
   // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。被控电脑上的任务改回被控电脑时,
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
+  const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice) =>
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
       confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
@@ -7742,13 +7761,18 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t('newChat.chatInput.agentRelocation.description'),
+          description: t(relocationDescriptionKey({
+            fromAgent: relocationSourceAgent,
+            toAgent: targetAgent,
+            fromAgentDeviceId: agentDeviceId,
+            toAgentDeviceId: target?.deviceId,
+          })),
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, confirmDialog, t],
+    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
@@ -7761,6 +7785,7 @@ export function ChatInput({
     }
     return {
       devices: remoteAgentDevices,
+      catalogHostDeviceId,
       selectedDeviceId: effectiveAgentDeviceId,
       // 被控电脑上的任务:没在浏览其他电脑时列被控电脑自己的目录与它的镜像记忆。
       ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
@@ -7774,7 +7799,7 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
         return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
@@ -7794,6 +7819,7 @@ export function ChatInput({
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
     remoteAgentDevices,
+    catalogHostDeviceId,
     effectiveAgentDeviceId,
     intentAgentDeviceId,
     confirmAgentRelocation,
@@ -9301,16 +9327,20 @@ export function ChatInput({
           />
         </div>
       )}
-      {/* Voice-input error + attachment rejections (oversize / blocked /
+      {/* Voice-input error (or the voiceprint filter notice) + attachment rejections (oversize / blocked /
           read-failed) share ONE floating slot above the input card — so they
           don't shrink the typing area and are clearly visible. They MUST live
           in a single flex-col container: two separate same-position absolute
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
-          {voiceInput.lastError && <VoiceInputStatusNotice message={voiceInput.lastError} />}
+          {voiceInput.lastError ? (
+            <VoiceInputStatusNotice message={voiceInput.lastError} />
+          ) : showSpeakerFilteredNotice ? (
+            <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
+          ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
           )}
@@ -10002,6 +10032,7 @@ export function ChatInput({
                         ? handleUnifiedDraftSelect
                         : undefined
                     }
+                    {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
@@ -10182,7 +10213,7 @@ export function ChatInput({
                       <Tip
                         text={
                           mainSlotIsVoice
-                            ? t('bots.voiceMode.startConversation')
+                            ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
                             : queueEditActive
                             ? t('newChat.pendingQueue.editSaveAria')
                             : voiceReleaseToSendActive
