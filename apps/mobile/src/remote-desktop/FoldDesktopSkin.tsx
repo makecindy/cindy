@@ -417,6 +417,8 @@ export function FoldDesktopDeck({
         }}
       >
         <RemoteKeySurface
+          // A new skin starts clean: locked modifiers must not carry across.
+          key={skin}
           {...keys}
           testID="remoteDesktop.retroKeys"
           mode="classic"

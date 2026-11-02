@@ -111,6 +111,7 @@ const Keycap = memo(function Keycap({
   latch,
   artwork,
   onActivate,
+  disabled,
 }: {
   rect: KeyRect;
   styles: ReturnType<typeof makeStyles>;
@@ -124,6 +125,7 @@ const Keycap = memo(function Keycap({
   latch: KeyLatch | null;
   artwork: ReactNode;
   onActivate(id: string): void;
+  disabled: boolean;
 }) {
   const selected = latch !== null;
   const foreground = selected
@@ -138,7 +140,7 @@ const Keycap = memo(function Keycap({
       accessible
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled }}
       accessibilityActions={[{ name: "activate" }]}
       onAccessibilityAction={() => onActivate(rect.id)}
       style={[
@@ -363,8 +365,11 @@ export function RemoteKeySurface({
     if (!rect) return;
     touches.current.delete(touch);
     emit(input.release(touch, cancelled));
-    if (!rect.code && !cancelled && (rect.id === KEY_PAGE || allowInput()))
+    if (!rect.code && !cancelled && (rect.id === KEY_PAGE || allowInput())) {
       actionsRef.current[rect.id]?.();
+      // Shortcuts bypass this input, so restore any modifier they let go of.
+      if (rect.id !== KEY_PAGE) emit(input.resync());
+    }
     showPressed();
   };
   const touchId = (event: GestureResponderEvent) =>
@@ -435,6 +440,8 @@ export function RemoteKeySurface({
   const uppercase = input.uppercase();
   const activateRef = useRef((_id: string) => {});
   activateRef.current = (id) => {
+    // A view-only deck still shows its keys; they must not offer actions.
+    if (!enabled) return;
     const rect = rectsRef.current.find((item) => item.id === id);
     if (!rect) return;
     begin("accessibility", rect);
@@ -483,6 +490,7 @@ export function RemoteKeySurface({
           latch={rect.code ? input.latch(rect.code) : null}
           artwork={rect.bare ? null : renderKeycap?.(rect)}
           onActivate={activate}
+          disabled={!enabled}
         />
       ))}
       {renderOverlay?.(rects)}

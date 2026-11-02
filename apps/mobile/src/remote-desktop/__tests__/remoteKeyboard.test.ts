@@ -82,6 +82,34 @@ describe("RemoteKeyInput", () => {
     expect(input.press(2, "Digit1")).toEqual([down("Digit1")]);
   });
 
+  it("lets go of a spent one-shot modifier before the next overlapping key", () => {
+    const input = new RemoteKeyInput();
+    input.press("m", "ShiftLeft");
+    input.release("m");
+    expect(input.press(1, "KeyA")).toEqual([down("ShiftLeft"), down("KeyA")]);
+    // B arrives while A is still down: Shift is no longer wanted.
+    expect(input.press(2, "KeyB")).toEqual([up("ShiftLeft"), down("KeyB")]);
+    expect(input.release(1)).toEqual([up("KeyA")]);
+    expect(input.release(2)).toEqual([up("KeyB")]);
+  });
+
+  it("keeps a modifier the user still holds across overlapping keys", () => {
+    const input = new RemoteKeyInput();
+    input.press("cmd", "MetaLeft");
+    input.press(1, "Tab");
+    expect(input.press(2, "KeyZ")).toEqual([down("KeyZ")]);
+  });
+
+  it("restores held modifiers after a shortcut released them", () => {
+    const input = new RemoteKeyInput();
+    input.press("cmd", "MetaLeft");
+    input.press(1, "Tab");
+    input.release(1);
+    expect(input.resync()).toEqual([down("MetaLeft")]);
+    // Tab again still reaches the host with Command held.
+    expect(input.press(2, "Tab")).toEqual([down("Tab")]);
+  });
+
   it("does not latch a modifier whose touch was cancelled", () => {
     const input = new RemoteKeyInput();
     input.press(1, "AltLeft");

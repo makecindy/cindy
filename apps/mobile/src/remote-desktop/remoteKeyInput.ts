@@ -78,10 +78,26 @@ export class RemoteKeyInput {
     this.presses.set(touch, keys);
     for (const [key, latch] of this.latches)
       if (latch === "once") this.latches.delete(key);
-    const events = keys
-      .filter((key) => !this.remote.includes(key))
-      .map((key) => ({ kind: "key" as const, code: key, down: true }));
-    this.remote.push(...events.map((event) => event.code));
+    // The host's modifiers must match this press, not whatever an earlier,
+    // still-held key needed: a used one-shot Shift must not reach the next key.
+    const stale = this.remote
+      .filter((key) => REMOTE_MODIFIERS.includes(key) && !keys.includes(key))
+      .reverse();
+    this.remote = this.remote.filter((key) => !stale.includes(key));
+    const events: RemoteKeyEvent[] = stale.map((key) => ({
+      kind: "key",
+      code: key,
+      down: false,
+    }));
+    const pressed = keys.filter((key) => !this.remote.includes(key));
+    events.push(
+      ...pressed.map((key) => ({
+        kind: "key" as const,
+        code: key,
+        down: true,
+      })),
+    );
+    this.remote.push(...pressed);
     return events;
   }
 
@@ -97,6 +113,15 @@ export class RemoteKeyInput {
     const released = this.remote.filter((code) => !needed.has(code)).reverse();
     this.remote = this.remote.filter((code) => needed.has(code));
     return released.map((code) => ({ kind: "key", code, down: false }));
+  }
+
+  /**
+   * Presses again whatever this input still holds. A shortcut sent around it
+   * (the strip's undo, search) lets go of the modifiers it used, which may be
+   * ones the user is still holding.
+   */
+  resync(): RemoteKeyEvent[] {
+    return this.remote.map((code) => ({ kind: "key", code, down: true }));
   }
 
   /** Forgets everything; the caller tells the host to release its keys. */
