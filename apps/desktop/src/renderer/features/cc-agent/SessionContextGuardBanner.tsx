@@ -69,6 +69,15 @@ export function resolveSessionContextLength(params: {
   const { sessionModel, sessionProviderId, sessionContextWindow, routing, providers, probes } = params;
   const byId = new Map(providers.map((p) => [p.id, p]));
 
+  // The Hermes home model is not a providers.yaml/routing.yaml endpoint: its limit is the
+  // window Hermes reports, never a local route's. Without one, show no banner rather than
+  // a wrong one (ROADMAP 3.7b: a DeepSeek lead read "174% full" against a 32k local route).
+  if (!sessionModel?.trim() || sessionModel.trim() === 'hermes-default') {
+    return typeof sessionContextWindow === 'number' && sessionContextWindow > 0
+      ? sessionContextWindow
+      : undefined;
+  }
+
   if (sessionProviderId && byId.has(sessionProviderId)) {
     const cap = byId.get(sessionProviderId)?.capabilities.contextLength;
     if (typeof cap === 'number' && cap > 0) return cap;

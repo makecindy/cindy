@@ -372,7 +372,7 @@ import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuff
 import { readPanelCollapsedRecord } from '@/layout/collapsePrefs';
 import {
   normalizeOrcaDisplayAgentKind,
-  orcaAgentLabel,
+  orcaLeadAgentLabel,
   orcaVendorForAgentKind,
 } from './lib/orcaAgentDisplay';
 import {
@@ -2943,7 +2943,7 @@ function CCAgentSessionContent({
   const leadAgentKind = normalizeOrcaDisplayAgentKind(session?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaLeadAgentLabel(session?.agentKind),
   });
   const passiveOrcaWorkersRevealSessionRef = useRef<string | null>(null);
   const routeWorkerHint = useMemo(() => {

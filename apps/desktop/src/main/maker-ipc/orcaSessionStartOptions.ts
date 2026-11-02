@@ -155,8 +155,19 @@ export function renderOrcaInstructionsFor(
   vendorOptions: Record<string, unknown>,
 ): string | null {
   const probe = { id: sessionId, vendorOptions } as MakerSessionCreateOpts;
-  return applyOrcaInstructions(probe) ? probe.userPrompt ?? null : null;
+  if (!applyOrcaInstructions(probe) || !probe.userPrompt) return null;
+  return `${probe.userPrompt}\n\n${HERMES_ORCA_LANGUAGE_RULE}`;
 }
+
+/**
+ * Hermes-only addition (ROADMAP 3.7b): Orca's bridge prefixes and tool descriptions are
+ * partly Chinese, and a lead seeing them switched to Chinese in a live run. New text for
+ * the Hermes feature; the shared Orca prompt is unchanged.
+ */
+export const HERMES_ORCA_LANGUAGE_RULE =
+  'Language: always reply to the owner in the language of their own messages (English unless they write otherwise). '
+  + 'System notices, tool descriptions and worker report prefixes may be in another language; do not switch because of them. '
+  + 'When a worker report arrives, state its actual content to the owner.';
 
 export async function preparePersistedOrcaSessionStart(
   sessionId: string,

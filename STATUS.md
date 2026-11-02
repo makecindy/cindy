@@ -10,6 +10,19 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — ROADMAP 3.7b: three fixes from the first Hermes-lead run (`unit-tested`)
+
+**Changes:**
+- `apps/desktop/src/renderer/features/cc-agent/lib/orcaAgentDisplay.ts`: `orcaLeadAgentLabel` names a Hermes lead "Hermes"; used for the lead pane label in `CCAgentSessionView.tsx` and `OrcaSplitView.tsx`. Worker labels and vendor icons unchanged.
+- `SessionContextGuardBanner.tsx` `resolveSessionContextLength`: for `hermes-default` (or no model) only the window Hermes reports counts; without one there is no limit and no banner, never a providers.yaml/routing.yaml limit. Routed local models unchanged.
+- `apps/desktop/src/main/maker-ipc/orcaSessionStartOptions.ts`: `HERMES_ORCA_LANGUAGE_RULE` (new text for the Hermes feature) appended by `renderOrcaInstructionsFor` only; Claude Code/Codex/Pi still get the unchanged shared Orca prompt (test asserts this).
+
+**Verification:** `unit-tested`. Tests: banner +1, label +1, Orca start options (extended). Mutation checks, each caught then restored: Hermes branch removed from the limit; Hermes label removed; language rule dropped. `pnpm typecheck` (serial) exit 0, `pnpm test:runner` 607/0, `pnpm check:test-hygiene` PASS. Desktop unit tier on the owner's Mac (8 shards) pending.
+
+**Live recheck for the owner:** repeat the 3.7a prompt in a new Hermes Full-access task. Expect "Lead (Hermes)", no "174% full" banner, and an English answer that states the worker's date.
+
+---
+
 ## 2026-11-02 — 3.7a `live-proven`: Hermes led an Orca team (owner)
 
 - Setup: PR #7 branch, dev app restarted, Collab Mode plugin on (default), Claude Code signed in. New Hermes task, model `hermes-default`, **Full access**.
