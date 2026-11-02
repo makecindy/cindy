@@ -761,12 +761,11 @@ function RecentTask({ task, routine, onOpen }: { task?: Session; routine?: Routi
   const attention = useSessionAttentionKind(task?.id ?? '');
   const { t } = useTranslation();
   const automatic = routine || task?.companion?.role === 'routine' || task?.source === 'scheduler';
-  return <Row testId="bot-glance-task" icon={<span className="relative flex size-5 items-center justify-center">
-      <MessageCircle size={16} />
-      {automatic ? <span className="absolute -bottom-1 -right-1 rounded-full bg-popover" role="img" aria-label={t('routines.title')}>
-        <AutomationTimerIcon paused={routine?.enabled === false} running={routine?.activity === 'running'} />
-      </span> : null}
-    </span>} title={routine?.name ?? task?.title ?? ''}
+  return <Row testId="bot-glance-task" icon={automatic
+    ? <span role="img" aria-label={t('routines.title')}>
+        <AutomationTimerIcon size={16} className="size-5" paused={routine?.enabled === false} running={routine?.activity === 'running'} />
+      </span>
+    : <MessageCircle size={16} />} title={routine?.name ?? task?.title ?? ''}
     onClick={onOpen}
     trailing={routine?.enabled === false || attention === 'done' ? <>{routine?.enabled === false ? <span>{t('routines.paused')}</span> : null}
       {attention === 'done' ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span> : null}</> : undefined} />;
