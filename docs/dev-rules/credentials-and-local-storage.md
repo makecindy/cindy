@@ -303,6 +303,12 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 
 ## Review 清单
 
+截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存
+`targetLanguage`，本机客户端共用，不含截图、识别文字或账号数据，不同步到其他设备。
+复用 override settings 的跨进程锁和原子写；恢复「跟随界面语言」移除覆盖，
+文件损坏时保留原文件并报告保存失败。实现与回归见
+`main/region-screenshot/translationPreferences.ts` 及其同名单测。
+
 1. 写入目标是否可能位于仓库、当前工作目录或被 Git 跟踪的路径？
 2. 是否把真实凭证带入了测试、fixture、日志、错误或 Renderer？
 3. 持久数据、临时数据和用户导出是否选择了正确的生命周期与目录？

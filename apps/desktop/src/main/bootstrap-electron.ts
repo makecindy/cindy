@@ -1000,7 +1000,7 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
-import { initRegionScreenshot, stopRegionScreenshot } from './region-screenshot/index.js';
+import { initRegionScreenshot, setRegionScreenshotLocale, stopRegionScreenshot } from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -3190,6 +3190,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  setRegionScreenshotLocale(currentApplicationMenuLocale);
   if (previousLocale !== currentApplicationMenuLocale) {
     // Identity names are localized on the source host; refresh its cached views
     // and linked devices through the existing provider-change notification.

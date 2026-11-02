@@ -33,7 +33,7 @@ import { CompanionPresenceRing } from './CompanionPresenceRing';
 import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { WorkingStatusText } from './WorkingStatusText';
 
-export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, groupId, startedAt, onStop, stopPending, onError }: {
+export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, groupId, startedAt, onStop, stopPending, collapsed = false, revealWaiting = true, onError }: {
   deviceId: string;
   executionId?: string;
   groupId?: string;
@@ -44,6 +44,8 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   online: boolean;
   executionStatus?: BotGroupSpeaker['executionStatus'];
   stopping?: boolean;
+  collapsed?: boolean;
+  revealWaiting?: boolean;
   onStop?: () => Promise<void>;
   stopPending?: boolean;
   onError(message: string | null): void;
@@ -78,12 +80,13 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   const copy = t(`devices.companions.working.${livePhase ?? 'processing'}`);
   const elapsedTitle = useTeammateElapsedTitle(true, startedAt);
   const label = isStopping ? t('groupChat.speaking.stopping')
-    : executionStatus === 'queued' ? t('devices.companions.status.queued')
+    : executionStatus === 'queued' ? t('groupChat.speaking.queued')
     : activity === 'planning'
     ? t('groupChat.speaking.planning')
     : copy ?? (activity === 'step' ? t('groupChat.speaking.step') : t('devices.companions.working.processing'));
   const elapsed = executionStatus !== 'queued' && startedAt && Number.isFinite(startedAt)
     ? t('message.renderer.workedDuration', { duration: formatLocalizedSeconds((now - startedAt) / 1000) }) : null;
+  if (collapsed && !(waiting && revealWaiting)) return null;
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t('groupChat.waitingConfirm', { name: identity.name }) : label}`}>
     <View style={styles.nameRow}>
       <View style={styles.avatar}>

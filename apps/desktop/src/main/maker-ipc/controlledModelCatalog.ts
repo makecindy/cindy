@@ -1,6 +1,7 @@
-import type { InvokeResultPayload } from '@cindy/device-link';
+import { scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
 import { MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 import { extractIpcError } from '../../shared/ipcError.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 export interface ControlledModelCatalogDeps {
@@ -70,6 +71,10 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
       }
       throwIpcError('PRECONDITION_FAILED', 'Model source is currently unavailable');
     }
-    return result.result;
+    // 分享来的供应商与控制端直读(ipc.ts)用同一份受邀者投影，远控时的模型列表同样按组判断能否选用
+    // (provider-sharing.md §5.1)。
+    return request.channel === 'maker:provider:list' && isProviderShareAgentDeviceId(deviceId)
+      ? scrubSharedProviderCatalog(result.result)
+      : result.result;
   };
 }

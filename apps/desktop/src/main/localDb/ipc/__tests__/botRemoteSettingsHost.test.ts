@@ -134,6 +134,18 @@ it('writes only the fields the settings pages edit, and never a permission chang
   expect(deps.updateProfile).toHaveBeenCalledTimes(1);
 });
 
+it('accepts the unchanged model through the versioned selection operation, leaving ordinary updates unchanged', async () => {
+  const { deps, call } = setup();
+  expect(await call('profile.acceptModelSelection', { patch: {}, expectedVersion: 3 })).toMatchObject({ ok: true });
+  expect(deps.updateProfile).toHaveBeenCalledWith({ id: 'bot-1', acceptSavedModelSelectionVersion: 3 });
+  for (const expectedVersion of [undefined, 0, -1, 1.5, '3']) {
+    expect(await call('profile.acceptModelSelection', { patch: {}, expectedVersion })).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  }
+  expect(await call('profile.acceptModelSelection', { patch: { capabilities: { permissions: 'trusted' } }, expectedVersion: 3 }))
+    .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(deps.updateProfile).toHaveBeenCalledTimes(1);
+});
+
 it('lets the page see a memory revision conflict and hides unexpected failures', async () => {
   const conflict = setup({ deps: { memory: { update: vi.fn(async () => { throw createIpcError('PRECONDITION_FAILED', BOT_MEMORY_CHANGED); }) } as never } });
   expect(await conflict.call('memory.update', { filename: 'user_a.md', title: 't', body: 'b', expectedUpdatedAt: '2026-01-01T00:00:00Z' }))

@@ -996,7 +996,7 @@
     "saveFileName": "截图",
     "saveFailed": "不能存截屏",
     "prompt": {
-      "translate": "请辨此截屏中之文字，译为繁体中文，保留原有段落与清单结构，唯输出译文。若原文已是中文，则译为英文。",
+      "translate": "辨图中文字之语，译为{{language}}，仍其段落、条目与表格。已有目标语言者不改；诸语杂陈，仅译其余。若全文已是目标语言，简言告之，勿另译他语；否则仅出译文。",
       "explain": "请释此截屏之内容。若为错误消息，述其原因与解法；若为图表、代码或界面，述其所表何意、要点为何。",
       "extract": "请将此截屏中之文字照原样撷出，保留原有换行、段落与清单；表格以 Markdown 表格输出。唯输出所撷之文字。"
     },
@@ -1044,6 +1044,12 @@
       "edit": "修",
       "autoUnavailable": "自动卷动已止，可于所选范围内手动卷动",
       "autoPermission": "自动卷动须「辅助使用」权限。请于系统设置中许 Cindy 而后再试，亦可于所选范围内手动卷动"
+    },
+    "translation": {
+      "action": "译为{{language}}",
+      "targetLanguage": "译文语言",
+      "followUi": "随界面之语",
+      "saveFailed": "语言未存，请重选。"
     }
   },
   "privacyExit": {
@@ -18799,6 +18805,9 @@
     "failed": "操作未毕，请再试或览此机之卷。"
   },
   "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
     "more": "更多操作",
     "retry": "重试",
     "image": "图",
