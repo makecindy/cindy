@@ -282,7 +282,6 @@ export class InputHandoffSession {
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
-  private pageExposureAsked = false;
   /** The process this request switched page accessibility on for, to switch it back off. */
   private pageExposedOn: number | undefined;
   private watchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1183,7 +1182,8 @@ export class InputHandoffSession {
    * minimized (accessibility sees it), and cover a sign-in page before it shows.
    */
   private async coverBeforeRestoring(): Promise<void> {
-    const before = await this.read().catch(() => null);
+    // A browser may only now be building its page: wait for it here, not after the owner can already type.
+    const before = await this.readFirstStep(false);
     if (before && !before.pageMissing) this.guardSignInPage(before);
   }
 
@@ -1225,9 +1225,9 @@ export class InputHandoffSession {
     if ('error' in raw) return null;
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
     const step = extractStep(raw as NativeAxSnapshot);
-    // A browser builds its page for accessibility only when asked: ask once, and the next read sees it.
-    if (step.pageMissing && !this.pageExposureAsked && !this.ended) {
-      this.pageExposureAsked = true;
+    // A browser builds its page for accessibility only when asked, and the next read sees it.
+    // Asked on every miss: another request on the same browser may have ended and taken it back.
+    if (step.pageMissing && !this.ended) {
       const pid = this.target.pid;
       if (await this.options.driver.exposePage?.(pid, true).catch(() => false)) this.pageExposedOn = pid;
       // The request may have ended while asking, with nothing left to take it back.

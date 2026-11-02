@@ -40,6 +40,8 @@ describe('extractStep', () => {
       expect(extractStep(page('https://shop.example.com/pay', [field('Password', { secure: true })])).signIn).toBe(true);
       expect(extractStep(page('https://shop.example.com/pay', [field('Verification code')])).signIn).toBe(true);
       expect(extractStep(page('https://appstoreconnect.apple.com/login', [field('Email')])).signIn).toBe(true);
+      // Read protection covers web addresses only: no sign-in on the window without it.
+      expect(extractStep(page('file:///tmp/login.html', [field('Password', { secure: true })])).signIn).toBeUndefined();
       expect(extractStep(page('https://shop.example.com/pay', [field('Email')], [node('0.0', 'AXHeading', { title: 'Sign in to continue' })])).signIn).toBe(true);
     });
 

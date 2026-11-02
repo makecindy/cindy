@@ -375,9 +375,9 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     if (topWeb?.url) addressSaysLogin = LOGIN_ADDRESS.test(new URL(topWeb.url).host + new URL(topWeb.url).pathname);
   } catch { /* an address that does not parse says nothing */ }
   const looksLikeLogin = addressSaysLogin || labels.some((text) => LOGIN_WORDS.test(text));
-  // A browser page is covered by its address: without one it stays an ordinary form (whose answer is covered after it is typed).
+  // A browser page is covered by its web address: without one (or on file:, data:, blob:) it stays an ordinary form.
   const signIn =
-    (!browser || !!topWeb?.url) &&
+    (!browser || /^https?:/i.test(topWeb?.url ?? '')) &&
     (fieldTypes.some((type) => SIGN_IN_SECRETS.has(type)) ||
       (looksLikeLogin && fieldTypes.some((type) => SIGN_IN_ACCOUNTS.has(type))));
   return {

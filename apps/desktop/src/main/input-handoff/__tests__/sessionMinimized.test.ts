@@ -97,7 +97,11 @@ function browser(
   return { driver, raised };
 }
 
-function start(driver: HandoffDriver, target: HandoffTargetSpec) {
+function start(
+  driver: HandoffDriver,
+  target: HandoffTargetSpec,
+  extra: { onSecretEntered?: () => void } = {},
+) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
   let clock = 0;
@@ -117,6 +121,7 @@ function start(driver: HandoffDriver, target: HandoffTargetSpec) {
     },
     finishingDelayMs: 60_000,
     settleTimeoutMs: 2000,
+    ...extra,
   });
   return { session, finished, latest: () => published[published.length - 1] };
 }
@@ -244,6 +249,38 @@ describe('a target window that is minimized', () => {
     expect(asked).toEqual([true]);
     session.cancel();
     expect(asked).toEqual([true, false]);
+  });
+
+  it('covers the page before the window comes back, even when the page is only now being built', async () => {
+    const { driver } = closedBrowser(true);
+    const raise = driver.raise!.bind(driver);
+    const events: string[] = [];
+    driver.raise = async (target) => {
+      events.push('raise');
+      return raise(target);
+    };
+    const { session } = start(
+      driver,
+      { app: 'Google Chrome', windowTitle: 'App Store Connect' },
+      { onSecretEntered: () => events.push('cover') },
+    );
+    await session.start();
+    expect(events[0]).toBe('cover');
+    expect(events).toContain('raise');
+  });
+
+  it('asks again when another request on the same browser took it back', async () => {
+    const { driver, asked } = closedBrowser(false);
+    const { session, latest } = start(driver, {
+      app: 'Google Chrome',
+      windowTitle: 'App Store Connect',
+    });
+    await session.start();
+    expect(fields(latest())).toEqual(['Email']);
+    await driver.exposePage!(20, false);
+    asked.length = 0;
+    await (session as unknown as { read(): Promise<unknown> }).read();
+    expect(asked).toEqual([true]);
   });
 
   it('leaves it on when something else had already turned it on', async () => {
