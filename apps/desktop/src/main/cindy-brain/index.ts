@@ -397,6 +397,8 @@ import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
+import type { SupportedLocale } from '../../shared/locale.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import {
@@ -11138,21 +11140,22 @@ export function setGhostsChangedObserver(
 }
 
 /**
- * 宿主语言切换后的插件刷新入口：重新按当前语言解析 manifest 并广播；
+ * 宿主语言切换后的插件刷新入口：插件可见的 app-context 没变时不做任何事；
+ * 变了才重新按当前语言解析 manifest 并广播；
  * 已运行的逻辑页收到同一份 app-context 变化，可经自身 BroadcastChannel
  * 通知设置页/面板。未运行插件下次启动时直接读取最新语言。
  */
-export function refreshGhostLocalization(): void {
+export function refreshGhostLocalization(previousLocale: SupportedLocale): void {
   if (!managerSingleton) return;
-  const ghosts = managerSingleton.list();
-  broadcastGhostsChanged(ghosts);
-  const context = currentGhostAppContext();
-  for (const ghost of ghosts) {
-    sendToGhostLogic(installedGhostStoragePart(ghost), {
-      type: 'host-context-changed',
-      ...context,
-    });
-  }
+  const manager = managerSingleton;
+  refreshGhostLocalizationIfChanged({
+    region: currentGhostAppContext().context.region,
+    previousLocale,
+    currentLocale: getResolvedMainLocale(),
+    list: () => manager.list(),
+    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts),
+    sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),
+  });
 }
 
 /** Plugin 顶部快捷行的 host-owned MRU 快照，多窗口同步。 */
