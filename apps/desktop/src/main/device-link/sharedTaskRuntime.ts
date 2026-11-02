@@ -104,8 +104,9 @@ export function startSharedTaskRuntime(options: {
     if (!current()) { rebindIfStable(); return; }
     if (refreshing || !current()) return;
     refreshing = true;
-    const online = options.client.hasServerCapability(SHARED_TASK_CAPABILITY) && options.client.getStatus() === 'online';
-    const connectionEpoch = options.client.getConnectionEpoch();
+    const connection = options.client.crossAccountConnection();
+    const online = connection.hasServerCapability(SHARED_TASK_CAPABILITY) && connection.getStatus() === 'online';
+    const connectionEpoch = connection.getConnectionEpoch();
     if (online && connectionEpoch !== seenConnectionEpoch) {
       seenConnectionEpoch = connectionEpoch;
       syncRequested = true;

@@ -6,20 +6,22 @@
  * 补读。回复用群聊同一个输入框的话题模式（BotGroupComposer `mode="thread"`），发出即乐观插入，
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
+import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { useAttachments } from '@/hooks/useAttachments';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
-import { botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
+import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
@@ -36,12 +38,27 @@ import {
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
 import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
+const threadAccessLost = (code: string) => ['NOT_FOUND', 'PERMISSION_DENIED', 'FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER',
+  'CONVERSATION_NOT_FOUND', 'MESSAGE_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'].includes(code);
+
+interface ThreadWindow {
+  revision: string; root: BotGroupMessageView; replies: BotGroupMessageView[];
+  executionFailures: BotGroupExecutionFailureView[]; hasMore: boolean;
+}
+// Disposable warm views only. Durable messages and coverage remain in main's room projection.
+const threadWindows = new Map<string, ThreadWindow>();
+let windowsOwner = getDataOwnerGeneration();
+function windows() {
+  if (!isDataOwnerGenerationCurrent(windowsOwner)) { threadWindows.clear(); windowsOwner = getDataOwnerGeneration(); }
+  return threadWindows;
+}
 
 /** Shares of this thread's replies that the main chat has loaded. */
 export type BotGroupSharedReplies = ReadonlyMap<string, { messageId: string; bySelf: boolean }>;
@@ -149,11 +166,12 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
   sharedReplies?: BotGroupSharedReplies;
+  onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
   onClose: () => void;
@@ -161,8 +179,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const titleId = useId();
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
+  const readLocatedMention = useReadLocatedMention(group.id);
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -177,10 +195,21 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
   }, [shareScope]);
-  const [root, setRoot] = useState<BotGroupMessageView | null>(null);
-  const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>([]);
-  const [replies, setReplies] = useState<BotGroupMessageView[]>([]);
-  const [hasMore, setHasMore] = useState(false);
+  const windowKey = `${group.id}:${rootId}`;
+  const windowOwner = useRef(getDataOwnerGeneration());
+  const [initial] = useState(() => {
+    const cached = windows().get(windowKey);
+    if (cached && cached.revision === group.historyRevision) return cached;
+    windows().delete(windowKey);
+    return undefined;
+  });
+  const revisionRef = useRef(initial?.revision);
+  const historyEpochRef = useRef(0);
+  const latestReadRef = useRef(0);
+  const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
+  const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
+  const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
+  const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const [error, setError] = useState('');
   // Off by default: a reply stays in the thread unless the user asks for both.
   const [alsoSend, setAlsoSend] = useState(false);
@@ -197,6 +226,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const aliveRef = useRef(true);
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
+  const queuedSourcesRef = useRef(new Set<string>());
+  const changedRepliesRef = useRef(new Set<string>());
 
   /** Lowest sequence of the last latest-page read; replies below it live only on opened older pages. */
   const latestFloorRef = useRef(Number.POSITIVE_INFINITY);
@@ -206,6 +237,27 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   /** Whether the reader follows this Thread; undefined until known, or when the server keeps no read state. */
   const [following, setFollowing] = useState<boolean | undefined>(undefined);
   const followKey = `${group.id}:${rootId}`;
+  useEffect(() => {
+    if (!isDataOwnerGenerationCurrent(windowOwner.current)) return;
+    if (!root || !revisionRef.current) { windows().delete(windowKey); return; }
+    const cache = windows();
+    cache.delete(windowKey);
+    cache.set(windowKey, { revision: revisionRef.current, root, replies: replies.slice(-500), executionFailures,
+      hasMore: hasMore || replies.length > 500 });
+    if (cache.size > 20) cache.delete(cache.keys().next().value!);
+  }, [windowKey, root, replies, executionFailures, hasMore]);
+
+  const clearHistory = useCallback((wholeRoom = true) => {
+    historyEpochRef.current++;
+    queuedSourcesRef.current.clear();
+    changedRepliesRef.current.clear();
+    for (const key of windows().keys())
+      if (key === windowKey || (wholeRoom && key.startsWith(`${group.id}:`))) windows().delete(key);
+    repliesRef.current = [];
+    setReplies([]); setRoot(null); setExecutionFailures([]); setHasMore(false);
+    readBeforeRef.current = null; setReadBefore(null); setFollowing(undefined);
+    latestFloorRef.current = Number.POSITIVE_INFINITY;
+  }, [group.id, windowKey]);
 
   /**
    * Reads the latest page, or the page before `before`. `rereadOnly` re-reads an opened page for a
@@ -213,21 +265,43 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
    */
   const read = useCallback(async (before?: number, rereadOnly = false, onAccepted?: () => void) => {
     const owner = getDataOwnerGeneration();
-    const current = () => aliveRef.current && isDataOwnerGenerationCurrent(owner);
+    const epoch = historyEpochRef.current;
+    const latestRead = latestReadRef.current;
+    const current = () => aliveRef.current && isDataOwnerGenerationCurrent(owner) && epoch === historyEpochRef.current;
     const shown = repliesRef.current;
+    // A page can land before React commits its rows. Keep those sources explicit
+    // so the coalesced refresh also validates their execution state.
+    const extraSources = before ? [] : [...queuedSourcesRef.current];
+    if (!before) queuedSourcesRef.current.clear();
+    const changedReplies = before ? [] : [...changedRepliesRef.current];
+    if (!before) changedRepliesRef.current.clear();
     // An older page belongs below the reply it was read from; a latest page that started over
     // meanwhile dropped that reply, and the page would sit under the new one with the gap still in it.
     const anchorId = before ? shown[0]?.id : undefined;
     const anchored = (replies: BotGroupMessageView[]) => !anchorId || replies.some(reply => reply.id === anchorId);
     try {
-      // Reading the latest page marks the Thread read only while the reader is at the newest reply:
-      // a reply that arrives while they read further up stays unread until they scroll down to it.
-      const markRead = !before && stickToBottomRef.current;
+      // Background updates (including a companion's replies) never consume human unread.
+      // Match the main timeline: only a focused, visible reader at the newest reply acknowledges it.
+      const markRead = !before && stickToBottomRef.current
+        && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
-      const result = await api().thread({ groupId: group.id, rootId, before, sourceMessageIds: shown.map(message => message.id), markRead });
+      const result = await api().thread({ groupId: group.id, rootId, before,
+        sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
-      if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
+      if (!result.ok) {
+        if (threadAccessLost(result.errorCode)) clearHistory(result.errorCode !== 'MESSAGE_NOT_FOUND');
+        setError(t(chatErrorKey(result.errorCode))); return;
+      }
+      const reset = !!result.historyRevision && !!revisionRef.current && result.historyRevision !== revisionRef.current;
+      if (reset) {
+        clearHistory();
+        revisionRef.current = result.historyRevision;
+        if (before) { refreshRef.current(); return; }
+      } else if (result.historyRevision) revisionRef.current = result.historyRevision;
+      // A later latest-page refresh owns updates to already visible rows and metadata.
+      const stalePage = !!before && latestRead !== latestReadRef.current;
+      if (!before) latestReadRef.current++;
       // A read that overlaps a follow save may carry the old choice; the save's own answer wins.
       if (!before && followWrites === save.writes && !save.saving) {
         save.saved = result.following;
@@ -237,27 +311,62 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
-      setExecutionFailures(result.executionFailures ?? []);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
       const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
-      if (!anchored(repliesRef.current)) return;
+      if (!reset && !anchored(repliesRef.current)) return;
+      const addedSources = new Set(stalePage
+        ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
+      if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
+      else if (addedSources.size) setExecutionFailures(previous => [
+        ...previous.filter(failure => !addedSources.has(failure.sourceMessageId)),
+        ...(result.executionFailures ?? []).filter(failure => addedSources.has(failure.sourceMessageId)),
+      ]);
       onAccepted?.();
-      setReplies(previous => (anchored(previous)
-        ? stabilizeById(previous, gap ? result.replies : mergeBotGroupMessages(previous, result.replies))
-        : previous));
+      setReplies(previous => {
+        if (reset || gap) return result.replies;
+        if (!anchored(previous)) return previous;
+        const incoming = stalePage ? result.replies.filter(reply => !previous.some(old => old.id === reply.id))
+          : mergeBotGroupMessages(result.replies, result.messageUpdates ?? []);
+        return stabilizeById(previous, mergeBotGroupMessages(previous, incoming));
+      });
       if (!before) latestFloorRef.current = floor;
-      if (!rereadOnly && (before || shown.length === 0 || gap)) setHasMore(result.hasMore);
+      if (!rereadOnly && (before || shown.length === 0 || gap || reset)) setHasMore(result.hasMore);
+      if (addedSources.size) {
+        for (const id of addedSources) queuedSourcesRef.current.add(id);
+        refreshRef.current();
+      }
+      // Recheck local reactions after the latest page settles, inside the same
+      // coalesced refresh. Otherwise that refresh can invalidate this recheck.
+      // A durable projection already returns the changed reply in messageUpdates.
+      if (!before && !gap && !reset) {
+        const refreshedIds = new Set([...result.replies, ...(result.messageUpdates ?? [])].map(reply => reply.id));
+        for (const reply of shown) {
+          if (!changedReplies.includes(reply.id) || refreshedIds.has(reply.id)) continue;
+          if (!current()) return;
+          await readRef.current(reply.sequence + 1, true);
+        }
+      }
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
-      if (!before && !gap && result.replies.length > 0) {
+      if (!before && !gap && !reset && result.replies.length > 0) {
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
-          return earlier.ok && current() ? earlier.replies : null;
+          if (!current()) return null;
+          if (!earlier.ok) {
+            if (threadAccessLost(earlier.errorCode)) {
+              clearHistory(earlier.errorCode !== 'MESSAGE_NOT_FOUND'); setError(t(chatErrorKey(earlier.errorCode)));
+            }
+            return null;
+          }
+          if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
+            clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
+          }
+          return earlier.replies;
         });
         if (refreshed && current()) {
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
@@ -265,7 +374,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t]);
+  }, [group.id, rootId, t, clearHistory]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -282,6 +391,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   }, [read]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
+  const groupRevisionRef = useRef(group.historyRevision);
+  useEffect(() => {
+    const previous = groupRevisionRef.current;
+    groupRevisionRef.current = group.historyRevision;
+    if (group.historyRevision && previous !== group.historyRevision && revisionRef.current !== group.historyRevision) {
+      clearHistory(); revisionRef.current = group.historyRevision; refreshRef.current();
+    }
+  }, [group.historyRevision, clearHistory]);
   /** Following is the reader's own switch, off by default: replying or being named never turns it on. */
   const toggleFollowing = useCallback(() => {
     if (following === undefined) return;
@@ -306,15 +423,25 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   useEffect(() => {
     aliveRef.current = true;
     refreshRef.current();
+    const acknowledgeVisible = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus() && stickToBottomRef.current)
+        refreshRef.current();
+    };
+    window.addEventListener('focus', acknowledgeVisible);
+    document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
       if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
     });
-    return () => { aliveRef.current = false; stop(); };
+    return () => {
+      aliveRef.current = false; stop();
+      window.removeEventListener('focus', acknowledgeVisible);
+      document.removeEventListener('visibilitychange', acknowledgeVisible);
+    };
   }, [group.id, rootId]);
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -340,9 +467,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   // The root and the latest page come with every refresh; a reply opened through 「加载更早」 sits
   // below that page, so the page holding it is re-read for its new reaction state.
   const onChanged = useCallback((messageId: string) => {
-    refreshRef.current();
     const reply = repliesRef.current.find(candidate => candidate.id === messageId);
-    if (reply && reply.sequence < latestFloorRef.current) void readRef.current(reply.sequence + 1, true);
+    if (reply && reply.sequence < latestFloorRef.current) changedRepliesRef.current.add(messageId);
+    refreshRef.current();
   }, []);
   const onSendStart = useCallback((message: BotGroupOutgoingMessage) => {
     stickToBottomRef.current = true;
@@ -364,18 +491,25 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const search = focusSearch.current;
     if (search.pages < 0) return;
     const target = findThreadMessageElement(contentRef.current, focus.messageId);
-    if (target) { stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target); return; }
+    if (target) {
+      stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target);
+      if (!replies.find(reply => reply.id === focus.messageId)?.deleted) readLocatedMention(focus.messageId, target);
+      return;
+    }
     if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore]);
+  }, [focus, replies, hasMore, readLocatedMention]);
 
   /** One server operation per reply and person, so a retry never posts twice. */
-  async function postToMain(messageId: string, fromComposer: boolean) {
+  async function postToMain(messageId: string, fromComposer: boolean, acceptedSource?: BotGroupMessageView) {
     if (readOnly || postingRef.current.has(messageId)) return false;
     postingRef.current.add(messageId); setPosting(new Set(postingRef.current));
     const owner = getDataOwnerGeneration();
+    const source = acceptedSource ?? repliesRef.current.find(message => message.id === messageId);
+    const settlePending = source ? onPostPending?.({ ...source, threadRootId: rootId }) : undefined;
+    let receipt: string | null = null;
     const failed = (code?: string) => {
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (code === 'SHARE_UNAVAILABLE') {
@@ -388,13 +522,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       const result = await api().shareToMain({ groupId: group.id, messageId });
       if (!isDataOwnerGenerationCurrent(owner)) return false;
       if (!result.ok) { failed(result.errorCode); return false; }
+      receipt = result.messageId;
       setPosted(previous => new Map(previous).set(messageId, result.messageId));
       setUnposted(previous => { const next = new Set(previous); next.delete(messageId); return next; });
       if (result.alreadyShared && !fromComposer) toast.info(t(key('thread.alreadyPosted')));
       refreshBotGroups();
       return true;
     } catch { failed(); return false; }
-    finally { postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
+    finally { settlePending?.(receipt); postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
   }
   async function retryUnposted() {
     // The queue belongs to the account that started the retry; stop once it is switched.
@@ -415,13 +550,19 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revealShare = (shareId: string) => {
     if (!onRevealShare?.(shareId)) toast.info(t(key('thread.shareNotLoaded')));
   };
-  const sendReply = async (input: { text: string; clientId: string; mentions: BotGroupMessageView['mentions'] }) => {
+  const attachmentScope = botGroupThreadDraftKey(group.id, rootId);
+  const attachmentState = useAttachments(attachmentScope);
+  const sendReply = async (input: Omit<Parameters<ChatServerApi['reply']>[0], 'groupId' | 'rootId'>) => {
     const owner = getDataOwnerGeneration();
     const toMain = alsoSend;
     const result = await api().reply({ groupId: group.id, rootId, ...input });
     if (result.ok && isDataOwnerGenerationCurrent(owner)) {
       setAlsoSend(false);
-      if (toMain) await postToMain(result.messageId, true);
+      // The topic receipt settles its own send; the optional main-chat copy has its own retry.
+      if (toMain) void postToMain(result.messageId, true, { ...pendingBotGroupMessage({
+        clientId: input.clientId, text: input.text, mentions: input.mentions,
+        attachments: (input.attachments ?? []).map(file => botGroupAttachmentPreview({ ...file, ext: file.ext ?? '', size: file.size ?? 0 })), quote: null,
+        createdAt: Date.now(), afterSequence: lastRealSequenceRef.current }), id: result.messageId, threadRootId: rootId });
     }
     return result;
   };
@@ -485,12 +626,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
   const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
 
-  return <aside ref={panelRef} aria-labelledby={titleId}
-        style={resize?.width === undefined ? undefined : { width: resize.width, maxWidth: 'none' }}
-        className="relative flex h-full min-w-0 w-1/2 max-w-[min(50%,28rem)] shrink-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
-          <h2 id={titleId} className="text-15 font-medium text-[var(--text-primary)]">{t(key('topic'))}</h2>
-          <div className="flex items-center gap-1">
+  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -501,13 +637,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
                 </Button>
               </Tip>
             ) : null}
-            <Tip text={t('bots.close')}>
-              <Button variant="secondary" tone="quiet" size="md"
-                className="w-8 rounded-none px-0 [&::before]:rounded-full"
-                aria-label={t('bots.close')} onClick={onClose}><X size={17} aria-hidden /></Button>
-            </Tip>
-          </div>
-        </header>
+        </>}>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onScroll={(event) => {
             const element = event.currentTarget;
@@ -517,11 +647,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             if (!wasAtBottom && stickToBottomRef.current) refreshRef.current();
           }}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
-            {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
-            <div data-testid="bot-group-thread-replies" className="mt-3 flex select-none items-center gap-3 text-12 text-[var(--text-tertiary)]">
-              <span className="shrink-0">{replyCount > 0 ? t(key('replyCount'), { count: replyCount }) : t(key('replies'))}</span>
-              <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-            </div>
+            <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
+              {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
+            </ThreadPanelRoot>
             {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
             {replyRows.map(message => (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
@@ -545,11 +673,12 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-          <div className="border-t border-[var(--border-default)]">
-            <BotGroupComposer
+            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
-              draftKey={botGroupThreadDraftKey(group.id, rootId)}
+              draftKey={attachmentScope}
+              attachmentScope={attachmentScope}
+              attachments={attachmentState}
               members={members}
               running={false}
               disabled={readOnly}
@@ -561,7 +690,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
                     alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
                     {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
                   </span>
-                  <span className="min-w-0 truncate">{t(key('thread.alsoSend'))}</span>
+                  <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
                 </button>
               )}
               sendReply={sendReply}
@@ -569,11 +698,6 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               onSendSettled={onSendSettled}
               onSent={onSent}
             />
-          </div>
         </>}
-        {/* Keep the existing Shift+Tab route from Close back into the group. */}
-        {resize && <div role="separator" aria-orientation="vertical" aria-label={t('diffPanel.shell.resizeHandleAria')}
-          tabIndex={0} {...resize.handleProps}
-          className="absolute inset-y-0 left-0 z-10 w-2 touch-none cursor-col-resize hover:border-l hover:border-[var(--text-tertiary)] focus-visible:border-l focus-visible:border-[var(--focus-ring)] focus-visible:outline-none" />}
-  </aside>;
+  </ThreadPanel>;
 }

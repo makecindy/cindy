@@ -1,3 +1,4 @@
+import type { TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
@@ -40,7 +41,7 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
-import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { isTerminalTurnErrorEvent, type SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
@@ -60,7 +61,8 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
-  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
+  readonly sessionListActivityTracker: SessionListActivityTracker;
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -71,6 +73,7 @@ export interface FinishSessionTerminalEventDeps {
   ) => Promise<void>;
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
+  readonly taskCompletionDeliveryHolder?: Pick<TaskCompletionDeliveryHost, 'settleTerminal'> | null;
   readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   /** Resolves a Bot group member turn when its hidden group lane finishes. */
   readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
@@ -146,7 +149,7 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn'> | null;
+  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -169,7 +172,7 @@ export function finishSessionTerminalEvent(
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
-      ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
+      ? captureProductTurnFailureOwner(session, event, eventAgentMeta, prepared.pluginTargetInputIds)
       : undefined;
   // done / 终止型 error 持久化边界:把在飞 assistant 落库(与 text isFinal 互斥幂等)。
   // tool_use 边界的 flush 已在上面 broadcast 前做(需先于 tool_use 落库);
@@ -543,6 +546,18 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (
+        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
+      ) {
+        deps.sessionListActivityTracker.end(session.id, {
+          identity: event.sessionTurnGeneration === undefined ? undefined
+            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+        });
+      }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
       // 钉住,review P1-1)。
@@ -675,7 +690,7 @@ export function finishSessionTerminalEvent(
         deps.onPluginTaskTerminal?.(session.id, {
           instanceId: event.sessionInstanceId ?? session.instanceId,
           generation: event.sessionTurnGeneration,
-        }, outcome, turnAssistantPersistId ?? undefined);
+        }, outcome, turnAssistantPersistId ?? undefined, prepared.pluginTargetInputIds.length ? prepared.pluginTargetInputIds : undefined);
       }
       if (
         unsuccessfulBoundary &&
@@ -700,6 +715,13 @@ export function finishSessionTerminalEvent(
             message?: unknown;
             reason?: unknown;
           } | null;
+          if (typeof event.sessionTurnGeneration === 'number') {
+            await deps.taskCompletionDeliveryHolder?.settleTerminal({ sessionId: session.id,
+              execution: { instanceId: event.sessionInstanceId ?? session.instanceId, generation: event.sessionTurnGeneration },
+              successful: !unsuccessfulBoundary && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist,
+              text: typeof doneData?.result === 'string' ? doneData.result : '', messageClientId: turnAssistantPersistId,
+            }).catch(() => deps.log.warn('Task completion delivery settlement deferred'));
+          }
           await deps.botDelegationServiceHolder?.settleSession({
             childSessionId: session.id,
             execution:
@@ -740,6 +762,7 @@ export function finishSessionTerminalEvent(
       if (providerGroupHeldWorkerTerminal) {
         // 已与产品终态一起暂存，由同一次恢复登记结算。
       } else {
+        deps.orcaTeamServiceForEvents?.noteWorkerProductTerminal(workerTerminalCapture);
         void (async () => {
           try {
             await deps.workerTurnStartSequencer.waitForStart(session.id);

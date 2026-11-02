@@ -1,0 +1,438 @@
+{
+  "permission": {
+    "mode": {
+      "default": "常例權柄",
+      "acceptEdits": "許修",
+      "plan": "謀劃式",
+      "auto": "自核",
+      "bypass": "完全存取"
+    },
+    "pickerSelect": "擇權柄之式 {{mode}}",
+    "armedRiskWarning": "君確許之後，此決方回傳於機。",
+    "armedHighRiskTitle": "確認高險之舉",
+    "kind": "權柄確認",
+    "deny": "拒",
+    "denyAccessibility": "拒此權柄之請",
+    "alwaysAllow": "本差事常許",
+    "alwaysAllowAccessibility": "本差事常許權柄之請",
+    "alwaysAllowConfirm": "確本差事許",
+    "allowOnce": "許一次",
+    "allowOnceAccessibility": "許權柄之請一次",
+    "allowOnceConfirm": "確許一次",
+    "highRisk": "高險",
+    "autoReviewUnavailable": "自核未竟，請確認是否許此舉。",
+    "autoReviewReason": "自核待君定奪：{{reason}}",
+    "fullAccessConfirm": {
+      "title": "啟完全存取乎？",
+      "description": "完全存取將關工作區沙箱，並略過常規審批。{{appName}} 可改工作區外之卷、行聯網命令而不復相詢；內建高險之舉仍須確認。慎之。",
+      "confirm": "啟完全存取",
+      "cancel": "守今之權柄"
+    }
+  },
+  "planMode": {
+    "label": "謀劃式",
+    "exit": "出謀劃式"
+  },
+  "panel": {
+    "readOnlyKind": "待確",
+    "readOnlyTitle": "機上方待確認",
+    "pendingRequests": "待理之請",
+    "queueSwitchTo": "轉至{{position}}待理之請：{{label}}",
+    "queueSwitchGeneric": "轉待理之請",
+    "queuePositionCurrent": "今",
+    "queuePositionNext": "其次",
+    "queuePositionNth": "第 {{index}}",
+    "composerBlockedByPending": "先理機上待理之請，方可續書。",
+    "missingRequestId": "此遠端互動缺 requestId，決定無從回傳。",
+    "desktopConfirmUnsupported": "此確認唯可於遠方之機上理之。請歸機上續行。",
+    "unsupportedType": "手機版暫不支此類遠端互動。",
+    "unsupportedKind": "暫不支",
+    "desktopOnlyKind": "機上理之",
+    "cancelRequest": "罷此請",
+    "cancelRequestAccessibility": "罷此遠端之請",
+    "awaitingAnswer": "待答",
+    "continueAccessibility": "續遠端之問",
+    "continue": "續",
+    "askOptionCount": "{{count}} 項可擇",
+    "askFreeInput": "任書",
+    "askModeMulti": "多擇",
+    "askModeSingle": "單擇",
+    "askMetaCaption": "{{options}} · {{mode}} · 可另作答",
+    "collapse": "收",
+    "collapsePendingCard": "收待理之請，先覽機上所出",
+    "expandPendingCard": "展待理之請以續答：{{title}}",
+    "collapsedHint": "點而答之",
+    "selectAnswer": "擇答 {{label}}",
+    "submittingHint": "方將決定回傳於機，勿重呈。",
+    "decisionNotAccepted": "呈之未成，請再試。",
+    "customAnswerInputAccessibility": "書自擬之答",
+    "customAnswerPlaceholder": "書他答",
+    "customAnswerButtonText": "書他答…",
+    "answerInput": "書答",
+    "previous": "前一步",
+    "skipAccessibility": "略此問",
+    "skip": "略",
+    "submitAnswerAccessibility": "呈答",
+    "next": "次之",
+    "answerRequired": "擇或書一答，方可續。",
+    "submit": "呈",
+    "sendAndContinue": "遣而續之",
+    "closeAnswer": "闔",
+    "planReviewTitle": "審 Claude 之謀",
+    "planExpand": "展謀",
+    "planEditHint": "以修改之式調其謀",
+    "planBrowseHint": "擇章節即可躍覽",
+    "planEditToggle": "修謀",
+    "planEditExit": "出修謀",
+    "planCollapse": "收謀",
+    "planExpandArea": "展謀之覽區",
+    "planHalf": "轉半屏之謀",
+    "planEditorAccessibility": "修謀之器",
+    "planEditorPlaceholder": "修其謀",
+    "planOutline": "目錄",
+    "planJumpTo": "躍至謀之章節 {{title}}",
+    "planEmpty": "謀猶白紙，未著一字。",
+    "planApproveAccessibility": "准而行其謀",
+    "planApprove": "准 Claude 之謀，始撰程式",
+    "planFeedbackLabel": "謀之回饋",
+    "planFeedbackPlaceholder": "告 Claude 當如何為之",
+    "planFeedbackRequired": "書回饋方可呈。",
+    "planFeedbackSubmit": "呈謀之回饋",
+    "planFeedbackAccessibility": "以回饋改其謀"
+  },
+  "kinds": {
+    "permission": {
+      "title": "機上之舉待授權",
+      "label": "授權"
+    },
+    "ask_user_question": {
+      "title": "Agent 有問待答",
+      "label": "問"
+    },
+    "plan_review": {
+      "title": "行事之謀待確認",
+      "label": "謀"
+    },
+    "issue_confirm": {
+      "title": "Issue 內容待確認",
+      "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "差事易名待確認",
+      "label": "易名"
+    },
+    "ghost_grant_confirm": {
+      "title": "卷之存取權柄待確認",
+      "label": "卷之存取"
+    },
+    "plugin_setup": {
+      "title": "須於機上設法器",
+      "label": "法器"
+    },
+    "fallback": {
+      "title": "遠端之請待理",
+      "label": "請"
+    },
+    "input_handoff": {
+      "title": "待君代書",
+      "label": "代書"
+    }
+  },
+  "rewind": {
+    "readError": "回退之先覽無從讀取，請再同步後重試。",
+    "noFilesNote": "此訊之後未察案中卷有改；續則除其後之言談錄。",
+    "conversationOnlyNote": "今無可用之 Git 保存點，案中卷不可復原；續則除此訊之後之言談錄，卷不復舊態。",
+    "gitSafetyDisabledNote": "Git 安全保存點未啟，故今案中卷不可復原。請於機上規制中啟之；續則除此訊之後之言談錄。",
+    "moreFiles": "另有 {{count}} 卷",
+    "stats": "{{count}} 卷 · +{{insertions}} / -{{deletions}} 行",
+    "gotIt": "知矣",
+    "cancel": "罷",
+    "cancelAccessibility": "罷回退",
+    "confirm": "確回退",
+    "confirming": "方回退",
+    "titleLoading": "方察回退之影響",
+    "titleDefault": "回退至此訊乎？",
+    "titleEmpty": "唯退言談之錄",
+    "titleError": "不可回退",
+    "detailLoading": "手機方自機上讀卷之回退先覽。",
+    "detailDefault": "將退下列諸卷，並截此訊之後之言談錄。",
+    "detailEmpty": "此訊之後未察案中卷有改。",
+    "detailConversationOnly": "案中卷不復舊態。",
+    "detailError": "機上拒此回退。"
+  },
+  "collab": {
+    "dispatchSummaryItem": "{{label}}：{{task}}",
+    "batchTitle": "分差於 {{count}} 位 Worker",
+    "batchTitleGeneric": "分差於眾 Worker",
+    "batchBodyFallback": "批立 Worker",
+    "dispatchTitle": "派差於 Worker {{who}}",
+    "dispatchRole": "其職 {{meta}}",
+    "dispatchBodyFallback": "立 Worker",
+    "sendTitle": "遣訊於 Worker",
+    "sendBodyFallback": "遣訊",
+    "fromLead": "Lead 之訊",
+    "fromWorkerNamed": "Worker「{{role}}」之訊",
+    "fromWorker": "Worker 之訊",
+    "emptyMessageBody": "（空訊）"
+  },
+  "contextSheet": {
+    "backAccessibility": "歸上下文之面板",
+    "goalStatus": {
+      "active": "方進",
+      "paused": "已暫止",
+      "blocked": "待理",
+      "complete": "已畢",
+      "budgetLimited": "已至上限",
+      "usageLimited": "耗用受限",
+      "capacityLimited": "模型繁忙"
+    },
+    "goalLabel": "鵠",
+    "goalObjectiveAccessibility": "鵠之所在",
+    "goalPlaceholder": "君之所志何在？Agent 將循此鵠鍥而不捨，至成或觸限乃止。",
+    "advancedSettings": "進階規制",
+    "limitsHint": "未改則從遠方之機之常例限；任一上限既至，鵠自止，亦可隨時手止；「無限」謂不設此限。",
+    "maxTurns": "輪數之極",
+    "tokenBudget": "Token 之度",
+    "noProgressLimit": "無進之限",
+    "startGoal": "啟鵠",
+    "goalMeta": "{{turns}} 輪 · {{tokens}} token",
+    "goalCapacityHint": "上游暫無餘力，時至自當再試",
+    "pause": "暫止",
+    "resume": "續",
+    "clearGoal": "止鵠",
+    "unlimited": "無限",
+    "noScreenshots": "未得截圖。",
+    "mediaRemove": "除附圖 {{name}}",
+    "mediaDeselect": "棄選圖 {{name}}",
+    "mediaSelect": "選圖 {{name}}",
+    "photoPermissionHint": "照片權柄未啟；啟之則可速增近日之圖。",
+    "enablePhotoPermission": "啟照片權柄",
+    "enable": "往啟",
+    "icloudTimeout": "圖猶自 iCloud 取下，候之逾時。請察網路，稍後再試。",
+    "photoNotReadable": "此圖暫不可讀（或未自 iCloud 取下完畢），請稍後再試。"
+  },
+  "pluginSetup": {
+    "remoteDesktop": "啟桌面",
+    "completeOnDesktop": "可以遠端桌面操控其機以竟設定。登入、授權與憑據之存皆在其機，此卡自更其狀。",
+    "chooseOne": "擇一設定之法",
+    "progress": "{{satisfied}}/{{total}} 已畢",
+    "desktopActionHint": "於機上{{action}}",
+    "a11ySeparator": "，",
+    "phase": {
+      "pending": "待設",
+      "action_running": "方行…",
+      "waiting_external": "候授權…",
+      "verifying": "方驗…",
+      "satisfied": "已畢",
+      "failed": "未成",
+      "cancelled": "已罷"
+    },
+    "error": {
+      "ACTION_FAILED": "設定之舉未竟，請再試。",
+      "ACTION_STALE": "設定已更，請重擇設定之舉。",
+      "AUTH_CANCELLED": "授權已罷，君可重授。",
+      "AUTH_FAILED": "授權未成，請再試。",
+      "AUTH_NETWORK": "授權之服不可連，請察網路後再試。",
+      "AUTH_SERVICE_UNAVAILABLE": "授權之服暫不可用，請稍後再試。",
+      "INLINE_INVALID": "設定之內容無效，請察後再試。",
+      "INLINE_UNAVAILABLE": "今版不能於言談中存此設定，請更新 Cindy 後再試。",
+      "SAVE_FAILED": "設定未能存之，請再試。",
+      "WINDOW_CLOSED": "發起設定之窗已闔，請歸其差事再試。",
+      "TARGET_UNAVAILABLE": "法器已停、已卸或不可用，請察法器之狀後再試。",
+      "ASSESSMENT_FAILED": "暫不能重整設定之狀，請再試。",
+      "TIMEOUT": "候設定逾時，請再試。"
+    },
+    "action": {
+      "oauth_connect": "授權",
+      "open_plugin_settings": "啟規制",
+      "manage_connection": "理連線",
+      "open_client_settings": "啟模型規制"
+    },
+    "inlineFormAction": "於機上填{{label}}",
+    "inlineFormActionGeneric": "於機上填一項設定"
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "此頁未用安全連線，所書之內容或為他人所窺。",
+      "ip-address": "此頁用 IP 位址而非網域名稱，請確其為君所期之站。",
+      "local-host": "此頁出自此機之服務，請確其為君所期之程式。",
+      "local-file": "此頁乃此機之卷，請確其為君所期之內容。",
+      "punycode": "此網址含異字，或冒他站，請細核之。",
+      "embedded-frame": "輸入框在嵌入之他站中，請確其來源可信。"
+    },
+    "agentControlled": "此介面乃 Agent 所啟。填寫之前，請確其實為君欲登入之處。",
+    "agentPicture": "此 QR 碼出自 Agent 之截圖，Cindy 不見原畫，掃畢亦不自續。請確其所指之站乃君欲登入之處，掃畢點「交還給 Agent」。",
+    "error": {
+      "decision": "此舉未達，請再試。",
+      "stale": "介面已變，請依最新內容為之。",
+      "submit": "所書未達，請再試。"
+    },
+    "terminal": {
+      "succeeded": "已交還 Agent。",
+      "cancelled": "代書已罷。",
+      "failed": "代書已終。",
+      "expired": "候之過久，代書已終。"
+    },
+    "failure": {
+      "permission": "Cindy 無讀此機介面之權柄。請於系統設定之輔助使用中許 Cindy。",
+      "target_gone": "目標之窗已闔。",
+      "unreadable": "此介面不可讀。可於主機之上徑自竟之，再交還 Agent。",
+      "action_failed": "方才之舉未生效，請察介面後再試。",
+      "timeout": "候之過久，代書已終。",
+      "unsupported": "此機暫不支代書。",
+      "origin_changed": "填寫之前頁已變，一字未填。請確今頁後再填。",
+      "picture_unavailable": "此步之畫面無從顯示。請於系統設定中許 Cindy 錄製螢幕，並確其窗未縮至最小。",
+      "screen_locked": "此機螢幕已鎖（顯示器休眠亦鎖螢幕）。請先喚醒解鎖，再令 Agent 重試。",
+      "nothing_to_fill": "此介面無須君書之處，已交還 Agent 自續。"
+    },
+    "phase": {
+      "reading": "方讀介面…",
+      "working": "方填寫…",
+      "finishing": "似已畢，{{count}} 秒後交還 Agent。",
+      "finishingNow": "似已畢，方交還 Agent…"
+    },
+    "action": {
+      "stay": "猶未畢",
+      "done": "交還給 Agent",
+      "cancel": "罷代書",
+      "claim": "改於此理",
+      "picture": "觀畫面",
+      "backToForm": "歸表單",
+      "liveView": "即景",
+      "fill": "填",
+      "skip": "略",
+      "continue": "續",
+      "close": "罷",
+      "showPassword": "顯密碼",
+      "hidePassword": "隱密碼",
+      "scan": "掃碼"
+    },
+    "remoteUnavailable": "此機不能自遠端受書。請於主機之上竟此步，再交還 Agent。",
+    "unnamedField": "輸入處",
+    "passwordField": "密碼",
+    "codeField": "驗證碼",
+    "filledHint": "已有內容；留空則不變。",
+    "record": {
+      "doneOn_one": "主人於 {{device}} 竟 {{count}} 步之書",
+      "doneOn_other": "主人於 {{device}} 竟 {{count}} 步之書",
+      "doneHost_one": "主人於宿主之機竟 {{count}} 步之書",
+      "doneHost_other": "主人於宿主之機竟 {{count}} 步之書",
+      "donePhone_one": "主人於手機竟 {{count}} 步之書",
+      "donePhone_other": "主人於手機竟 {{count}} 步之書",
+      "doneElsewhere_one": "主人於他器竟 {{count}} 步之書",
+      "doneElsewhere_other": "主人於他器竟 {{count}} 步之書",
+      "done": "代書已畢",
+      "nothingToFill": "無須書，已交還 Agent",
+      "cancelled": "代書已罷",
+      "expired": "代書已逾時",
+      "failed": "代書未竟"
+    },
+    "holder": {
+      "elsewhere": "方於 {{device}} 理之，亦可改於此理。",
+      "host": "宿主之機",
+      "phone": "手機",
+      "otherDevice": "他器"
+    },
+    "agentNote": "Agent 附言：{{note}}",
+    "picture": {
+      "hint": "點畫中某處，Cindy 即於主機點其同處。",
+      "open": "顯此步之畫面",
+      "openHint": "此步不能整為表單。畫面唯加密傳至此器，不存。",
+      "alt": "目標之窗之畫面",
+      "loading": "方取畫面…",
+      "error": "畫面未得，請再試。",
+      "field": "今之輸入框",
+      "type": "書",
+      "typeEnter": "書而按 Return"
+    },
+    "liveViewHint": "於此即時觀此一窗，點按與書寫唯入此窗。",
+    "deviceCode": {
+      "prompt": "以此碼登入",
+      "copy": "錄其碼",
+      "copied": "碼已錄",
+      "copyFailed": "錄之未成",
+      "open": "於此器啟",
+      "openFailed": "連結無從啟",
+      "then": "於所啟之頁書碼並竟登入，然後點「交還給 Agent」。"
+    },
+    "sheetNote": "唯填於機上此處，不交 Agent，亦不存。",
+    "nothingLeft": "此處已無須君書者。",
+    "qr": {
+      "open": "於此器啟 {{site}}",
+      "openApp": "於此器啟 {{site}} 連結",
+      "share": "存圖或分與",
+      "copyLink": "錄連結",
+      "copyText": "錄內容",
+      "copied": "已錄。",
+      "copyFailed": "錄之未成，請再試。",
+      "openFailed": "此器啟不得此連結。可存圖後於 App 之「掃一掃」中自相簿辨之。",
+      "shareFailed": "分享無從啟，請再試。",
+      "hintLink": "於此器啟之，則喚相應 App 以竟登入；亦可存圖後於 App 之「掃一掃」中自相簿辨之。登入後自續。",
+      "hint": "存圖後於 App 之「掃一掃」中自相簿辨之，或以他器掃此碼。登入後自續。",
+      "alt": "機上之 QR 碼。點之即點機上此碼。",
+      "loading": "方取 QR 碼…",
+      "failed": "QR 碼未得，點之再試。",
+      "scanned": "已掃，候君於手機確認。確認後自續。"
+    }
+  },
+  "presentation": {
+    "action": {
+      "submitting": "方呈"
+    },
+    "permission": {
+      "highRiskTitle": "高險之授權須再確認",
+      "highRiskDetail": "先核指令內容，再點一次確許；不確則拒之。",
+      "sessionAllowTitle": "可唯許一次，亦可本差事常許",
+      "allowTitle": "許之，則機上續行",
+      "tool": "工具：{{tool}}",
+      "title": "許用 {{tool}} 乎？",
+      "risk": "此指令或改系統、倉庫或外部服務之狀。許之前，請確君信今之差事與指令內容。",
+      "titleCommand": "許行此指令乎？",
+      "titleFileRead": "許讀卷乎？",
+      "titleFileWrite": "許改卷乎？",
+      "titleBrowser": "許瀏覽器行此步乎？",
+      "titlePlugin": "許用法器「{{plugin}}」乎？"
+    },
+    "ask": {
+      "progress": "第 {{current}}/{{total}} 問",
+      "multiSelect": "可多擇，亦可另書他答。",
+      "singleSelect": "擇一答，或另書他答。",
+      "emptyTitle": "無具體之問",
+      "emptyDetail": "可呈空答，令機上續行。",
+      "waiting": "Agent 方候確認"
+    },
+    "plan": {
+      "outlineCount": "{{count}} 章節",
+      "noOutline": "無章目",
+      "hasFile": "有謀之卷",
+      "noFile": "無謀卷之路徑",
+      "editedTitle": "謀已修，准之則依今版行",
+      "approveTitle": "准之，則機上依謀續行"
+    },
+    "queue": {
+      "count": "{{count}} 件",
+      "empty": "無請待理。哼，吾正好偷閒。",
+      "hint": {
+        "plan_review": "先觀其謀，必要時回饋以改，確認之後機上方續行。",
+        "permission": "唯以此決回傳於機上今之差事。",
+        "ask_user_question": "所答存為草稿，呈後機上續行。",
+        "issue_confirm": "確標題與正文，然後呈之。",
+        "plugin_setup": "設定須於機上竟之，此處可罷此請。",
+        "fallback": "手機依機上所請之序理之。"
+      }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} 欲請君過目",
+    "operation": "所為",
+    "details": "觀詳情",
+    "fields": {
+      "path": "卷",
+      "file_path": "卷",
+      "url": "位址",
+      "command": "令",
+      "ghost_id": "法器",
+      "tool": "工具"
+    }
+  }
+}

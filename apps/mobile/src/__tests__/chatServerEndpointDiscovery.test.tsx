@@ -9,15 +9,30 @@ import { getBundledEndpointManifest } from '@cindy/maker-shared/client-endpoints
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'phone-owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn() },
   storage: new Map<string, string>(),
+  history: new Map<string, string>(),
   sockets: [] as any[],
 }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-generation' }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => h.storage.get(key) ?? null,
   setItem: async (key: string, value: string) => { h.storage.set(key, value); },
+  getAllKeys: async () => [...h.storage.keys()],
+  removeItem: async (key: string) => { h.storage.delete(key); },
 } }));
+// Keep native IO controlled while exercising the real history cache and durable ledger.
+vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
+  files: async () => [...h.history.keys()], read: async (key: string) => h.history.get(key) ?? null,
+  write: async (key: string, value: string) => { h.history.set(key, value); },
+  remove: async (key: string) => { h.history.delete(key); },
+}) }));
+vi.mock('@/session/mobileDurableOutbox', async () => {
+  const { createDurableOutbox } = await import('@/session/durableOutbox');
+  const { default: storage } = await import('@react-native-async-storage/async-storage');
+  return { mobileDurableOutbox: createDurableOutbox(storage) };
+});
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 
 const bases = { cn: 'https://hotfix.cindy.com.cn/cindy', global: 'https://hotfix.cindy.app/cindy' };
 const texts = Object.fromEntries(Object.entries(bases).map(([region, base]) => [region,
@@ -32,12 +47,22 @@ const room = { id: roomId, kind: 'group', state: 'joined', name: 'Fixture', arch
 let root: Root | undefined;
 let roster: any;
 let group: any;
+let api: ReturnType<typeof import('@/chat/useChatServer')['useChatClient']>;
 let hooks: typeof import('@/chat/useChatServer');
-function Probe() { roster = hooks.useChatServerRoster(true); group = hooks.useChatServerGroup(roomId, true); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+function Probe() { api = hooks.useChatClient(); roster = hooks.useChatServerRoster(true); group = hooks.useChatServerGroup(roomId, true); return null; }
+async function render() {
+  const { setMobileAuthOwner, getMobileAuthOwner } = await import('@/auth/authOwnerGeneration');
+  const { getActiveMobileSessionRealm } = await import('@/config/env');
+  const { mobileDurableOutbox } = await import('@/session/mobileDurableOutbox');
+  setMobileAuthOwner(h.auth.user.id, getActiveMobileSessionRealm());
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  root ??= createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(Probe)));
+}
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
-  vi.resetModules(); vi.clearAllMocks(); h.storage.clear(); h.sockets = [];
+  // reset-modules: each case reconstructs process-owned endpoint/realm startup caches.
+  vi.resetModules(); vi.clearAllMocks(); h.storage.clear(); h.history.clear(); h.sockets = [];
   vi.stubGlobal('__DEV__', false);
   vi.stubEnv('EXPO_PUBLIC_CINDY_AUTH_REGION', 'global');
   vi.stubEnv('EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL', bases.global);
@@ -48,10 +73,11 @@ beforeEach(() => {
     options.assertCurrent();
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
     if (path.startsWith('/v1/conversations?')) return [room];
+    if (path.endsWith('/members')) return [];
     if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '1' };
     if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
     if (path.includes('/messages?')) return [];
-    if (path.includes('/changes?')) return { head: '1' };
+    if (path.includes('/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (options.method === 'POST') return { id: self };
     throw new Error('Unexpected fixture request');
   });
@@ -81,9 +107,22 @@ it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the 
   expect(h.sockets.every(socket => socket.url === ws.href)).toBe(true);
   await act(async () => h.sockets.forEach(socket => socket.onopen({})));
   expect(h.sockets[0].send).toHaveBeenCalledWith(JSON.stringify({ type: 'auth', token: 'fixture-token:phone-owner' }));
-  await act(async () => { await group.act('send', { text: 'fixture', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } }); });
+  await act(async () => {
+    await group.act('send', { text: 'fixture', clientId: 'fixture-operation', mentions: { all: false, botIds: [] } });
+    const { mobileDurableOutbox } = await import('@/session/mobileDurableOutbox');
+    const { createChatOutboxDelivery } = await import('@/chat/chatOutbox');
+    await createChatOutboxDelivery({ store: mobileDurableOutbox, client: api.client,
+      current: api.current, canRun: () => true, accessLost: async () => {} }).run();
+  });
   const sent = h.auth.apiFetch.mock.calls.find(([path, options]) => path.endsWith('/messages') && options.method === 'POST')!;
   expect(sent[1].body).toEqual({ operationId: 'fixture-operation', content: [{ type: 'text', text: 'fixture' }], mentions: [] });
+  // PR #7145: exercise the real group hook/client/HTTP adapter, not only a fake resolver.
+  const controller = new AbortController();
+  h.auth.apiFetch.mockImplementationOnce(async (_path, options) => {
+    expect(options.signal).toBe(controller.signal);
+    return { name: 'image.png', type: 'image/png', size: 1, url: 'https://media.example.invalid/image.png' };
+  });
+  await expect(group.media(self, controller.signal)).resolves.toMatchObject({ category: 'image', url: 'https://media.example.invalid/image.png' });
   const oldSockets = [...h.sockets];
   const other = region === 'cn' ? 'global' : 'cn';
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts[other] })));

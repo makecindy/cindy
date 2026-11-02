@@ -27,7 +27,6 @@ import {
   buildTelegramReplyContextBlock,
 } from './groupWindow';
 import { readTelegramPersona } from './behaviorStore';
-import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
@@ -218,17 +217,24 @@ export function buildTelegramAdapter(
     // 必须确认, 把伙伴设成 Auto 或 Ask。
     turnPolicyOptionalForMode: (mode, policy) =>
       mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
-    groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
+    groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
+      // Companion bots admit guest DMs too. Reuse the verified requester identity
+      // used by channelToolScopeFor; a DM alone is not proof of ownership.
+      if (
+        !lane &&
+        !(event.speaker ? event.speaker.isOwner : event.senderId === telegramIm.getOwnerUserId())
+      ) return undefined;
       const provider = `telegram-personal:${event.contextId}`;
       return {
-        // 跨 lane 检索只给 DM(!lane, 上游已保证 DM 非 owner 不进业务链路)。
+        // 跨 lane 检索只给通过主人身份检查的 DM。
         // 群轮次一律 lane-only —— 与上面 turnPermissionPolicyFor 的 2026-07-30
         // 裁决同一信任模型: 群窗口/引用块把成员可控文本注入 owner 触发的轮次,
         // 注入可借 owner 轮次把其它 lane 的历史检索出来回帖泄漏。owner 要跨
         // lane 查, 走私聊(检索类调用无强确认卡, 不能靠确认兜底)。
         access: lane ? 'lane' : 'owner',
         provider,
+        readImage: (fileId) => telegramIm.readGroupHistoryImage(fileId),
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };
     },
@@ -312,10 +318,6 @@ export function buildTelegramAdapter(
         provided: historyMedia.attachments,
         unavailable: historyMedia.unavailable,
       });
-      // 记住每个人①: 群里说话的人自动登记进智能通讯录(尽力而为, 零阻塞)。
-      if (event.speaker) {
-        autoRegisterTelegramSpeaker(event.speaker, { chatName: null });
-      }
       // 全响应·自主判断(ambient): 安静上下文指令 — 值得说才说, 否则 NO_REPLY
       // 哨兵沉默(transport 在流式 finalize 吞掉哨兵并撤占位)。
       const ambientBlock = event.ambient

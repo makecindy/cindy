@@ -11,6 +11,7 @@ import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
+import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
   __testing as promptRecommendations,
@@ -20,6 +21,7 @@ import {
 } from '@/lib/promptRecommendationStore';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
+  cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
@@ -66,7 +68,7 @@ vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHi
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
   h.editor = editor;
-  return { state: h.processing ?? (h.listening ? 'listening' : 'idle'), isListening: h.listening, isBusy: h.listening || h.processing !== null, draftText: '', start: vi.fn(), stop: h.stop, cancel: vi.fn() };
+  return { state: h.processing ?? (h.listening ? 'listening' : 'idle'), isListening: h.listening, isBusy: h.listening || h.processing !== null, draftText: '', start: vi.fn(), stop: h.stop, cancel: h.cancel };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -101,7 +103,7 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   pendingFileMentionsVersion: 0, consumePendingFileMentions: () => [],
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
-beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
+beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
 afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
@@ -109,6 +111,73 @@ const props = {
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+// #8232, unit: the real composer Escape listener must not cancel a covered
+// voice draft. Existing voice cases cover sending, not foreground previews.
+it.each(['listening', 'submitting', 'refining'] as const)('preserves %s voice input while a Markdown preview owns Escape', async state => {
+  h.listening = state === 'listening';
+  h.processing = state === 'listening' ? null : state;
+  render(<ChatInput {...props} onSend={vi.fn()} />);
+  const preview = document.createElement('section');
+  preview.dataset.textLightboxSearchHost = '';
+  const paragraph = document.createElement('p');
+  paragraph.textContent = 'Foreground document';
+  preview.append(paragraph);
+  document.body.append(preview);
+  try {
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+    expect(h.cancel).not.toHaveBeenCalled();
+    preview.remove();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(h.cancel).toHaveBeenCalledTimes(1);
+  } finally {
+    preview.remove();
+  }
+});
+
+it.each(['removed-source', 'removed-model'])('sends the first message through host baseline recovery (%s)', async (reason) => {
+  h.localProviders = reason === 'removed-model'
+    ? [sshNativeCodexProvider([sshModel('different-model')])] : [];
+  const onSend = vi.fn().mockResolvedValue(true);
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} sessionId={'recovery-' + reason} deviceLinkDeviceId={null}
+    initialModel={route.model} initialProviderId={route.providerId} runtimeEffective={route}
+    allowBaselineRecovery onSend={onSend} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Retry companion</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  expect((send as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(send); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][0]).toBe('Retry companion');
+  expect(onSend.mock.calls[0][6]).toMatchObject({ baselineRecovery: true, providerId: route.providerId });
+  expect(h.confirm).not.toHaveBeenCalled();
+});
+
+it.each([false, undefined])('keeps disconnected ordinary sessions blocked without a host recovery offer (%s)', async (allowBaselineRecovery) => {
+  const onSend = vi.fn();
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} deviceLinkDeviceId={null} initialModel={route.model}
+    initialProviderId={route.providerId} runtimeEffective={route}
+    allowBaselineRecovery={allowBaselineRecovery} onSend={onSend} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Must stay blocked</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' });
+  expect((send as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(send);
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+it('does not use baseline recovery to bypass a pending selection source check', async () => {
+  const onSend = vi.fn();
+  const route = { agentKind: 'codex' as const, model: 'retired-model', providerId: 'removed', effort: null, fastMode: false };
+  render(<ChatInput {...props} deviceLinkDeviceId={null} initialModel={route.model}
+    initialProviderId={route.providerId} runtimeEffective={route} allowBaselineRecovery
+    runtimePending={{ generation: 1, source: 'agent', profile: { ...route, providerId: 'new-disconnected-choice' } }}
+    onSend={onSend} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Do not bypass the new choice</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(onSend).not.toHaveBeenCalled();
+});
 
 it.each([null, 'test-host'])('preserves no-effort after creation when sending the second message (%s)', async (deviceLinkDeviceId) => {
   h.localProviders = [sshNativeCodexProvider([sshModel('qwen3:14b', { efforts: [], defaultEffort: null })])];
@@ -438,6 +507,45 @@ it.each(['button', 'Enter', 'voice'] as const)(
   },
 );
 
+// PR #7300: manual-send coverage missed automatic actions consuming a request
+// while metadata/Send is disabled. Unit through real ChatInput: one screenshot,
+// one blocked request, then enable Send; retain it and dispatch exactly once.
+it.each(['metadata', 'disabled'] as const)('retains screenshot submission until %s is ready', async gate => {
+  const key = `screenshot-wait-${gate}`;
+  const onSend = vi.fn().mockResolvedValue(true);
+  const inputProps = { ...props, sessionId: key, draftKey: key, onSend,
+    attachmentState: { ...attachments, hasAttachments: true, attachments: [{
+      id: 'shot', name: 'shot.png', path: 'clipboard://shot', ext: '.png',
+      size: 16, category: 'image' as const, url: 'image:shot', mimeType: 'image/png',
+    }] },
+  };
+  const loaded = { initialModel: 'gpt-6-astra', initialProviderId: 'openai', initialEffort: 'medium' as const };
+  const view = render(<ChatInput {...inputProps} {...(gate === 'disabled' ? loaded : {})} disabled={gate === 'disabled'} />);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Explain screenshot</p>'); });
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      requestComposerSubmit({ storageKey: key, attachmentUrl: 'image:shot' });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(peekComposerSubmitRequest(key)).not.toBeNull();
+    view.rerender(<ChatInput {...inputProps} {...loaded} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0][0]).toBe('Explain screenshot');
+    expect(peekComposerSubmitRequest(key)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  } finally {
+    view.unmount();
+    takeComposerSubmitRequest(key);
+    clearDraft(key);
+    vi.useRealTimers();
+  }
+});
+
 it('hides a missing existing model, recovers from the effective runtime, and preserves new-draft defaults', async () => {
   const onSend = vi.fn();
   const view = render(<ChatInput {...props} hideRuntimeControls={false} onSend={onSend} />);
@@ -535,6 +643,61 @@ function companionProps() {
   h.localProviders = [sshNativeCodexProvider([sshModel('fixture-chat')])];
   return { ...props, deviceLinkDeviceId: null, initialModel: 'fixture-chat', initialProviderId: 'openai' };
 }
+
+// Unit regression for the 2026-10-29 coexistence rule: an empty companion
+// editor with a ready recommendation must still offer a call. Existing tests
+// cover drafts and recommendations separately, not this combined state.
+it.each(['click', 'Tab', 'Enter'] as const)('keeps a recommendation alongside the call action and accepts it with %s', async (accept) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const onStartVoiceConversation = vi.fn();
+  const inputProps = { ...companionProps(), sessionId: 'queue-shortcut', onSend, onStartVoiceConversation };
+  const view = render(<ChatInput {...inputProps} />);
+  await act(async () => { h.editor!.commands.clearContent(); });
+  // jsdom has no Range geometry; real selection scrolling is covered by the Electron fixture.
+  h.editor!.view.setProps({ handleScrollToSelection: () => true });
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  const prompt = 'Continue with the recommendation';
+  await act(async () => {
+    promptRecommendations.applyRunningSnapshot(new Map([['queue-shortcut', { isRunning: true }]]));
+    promptRecommendations.noteTurnEnded('queue-shortcut', 200);
+    promptRecommendations.applyRunningSnapshot(new Map());
+    promptRecommendations.settleCompletion('queue-shortcut');
+    const seq = beginPromptRecommendationPrediction('queue-shortcut', 200)!;
+    resolvePromptRecommendationPrediction('queue-shortcut', 200, seq, prompt);
+  });
+  expect(screen.getByText(prompt)).toBeTruthy();
+  const call = screen.getByRole('button', { name: 'bots.voiceMode.startConversation' });
+  fireEvent.click(call);
+  expect(onStartVoiceConversation).toHaveBeenCalledOnce();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.editor!.getText()).toBe('');
+
+  view.rerender(<ChatInput {...inputProps} voiceConversationActive />);
+  expect(screen.queryByText(prompt)).toBeNull();
+  view.rerender(<ChatInput {...inputProps} />);
+  expect(screen.getByText(prompt)).toBeTruthy();
+  await act(async () => {
+    if (accept === 'click') {
+      fireEvent.click(screen.getByRole('button', { name: `newChat.chatInput.recommendationShortcut: ${prompt}` }));
+    } else {
+      h.editor!.view.dom.focus();
+      fireEvent.keyDown(h.editor!.view.dom, { key: accept, code: accept });
+    }
+  });
+  if (accept !== 'Enter') {
+    expect(h.editor!.getText()).toBe(prompt);
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  }
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(onSend.mock.calls[0][0]).toBe(prompt);
+  expect(onStartVoiceConversation).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeTruthy();
+});
 
 it('switches one companion action between call and send, retaining focus and dispatching the draft once', async () => {
   const onSend = vi.fn().mockResolvedValue(true);

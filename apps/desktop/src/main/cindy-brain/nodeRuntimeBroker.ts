@@ -162,6 +162,8 @@ export interface GhostNodeRuntimeBrokerDeps {
    * 未保存或保险库不可用。调用方不得记录返回值。
    */
   readSecret?: (ghostId: string, secretKey: string) => string | null;
+  authenticatedFetch?: (ghostId: string, request: Record<string, unknown>, authorization: string,
+    assertCurrent: () => void, signal: AbortSignal) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
@@ -282,6 +284,10 @@ function readDiagnosticAdapterKilled(child: NodeWorkerProcess): boolean | 'unkno
 }
 
 interface PendingRpc {
+  manifestSnapshot: string;
+  approvalRevision?: string;
+  hostAbort: AbortController;
+  hostRequests?: number;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
@@ -355,6 +361,7 @@ interface WorkerEntry {
   stopping: boolean;
   /** 曾发给本 worker 的凭证明文(stderr 及退出诊断脱敏用;settleExit 后立即清空)。 */
   exposedSecretValues: Set<string>;
+  privateSecretValues: Set<string>;
   /** exit 后 stderr drain 用:非 null 表示进程已退出、正在等待管道排空。 */
   exitDrain: {
     code: number | null;
@@ -1132,6 +1139,9 @@ export class GhostNodeRuntimeBroker {
       this.authorizePlugin(entry, message);
       return;
     }
+    if (message.type === 'authenticated-fetch') {
+      void this.handlePrivateHostRequest(entry, message); return;
+    }
     if (message.type === 'spawn-child') {
       void this.spawnChildForWorker(entry, message);
       return;
@@ -1145,6 +1155,38 @@ export class GhostNodeRuntimeBroker {
     } else if (message.type === 'child-kill') {
       this.stopChild(entry, child, false);
     }
+  }
+
+  private async handlePrivateHostRequest(entry: WorkerEntry,
+    message: Extract<GhostNodeChildToHostMessage, { type: 'authenticated-fetch' }>) {
+    const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    const pending = entry.pending.get(message.rpcId);
+    const reply = (ok: boolean, result?: unknown) => this.replyToWorker(entry,
+      { type: 'node-host-result', reqId: message.reqId, ok, ...(ok ? { result } : {}) });
+    const assertCurrent = () => {
+      const current = this.deps.getGhost(ghostId);
+      if (!pending?.signal || pending.signal.aborted
+        || (!pending.callId || this.deps.getCallSignal?.(ghostId, pending.callId) !== pending.signal)
+        || entry.pending.get(message.rpcId) !== pending
+        || this.workers.get(GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel)) !== entry
+        || !current?.enabled || current.dir !== entry.ghost.dir
+        || JSON.stringify(current.manifest) !== pending.manifestSnapshot
+        || (current.approval?.state === 'approved' ? current.approval.revision : undefined) !== pending.approvalRevision
+        || !this.ownerScopeUsable(ghostId, pending.ownerScopeSnapshot)) throw new Error('NODE_HOST_UNAVAILABLE');
+    };
+    let acquired = false;
+    try {
+      assertCurrent();
+      if ((pending!.hostRequests ?? 0) >= 4) throw new Error('NODE_HOST_BUSY');
+      pending!.hostRequests = (pending!.hostRequests ?? 0) + 1;
+      acquired = true;
+        this.rememberPrivateSecret(entry, message.authorization.slice(7));
+        if (!this.deps.authenticatedFetch) throw new Error('NODE_FETCH_UNAVAILABLE');
+        const result = await this.deps.authenticatedFetch(ghostId,
+          { ...message.request, callId: pending!.callId }, message.authorization, assertCurrent, pending!.hostAbort.signal);
+        assertCurrent(); reply(true, result);
+    } catch { reply(false); }
+    finally { if (acquired && pending) pending.hostRequests = Math.max(0, (pending.hostRequests ?? 1) - 1); }
   }
 
   private authorizePlugin(
@@ -1621,6 +1663,7 @@ export class GhostNodeRuntimeBroker {
     }
     entry.pending.clear();
     entry.exposedSecretValues.clear();
+    entry.privateSecretValues.clear();
     // PID 是启动期已经捕获的只读 fact；停止关键路径前不再调用诊断 getter/logger。
     const stopPid = entry.diagnosticPid;
     let sigtermKillReturned = false;
@@ -1873,6 +1916,7 @@ export class GhostNodeRuntimeBroker {
       mcpInitPromise: null,
       stopping: false,
       exposedSecretValues: new Set(),
+      privateSecretValues: new Set(),
       exitDrain: null,
     };
     const recordStartupObservation = (observation: NodeWorkerStartupObservation): void => {
@@ -2112,6 +2156,9 @@ export class GhostNodeRuntimeBroker {
     const id = String(entry.nextId++);
     return new Promise((resolve, reject) => {
       const pending: PendingRpc = {
+        manifestSnapshot: JSON.stringify(entry.ghost.manifest),
+        approvalRevision: entry.ghost.approval?.state === 'approved' ? entry.ghost.approval.revision : undefined,
+        hostAbort: new AbortController(),
         resolve,
         reject,
         // 先占位,armPendingTimer 里立即赋真值(expire 闭包要先于 timer 存在)。
@@ -2129,6 +2176,7 @@ export class GhostNodeRuntimeBroker {
         callId,
         cancel: () => abort(),
         cleanup: () => {
+          pending.hostAbort.abort();
           pending.authorization?.dispose();
           signal?.removeEventListener('abort', abort);
           if (!signal) return;
@@ -2252,7 +2300,14 @@ export class GhostNodeRuntimeBroker {
       this.failProtocol(entry, 'Node 返回的 JSON-RPC 消息必须是对象');
       return;
     }
-    const msg = message as Record<string, unknown>;
+    let msg = message as Record<string, unknown>;
+    // Only the private authenticated upload API adds this result boundary; legacy
+    // Node replies retain their existing behavior. Reject rather than mutate data.
+    const serialized = JSON.stringify(message);
+    if ([...entry.privateSecretValues].some(value => serialized.includes(JSON.stringify(value).slice(1, -1)))) {
+      if (msg.id === undefined) return;
+      msg = { jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'NODE_CREDENTIAL_OUTPUT_BLOCKED' } };
+    }
     if (msg.jsonrpc !== '2.0') {
       this.failProtocol(entry, 'Node 返回的消息缺少 jsonrpc: "2.0"');
       return;
@@ -2474,6 +2529,7 @@ export class GhostNodeRuntimeBroker {
     }
     entry.pending.clear();
     entry.exposedSecretValues.clear();
+    entry.privateSecretValues.clear();
     // 启动期退出不在这里报 crashed:ensureWorker 统一收口(可能还要重试,
     // 重试成功时插件不该看到一次假 crash)。
     if (!entry.stopping && !entry.startupPhase) {
@@ -2529,6 +2585,12 @@ export class GhostNodeRuntimeBroker {
       .join('');
     if (!recent) return null;
     return stderrHint(this.redactSecrets(entry, recent), true);
+  }
+
+  private rememberPrivateSecret(entry: WorkerEntry, value: string): void {
+    if (entry.privateSecretValues.size >= 256 && !entry.privateSecretValues.has(value))
+      throw new Error('NODE_CREDENTIAL_WORKER_RESTART_REQUIRED');
+    entry.privateSecretValues.add(value); entry.exposedSecretValues.add(value);
   }
 
   private redactSecrets(entry: WorkerEntry, text: string): string {

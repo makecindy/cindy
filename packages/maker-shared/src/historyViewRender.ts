@@ -159,22 +159,23 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const expanded = summaries.some((summary) => snapshot.expanded.has(summary.key));
     const states = summaries.map((summary) => snapshot.details.get(
       summary.preview && snapshot.expanded.has(summary.preview.key) ? summary.preview.key : summary.key));
-    const setVisible = (full: boolean, preview: boolean) => {
-      for (const summary of summaries) {
-        view.setExpanded(summary.key, full);
-        if (summary.preview) view.setExpanded(summary.preview.key, !full && preview);
-      }
-    };
     const lines = [...summaries].reverse().find((summary) => summary.lines)?.lines;
+    // A read preview can end in prose that seals this group in the regrouped render.
+    // Deciding from that render would collapse and reopen the preview without end.
+    const livePreview = !lines && summaries.some((summary) => summary.isStreaming && summary.preview);
+    const setVisible = (full: boolean, preview: boolean) => view.retainExpanded(summaries.flatMap((summary) =>
+      full ? [summary.key]
+        : preview && livePreview && summary.isStreaming && summary.preview ? [summary.preview.key] : []));
     return structure.rebuild(item, next, {
       owner: view, key: summaries.map((summary) => summary.key).join('|'), expanded,
       revision: summaries.map((summary) => summary.revision).join('|'),
       previewComplete: summaries.every((summary) => summary.preview?.firstMessageId === summary.firstMessageId),
       ...(lines ? { lines } : {}),
+      livePreview,
       awaitingDetails: states.some((state) => !state?.complete && !state?.messages.length),
       loading: states.some((state) => state?.loading), failed: states.some((state) => !!state?.error),
       setVisible,
-      toggle: () => setVisible(!expanded, false),
+      toggle: () => { for (const summary of summaries) view.setExpanded(summary.key, !expanded); },
       retry: () => { for (const summary of summaries) void view.loadDetails(
         summary.preview && view.getSnapshot().expanded.has(summary.preview.key) ? summary.preview : summary); },
     });

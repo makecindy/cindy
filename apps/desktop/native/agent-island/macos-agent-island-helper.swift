@@ -1376,6 +1376,7 @@ struct AgentIslandCompanion: Codable, Equatable {
 }
 
 struct AgentIslandSession: Codable, Equatable, Identifiable {
+  var groupChat: AgentIslandGroupChat? = nil
   let sessionId: String
   var completionToken: String? = nil
   let title: String
@@ -1397,6 +1398,11 @@ struct AgentIslandSession: Codable, Equatable, Identifiable {
   var id: String { sessionId }
   var displayTitle: String { title.isEmpty ? (projectName ?? title) : title }
   var subtitle: String { compactDetail }
+}
+
+struct AgentIslandGroupChat: Codable, Equatable {
+  let avatars: [AgentIslandCompanion]
+  let mentionLabel: String?
 }
 
 struct AgentIslandPillSnapshot: Codable {
@@ -1650,7 +1656,6 @@ private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
 private let compactIslandMinContentWidth: CGFloat = 80
-private let compactCollapseLeadingReservedWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
@@ -2474,8 +2479,12 @@ struct AgentIslandRootView: View {
           y: layout.shadowY
         )
 
-      content(layout: layout)
+      ZStack(alignment: .top) {
+        content(layout: layout)
+      }
         .frame(width: layout.width, height: layout.height, alignment: .top)
+        // Clip outgoing transition layers together with the incoming content.
+        .compositingGroup()
         .clipShape(NotchShape(
           topExtension: layout.topExtension,
           bottomRadius: layout.bottomRadius,
@@ -3487,7 +3496,9 @@ struct ExpandedSessionRow: View, Equatable {
   private var rowMainContent: some View {
     HStack(alignment: .center, spacing: 10) {
       Group {
-        if let companion = session.companion {
+        if let group = session.groupChat {
+          AgentIslandGroupAvatar(group: group, size: expandedRowLeadingSize)
+        } else if let companion = session.companion {
           AgentIslandCompanionStatusAvatar(session: session, companion: companion, size: expandedRowLeadingSize)
         } else {
           StatusDot(
@@ -3747,12 +3758,15 @@ struct ExpandedSessionHeaderLine: View {
 
   /// A finished companion turn reads as a message: the reply is the content, no "Done" tag.
   private var isCompanionReply: Bool {
-    session.companion != nil && session.phase == "completed"
+    (session.companion != nil || session.groupChat != nil) && session.phase == "completed"
   }
 
   private var titleText: Text {
     let title = Text(expandedPrimaryTitle(for: session, strings: strings))
       .foregroundColor(Color.white.opacity(0.92))
+    if let mention = session.groupChat?.mentionLabel {
+      return title + Text(" · \(mention)").foregroundColor(Color.white.opacity(0.65))
+    }
     guard let group = companionGroupName else { return title }
     // The group yields first when the line is too narrow: the speaker stays readable.
     return title + Text(" · \(group)").foregroundColor(Color.white.opacity(0.42))
@@ -4239,7 +4253,9 @@ struct StatusDot: View {
   var body: some View {
     let accent = statusAccentColor(for: session)
     ZStack {
-      if let companion = session.companion {
+      if let group = session.groupChat {
+        AgentIslandGroupAvatar(group: group, size: side)
+      } else if let companion = session.companion {
         AgentIslandCompanionStatusAvatar(
           session: session,
           companion: companion,
@@ -4424,6 +4440,39 @@ final class AgentIslandCompanionAvatarStore {
     if cache.count >= 16 { cache.removeAll() }
     cache[base64] = image
     return image
+  }
+}
+
+/// Same first-five, first-member-in-front geometry as the teammate sidebar.
+struct AgentIslandGroupAvatar: View {
+  let group: AgentIslandGroupChat
+  let size: CGFloat
+
+  var body: some View {
+    let members = Array(group.avatars.prefix(5))
+    ZStack(alignment: .topLeading) {
+      if members.isEmpty {
+        Image(systemName: "person.2.fill")
+          .font(.system(size: size * 0.6))
+          .foregroundColor(.white.opacity(0.7))
+          .frame(width: size, height: size)
+      } else if members.count == 1 {
+        AgentIslandCompanionAvatar(companion: members[0], size: size)
+      } else {
+        let diameter = size * (members.count <= 3 ? 0.6 : members.count == 4 ? 0.55 : 0.5)
+        let radius = (size - diameter) / 2
+        ForEach(Array(members.indices.reversed()), id: \.self) { index in
+          let position = members.count - 1 - index
+          let angle = -3 * Double.pi / 4 + Double(position) * 2 * Double.pi / Double(members.count)
+          let x = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(cos(angle)))
+          let y = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(sin(angle)))
+          AgentIslandCompanionAvatar(companion: members[index], size: diameter)
+            .overlay(Circle().stroke(Color.black, lineWidth: max(1, size / 20)))
+            .offset(x: x, y: y)
+        }
+      }
+    }
+    .frame(width: size, height: size)
   }
 }
 
@@ -4663,6 +4712,7 @@ final class TrackingView: NSView {
   var dragActive = false
   var dragMode: String?
   var onHover: ((Bool, Bool) -> Void)?
+  private var resizeCursorShown = false
   private var lastMenuBar = false
   private var lastPanel = false
 
@@ -4710,10 +4760,21 @@ final class TrackingView: NSView {
     let point = convert(event.locationInWindow, from: nil)
     if isResizeHit(point, edge: .left) {
       agentIslandFrameResizeCursor(edge: .left).set()
+      resizeCursorShown = true
       return
     }
     if isResizeHit(point, edge: .right) {
       agentIslandFrameResizeCursor(edge: .right).set()
+      resizeCursorShown = true
+      return
+    }
+    // Only undo the resize cursor this view set; otherwise a transparent carrier area passes
+    // clicks to the window below, so leave that window's cursor (e.g. an I-beam) alone.
+    if resizeCursorShown {
+      resizeCursorShown = false
+      NSCursor.arrow.set()
+    }
+    guard visualRect().contains(point) else {
       return
     }
     super.cursorUpdate(with: event)
@@ -5092,10 +5153,12 @@ final class AgentIslandController {
       hardwareNotchLayoutEnabled: hardwareNotchLayoutEnabled,
       preferredContentWidth: preferredContentWidth
     )
+    // The main process sends one carrier size for both modes so expanding never
+    // resizes the window (Mission Control animates every resize).
     let cocoaFrame = convertToCocoaFrame(
       frame,
       screen: screen,
-      carrierHeight: ceil(layout.height + layout.carrierInset)
+      carrierHeight: max(CGFloat(frame.height), ceil(layout.height + layout.carrierInset))
     )
     emitFrameDebug(
       event: "apply-frame",
@@ -5604,7 +5667,7 @@ final class AgentIslandController {
       event: "drag-finish",
       interaction: interaction,
       frame: panel.frame,
-      contentWidth: currentContentWidth(frame: panel.frame, layout: lastLayout),
+      contentWidth: displayedContentWidth(),
       screenPoint: screenPoint,
       force: true
     )
@@ -5616,7 +5679,7 @@ final class AgentIslandController {
     eventSink(["type": "drag", "active": false])
     emitLayoutPreference(
       frame: panel.frame,
-      contentWidth: currentContentWidth(frame: panel.frame, layout: lastLayout),
+      contentWidth: displayedContentWidth(),
       force: true,
       snapCenter: interaction.mode == .move
     )
@@ -5771,7 +5834,13 @@ final class AgentIslandController {
     guard model.state.visible, panel.isVisible else {
       return nil
     }
-    let frame = panel.frame
+    // Drag math sizes the carrier around the island itself; the main process sends
+    // the shared carrier size again once the drag ends.
+    let frame = centeredFrameForResize(
+      contentWidth: lastLayout.width,
+      inset: lastLayout.carrierInset,
+      startFrame: panel.frame
+    )
     let resolvedHit = hit ?? hitTestInteraction(screenPoint: screenPoint)
     if let resizeMode = resolvedHit.resizeMode {
       let contentWidth = constrainedContentWidth(lastLayout.width, expanded: lastLayout.expanded)
@@ -5823,9 +5892,8 @@ final class AgentIslandController {
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
   }
 
-  /// The screen rectangle where the collapsed island sat. After expand, that
-  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
-  /// Clicking it should fold the island back; toolbar / title live outside it.
+  /// Keep the full compact footprint clickable, including its notch-side wings.
+  /// The leading title/mascot is passive; only the trailing toolbar owns clicks.
   private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
     let layout = interaction.startLayout
     let footprintWidth = compactCollapseFootprintWidth(layout: layout)
@@ -5834,15 +5902,8 @@ final class AgentIslandController {
     guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
       return false
     }
-    let visualMinX = centerX - layout.width / 2
     let visualMaxX = centerX + layout.width / 2
-    let sideChrome = layout.hasHardwareNotch
-      ? max(0, (layout.width - layout.notchWidth) / 2)
-      : 0
-    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
-    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
-    return clickX > visualMinX + leadingReserved
-      && clickX < visualMaxX - trailingReserved
+    return clickX < visualMaxX - compactCollapseTrailingReservedWidth
   }
 
   private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
@@ -5965,6 +6026,16 @@ final class AgentIslandController {
       && abs(target.minY - frame.minY) < 0.5
       && abs(target.width - frame.width) < 0.5
       && abs(target.height - frame.height) < 0.5
+  }
+
+  // The island's own width. Unlike currentContentWidth(frame:), it stays correct while the
+  // panel still has the shared carrier size, e.g. a resize edge pressed but never dragged.
+  private func displayedContentWidth() -> CGFloat {
+    constrainedContentWidth(
+      lastLayout.width,
+      expanded: lastLayout.expanded,
+      fixedCenterX: panel.frame.midX
+    )
   }
 
   private func currentContentWidth(frame: NSRect, layout: AgentIslandLayout) -> CGFloat {
@@ -6460,7 +6531,7 @@ final class AgentIslandController {
       height: Double(panel.frame.height),
       displayId: frame.displayId,
       displayBounds: frame.displayBounds,
-      contentWidth: Double(currentContentWidth(frame: panel.frame, layout: lastLayout))
+      contentWidth: Double(displayedContentWidth())
     )
   }
 

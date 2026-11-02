@@ -594,7 +594,7 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission?.submitting).toBeFalsy();
   });
 
-  it('提交中的队首被后到的并行请求顶替后，A 的失败回执不会把它拉回队首', async () => {
+  it('提交中到达的并行请求排到队尾，A 的失败回执仍把 A 留在队首可重试', async () => {
     const s = openRemoteSession();
     let rejectReceipt!: (error: Error) => void;
     host.invoke.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectReceipt = reject; }));
@@ -610,21 +610,35 @@ describe('device-link 远程交互往返 — permission', () => {
     await flush();
     expect(makerChatStore.getSnapshot(s).pendingPermission?.submitting).toBe(true);
 
-    // 并行请求 B 这时到达：按既有语义顶替 A 成为队首（用户对 A 的回执竞赛已输），
-    // 但队列不会留下已作答的 A —— 否则用户会再次看到自己刚回答过的卡片。
+    // 并行请求 B 这时到达：A 的回执竞赛还没分出胜负，Host 的 pending map 里 A
+    // 与 B 同时存在，所以 B 只能排到队尾，不能顶替 A —— 用 B 覆盖队首后，A 的
+    // 失败回执会在对账前因队首不匹配直接返回，Host 仍在等的 A 就从控制端消失。
     host.hostInteraction(s, {
       kind: 'permission', requestId: 'superseding-b', toolName: 'Read',
       input: { file_path: '/b.txt' },
     });
     await flush();
-    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('superseding-b');
-    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue.map((i) => i.requestId)).toEqual([]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('superseded-head-a');
+    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue.map((i) => i.requestId))
+      .toEqual(['superseding-b']);
 
-    // A 的回执随后失败：不能把已经顶替掉的 A 重新拉回队首、把 B 挤下去。
+    // A 的回执随后失败：Host 的 pending map 里 A、B 都还在，对账因此保住队首，
+    // A 留在队首且可重试，B 仍在队尾等待。
+    host.seedPending(s, {
+      kind: 'permission', requestId: 'superseded-head-a', toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    host.seedPending(s, {
+      kind: 'permission', requestId: 'superseding-b', toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
     rejectReceipt(new Error('receipt lost'));
     await flush();
-    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('superseding-b');
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('superseded-head-a');
     expect(makerChatStore.getSnapshot(s).pendingPermission?.submitting).toBeFalsy();
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.submissionFailed).toBe(true);
+    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue.map((i) => i.requestId))
+      .toEqual(['superseding-b']);
   });
 
   it('排队中的权限保留 IM 来源说明与自动审批故障原因', async () => {
@@ -1051,6 +1065,15 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
       .messages.find((m) => m.askUserRequestId === 'ask-other');
     expect(askMsg?.askUserStatus).toBe('answered'); // 与答题端一致,而非 expired
     expect(askMsg?.askUserAnswers).toEqual({ 'X?': 'A' });
+
+    // #7144: replaying a close through the real remote-push subscription must
+    // not hide the already answered history row. Pending expiry is tested below.
+    host.hostDismiss(s, 'ask-other', 'server_request_resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.find(
+      (m) => m.askUserRequestId === 'ask-other',
+    )).toBe(askMsg);
+    expect(askMsg?.askUserStatus).toBe('answered');
   });
 
   it('对端 dismiss 但无 decision(真·放弃 / 老被控端)→ ask 仍标 expired(兜底)', async () => {

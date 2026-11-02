@@ -52,8 +52,11 @@ export interface GhostOauthClientConfig {
   scopes: readonly string[];
   /** scope 参数拼接分隔符(缺省空格 = OAuth 标准;Slack 这类逗号分隔的服务商传 ','). */
   scopeDelimiter?: string;
-  /** 用户在意识设置页自填的 OAuth 客户端 ID。 */
-  clientId: string;
+  /**
+   * 用户在意识设置页自填或清单内置的 OAuth 客户端 ID。由服务端签发应用身份的
+   * tokenBroker(飞书企业)可缺省,授权开始时经 broker bootstrap 取得。
+   */
+  clientId?: string;
   /** 可选:客户端 secret(桌面应用的 installed-app secret 本非机密,但仍按凭证纪律保管)。 */
   clientSecret?: string;
   /** PKCE(S256)开关,缺省 true;个别老服务商不支持时意识可显式声明关闭。 */
@@ -220,10 +223,23 @@ export type GhostOauthBrokerResult =
  * 带登录 JWT 调 server 端 `/api/integrations/<slug>/oauth/exchange|refresh`
  * 并把响应映射成 bundle;本引擎不感知 HTTP 细节。
  */
+/** broker 为本次授权签发的应用身份(一次性授权事务绑定当时的企业 App 版本)。 */
+export type GhostOauthBrokerBootstrapResult =
+  | { ok: true; clientId: string; transactionId: string }
+  | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; detail?: string };
+
 export interface GhostOauthBrokerClient {
+  /**
+   * 由服务端签发应用身份的 slug 返回本次授权的 clientId 与授权事务;其它 slug
+   * 返回 null,继续用清单里的 clientId。
+   */
+  bootstrap?(
+    slug: string,
+    params: { redirectUri: string },
+  ): Promise<GhostOauthBrokerBootstrapResult | null>;
   exchange(
     slug: string,
-    params: { code: string; redirectUri: string; codeVerifier?: string },
+    params: { code: string; redirectUri: string; codeVerifier?: string; transactionId?: string },
   ): Promise<GhostOauthBrokerResult>;
   refresh(slug: string, params: { refreshToken: string }): Promise<GhostOauthBrokerResult>;
 }
@@ -421,7 +437,10 @@ export async function startGhostOauthFlow(
 ): Promise<GhostOauthFlowResult> {
   const { config } = opts;
 
-  if (!config.clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  // tokenBroker 可在授权开始时由服务端签发 clientId,缺省时留到流程内判定。
+  if (!config.clientId && !config.tokenBroker) {
+    return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  }
   if (!isSafeHttpsUrl(config.authorizeUrl)) {
     return {
       ok: false,
@@ -601,23 +620,6 @@ async function runGhostOauthFlow(
   const callbackPath = config.callbackPath ?? CALLBACK_PATH;
   const redirectUri = config.publicRedirectUri ?? `http://127.0.0.1:${port}${callbackPath}`;
 
-  const authorizeUrl = new URL(config.authorizeUrl);
-  authorizeUrl.searchParams.set('response_type', 'code');
-  authorizeUrl.searchParams.set('client_id', config.clientId);
-  authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-  authorizeUrl.searchParams.set('state', state);
-  if (config.scopes.length > 0) {
-    authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
-  }
-  if (challenge) {
-    authorizeUrl.searchParams.set('code_challenge', challenge);
-    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
-  }
-  for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
-    if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
-    authorizeUrl.searchParams.set(key, value);
-  }
-
   // 回调等待(含超时与取消;三路竞速,谁先到听谁的)。
   const callback = new Promise<
     { kind: 'code'; code: string } | { kind: 'invalid'; detail: string }
@@ -714,6 +716,45 @@ async function runGhostOauthFlow(
   try {
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    // 由服务端签发应用身份的 broker(飞书企业):每次授权取企业当前 App ID 与一次性
+    // 授权事务,不用包内 clientId(包内的只留给不认识该接口的旧客户端)。
+    let clientId = config.clientId;
+    let transactionId: string | undefined;
+    // 请求挂住时仍要能被取消(再点连接会顶掉本单)并受整单时限约束,否则本单
+    // 一直占着回调端口,新的一单也排不上。
+    const bootstrapping = config.tokenBroker
+      ? opts.broker?.bootstrap?.(config.tokenBroker, { redirectUri })
+      : undefined;
+    const issued = bootstrapping
+      ? await Promise.race([bootstrapping, timeout, cancellation.cancelledPromise])
+      : null;
+    if (issued === 'timeout') return { ok: false, error: 'TIMEOUT' };
+    if (issued === 'cancelled') return { ok: false, error: 'CANCELLED' };
+    if (issued) {
+      if (!issued.ok) {
+        logger?.warn('ghost oauth broker 获取授权应用失败', { slug: config.tokenBroker, error: issued.error });
+        return { ok: false, error: issued.error, detail: issued.detail };
+      }
+      ({ clientId, transactionId } = issued);
+    }
+    if (!clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+    if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    const authorizeUrl = new URL(config.authorizeUrl);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('client_id', clientId);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('state', state);
+    if (config.scopes.length > 0) {
+      authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
+    }
+    if (challenge) {
+      authorizeUrl.searchParams.set('code_challenge', challenge);
+      authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+    }
+    for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
+      if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
+      authorizeUrl.searchParams.set(key, value);
+    }
     opts.remote?.assertCurrent();
     if (opts.remote) await new Promise<void>(resolve => server.close(() => resolve()));
     // Reserve the same redirect port on both hosts. The controller never kills a port owner.
@@ -747,6 +788,7 @@ async function runGhostOauthFlow(
         code: outcome.code,
         redirectUri,
         ...(verifier !== null ? { codeVerifier: verifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
       });
       opts.remote?.assertCurrent();
       if (!brokered.ok) {
@@ -773,7 +815,7 @@ async function runGhostOauthFlow(
     form.set('grant_type', 'authorization_code');
     form.set('code', outcome.code);
     form.set('redirect_uri', redirectUri);
-    form.set('client_id', config.clientId);
+    form.set('client_id', clientId);
     if (config.clientSecret) form.set('client_secret', config.clientSecret);
     if (verifier) form.set('code_verifier', verifier);
 
@@ -884,6 +926,9 @@ export async function refreshGhostOauthToken(
     return { ok: true, bundle };
   }
 
+  if (!config.clientId) {
+    return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: 'clientId 未配置' };
+  }
   const form = new URLSearchParams();
   form.set('grant_type', 'refresh_token');
   form.set('refresh_token', refreshToken);

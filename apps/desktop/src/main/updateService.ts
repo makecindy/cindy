@@ -44,6 +44,8 @@ import { compareAppUpdateVersions } from './updateVersionPolicy';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
 import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
+import { prefetch as prefetchAgentBinary } from './agent-binaries/index.js';
+import { getVendorAsset } from './agent-binaries/manifest.js';
 
 import { createLogger, maskPath } from './logger';
 import {
@@ -2063,8 +2065,9 @@ async function executeRelaunchUnguarded(
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
 
-  // Every applied app update — manual, idle or startup auto-relaunch — checks
-  // agent binaries once on the next launch; ordinary launches do not.
+  // Keep the legacy marker for rollback compatibility. New startups adopt only
+  // completed binary downloads and reuse usable local runtimes otherwise;
+  // application-update readiness never waits for optional binary preparation.
   if (readyVersion) {
     cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
   }
@@ -2466,18 +2469,47 @@ export function initUpdateService(): void {
     app.quit();
   });
 
+  // About downloads before showing the restart confirmation. A failed preparation
+  // leaves both the application update state and the running harness untouched.
+  const preparedHarnessVersions = new Map<'claude-code' | 'codex', string>();
+  ipcMain.handle('update-harness-prepare', async (event, kind: unknown, expectedVersion: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if ((kind !== 'claude-code' && kind !== 'codex') || typeof expectedVersion !== 'string'
+      || expectedVersion.length === 0 || expectedVersion.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'kind and expectedVersion required');
+    }
+    preparedHarnessVersions.delete(kind);
+    const signal = AbortSignal.timeout(180_000);
+    const manifest = await fetchManifest(undefined, signal);
+    const asset = manifest && getVendorAsset(manifest, kind === 'claude-code' ? 'claudeCode' : 'codexPackage');
+    if (!manifest || !asset || asset.version !== expectedVersion) {
+      throwIpcError('INTERNAL', 'harness update changed or is unavailable; check again');
+    }
+    if (!await prefetchAgentBinary(kind, { manifest, signal })) {
+      throwIpcError('INTERNAL', 'could not prepare harness update; retry later');
+    }
+    preparedHarnessVersions.set(kind, expectedVersion);
+    return { ready: true };
+  });
+
   // About → Agent version update: keep the same graceful app relaunch lifecycle,
-  // but ask the next startup to refresh managed harness binaries before they are
-  // exposed to Maker. The marker is consumed once by agent-binaries/prepare and
-  // is scoped to the harness the user confirmed; Pi has its own kernel manager.
-  ipcMain.handle('update-harness-relaunch', (event, kind: unknown) => {
+  // with cache-only adoption for prepared targets. Only legacy kind-only callers
+  // retain a scoped repair marker: a newer manifest must not cause a prepared
+  // update to download again in Splash. Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown, preparedVersion?: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (kind !== 'claude-code' && kind !== 'codex') {
       throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
     }
-    const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
-    if (!cancelMarker) {
-      throwIpcError('INTERNAL', 'failed to schedule harness update');
+    if (preparedVersion !== undefined) {
+      if (typeof preparedVersion !== 'string' || preparedHarnessVersions.get(kind) !== preparedVersion) {
+        throwIpcError('INVALID_PARAMS', 'prepare the requested harness version before restarting');
+      }
+    } else {
+      const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+      if (!cancelMarker) {
+        throwIpcError('INTERNAL', 'failed to schedule harness update');
+      }
     }
     log.info(`harness update relaunch requested: ${kind}`);
     app.relaunch({ args: process.argv.slice(1) });
@@ -2702,7 +2734,7 @@ export function initUpdateService(): void {
 export async function enableUncustomizedBetaChannel(
   shouldWrite: () => boolean = () => true,
 ): Promise<boolean> {
-  // Linux 目前仅 x64 发布 beta .deb；arm64 等不支持构建不得写入组织默认。
+  // Linux x64 / arm64 支持 beta .deb；其他不支持的构建不得写入组织默认。
   if (!supportsBetaUpdateChannel(process.platform, process.arch)) return false;
   const wasBeta = readUpdateChannelSettings().enableBeta;
   // 先拦住 apply 再等落盘。身份守卫拒绝或写入失败时,旧补丁还得能用。

@@ -6,12 +6,10 @@ import type { BrowserMcpDeps } from '../types.js';
 import { BrowserToolRegistry } from './tool-registry.js';
 import { registerBrowserTools } from './tools.js';
 import browserWorkflowRules from './prompts/rules/browser-workflow.md?raw';
-import recipeAuthorRules from './prompts/rules/recipe-author.md?raw';
 
 /** key → markdown body. Bundled into list_tools responses ONCE per category. */
 const RULES: Record<string, string> = {
   'browser-workflow': browserWorkflowRules,
-  'recipe-author': recipeAuthorRules,
 };
 
 const D_LIST_TOOLS =

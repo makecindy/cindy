@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+const fixture = vi.hoisted(() => ({ handle: vi.fn(), token: 'isolated-test-token', refresh: vi.fn(async () => true),
+  profiles: [] as unknown[], savedProfiles: null as unknown[] | null,
+  capabilitiesJson: '{}', sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn() }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
@@ -9,7 +12,13 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated
 vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
-  select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
+  select: () => ({ from: () => ({
+    where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }),
+    innerJoin: () => ({ where: (condition: import('drizzle-orm').SQL) => ({ limit: async () => [{
+      profile: (fixture.savedProfiles ?? fixture.profiles).find(p => (p as { id: string }).id === new SQLiteSyncDialect().sqlToQuery(condition).params[0]),
+      capabilitiesJson: fixture.capabilitiesJson,
+    }] }) }),
+  }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));
 vi.mock('node:http', async () => {
@@ -42,9 +51,12 @@ vi.mock('ws', async () => {
   } };
 });
 import { withChatServer } from '../chatServer.js';
+import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { createCompanionHomeRegistry } from '../../companion-cloud/homes.js';
 import { createCompanionCloudState } from '../../companion-cloud/state.js';
-import type { CompanionCloudHost } from '../../companion-cloud/runtime.js';
+import { activeCompanionCloud, type CompanionCloudHost } from '../../companion-cloud/runtime.js';
+import * as chatRoom from '../../companion-cloud/room.js';
+import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
 const selfId = '30000000-0000-4000-8000-000000000001';
@@ -83,6 +95,10 @@ describe('Chat Server cloud companions', () => {
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.profiles = [{ id: 'local-bot', displayName: 'Mia', avatar: null, status: 'active' }];
     fixture.sockets = [];
+    fixture.token = 'isolated-test-token';
+    fixture.refresh.mockReset().mockResolvedValue(true);
+    fixture.capabilitiesJson = '{}';
+    fixture.savedProfiles = null;
     me = { actor: { id: selfId }, deviceId: 'desk-1', capabilities: { companionHome: true, directRoomClaim: true } };
     home = null; claimed = false;
     directMembers = [{ id: selfId, state: 'joined' }, { id: botActor, state: 'joined' }];
@@ -99,7 +115,54 @@ describe('Chat Server cloud companions', () => {
     deps = { ensureLane: vi.fn(), abortLane: vi.fn(async () => {}), dispatch: vi.fn(), companionCloud: host } as unknown as BotGroupChatServiceDeps;
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
-  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+  afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); vi.restoreAllMocks(); });
+
+  // PR #7242, unit: production transcript paging must reuse a scan, but still
+  // observe delta edits, reset and revoked access. Existing room tests bypassed this injection.
+  it('reuses a checked transcript for older pages and revalidates changes before reusing it', async () => {
+    claimed = true;
+    const scans = vi.spyOn(chatRoom, 'readAllRoomMessages');
+    const saved = new Map<string, ChatHistoryState>();
+    deps.chatHistoryStore = () => ({
+      read: async room => structuredClone(saved.get(room)),
+      write: async (room, state) => { if (state) saved.set(room, structuredClone(state)); else saved.delete(room); },
+    });
+    const message = (seq: number, text = `text ${seq}`) => ({ id: `m${seq}`, seq: String(seq), authorId: selfId,
+      createdAt: new Date(seq * 1000).toISOString(), content: [{ type: 'text', text }] });
+    let cursor = '1', mode: 'same' | 'edit' | 'reset' | 'forbidden' = 'same';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations') return { body: { id: roomId } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'direct' }, messages: [], cursor } };
+      if (route.includes('/messages?')) {
+        const before = Number(new URL(`https://fixture${route}`).searchParams.get('before') ?? 111);
+        return { body: Array.from({ length: 110 }, (_, i) => message(110 - i, mode === 'reset' ? 'reset' : undefined))
+          .filter(m => Number(m.seq) < before).slice(0, 100) };
+      }
+      if (route.startsWith('/changes?')) {
+        if (mode === 'forbidden') return { status: 403, body: { error: { code: 'FORBIDDEN' } } };
+        if (mode === 'reset') return { status: 409, body: { error: { code: 'RESET_REQUIRED' } } };
+        return { body: { cursor, changes: mode === 'edit' ? [{ type: 'message.updated', data: { message: { ...message(1, 'edited'), revision: 2 } } }] : [] } };
+      }
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const runtime = activeCompanionCloud()!;
+    const first = await runtime.transcript('local-bot');
+    const reads = () => fixture.handle.mock.calls.filter(([route]) => route.startsWith('/changes?') || route.includes('/messages?')).length;
+    const initialReads = reads();
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages).toHaveLength(10);
+    expect(reads()).toBe(initialReads);
+    expect(scans).toHaveBeenCalledTimes(1);
+
+    cursor = '2'; mode = 'edit'; vi.setSystemTime(Date.now() + 31_000);
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages[0]!.text).toBe('edited');
+    expect(reads()).toBe(initialReads + 1);
+    expect(scans).toHaveBeenCalledTimes(2);
+    cursor = '3'; mode = 'reset'; vi.setSystemTime(Date.now() + 31_000);
+    expect((await runtime.transcript('local-bot', first.nextBefore)).messages[0]!.text).toBe('reset');
+    mode = 'forbidden'; vi.setSystemTime(Date.now() + 31_000);
+    await expect(runtime.transcript('local-bot', first.nextBefore)).rejects.toThrow('FORBIDDEN');
+  });
 
   it('claims an empty home for this computer once', async () => {
     claimed = true;
@@ -111,6 +174,231 @@ describe('Chat Server cloud companions', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls(`/actors/${botActor}`, 'PATCH')).toHaveLength(1);
     expect(calls('/executions/claim').length).toBeGreaterThan(1);
+  });
+
+  it('stops later home registrations when a home request restricts background work', async () => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    fixture.profiles.push({ id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' });
+    claimed = true;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', homeDeviceId: null },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', homeDeviceId: null },
+      ] };
+      if (route === `/actors/${botActor}` && method === 'PATCH') return { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
+      if (route === `/actors/${other}` && method === 'PATCH') return { body: { id: other, homeDeviceId: 'desk-1' } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls(`/actors/${botActor}`, 'PATCH')).toHaveLength(1);
+    expect(calls(`/actors/${other}`, 'PATCH')).toHaveLength(0);
+    expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
+  // PR #7919 / chat-work-polling.md: the fallback-avatar branch must honor the same
+  // background gate as ordinary profile writes. Existing avatar tests only covered success.
+  // Unit: two renamed fallback profiles; the first restriction must stop the second HTTP write.
+  it.each([401, 429])('stops fallback profile writes after a background %s', async status => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    home = 'desk-1'; claimed = true;
+    fixture.capabilitiesJson = JSON.stringify({ cloudAvatarFallback: true });
+    fixture.refresh.mockResolvedValue(false);
+    fixture.profiles = [
+      { id: 'local-bot', displayName: 'Mia renamed', avatar: '🤖', status: 'active' },
+      { id: 'other-bot', displayName: 'Other renamed', avatar: '🤖', status: 'active' },
+    ];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', avatar: 'https://cdn.example/mia.png', homeDeviceId: home },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', avatar: 'https://cdn.example/other.png', homeDeviceId: home },
+      ] };
+      if (route === `/actors/${botActor}/profile` && method === 'POST') return { status, body: {
+        error: { code: status === 401 ? 'TOKEN_EXPIRED' : 'RATE_LIMITED' },
+      } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST')).toHaveLength(1);
+    expect(calls(`/actors/${other}/profile`, 'POST')).toHaveLength(0);
+    expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
+  it('gates installation discovery after another companion home was rate limited', async () => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    host.installationId = () => 'this-install';
+    fixture.profiles.push({ id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' });
+    claimed = true;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', homeDeviceId: null },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', homeDeviceId: 'desk-1' },
+      ] };
+      if (route === `/actors/${botActor}` && method === 'PATCH') return { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls(`/actors/${botActor}`, 'PATCH')).toHaveLength(1);
+    expect(calls('/preferences')).toHaveLength(0);
+    expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
+  it('observes installation read limits before another in-flight installation writes its ownership', async () => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    host.installationId = () => 'this-install'; home = 'desk-1'; claimed = true;
+    fixture.profiles.push({ id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' });
+    let finish!: (value: unknown) => void;
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', homeDeviceId: home },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', homeDeviceId: home },
+      ] };
+      if (route === '/preferences' && method === 'GET') return actor === botActor
+        ? { status: 429, body: { error: { code: 'RATE_LIMITED' } } }
+        : new Promise(resolve => { finish = resolve; });
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls('/preferences', 'GET')).toHaveLength(2); // both sent before the restriction arrived
+    finish({ body: [] }); await vi.advanceTimersByTimeAsync(0);
+    expect(calls('/preferences', 'POST')).toHaveLength(0);
+    expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
+  it.each([false, true])('replays every installation check after shared renewal (late 401 after token rotation: %s)', async late => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    host.installationId = () => 'this-install'; home = 'desk-1'; claimed = true;
+    fixture.profiles.push({ id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' });
+    let renewed = false, finish!: (value: boolean) => void;
+    let finishResponse!: (value: unknown) => void;
+    fixture.refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', homeDeviceId: home },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', homeDeviceId: home },
+      ] };
+      if (route === '/preferences' && method === 'GET' && !renewed) return late && actor === other
+        ? new Promise(resolve => { finishResponse = resolve; })
+        : { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls('/preferences', 'GET')).toHaveLength(2);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    fixture.token = 'renewed-test-token';
+    if (late) {
+      finishResponse({ status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls('/preferences', 'GET')).toHaveLength(2);
+    }
+    renewed = true; finish(true); await vi.advanceTimersByTimeAsync(0);
+    expect(calls('/preferences', 'GET')).toHaveLength(4);
+    expect(calls('/preferences', 'POST')).toHaveLength(2);
+    expect(activeCompanionCloud()!.installConfirmed('local-bot')).toBe(true);
+    expect(activeCompanionCloud()!.installConfirmed('other-bot')).toBe(true);
+  });
+
+  it.each(['handover', 'create', 'members', 'organizer'] as const)('lets explicit %s wait for shared renewal and finish registration', async action => {
+    home = 'desk-1'; claimed = true;
+    host.listDevices = async () => [{ deviceId: 'laptop', name: 'Laptop', platform: 'darwin', appVersion: '1', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false }];
+    let expired = false, finish!: (value: boolean) => void;
+    fixture.refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (expired && (route === '/me' || route === '/executions/claim')) return { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+      if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
+      if (action !== 'handover' && route === `/conversations/${roomId}/snapshot`) return { body: {
+        room: { id: roomId, kind: 'group', name: 'Group', revision: 1, state: 'joined', response_mode: 'all', speaking_mode: 'auto', archived: false },
+        members: [{ id: selfId, kind: 'human', name: 'Me', state: 'joined', role: 'owner', ownerActorId: selfId },
+          { id: botActor, kind: 'bot', name: 'Mia', state: 'joined', role: 'member', ownerActorId: selfId }], messages: [], cursor: '1',
+      } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expired = true;
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+      changes: [{ type: 'work.available', data: { work: [{ botId: botActor, conversationId: roomId }] } }] }));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    if (action !== 'handover') signalBotAutonomyBotsChanged();
+    let settled = false;
+    const pending = action === 'handover' ? activeCompanionCloud()!.transfer('local-bot', 'laptop')
+      : action === 'create' ? service.createGroup({ name: 'New group', botIds: ['local-bot'] })
+      : action === 'members' ? service.setMembers({ groupId: roomId, botIds: ['local-bot'] })
+      : service.updateGroup({ groupId: roomId, organizerBotId: 'local-bot' });
+    const completed = pending.then(value => { settled = true; return value; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    expired = false; fixture.token = 'renewed-test-token'; finish(true);
+    const result = await completed;
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    if (action === 'handover') expect(calls(`/actors/${botActor}`, 'PATCH').at(-1)?.[2]).toMatchObject({ homeDeviceId: 'laptop', expectedHomeDeviceId: 'desk-1' });
+  });
+
+  it('continues an explicit action when the background registration it joined was deferred', async () => {
+    home = 'desk-1'; claimed = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(0);
+    let finish!: (value: unknown) => void, held = false;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me' && !held) { held = true; return new Promise(resolve => { finish = resolve; }); }
+      if (route === '/executions/claim') return { status: 429, body: { error: { code: 'RATE_LIMITED' } } };
+      if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
+      return respond(route, method, body);
+    });
+    signalBotAutonomyBotsChanged(); await vi.advanceTimersByTimeAsync(2000);
+    expect(held).toBe(true);
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+      changes: [{ type: 'work.available', data: { work: [{ botId: botActor, conversationId: roomId }] } }] }));
+    await vi.advanceTimersByTimeAsync(250);
+    const created = service.createGroup({ name: 'New group', botIds: ['local-bot'] });
+    finish({ body: me });
+    expect(await created).toMatchObject({ ok: true, groupId: roomId });
+  });
+
+  it('keeps an existing installation confirmation when a local auth hold defers its recheck and an in-flight claim succeeds', async () => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    host.installationId = () => 'this-install'; home = 'desk-1'; claimed = true;
+    fixture.profiles.push({ id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' });
+    const actors = [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', homeDeviceId: home },
+      { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', homeDeviceId: home }];
+    let armed = false, actorsHeld = false;
+    let finishActors!: (value: unknown) => void, finishClaim!: (value: unknown) => void, finishRefresh!: (value: boolean) => void;
+    fixture.refresh.mockImplementation(() => new Promise(resolve => { finishRefresh = resolve; }));
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route === '/actors' && method === 'GET') {
+        if (armed && !actorsHeld) { actorsHeld = true; return new Promise(resolve => { finishActors = resolve; }); }
+        return { body: actors };
+      }
+      if (route === '/preferences' && method === 'GET') return { body: [{ key: 'companion.install.v1', revision: 1,
+        value: { installationId: 'this-install', deviceId: 'desk-1' } }] };
+      if (armed && route === '/executions/claim') return actor === botActor
+        ? new Promise(resolve => { finishClaim = resolve; }) : { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(activeCompanionCloud()!.installConfirmed('local-bot')).toBe(true);
+    const wake = (botId: string) => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+      changes: [{ type: 'work.available', data: { work: [{ botId, conversationId: roomId }] } }] }));
+    armed = true; wake(botActor); await vi.advanceTimersByTimeAsync(1000);
+    expect(actorsHeld).toBe(true);
+    wake(other); await vi.advanceTimersByTimeAsync(250);
+    expect(fixture.refresh).toHaveBeenCalledOnce();
+    finishActors({ body: actors }); await vi.advanceTimersByTimeAsync(0);
+    finishClaim({ body: { execution } }); await vi.advanceTimersByTimeAsync(0);
+    expect(activeCompanionCloud()!.installConfirmed('local-bot')).toBe(true);
+    expect(host.deliverToCanonical).toHaveBeenCalledOnce();
+    armed = false; fixture.token = 'renewed-test-token'; finishRefresh(true); await vi.advanceTimersByTimeAsync(0);
   });
 
   it('drops the previous owner\'s companion homes as soon as the service is touched after an account switch', async () => {
@@ -132,9 +420,13 @@ describe('Chat Server cloud companions', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls(`/actors/${botActor}`, 'PATCH').length).toBeGreaterThan(0);
     expect(calls('/executions/claim')).toHaveLength(0);
-    // Registration succeeds on a later cycle: this computer is the home and starts claiming.
+    // Registration is retried by the 60s actor refresh, not the former 5s cadence.
+    // A failed home registration must still fence claims throughout that interval.
     patch = () => { home = 'desk-1'; return { body: { id: botActor, homeDeviceId: 'desk-1' } }; };
     await vi.advanceTimersByTimeAsync(20_000);
+    expect(calls('/executions/claim')).toHaveLength(0);
+    expect(calls(`/actors/${botActor}`, 'PATCH')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(32_000);
     expect(calls('/executions/claim').length).toBeGreaterThan(0);
   });
 
@@ -148,6 +440,64 @@ describe('Chat Server cloud companions', () => {
     expect(host.homes.isShadowed('local-bot')).toBe(true);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
+  // A reset skips the compacted actor.changed that announced a home move; the server only emits
+  // it for home changes. Re-read before claiming from the new head, not after the 60s refresh.
+  it('re-reads companion homes before claiming after an owner event reset', async () => {
+    claimed = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0]!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(host.homes.isHomeHere('local-bot')).toBe(true);
+    home = 'laptop';
+    const before = calls('/executions/claim').length;
+    socket.emit('message', JSON.stringify({ type: 'scope_error', scope: `actor:${selfId}`, error: { code: 'RESET_REQUIRED', details: { head: '42' } } }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(host.homes.homeOf('local-bot')).toBe('laptop');
+    expect(calls('/executions/claim')).toHaveLength(before);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '42' }));
+  });
+
+  // #6897: the profile survives a lost/corrupt sync file and an unsuccessful bookkeeping write.
+  // Exercise real registration and the outbound actor payload, not a cached flag alone.
+  it.each(['missing', 'corrupt', 'write-failed'])(
+    'preserves the cloud avatar after restart with %s sync bookkeeping', async failure => {
+    service.dispose();
+    fixture.capabilitiesJson = JSON.stringify({ cloudAvatarFallback: true });
+    host = {
+      ...host,
+      openState: (_endpoint, _human, current) => {
+        const state = createCompanionCloudState({ filePath: 'state.json', current,
+          io: { read: () => failure === 'corrupt' ? 'not json' : null, write: () => {
+            if (failure === 'write-failed') throw new Error('disk full');
+          } } });
+        return state;
+      },
+    } as typeof host;
+    deps = { ...deps, companionCloud: host } as BotGroupChatServiceDeps;
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Old local copy', avatar: '🦊', status: 'active' }];
+    // Reconciliation can replace the initially read roster before publication.
+    fixture.savedProfiles = [{ id: 'local-bot', displayName: 'Mia (renamed)', avatar: '🤖', status: 'active' }];
+    home = 'desk-1';
+    claimed = true;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' && method === 'GET'
+      ? { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', avatar: 'https://cdn.example/old.png', avatarSource: 'cloud', homeDeviceId: 'desk-1' }] }
+      : respond(route, method, body));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST').map(call => call[2])).toEqual([
+      { name: 'Mia (renamed)', avatar: 'https://cdn.example/old.png', avatarSource: 'cloud' },
+    ]);
+    // A deliberate portable avatar with no fallback provenance remains publishable.
+    fixture.capabilitiesJson = '{}';
+    fixture.handle.mockClear();
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST').map(call => call[2])).toContainEqual(
+      { name: 'Mia (renamed)', avatar: '🤖', avatarSource: null },
+    );
   });
 
   it('publishes each companion\'s name on its own, so one broken avatar never blocks the others', async () => {

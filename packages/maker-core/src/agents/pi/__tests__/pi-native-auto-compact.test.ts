@@ -636,7 +636,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     },
   );
 
-  function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number; modelOverrides?: Record<string, { reserveTokens?: number }> }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -648,7 +648,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     walk(agentHome);
     expect(files.length).toBeGreaterThan(0);
     return JSON.parse(readFileSync(files[files.length - 1]!, "utf8")) as {
-      compaction?: { reserveTokens?: number };
+      compaction?: { reserveTokens?: number; modelOverrides?: Record<string, { reserveTokens?: number }> };
     };
   }
 

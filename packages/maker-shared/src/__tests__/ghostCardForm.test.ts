@@ -107,6 +107,17 @@ describe("declarative card forms", () => {
     expect(visibleMailAttachments({ ...values, bodyHtml: '' }).map(f => f.key)).toEqual(['body', 'unused', 'pdf']);
     expect(visibleMailAttachments({ ...values, bodyHtml: '', quoteHtml: '' })).toEqual(files);
   });
+  // Unit regression through insertMailImage: attachment-list coverage already checked CID
+  // prefixes, but insertion still used substring matching. `cid:photo-large` plus a `photo`
+  // attachment was the minimal input that incorrectly left the user's draft unchanged.
+  it('inserts an image when another inline CID only shares its prefix', () => {
+    const values = { bodyHtml: '<img src="cid:photo-large">', quoteHtml: '', attachmentItems: JSON.stringify([
+      { key: 'photo', filename: 'photo.png', mimeType: 'image/png', contentId: 'photo' },
+    ]) };
+    const next = insertMailImage(values, 'attachmentItems', 'photo');
+    expect(next.bodyHtml).toContain('<img src="cid:photo-large">');
+    expect(next.bodyHtml).toContain('<img src="cid:photo" alt="photo.png"');
+  });
   it('inserts existing image bytes with an unused CID and keeps preview addresses out of the authored HTML', () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     const values = { bodyHtml: '<html><head><style>img{width:200px}</style></head><body><p>Hi</p></body></html>', attachmentItems: JSON.stringify([

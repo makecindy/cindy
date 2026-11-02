@@ -1,7 +1,15 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import type { WritableDirectoryGrantErrorCode } from '../../shared/writableDirectoryGrantError.js';
 
 const GRANT_TTL_MS = 5 * 60_000;
+
+/** A rejected picker proof is distinct from a task creation/storage failure. */
+export class WritableDirectoryPickerGrantError extends Error {
+  constructor(readonly code: WritableDirectoryGrantErrorCode, message: string) {
+    super(message);
+  }
+}
 
 type WritableDirectoryPickerGrant = {
   scopeId: string;
@@ -71,11 +79,21 @@ export async function consumeWritableDirectoryPickerGrants(input: {
     const key = grantKey(input.senderId, input.scopeId, directory);
     const grant = grants.get(key);
     if (!grant) {
-      throw new Error('Writable directory was not authorized by the system picker');
+      throw new WritableDirectoryPickerGrantError(
+        'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED',
+        'Writable directory was not authorized by the system picker',
+      );
     }
     const currentRealPath = await fs.realpath(directory).catch(() => null);
-    if (currentRealPath === null || currentRealPath !== grant.realPath) {
-      throw new Error('Writable directory changed after it was selected');
+    if (currentRealPath === null) {
+      throw new WritableDirectoryPickerGrantError(
+        'WRITABLE_DIRECTORY_UNAVAILABLE', 'Writable directory is unavailable',
+      );
+    }
+    if (currentRealPath !== grant.realPath) {
+      throw new WritableDirectoryPickerGrantError(
+        'WRITABLE_DIRECTORY_TARGET_CHANGED', 'Writable directory changed after it was selected',
+      );
     }
     matched.push(key);
   }

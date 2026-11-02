@@ -11,6 +11,8 @@ import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
 import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
+import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import { applyListContinuation } from '@/lib/composerListContinuation';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
@@ -456,6 +458,35 @@ export function handleStructuredListBreak(view: EditorView): boolean {
     view.dispatch(view.state.tr.insertText('[ ] ').scrollIntoView());
   }
   return split;
+}
+
+/** Handle list editing only for newline keys; leave sending and IME to the caller. */
+export function handleComposerListEnter(
+  view: EditorView,
+  event: KeyboardEvent,
+  preference: ComposerSendShortcutPreference,
+): boolean {
+  if (
+    event.key !== 'Enter' ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.isComposing ||
+    !(event.shiftKey || event.altKey || preference === 'modifier-enter')
+  ) return false;
+
+  const { $from } = view.state.selection;
+  if ($from.parent.type.spec.code) return false;
+  // Fenced code remains plain text in the composer. Do not turn a code line
+  // that happens to start with a list marker into a new list item.
+  if (
+    $from.depth === 1 &&
+    scanFenceState(
+      $from.parent.textBetween(0, $from.parentOffset, '\n', '\n'),
+      documentFenceStateBefore(view.state.doc, $from.before(1)),
+    )
+  ) return false;
+
+  return handleStructuredListBreak(view) || applyListContinuation(view);
 }
 
 /** Exit an empty structured item with one Backspace, matching plain-list input. */

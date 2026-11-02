@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
+import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
-import { fastModeToStorage } from '@cindy/maker-shared';
 import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
 import { withParsedPluginMessageAttachments } from '../../cindy-media/pluginMessageAttachments.js';
 import { PLUGIN_ATTACHMENT_MAX_BYTES } from '../../../shared/pluginAttachments.js';
@@ -12,8 +13,6 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
-  isTeamPlanLabelLocked,
-  isTeamPlanLabelLockedByReceipt,
   PluginTaskError,
   assertPluginTaskResult,
   readPluginTaskPlanReceipt,
@@ -21,41 +20,9 @@ import {
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
-import type { PluginTeamPlan, PluginTaskView } from '../../../shared/pluginTasks.js';
+import type { PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
-
-it('locks only unsettled team-plan labels for worker rename', () => {
-  const route = {} as never;
-  const plan = {
-    concurrency: 2,
-    items: [
-      { label: 'w0', workingDir: '/answer', route },
-      { label: 'w1', workingDir: '/answer', route },
-    ],
-  } as unknown as PluginTeamPlan;
-  expect(isTeamPlanLabelLocked(plan, [], ['w0'])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, [], ['w1', null])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w1'])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, [], ['other'])).toBe(false);
-  expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
-});
-
-it('releases the plan label lock only after the plugin is uninstalled', () => {
-  const route = {} as never;
-  const plan = {
-    concurrency: 1,
-    items: [{ label: 'w0', workingDir: '/answer', route }],
-  } as unknown as PluginTeamPlan;
-  const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
-  expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
-  // 插件卸载（任务归属确实撤销）后，保留的收据不再锁定改名；
-  // 停用 / 未批准仍传入 true（可恢复），继续锁定由上层保证。
-  expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);
-});
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
   const f=fixture(), task=await f.create();
@@ -66,30 +33,7 @@ it('rejects oversized plans before saving and refuses oversized legacy receipts 
   for (const payload of [' '.repeat(PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS+1), JSON.stringify({teamPlan:{task:'x'.repeat(PLUGIN_TEAM_PLAN_MAX_JSON_CHARS)}})])
     expect(()=>readPluginTaskPlanReceipt(payload)).toThrow('size');
   f.rows.get(task.taskId)!.payload=JSON.stringify({teamPlan:plan});
-  await expect(f.service.settleWorkerLabel('p',task.taskId,'w0')).rejects.toMatchObject({code:'INVALID_REQUEST'});
-});
-
-it.each([false,true])('production Auto context checks uninstall after its projection await (worker=%s)', async worker => {
-  for (const revoked of [false,true]) {
-    const f=fixture(),task=await f.create();
-    const session={...f.route,source:'plugin',workingDir:'/answer',permissionMode:'auto',status:'active'};
-    const results=[[session],worker?[{leadId:task.taskId,label:'w',teamId:'team',teamStatus:'active'}]:[],[session]];
-    const query={from:()=>query,where:()=>query,innerJoin:()=>query,limit:async()=>results.shift()};
-    const epoch={client:{drizzle:{select:()=>query},queryOne:async()=>({unchanged:1}),tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
-    let load!:(id:string)=>Promise<unknown>;
-    const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
-      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,fastModeToStorage,
-      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
-      pluginTaskServiceForCurrentOwner:()=>f.service,readPluginTaskConfig:()=>({permissionMode:'auto'}),
-      readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
-    const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-    const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
-    const block=source.slice(start,source.indexOf('\n  }));',start)+7);
-    const js=ts.transpileModule(block,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-    new Function(...Object.keys(deps),js)(...Object.values(deps));
-    if(revoked)await expect(load(worker?'worker':task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
-    else await expect(load(worker?'worker':task.taskId)).resolves.toMatchObject({authorized:true,pluginId:'p'});
-  }
+  await expect(f.service.setTeamPlan('p',task.taskId,{concurrency:1,items:[]})).rejects.toMatchObject({code:'INVALID_REQUEST'});
 });
 
 function fixture() {
@@ -204,6 +148,164 @@ function fixture() {
     },
   };
 }
+
+// Exercise the production Main creator with an in-memory persistence boundary;
+// service-only mocks cannot catch a permission choice being dropped by register.
+const permissionCreatorSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+const permissionCreatorStart = permissionCreatorSource.indexOf('      createSession: async (pluginId, taskId, title, route,');
+const permissionCreatorCode = ts.transpileModule('return (' + permissionCreatorSource.slice(
+  permissionCreatorStart + '      createSession: '.length,
+  permissionCreatorSource.indexOf('\n      },', permissionCreatorStart) + 8,
+) + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+function useProductionPermissionCreator(f: ReturnType<typeof fixture>, configured: { permissionMode: string }, useDefaults = true) {
+  const snapshot = {};
+  const persist = vi.fn(async (options: { sessionId: string; title: string; permissionMode: string;
+    onPersistenceStarted(): void; shouldContinue(): boolean }) => {
+    if (!options.shouldContinue()) throw new PluginTaskError('PERMISSION_DENIED', 'Configuration changed');
+    options.onPersistenceStarted();
+    f.tasks.set(options.sessionId, { taskId: options.sessionId, title: options.title, status: 'active',
+      resolvedConfig: f.route, revision: 1, permissionMode: options.permissionMode });
+  });
+  const deps = { assertPlugin: () => {}, getPluginTaskDefaults: () => useDefaults ? ({ ...configured }) : undefined,
+    resolveRoute: (...args: Parameters<typeof f.deps.resolveRoute>) => f.deps.resolveRoute(...args),
+    PluginTaskError, isPluginTaskPermissionAllowed, createPluginTaskSession: persist,
+    clampPluginTaskPermissionMode: (mode: unknown) => mode ?? 'ask', snapshot,
+    getCurrentDbClientSnapshot: () => snapshot, isPluginTaskAuthorized: () => true,
+  };
+  f.deps.readPermissionMode = () => useDefaults ? configured.permissionMode : undefined;
+  f.deps.createSession = new Function(...Object.keys(deps), permissionCreatorCode)(...Object.values(deps));
+  return persist;
+}
+
+// unit: new per-create permissions must reach ordinary Session persistence while
+// remaining within the user policy. Previous cases only exercised the default.
+it('persists the chosen creation permission without changing defaults or duplicate requests', async () => {
+  const f = fixture(), configured = { permissionMode: 'bypassPermissions' };
+  const persist = useProductionPermissionCreator(f, configured);
+  for (const permissionMode of ['ask', 'auto', 'bypassPermissions'] as const) {
+    const request = { requestKey: permissionMode, title: 'Work', permissionMode };
+    const task = await f.service.create('p', request);
+    expect(task.permissionMode).toBe(permissionMode);
+    expect(await f.service.create('p', request)).toEqual(task);
+    await expect(f.service.create('p', { ...request, permissionMode: permissionMode === 'ask' ? 'auto' : 'ask' }))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  }
+  expect((await f.create()).permissionMode).toBe('bypassPermissions');
+  expect(await f.create()).toMatchObject({ permissionMode: 'bypassPermissions' });
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(configured).toEqual({ permissionMode: 'bypassPermissions' });
+});
+
+// unit: a hidden card cannot cap explicit creation, sending or queued acceptance.
+// Enabled-card cases below retain their original ceiling and revocation behavior.
+it.each(['auto', 'bypassPermissions'] as const)('uses the hidden plugin configuration through %s creation and queued acceptance', async permissionMode => {
+  const f = fixture(), configured = { permissionMode: 'ask' };
+  useProductionPermissionCreator(f, configured, false);
+  const task = await f.service.create('p', { requestKey: 'independent', title: 'Work', permissionMode });
+  configured.permissionMode = 'plan';
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'input', text: 'Continue' });
+  await f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution);
+  f.deps.inspect = async () => ({ execution: f.execution, pending: [] });
+  expect((await f.service.getRun('p', run.runId)).status).toBe('running');
+  expect((await f.service.get('p', task.taskId)).permissionMode).toBe(permissionMode);
+  expect(configured.permissionMode).toBe('plan');
+});
+
+// unit: full access must work through ordinary send/accept, but a revoked user
+// ceiling must block the queued input before execution. No full-access path existed before.
+it('delivers an authorized full-access task and rechecks the ceiling before acceptance', async () => {
+  const f = fixture(), configured = { permissionMode: 'bypassPermissions' };
+  useProductionPermissionCreator(f, configured);
+  const task = await f.service.create('p', { requestKey: 'full', title: 'Work', permissionMode: 'bypassPermissions' });
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision,
+    requestKey: 'send', text: 'Continue' });
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  configured.permissionMode = 'auto';
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  await expect(f.service.create('p', { requestKey: 'denied', title: 'Work', permissionMode: 'bypassPermissions' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+it('rejects an unauthorized creation permission before reserving a task', async () => {
+  const f = fixture(), configured = { permissionMode: 'ask' };
+  const persist = useProductionPermissionCreator(f, configured);
+  const request = { requestKey: 'new', title: 'Work', permissionMode: 'auto' as const };
+  await expect(f.service.create('p', request)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(persist).not.toHaveBeenCalled();
+  expect(f.rows.size).toBe(0);
+  configured.permissionMode = 'auto';
+  expect((await f.service.create('p', request)).permissionMode).toBe('auto');
+});
+
+it.each(['route', 'persistence'] as const)('rechecks creation permission after %s preparation', async phase => {
+  const f = fixture(), configured = { permissionMode: 'auto' };
+  const persist = useProductionPermissionCreator(f, configured);
+  if (phase === 'route') f.deps.resolveRoute = async () => { configured.permissionMode = 'ask'; return f.route; };
+  else persist.mockImplementationOnce(async options => {
+    configured.permissionMode = 'ask';
+    options.onPersistenceStarted();
+  });
+  await expect(f.service.create('p', { requestKey: 'new', title: 'Work', permissionMode: 'auto' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.tasks.size).toBe(0);
+  expect(f.rows.size).toBe(0);
+});
+
+// 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
+// unit: new-title intent lives in the existing create receipt; context must reach
+// dispatch and participate in deduplication rather than becoming visible prose.
+it('persists automatic naming intent and dispatches separate context without duplicating title requests', async () => {
+  const f = fixture();
+  const schedule = vi.fn();
+  f.deps.scheduleAutoTitle = schedule;
+  const task = await f.service.create('p', { requestKey: 'new', autoTitle: true });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ autoTitle: true });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here', context: 'Window contents' };
+  await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe('Window contents');
+  expect(schedule).toHaveBeenCalledOnce();
+  await expect(f.service.send('p', { ...request, context: 'Another window' }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+// unit: a failed naming-metadata read must not leave an unsent receipt that
+// suppresses the retry. Inject the store failure after host bookkeeping starts.
+it('retries after a failed naming-metadata read without leaving an unsent receipt', async () => {
+  const f = fixture(), task = await f.create();
+  const get = f.deps.store.get;
+  let failRead = false;
+  f.deps.prepareInvocation = () => { failRead = true; return 'invocation'; };
+  f.deps.store.get = async id => {
+    if (failRead) { failRead = false; throw new Error('Store read failed'); }
+    return get(id);
+  };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here' };
+  await expect(f.service.send('p', request)).rejects.toThrow('Store read failed');
+  expect([...f.rows.values()].filter(row => row.operation === 'send')).toHaveLength(0);
+  f.deps.prepareInvocation = () => 'invocation';
+  await f.service.send('p', request);
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+});
+
+// unit；现有任务测试检查任务状态，未检查宿主统计观察者收到哪些事实。
+it('records one accepted input after create and does not count receipt replay or rejected dispatch', async () => {
+  const f = fixture();
+  const accepted: string[] = [];
+  f.deps.prepareInvocation = (_pluginId, id) => id;
+  f.deps.acceptInvocation = (_pluginId, id) => { accepted.push(id); };
+  const task = await f.create();
+  expect(accepted).toEqual([]);
+  const request = { taskId: task.taskId, requestKey: 'first-input', expectedRevision: task.revision, text: 'hello' };
+  const run = await f.service.send('p', request);
+  await f.service.send('p', request);
+  expect(accepted).toEqual([run.runId]);
+  vi.mocked(f.deps.dispatch).mockResolvedValueOnce({ ok: false });
+  await f.service.send('p', { ...request, requestKey: 'rejected-input' });
+  expect(accepted).toEqual([run.runId]);
+});
 
 // Targets create in a selected project through the same service, not directly through
 // session persistence. Without its create receipt, helper tools and uninstall lose ownership.
@@ -838,7 +940,7 @@ it('preserves exact retries of pre-canonical development receipts', async () => 
   await expect(createPluginTaskService(f.deps).create('p', request)).resolves.toEqual(task);
   await expect(f.service.create('p', { ...request, route: { ...f.route, model: 'changed' } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });
-it('freezes owned plan and retains settled labels',async()=>{const f=fixture(),task=await f.create();const plan={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};await f.service.setTeamPlan('p',task.taskId,plan);await f.service.setTeamPlan('p',task.taskId,plan);await expect(f.service.setTeamPlan('other',task.taskId,plan)).rejects.toThrow('Task not found');await expect(f.service.setTeamPlan('p',task.taskId,{...plan,concurrency:3})).rejects.toThrow('immutable');await f.service.settleWorkerLabel('p',task.taskId,'sample');expect(JSON.parse(f.rows.get(task.taskId)!.payload).settledLabels).toEqual(['sample']);});
+it('freezes the owned plan',async()=>{const f=fixture(),task=await f.create();const plan={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};await f.service.setTeamPlan('p',task.taskId,plan);await f.service.setTeamPlan('p',task.taskId,plan);await expect(f.service.setTeamPlan('other',task.taskId,plan)).rejects.toThrow('Task not found');await expect(f.service.setTeamPlan('p',task.taskId,{...plan,concurrency:3})).rejects.toThrow('immutable');expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(plan);});
 
 
 it('rechecks permissions when queued input reaches native dispatch', async () => {
@@ -901,7 +1003,50 @@ it.each(['send', 'cancel'] as const)('drain waits for the full %s operation incl
  f.switchOwner();
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe(kind === 'send' ? 'running' : 'cancelled');
 });
-it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as const)('drains the real releaseWorker branch through %s', async phase => {
+function releaseWorkerHandler(deps: Record<string, unknown>) {
+ const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+ const branch = source.slice(source.indexOf("      case 'releaseWorker': {"),source.indexOf("      case 'getTeam': {"));
+ const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ return new Function(...Object.keys(deps),js)(...Object.values(deps));
+}
+
+// PR #7824: exercise setTeamPlan -> public updateWorker -> releaseWorker.
+// Existing release coverage only used unchanged labels. A renamed Worker must
+// still archive by ID, including an archived retry, without rewriting old receipts (unit).
+it.each(['active', 'archived'])('releases a renamed planned Worker by ID from %s', async status => {
+ const f = fixture(), task = await f.create();
+ const plan = {concurrency: 1, items: [{label: 'w0', workingDir: '/answer', route: f.route}]};
+ await f.service.setTeamPlan('p', task.taskId, plan);
+ const receipt = f.rows.get(task.taskId)!;
+ receipt.payload = JSON.stringify({...JSON.parse(receipt.payload), settledLabels: ['previous']});
+ const before = structuredClone(receipt);
+ const record = {id: 'worker', teamId: 'team', leadSessionId: task.taskId, sessionId: 'child', role: 'Worker', label: 'w0', status};
+ const team = createOrcaTeamService({
+  listWorkersByLead: async () => [record],
+  updateWorkerIdentity: async ({label}: {label: string}) => { record.label = label; return {ok: true}; },
+  broadcastOrcaWorkerChanged: () => {},
+ } as unknown as OrcaTeamServiceDeps);
+ await expect(team.updateWorker({callerLeadSessionId: task.taskId, workerId: record.id, label: 'w1'})).resolves.toMatchObject({ok: true, label: 'w1'});
+ const query = {from: () => query, innerJoin: () => query, where: () => query, limit: async () => [record]};
+ const epoch = {client: {drizzle: {select: () => query}}};
+ const archiveWorker = vi.fn(async ({beforeArchive}: {beforeArchive: () => Promise<void>}) => {
+  await beforeArchive(); record.status = 'archived'; return {ok: true, workerId: record.id};
+ });
+ const run = releaseWorkerHandler({
+  service: f.service, getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginTaskResult, readPluginTaskPlanReceipt,
+  orcaWorkers: {}, orcaTeams: {}, sessions: {}, eq: () => true, and: () => true,
+  createPluginTaskStore: () => f.deps.store, readPluginWorkerCompletion: async () => ({row: record, completedAt: 1}),
+  orcaTeamService: {archiveWorker},
+ });
+ const request = {kind: 'releaseWorker', taskId: task.taskId, workerId: record.id, completedAt: 1};
+ await expect(run('p', request)).resolves.toMatchObject({ok: true, workerId: record.id});
+ await expect(run('p', request)).resolves.toMatchObject({ok: true, workerId: record.id});
+ expect(record.status).toBe('archived');
+ expect(archiveWorker).toHaveBeenCalledTimes(status === 'archived' ? 0 : 1);
+ expect(f.rows.get(task.taskId)).toEqual(before);
+});
+
+it.each(['validation', 'archive', 'alreadyArchived', 'failure'] as const)('drains the real releaseWorker branch through %s', async phase => {
  const f = fixture();
  let release!: () => void, entered!: () => void;
  const barrier = new Promise<void>(resolve => { release = resolve; });
@@ -909,31 +1054,26 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  const pause = async () => { entered(); await barrier; };
  const service = {...f.service,
   get: vi.fn(async () => { if (phase === 'validation') await pause(); return {taskId:'lead'}; }),
-  settleWorkerLabel: vi.fn(async () => {
-   if (phase === 'settlement' || phase === 'alreadyArchived') await pause();
-   // Native completion enqueues work on the real receipt tail. Holding that
-   // tail across archive would deadlock this callback.
-   await f.create();
-  }),
  };
  const archiveWorker = vi.fn(async ({beforeArchive}: {beforeArchive: () => Promise<void>}) => {
   await beforeArchive();
   if (phase === 'archive' || phase === 'failure') await pause();
   if (phase === 'failure') throw new Error('archive failed');
+  // Native completion enqueues work on the real receipt tail. Holding that
+  // tail across archive would deadlock this callback.
   await f.create();
   return {ok:true};
  });
  const record = {id:'worker',sessionId:'child',label:'one',status:phase === 'alreadyArchived' ? 'archived' : 'done'};
  const query = {from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[record]};
  const epoch = {client:{drizzle:{select:()=>query}}};
- const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,readPluginTaskPlanReceipt,
+ const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,
   orcaWorkers:{},orcaTeams:{},sessions:{},eq:()=>true,and:()=>true,
-  createPluginTaskStore:()=>({get:async()=>({payload:JSON.stringify({teamPlan:{items:[{label:'one'}]}})})}),
-  readPluginWorkerCompletion:async()=>({row:record,completedAt:1}),orcaTeamService:{archiveWorker}};
- const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
- const branch = source.slice(source.indexOf("      case 'releaseWorker': {"),source.indexOf("      case 'getTeam': {"));
- const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
- const run = new Function(...Object.keys(deps),js)(...Object.values(deps));
+  readPluginWorkerCompletion:async()=>{
+   if (phase === 'alreadyArchived') { await pause(); await f.create(); }
+   return {row:record,completedAt:1};
+  },orcaTeamService:{archiveWorker}};
+ const run = releaseWorkerHandler(deps);
  const operation = run('p',{kind:'releaseWorker',taskId:'lead',workerId:'worker',completedAt:1});
  const result = phase === 'failure' ? expect(operation).rejects.toThrow('archive failed') : expect(operation).resolves.toMatchObject({ok:true});
  await started;
@@ -942,7 +1082,6 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  await new Promise(resolve=>setTimeout(resolve,0));
  expect(drained).toBe(false);
  release(); await Promise.all([result,drain]);
- expect(service.settleWorkerLabel).toHaveBeenCalledTimes(phase === 'failure' ? 0 : 1);
  expect(archiveWorker).toHaveBeenCalledTimes(phase === 'alreadyArchived' ? 0 : 1);
  await f.service.drain();
  f.switchOwner();
@@ -1004,9 +1143,9 @@ describe('current plugin dispatch authority', () => {
     await expect(f.service.get('p',run.taskId)).resolves.toMatchObject({planModeEnabled:true});
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
   });
-  it.each(['plan', 'ask', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
-    const modes = ['plan', 'ask', 'acceptEdits', 'auto'];
-    for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
+  it.each(['plan', 'ask', 'acceptEdits', 'auto', 'bypassPermissions'])('allows only authority within %s configuration', configured => {
+    const modes = ['plan', 'ask', 'acceptEdits', 'auto', 'bypassPermissions'];
+    for (const mode of [...modes, 'unknown', undefined]) {
       expect(isPluginTaskPermissionAllowed(mode, configured)).toBe(modes.includes(mode!) && modes.indexOf(mode!) <= modes.indexOf(configured));
     }
     expect(isPluginTaskPermissionAllowed('auto', undefined)).toBe(false);
@@ -1241,6 +1380,86 @@ it('rechecks saved preferences at the runtime mutation boundary', async () => {
   expect(apply).not.toHaveBeenCalled();
 });
 
+it('an open plugin selection without a source session follows the auxiliary chain at low effort', async () => {
+  // Rule: a plugin's own persistent task must not borrow the new-task composer
+  // model; the settings copy says it follows the system auxiliary model. It runs
+  // on Pi when the provider offers the model there (2026-10-28). tier: unit.
+  const f = fixture();
+  const selected = { harness: 'codex' as const, model: 'next', providerId: f.route.providerId, effort: 'high' as const, fastMode: false };
+  const resolver = createSessionExecutionResolver({
+    captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); },
+    readDefault: () => ({ agentKind: selected.harness, model: selected.model, providerId: selected.providerId, effort: selected.effort, fastMode: selected.fastMode }),
+    availableAgents: () => ['codex', 'pi'],
+    availableModels: () => [{ id: 'next', efforts: ['high'] }, { id: 'cheap', efforts: ['low', 'high'] }, { id: 'nolow', efforts: ['high'] }, { id: 'onpi', efforts: ['medium', 'high'] }],
+    hasCindyAiApiKey: () => true,
+    readProviderRouting: async () => ({ availability: { 'claude-code': [],
+      pi: [{ id: f.route.providerId, name: 'provider', models: ['onpi'] }],
+      codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
+      resolveDefaultProviderIdForModel: () => f.route.providerId }),
+  });
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const resolveStart = source.indexOf('    const resolveRoute = async');
+  const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
+  const run = (candidates: Array<{ agentKind: 'codex'; providerId: string; model: string }>, config = {}, sourceSessionId?: string) => {
+    const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
+      activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => sourceSessionId,
+      resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+      getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
+      auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
+    const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function(...Object.keys(deps), js)(...Object.values(deps))('p') as Promise<{ model: string; effort: string }>;
+  };
+  // First usable candidate wins, at low effort; a model Pi does not offer stays on the chain's harness.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low', agentKind: 'codex' });
+  // A model the provider offers on Pi runs on Pi, at its lightest level.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'onpi' }]))
+    .resolves.toMatchObject({ model: 'onpi', effort: 'medium', agentKind: 'pi' });
+  // A chain head without a light effort level yields to the next candidate that has one.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  // Only when no candidate offers a light level does a model route at its default effort.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
+  // No usable candidate: the new-task selection remains the last resort.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  // An explicit plugin model never consults the chain.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
+});
+
+it('archives only its own idle task through the host writer and treats archived tasks as done', async () => {
+  // Rule: plugins rotate per-video tasks and archive the previous one; a working task is never cut off. tier: unit.
+  const f = fixture(), task = await f.create();
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  (f.deps.inspect as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ execution: f.execution, pending: [] });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.deps.archive).not.toHaveBeenCalled();
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect(f.deps.archive).toHaveBeenCalledTimes(1);
+  await expect(f.service.archive('other', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  await expect(f.service.send('p', { taskId: task.taskId, requestKey: 'late', expectedRevision: task.revision, text: 'x' })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  const bare = fixture(), plain = await bare.create();
+  await expect(bare.service.archive('p', { taskId: plain.taskId })).rejects.toMatchObject({ code: 'HOST_NOT_READY' });
+});
+
+// Review 2026-10-29 (Greptile P1): the idle check ran before the archive waited for the session
+// write lock, so input sent in between was archived out from under the user. tier: unit.
+it('does not archive a task that became busy while the archive waited for the session lock', async () => {
+  const f = fixture(), task = await f.create();
+  let busy = false;
+  f.deps.isBusy = () => busy;
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    busy = true; // the user sends input while the write waits for the lock
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.tasks.get(task.taskId)!.status).toBe('active');
+});
+
 it.each([
   ['provider', 'reset'], ['provider', 'partial'],
   ['mutation', 'reset'], ['mutation', 'partial'],
@@ -1277,9 +1496,12 @@ it.each([
   const preference = source.slice(preferenceStart, source.indexOf('      readPermissionMode:', preferenceStart));
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
-  const deps = { readPluginTaskConfig: () => config, getSelectedNewMakerRoute: () => selected,
+  const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
     activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
-    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
+    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+    // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
+    getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

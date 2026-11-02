@@ -138,6 +138,10 @@ describe('payloadSummary', () => {
       ],
     });
 
+    // 中间空行计入改动行；结尾换行不额外多算一行。
+    expect(buildPayloadToolDiff('Write', { file_path: '/repo/a.txt', content: 'a\n\nb' })?.insertions).toBe(3);
+    expect(buildPayloadToolDiff('Write', { file_path: '/repo/a.txt', content: 'a\n' })?.insertions).toBe(1);
+
     expect(buildPayloadToolDiff('Read', { file_path: '/repo/app.ts' })).toBeUndefined();
     expect(buildPayloadToolDiff('Edit', { old_string: 'a', new_string: 'b' })).toBeUndefined();
   });
@@ -389,6 +393,18 @@ describe('payloadSummary', () => {
       uri: 'data:image/png;base64,aaa',
     }))).toMatchObject({
       previewText: '内联图片数据 · PNG · 2 B',
+    });
+
+    // 约 1 MiB 的内联图片:档位要按取整后的展示值选,不能留在 KB 档显示 "1024 KB"。
+    // 1048575 字节的 base64 载荷,按解码后的字节数计(无 padding)。
+    const nearMibB64 = 'A'.repeat(1398100);
+    expect(summarizeMessagePayloadBody(buildAttachmentPayload({
+      kind: 'image',
+      name: 'big.png',
+      previewable: true,
+      uri: `data:image/png;base64,${nearMibB64}`,
+    }))).toMatchObject({
+      bodyText: '内联图片数据 · PNG · 1.0 MB',
     });
 
     expect(buildAttachmentPayload({

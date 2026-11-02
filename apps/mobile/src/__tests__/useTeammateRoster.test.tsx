@@ -38,7 +38,7 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers
 it('offers only real online hosts advertising create, including a host with an empty roster', async () => {
   await render();
   expect(result.targets.map(host => host.deviceId)).toEqual(['old', 'new']);
-  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   expect(h.link.invoke).toHaveBeenCalledTimes(2); // No extra capability probe or mutation.
   expect(result.authoritative).toBe(true);
   h.list.isOnline.mockReturnValue(false); await render(); expect(result.createTargets).toEqual([]);
@@ -137,7 +137,7 @@ it('exposes only computers whose manifest advertises group chats, keeping them t
   ] });
   h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
   await render();
-  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   // A transient manifest failure keeps the computer's groups; an older desktop never gains them.
   h.link.invoke.mockImplementation(async (deviceId) => { if (deviceId === 'new') throw new Error('timeout'); return manifest(false); });
   h.link.connectionEpoch++; await render();

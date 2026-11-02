@@ -1,6 +1,8 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
-import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
@@ -376,7 +378,7 @@ export function buildRecentWorkspaceOptions(
     if (session.status === 'deleted') continue;
     if (session.workspaceKind !== 'project') continue;
     if (session.orcaRole === 'worker') continue;
-    const rawWorkingDir = session.workingDir?.trim();
+    const rawWorkingDir = sessionProjectDirectory(session)?.trim();
     if (!rawWorkingDir) continue;
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.
@@ -384,7 +386,7 @@ export function buildRecentWorkspaceOptions(
     const members = membersByPath.get(pathKey) ?? [];
     members.push(session);
     membersByPath.set(pathKey, members);
-    const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+    const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
     const current = byPath.get(pathKey);
     if (!current) {
       byPath.set(pathKey, {
@@ -1191,7 +1193,7 @@ function readNewSessionDeviceOptionsParam(value: unknown): NewSessionDeviceOptio
       const record = item as Record<string, unknown>;
       const deviceId = readString(record.deviceId)?.trim() ?? '';
       if (!deviceId) return [];
-      const name = readString(record.name)?.trim() || deviceId;
+      const name = deviceDisplayName(deviceId, readString(record.name));
       return [{ deviceId, name }];
     });
   } catch {
@@ -1208,7 +1210,7 @@ function normalizeNewSessionDeviceOptions(
     const deviceId = option.deviceId.trim();
     if (!deviceId || seen.has(deviceId)) continue;
     seen.add(deviceId);
-    result.push({ deviceId, name: option.name.trim() || deviceId });
+    result.push({ deviceId, name: deviceDisplayName(deviceId, option.name) });
   }
   return result;
 }

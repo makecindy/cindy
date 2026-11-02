@@ -20,7 +20,7 @@ import {
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition, ownerScopedGhostPartitionForInstalledGhost } from '../ghostWebviewPartition.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
+import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, mediaTypeForLibraryPath, resolveGhostFilePath } from './ghostFiles.js';
 import mailComposeRuntimeSource from './mailComposeRuntime.js?raw';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -209,7 +209,8 @@ export async function fetchGhostSettings(ghost: InstalledGhost, pathname: string
   const args = { ghostId: id, pathname: path, method, readBodyText: async () => body ?? '', isCurrent, confirmConnection };
   const handler = path === '/secrets' || path.startsWith('/secrets/') ? ghostSecretsHandler
     : path === '/oauth' || path.startsWith('/oauth/') ? ghostOauthHandler
-    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler : null;
+    : path === '/connections' || path.startsWith('/connections/') ? ghostConnectionsHandler
+    : path === '/models' ? ghostModelsHandler : null;
   let result: { status: number; body?: string };
   if (handler) result = await handler(args);
   else if (path === '/kv' && ghostKvStore) result = await handleGhostKvRequest({
@@ -269,9 +270,13 @@ export function setGhostMediaModelsProvider(
   ghostMediaModelsProvider = provider;
 }
 
-let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostAgentModelsProvider: ((ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>) | null = null;
+let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<import('../../../shared/pluginModelPicker.js').PluginModelPickerResult>) | null = null;
+export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
+  ghostModelPickerProvider = provider;
+}
 export function setGhostAgentModelsProvider(
-  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+  provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
   ghostAgentModelsProvider = provider;
 }
@@ -307,6 +312,12 @@ type GhostSecretsProtocolHandler = (args: {
 }) => Promise<{ status: number; body?: string }>;
 
 let ghostSecretsHandler: GhostSecretsProtocolHandler | null = null;
+let ghostModelsHandler: GhostSecretsProtocolHandler | null = null;
+
+/** /models：插件发布它提供给模型选择器的模型(index.ts 注入，形态同 /secrets)。 */
+export function setGhostModelsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostModelsHandler = handler;
+}
 
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
@@ -570,13 +581,43 @@ function registerGhostProtocol(
           },
         });
       }
+      if (url.pathname === '/model-picker') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (request.method !== 'POST') return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        if (!ghostModelPickerProvider) return new Response(null, { status: 503, headers });
+        let options: unknown;
+        try {
+          const body = await readBoundedBodyText(request);
+          if (body.length > 4096) return new Response(null, { status: 400, headers });
+          options = JSON.parse(body || '{}');
+        } catch { return new Response(null, { status: 400, headers }); }
+        // Page authors cannot choose a different phone or impersonate a logic request.
+        if (!options || typeof options !== 'object' || Array.isArray(options) ||
+            Object.keys(options).some(key => key !== 'initial')) return new Response(null, { status: 400, headers });
+        const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
+        if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+        return new Response(JSON.stringify(result), { status: 200, headers });
+      }
       if (url.pathname === '/agent-models') {
         const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
         if (request.method !== 'GET') return new Response(null, { status: 405, headers });
-        if (url.search) return new Response(null, { status: 400, headers });
+        const keys = [...url.searchParams.keys()];
+        const ids = url.searchParams.getAll('agent_device_id');
+        let agentDeviceId: string | undefined;
+        if (keys.length > 0) {
+          if (keys.length !== 1 || keys[0] !== 'agent_device_id' || ids.length !== 1) {
+            return new Response(null, { status: 400, headers });
+          }
+          const id = ids[0];
+          if (!id || id.length > 128) return new Response(null, { status: 400, headers });
+          agentDeviceId = id;
+        }
         if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
         try {
-          const result = await ghostAgentModelsProvider(storagePart);
+          const result = agentDeviceId === undefined
+            ? await ghostAgentModelsProvider(storagePart)
+            : await ghostAgentModelsProvider(storagePart, agentDeviceId);
           if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(JSON.stringify(result), {
             status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
@@ -636,6 +677,23 @@ function registerGhostProtocol(
             ...(out.body !== undefined
               ? { 'Content-Type': 'application/json; charset=utf-8' }
               : {}),
+            'Cache-Control': 'no-cache',
+          },
+        });
+      }
+      if (url.pathname === '/models') {
+        if (!ghostModelsHandler) return new Response(null, { status: 503 });
+        const out = await ghostModelsHandler({
+          ghostId: storagePart,
+          method: request.method,
+          pathname: url.pathname,
+          readBodyText: () => readBoundedBodyText(request),
+          isCurrent: isRegistrationCurrent,
+        });
+        return new Response(out.body ?? null, {
+          status: out.status,
+          headers: {
+            ...(out.body !== undefined ? { 'Content-Type': 'application/json; charset=utf-8' } : {}),
             'Cache-Control': 'no-cache',
           },
         });
@@ -863,30 +921,6 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
     if (code === 'ENOENT' || code === 'EISDIR') return new Response(null, { status: 404 });
     log.error('ghost library serve error', { ghostId, error: err instanceof Error ? err.message : String(err) });
     return new Response(null, { status: 500 });
-  }
-}
-
-/** library 投影的 MIME 按扩展名粗判(面板展示用;嗅探不做,宿主只供已存文件)。 */
-function mediaTypeForLibraryPath(relPath: string): string {
-  const ext = relPath.slice(relPath.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.png': return 'image/png';
-    case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.gif': return 'image/gif';
-    case '.webp': return 'image/webp';
-    case '.svg': return 'image/svg+xml';
-    case '.mp4': return 'video/mp4';
-    case '.webm': return 'video/webm';
-    case '.mov': return 'video/quicktime';
-    case '.mp3': return 'audio/mpeg';
-    case '.wav': return 'audio/wav';
-    case '.ogg': return 'audio/ogg';
-    case '.m4a': return 'audio/mp4';
-    case '.pdf': return 'application/pdf';
-    case '.json': return 'application/json; charset=utf-8';
-    case '.txt': return 'text/plain; charset=utf-8';
-    default: return 'application/octet-stream';
   }
 }
 

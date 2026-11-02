@@ -14,9 +14,8 @@ import type {
   ConversationSearchStatusFilter,
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
-import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
+import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
@@ -58,9 +57,8 @@ type SessionRow = typeof sessions.$inferSelect & {
 
 export interface ConversationSearchHostScope {
   /**
-   * Main-owned source scope. Undefined includes normal tasks and linked personal
-   * companion chats; null permits every source only when another authoritative
-   * filter (for example Bot-owned Session ids) already constrains the query.
+   * Optional host-owned source restriction. Global owner search includes every
+   * task source, including records omitted from the default sidebar.
    */
   sessionSources?: readonly SessionSource[] | null;
   remoteVisibleOnly?: boolean;
@@ -101,7 +99,7 @@ export async function searchConversations(
   // Read the host's local aliases alongside the full, already-authorized candidate
   // set, before ranking/limiting. Local renderer search keeps its existing behavior.
   const [candidates, aliasRows] = await Promise.all([
-    listSearchableSessions(filters, hostScope.sessionSources, hostScope.remoteVisibleOnly),
+    listSearchableSessions(filters, hostScope.sessionSources),
     hostScope.remoteVisibleOnly
       ? getDbClient().drizzle.select().from(projectAliases).orderBy(desc(projectAliases.updatedAt))
       : Promise.resolve([]),
@@ -137,7 +135,7 @@ export async function searchConversations(
       // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
       let match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
       if (!match && row.workspaceKind === 'project' && !row.remoteHostId && row.workingDir
-        && aliasesByPath.get(normalizeProjectOrderPath(row.workingDir))?.includes(query.toLowerCase())) {
+        && aliasesByPath.get(normalizeProjectOrderPath(row.projectDir ?? row.workingDir))?.includes(query.toLowerCase())) {
         // Alias-only hits have no highlight positions in the task's title.
         match = { score: 0, indices: [] };
       }
@@ -337,9 +335,9 @@ function applyWorkingDirFilter(
   workingDirs: string[] | null,
 ): SessionRow[] {
   if (workingDirs == null) return rows;
-  const allowed = new Set(workingDirs);
+  const allowed = new Set(workingDirs.map((dir) => normalizeWorkingDirForComparison(dir)));
   return rows.filter((row) => {
-    const key = normalizeWorkingDirForGrouping(row.workingDir);
+    const key = normalizeWorkingDirForComparison(row.projectDir ?? row.workingDir);
     return key != null && allowed.has(key);
   });
 }
@@ -351,28 +349,18 @@ function normalizeSortBy(value: ConversationSearchSortBy | undefined): Conversat
 async function listSearchableSessions(
   filters: NormalizedConversationSearchFilters,
   sessionSources: readonly SessionSource[] | null | undefined,
-  remoteVisibleOnly = false,
 ): Promise<SessionRow[]> {
   if (sessionSources != null && sessionSources.length === 0) return [];
   const db = getDbClient().drizzle;
   const statusCond = statusCondition(filters.status);
   const agentCond = filters.agentKind === 'all' ? undefined : eq(sessions.agentKind, filters.agentKind);
   const sessionIdsCond = filters.sessionIds ? inArray(sessions.id, filters.sessionIds) : undefined;
-  const workerCond = or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker'));
-  // 插件后台隐藏任务不进入任何会话搜索；用户从插件详情页「后台任务」查看与接手。
-  const visibleCond = isNull(sessions.hiddenAt);
   const activityCutoff = cutoffForLastActivity(filters.lastActivity);
   // 兼容存量 DB 行：旧版 touchUserSendInDb 只写 user_send_at 不 bump updated_at，
   // 侧栏排序用 max(userSendAt, updatedAt)，这里也同步用 OR 避免漏掉这些行。
   const activityCond = activityCutoff === null
     ? undefined
     : or(gte(sessions.updatedAt, activityCutoff), gte(sessions.userSendAt, activityCutoff));
-  const personalChat = and(
-    inArray(botSessionLinks.role, remoteVisibleOnly
-      ? ['canonical', 'history']
-      : ['canonical', 'history', 'channel']),
-    ne(botProfiles.status, 'deleting'),
-  );
   return db
     .select({
       ...getTableColumns(sessions),
@@ -385,29 +373,12 @@ async function listSearchableSessions(
     .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
     .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(and(
-      sessionSources === undefined
-        ? or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES), personalChat)
-        : sessionSources === null ? undefined : inArray(sessions.source, sessionSources),
-      // Group lanes remain private to their group. IM lanes are searchable on
-      // their own computer only, including migrated lanes with ordinary sources.
-      or(
-        isNull(botSessionLinks.role),
-        and(ne(botSessionLinks.role, 'group'), ne(botSessionLinks.role, 'channel')),
-        remoteVisibleOnly ? undefined : and(
-          eq(botSessionLinks.role, 'channel'),
-          ne(botProfiles.status, 'deleting'),
-        ),
-      ),
-      remoteVisibleOnly ? or(isNull(botProfiles.id), eq(botSessionLinks.role, 'delegation'), and(
-        or(isNull(botProfiles.hiddenAt), eq(botProfiles.hiddenAt, 0)),
-        ne(botProfiles.status, 'archived'),
-        ne(botProfiles.status, 'deleting'),
-      )) : undefined,
+      // Search is an explicit owner read, independent of the default sidebar scope.
+      sessionSources == null ? undefined : inArray(sessions.source, sessionSources),
+      or(isNull(botProfiles.id), ne(botProfiles.status, 'deleting')),
       statusCond,
       agentCond,
       sessionIdsCond,
-      workerCond,
-      visibleCond,
       activityCond,
     ))
     .orderBy(desc(sessions.updatedAt));
@@ -462,6 +433,7 @@ function sessionSummaryFromRow(
     id: row.id,
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: row.workspaceKind,
     agentKind: normalizeDbAgentKind(row.agentKind),
     status: row.status,

@@ -38,6 +38,7 @@ import {
 import { getRecentModelsOwner, recordRecentModel } from '@/state/recentModels';
 
 import type { ModelMemoryAccessors } from './ModelSelector';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';
 import {
   agentKindOfEngine,
@@ -52,6 +53,7 @@ import {
 type ActionResult = void | boolean | Promise<void | boolean>;
 
 export interface UnifiedRowActionsOptions {
+  engineStore?: ModelPickerPreferenceStore['engines'];
   favoriteStore?: FavoriteStore;
   onFavoriteError?: () => void;
   interactionDisabled: boolean;
@@ -847,12 +849,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           }),
         ).then((applied) => {
           if (!applied) return false;
-          setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
+          (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, anchor.modelId, engine);
         });
       }
       return;
     }
-    setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
+    (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, anchor.modelId, engine);
   };
 
   const applyEffort: UnifiedRowActions['applyEffort'] = (anchor, entry, config, effort) => {
@@ -987,7 +989,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
     /** 「跟随推荐」的持久化部分:删 override + 删掉当前与推荐引擎两格的深度 / Fast 记忆。 */
     const resetStoredConfig = (): void => {
-      clearModelEngineOverride(anchor.providerId, anchor.modelId);
+      (options.engineStore?.clear ?? clearModelEngineOverride)(anchor.providerId, anchor.modelId);
       // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
       // ⇒ 跟随当前版本的目录默认。此前这里把**这一版**的 defaultEffort 快照写回记忆槽,
       // 于是服务端之后改了推荐档,点过「恢复推荐」的用户被钉死在旧值上 —— 与

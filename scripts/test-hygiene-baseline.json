@@ -311,7 +311,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts": {
-      "sourceReads": 2
+      "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
@@ -344,9 +344,6 @@
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaTeamService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaWorkerCreationService.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/pluginTaskAuthorshipWiring.test.ts": {
@@ -560,9 +557,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/renderer/__tests__/deviceLinkProjectsConcurrency.test.tsx": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/renderer/__tests__/deviceProvidersCache.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/renderer/__tests__/deviceProvidersRecovery.test.tsx": {
@@ -894,9 +888,6 @@
     "apps/desktop/src/renderer/hooks/__tests__/useDingTalkBot.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/hooks/__tests__/useFeishuBot.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/hooks/__tests__/useModelPricing.test.ts": {
       "resetModules": 1
     },
@@ -929,9 +920,6 @@
     },
     "apps/desktop/src/renderer/voice-input/__tests__/VoiceInputSection.recordingGate.test.ts": {
       "sourceReads": 9
-    },
-    "apps/desktop/src/renderer/voice-input/__tests__/WebMicAudioEngine.keepAliveIdle.test.ts": {
-      "resetModules": 1
     },
     "apps/mobile/src/__tests__/agentCapabilitiesCache.test.ts": {
       "resetModules": 1

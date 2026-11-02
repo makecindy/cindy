@@ -1,6 +1,7 @@
 import { RoutineEventAdmission, addRoutineReceipt, compactRoutineReceipts, receiptIsLive } from './routine-event-admission.js';
 import {
   BUILTIN_ROUTINE_ERROR,
+  LEGACY_TODO_CHECK_BUILTIN,
   matchesRoutineEvent,
   nextRoutineTriggerAt,
   parseRoutineEvent,
@@ -27,7 +28,10 @@ export interface RoutineRun {
   finishedAt?: number;
   error?: string;
   scheduleRunId?: string;
+  sessionId?: string;
   resultText?: string;
+  /** Execution remains successful when only delivery fails; never rerun work to resend it. */
+  delivery?: { status: 'delivered' | 'failed' | 'suppressed'; error?: string };
 }
 
 /** One account-owned snapshot; the host commits each transition atomically. */
@@ -86,6 +90,11 @@ export function rewriteRoutinePluginSource(
 
 export interface RoutineEngineDeps {
   load(): Promise<RoutineState | null>;
+  /**
+   * Replacement name/prompt for a legacy built-in daily todo check, applied once while it is migrated on
+   * load and before queued runs resume, so the revision and any pending batch stay valid.
+   */
+  legacyTodoCheckContent?(routine: Routine): Partial<Pick<RoutineInput, "name" | "prompt">> | null;
   save(state: RoutineState): Promise<void>;
   execute(
     routine: Routine,
@@ -95,8 +104,10 @@ export interface RoutineEngineDeps {
     canDispatch: () => boolean,
   ): Promise<{
     scheduleRunId?: string;
+    sessionId?: string;
     error?: string;
     resultText?: string;
+    delivery?: RoutineRun['delivery'];
     deferred?: boolean;
     skipped?: boolean;
     /** Host-owned execution cap reached; persist disabling with this run's result. */
@@ -106,6 +117,14 @@ export interface RoutineEngineDeps {
   now(): number;
   changed(): void;
   onError(error: unknown): void;
+}
+
+/** Only one-shot triggers, all of them consumed, and no run queued or running: nothing can fire it again. */
+function oneShotsConsumed(state: RoutineState, routine: Routine): boolean {
+  return routine.triggers.length > 0
+    && routine.triggers.every(trigger => trigger.kind === "once")
+    && !Object.keys(state.next).some(key => key.startsWith(`${routine.id}:`))
+    && !state.runs.some(run => run.routineId === routine.id && (run.status === "queued" || run.status === "running"));
 }
 
 /** Serial durable admission with one execution lane per routine; unrelated Bots stay independent. */
@@ -145,7 +164,16 @@ export class RoutineEngine {
       ) {
         throw new Error("Unsupported routine storage");
       }
-      for (const routine of saved.routines) parseRoutineInput(routine);
+      saved.routines = saved.routines.map(routine => {
+        const loaded: Routine = { ...routine, ...parseRoutineInput(routine) };
+        // The startup save below persists the migration; later loads see an ordinary routine.
+        if ((routine.builtin as string | undefined) === LEGACY_TODO_CHECK_BUILTIN) {
+          delete loaded.builtin;
+          delete loaded.builtinVersion;
+          Object.assign(loaded, this.deps.legacyTodoCheckContent?.(loaded) ?? {});
+        }
+        return loaded;
+      });
       this.state = saved;
     }
     this.state.receipts = compactRoutineReceipts(this.state.receipts, this.deps.now());
@@ -167,6 +195,20 @@ export class RoutineEngine {
         run.status = "interrupted";
         run.finishedAt = this.deps.now();
       }
+    }
+    // Repair one-shots that already fired before completion disabled them: they stay enabled but
+    // nothing can fire them again. Needs a delivered success as the latest run so an unfired or
+    // never-run one-shot (for example one resumed after its time passed) and a one-shot whose
+    // last attempt failed are left alone, as are suspended Bots.
+    for (const routine of this.state.routines) {
+      if (!routine.enabled || routine.builtin || this.blockedBots.has(routine.botId)) continue;
+      if (!oneShotsConsumed(this.state, routine)) continue;
+      // The latest attempt decides: an older success must not hide a later failed or interrupted run.
+      const latest = this.state.runs.findLast(run => run.routineId === routine.id);
+      if (latest?.status !== "success" || latest.delivery?.status === "failed") continue;
+      routine.enabled = false;
+      routine.revision += 1;
+      routine.updatedAt = this.deps.now();
     }
     await this.deps.save(this.state);
     this.stopped = false;
@@ -306,14 +348,21 @@ export class RoutineEngine {
         // A newly created, unclassified reminder must retain delivery.
         ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
         // Host realign of a built-in rule keeps the owner's latest pause choice.
-        ...(options.builtin && existing ? { enabled: existing.enabled } : {}),
+        ...(options.builtin && existing ? {
+          enabled: existing.enabled,
+          modelOverride: existing.modelOverride,
+          sessionMode: existing.sessionMode,
+          delivery: existing.delivery,
+        } : {}),
       });
       if (id && !existing && !creationId && !options.builtin) throw new Error("Routine not found");
       if ((creationId || options.builtin) && state.routines.some(row => row.id === id && row.botId !== botId)) throw new Error("Routine creation ID already used");
-      // Host-owned rules: callers other than ensureBuiltin may only pause/resume them.
+      // Host-owned instructions and triggers stay fixed; callers may pause or choose the execution model.
       if (existing?.builtin && !options.builtin &&
-        JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled })) !== JSON.stringify(input))
-        throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in routines can only be paused or resumed`);
+        JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
+          ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
+          sessionMode: input.sessionMode })) !== JSON.stringify(input))
+        throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
       const builtin = options.builtin ?? existing?.builtin;
       const builtinVersion = options.builtinVersion ?? existing?.builtinVersion;
       if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");
@@ -709,8 +758,14 @@ export class RoutineEngine {
             : result.skipped ? "skipped" : "success",
         finishedAt,
       });
-      if (result.disableRoutine && !aborted && !result.error) {
-        const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+      // A one-shot routine is finished only when nothing is left to fire (see oneShotsConsumed)
+      // and this run succeeded without a failed delivery.
+      const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+      const oneShotFinished = run.status === "success"
+        && result.delivery?.status !== "failed"
+        && !!routine && oneShotsConsumed(state, routine);
+      const disable = result.disableRoutine || oneShotFinished;
+      if (disable && !aborted && !result.error) {
         // A late result must not overwrite a newer user edit or cancel itself.
         if (routine) {
           routine.enabled = false;

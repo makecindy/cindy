@@ -1018,6 +1018,51 @@ describe('ProvidersSection — 深链定位', () => {
 describe('ProvidersSection — 允许被远程调用与供应商组', () => {
   afterEach(() => localProviderGroupsTesting.reset());
 
+  // Test value: the real settings rail must separate established outgoing shares and keep local
+  // reordering within that section. Existing deep-link tests never render an owned share.
+  // Minimal input: two shared providers interleaved with one ordinary provider; tier: unit.
+  it('separates outgoing shares, preserves selection and reorders within the shared section', async () => {
+    resetProviderShareStoreForTests();
+    let changed!: () => void;
+    let sharedIds = ['shared-a', 'shared-b'];
+    Object.assign(window.electronAPI, {
+      providerShare: {
+        command: vi.fn(async (cmd: { action: string }) => {
+          if (cmd.action === 'received') return [];
+          if (cmd.action === 'shared-provider-ids') return { ready: true, providerIds: sharedIds };
+          throw new Error(`unexpected ${cmd.action}`);
+        }),
+        onReceivedChanged: () => () => undefined,
+        onOwnedChanged: (listener: () => void) => { changed = listener; return () => undefined; },
+      },
+    });
+    providersState.providers = [
+      makeProvider('shared-a', { name: 'Shared A', connected: true }),
+      makeProvider('ordinary', { name: 'Ordinary', connected: true }),
+      makeProvider('shared-b', { name: 'Shared B', connected: true }),
+    ];
+    providersState.order = ['shared-a', 'ordinary', 'shared-b'];
+    renderAt('?tab=providers&connect=shared-a');
+    const group = await screen.findByRole('group', { name: 'providerShare.owned.title' });
+    const rowIds = () => [...group.querySelectorAll('[data-sortable-id]')].map(row => row.getAttribute('data-sortable-id'));
+    expect(rowIds()).toEqual(['shared-a', 'shared-b']);
+    expect(within(group).queryByRole('button', { name: /Ordinary/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Shared A/ })).toHaveLength(1);
+    expect(within(group).getByRole('button', { name: /Shared A/ }).getAttribute('aria-current')).toBe('true');
+
+    fireEvent.keyDown(within(group).getAllByRole('button', { name: 'settings.providers.order.handle' })[0], { key: 'ArrowDown' });
+    await waitFor(() => expect(rowIds()).toEqual(['shared-b', 'shared-a']));
+    expect(window.electronAPI.maker.setProviderOrder).toHaveBeenLastCalledWith(undefined, 1, ['shared-b', 'ordinary', 'shared-a']);
+    fireEvent.click(within(group).getByRole('button', { name: /Shared B/ }));
+    expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Shared B');
+
+    sharedIds = [];
+    await act(async () => changed());
+    expect(screen.queryByTestId('provider-share-owned')).toBeNull();
+    expect(screen.getByRole('button', { name: /Shared B/ }).getAttribute('aria-current')).toBe('true');
+    resetProviderShareStoreForTests();
+  });
+
   it('folds the provider group into the remote-use row and waits for the group settings before showing it', async () => {
     localProviderGroupsTesting.reset();
     let answer!: (groups: Record<string, unknown>) => void;

@@ -26,6 +26,28 @@ describe('buildExtractFnSource', () => {
     expect(src).toContain(JSON.stringify('a[href="x"]:not(.y)'));
   });
 
+  // CodeQL #423: JSON quoting alone leaves script delimiters and JS line
+  // separators in executable source. Exercise the generated function as well
+  // as its code/data boundary; selector and attribute values must round-trip.
+  it('escapes script delimiters and line separators without altering DOM read data', () => {
+    const payload = '</script><SCRIPT>throw new Error("injected")</SCRIPT>\u2028\u2029';
+    const src = buildExtractFnSource({ fields: { value: { selector: payload, attr: payload } } });
+    expect(src).not.toMatch(/<\/?script>|[\u2028\u2029]/iu);
+    const received: string[] = [];
+    const g = globalThis as unknown as { document?: unknown };
+    const previous = g.document;
+    g.document = { querySelector: (selector: string) => {
+      received.push(selector);
+      return { getAttribute: (attribute: string) => { received.push(attribute); return 'read result'; } };
+    } };
+    try {
+      expect(compile(src)()).toEqual({ ok: true, count: 1, records: [{ value: 'read result' }] });
+      expect(received).toEqual([payload, payload]);
+    } finally {
+      g.document = previous;
+    }
+  });
+
   it('expands a string field shorthand to a text-type field', () => {
     const src = buildExtractFnSource({ fields: { title: '.t' } });
     expect(src).toContain('"title":{"selector":".t","type":"text"}');

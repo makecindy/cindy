@@ -1917,3 +1917,148 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 });
+
+/**
+ * 2026-10-31 audit (CU-014/017/018): session-level shortcuts, unexplained
+ * observation failures and discovery-flooded errors. Each case drives the
+ * public call_tool entry; gap: none of these outcomes existed before.
+ */
+describe('createComputerMcpServer desktop guards', () => {
+  it('refuses lock / log-out / sleep chords before the driver sees them', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ ok: true })) };
+    const h = await makeHarness(deps, { sessionId: 'hotkey-guard' });
+    try {
+      for (const keys of [['ctrl', 'cmd', 'q'], ['Command', 'Shift', 'Q'], ['win', 'l'],
+        // review: restart / shut down chords reached the driver
+        ['ctrl', 'cmd', 'power'], ['ctrl', 'alt', 'cmd', 'power'], ['control', 'option', 'command', 'eject'], ['ctrl', 'power'],
+        // review: one canonical form (repeats, "a+b" entries, stray spaces, case)
+        ['ctrl', 'ctrl', 'cmd', 'q'], ['ctrl+cmd', 'q'], [' Ctrl ', 'CMD', 'Q'], ['cmd', 'q', 'ctrl', 'q']]) {
+        const blocked = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+          name: 'hotkey', args: { pid: 1, window_id: 2, keys },
+        } })) as { ok: boolean; errorCode?: string };
+        expect(blocked).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      }
+      const pressed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'press_key', args: { pid: 1, window_id: 2, key: 'q', modifiers: ['control', 'command'] },
+      } })) as { ok: boolean; errorCode?: string };
+      expect(pressed).toMatchObject({ ok: false, errorCode: 'HOTKEY_BLOCKED' });
+      expect(deps.callTool).not.toHaveBeenCalledWith('hotkey', expect.anything(), expect.anything());
+      expect(deps.callTool).not.toHaveBeenCalledWith('press_key', expect.anything(), expect.anything());
+
+      // an ordinary chord that shares keys with a blocked one stays allowed
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['ctrl', 'q'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['ctrl', 'q'] }), expect.anything());
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'hotkey', args: { pid: 1, window_id: 2, keys: ['cmd', 'c'] } } });
+      expect(deps.callTool).toHaveBeenCalledWith('hotkey', expect.objectContaining({ keys: ['cmd', 'c'] }), expect.anything());
+    } finally { await h.cleanup(); }
+  });
+
+  it('names a locked screen as the reason an observation produced nothing', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: false, error: 'capture failed' })),
+      describeDesktop: vi.fn(async () => ({ screen_locked: true })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'locked' });
+    try {
+      const observed = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 100, window_id: 1 },
+      } })) as { errorCode?: string; reason?: string; hint?: string };
+      expect(observed).toMatchObject({ errorCode: 'CUA_UNAVAILABLE', reason: 'screen_locked' });
+      expect(observed.hint).toContain('unlock');
+    } finally { await h.cleanup(); }
+  });
+
+  it('distinguishes a vanished window from one that is only off screen, with compact discovery', async () => {
+    const windows = [
+      { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+        process: { pid: 65985, command: '/very/long/command/line --with --flags' },
+        identity: { kind: 'electron-dev', confidence: 0.75, labels: ['electron'], hints: ['use set_value'] } },
+    ];
+    const failure = { degraded: true, degraded_reason: 'ax_window_unresolved', elements: [], tree_markdown: '',
+      screenshot_frame_valid: false, screenshot_error: { code: 'px_capture_unavailable' } };
+    const callTool = vi.fn(async (name: string) => name === 'list_windows' ? { windows } : failure);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'gone' });
+    try {
+      const offScreen = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5304 },
+      } })) as { reason?: string; recovery?: { discovery?: { data?: { windows?: unknown[] } } } };
+      expect(offScreen.reason).toBe('window_not_on_screen');
+      expect(offScreen.recovery?.discovery?.data?.windows).toEqual([
+        { pid: 65985, window_id: 5304, app_name: 'Electron', title: 'Cindy', is_on_screen: false,
+          identity: { kind: 'electron-dev', hints: ['use set_value'] } },
+      ]);
+
+      const gone = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 65985, window_id: 5300 },
+      } })) as { reason?: string };
+      expect(gone.reason).toBe('window_gone');
+    } finally { await h.cleanup(); }
+  });
+
+  it('tells the model the single-entry rule and the Electron / simulator routes', async () => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn() });
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: {} })) as {
+        workflow: string; tools: Array<{ name: string; description: string }>;
+      };
+      expect(payload.workflow).not.toContain('If using the native CLI instead');
+      expect(payload.workflow).toContain('not alternatives');
+      expect(payload.workflow).toContain('set_value');
+      expect(payload.workflow).toContain('xcrun simctl');
+      expect(payload.tools.find((tool) => tool.name === 'type_text')?.description).toContain('set_value');
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('unavailable observations get window state without an identity error', () => {
+  // Review (#8227 round 14): a minimized or other-Space window still has an AX tree, so the
+  // failed capture carries no window_id_not_found; window_not_on_screen must still be reachable.
+  const captureFailed = { degraded: true, elements: [], tree_markdown: '', screenshot_frame_valid: false,
+    screenshot_error: { code: 'px_capture_unavailable' } };
+
+  it('names window_not_on_screen for a capture failure of a window that exists off screen', async () => {
+    const callTool = vi.fn(async (name: string) => name === 'list_windows'
+      ? { windows: [{ pid: 7, window_id: 9, app_name: 'Electron', is_on_screen: false, process: { command: 'x --secret' } }] }
+      : captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'offscreen' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('window_not_on_screen');
+      expect(JSON.stringify(result)).not.toContain('--secret');
+    } finally { await h.cleanup(); }
+  });
+
+  it('skips the extra window discovery when the screen is locked', async () => {
+    const callTool = vi.fn(async (_name: string) => captureFailed);
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: true }) }, { sessionId: 'locked-skip' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: true },
+      } })) as { reason?: string };
+      expect(result.reason).toBe('screen_locked');
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['get_window_state']);
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('thrown window identity failures carry the same reason', () => {
+  // 2026-10-31 dev-build run: a dead window_id made the driver throw
+  // window_id_not_found, which skipped the CUA_UNAVAILABLE classification.
+  it('names window_gone for a thrown window_id_not_found with discovery', async () => {
+    const callTool = vi.fn(async (name: string) => {
+      if (name === 'list_windows') return { windows: [{ pid: 7, window_id: 99, is_on_screen: true }] };
+      throw Object.assign(new Error('window_id 1 is not a live window'), { code: 'window_id_not_found' });
+    });
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'thrown' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 1, include_screenshot: false },
+      } })) as { errorCode?: string; reason?: string; data?: { hint?: string } };
+      expect(result).toMatchObject({ errorCode: 'window_id_not_found', reason: 'window_gone' });
+      expect(result.data?.hint).toContain('no longer exists');
+    } finally { await h.cleanup(); }
+  });
+});

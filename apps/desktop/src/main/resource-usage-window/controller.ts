@@ -45,7 +45,10 @@ export interface ResourceUsageWindowControllerDeps {
    */
   pauseWhenHidden?: boolean;
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
+  /** Runs only when a requested presentation is shown, never during hidden prewarm. */
+  onBeforeShow?: (window: BrowserWindow) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
+  onUnavailable?: () => void;
   isOpenSender: (sender: WebContents) => boolean;
   /** 打开监视器的那扇应用窗；用于跟随显隐并在关闭监视器后恢复焦点。 */
   getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
@@ -88,6 +91,17 @@ export class ResourceUsageWindowController {
   prewarm(): void {
     if (this.disposed) return;
     this.ensureWindow();
+  }
+
+  /** A reused editor is about to receive a different document; wait for its first paint. */
+  resetPresentation(): void {
+    this.presentationReady = false;
+  }
+
+  /** A renderer error boundary can request the same bounded recovery as a process crash. */
+  rendererFailed(sender: WebContents): void {
+    const win = this.windowForSender(sender);
+    if (win) this.invalidateWindow(win, 'renderer reported a rendering failure');
   }
 
   /** 幂等打开：热窗口立即显示；冷窗口等待首份可展示快照，异常时才显示已挂载的 Loading 壳。 */
@@ -232,6 +246,7 @@ export class ResourceUsageWindowController {
       win = this.deps.createWindow();
     } catch (error) {
       this.resetWindowState();
+      this.deps.onUnavailable?.();
       log.error('resource-usage window creation failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -320,6 +335,7 @@ export class ResourceUsageWindowController {
     if (!win.isVisible()) this.enteringNativeFullscreen = false;
     this.visibilityGeneration += 1;
     this.setSamplingActive(win, true);
+    this.deps.onBeforeShow?.(win);
     if (win.isMinimized()) win.restore();
     // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
     // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
@@ -551,6 +567,7 @@ export class ResourceUsageWindowController {
     if (!reopen || this.disposed) return;
     if (this.automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERY_ATTEMPTS) {
       log.error('resource-usage automatic recovery exhausted', { reason });
+      this.deps.onUnavailable?.();
       return;
     }
     this.automaticRecoveryAttempts += 1;

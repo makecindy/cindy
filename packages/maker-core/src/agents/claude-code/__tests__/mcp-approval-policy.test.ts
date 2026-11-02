@@ -1827,7 +1827,7 @@ describe('remote sessions share the same permission semantics', () => {
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
       },
       {
-        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        toolNamePrefix: 'mcp__cindy_helper__ask_owner',
         sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
@@ -1944,7 +1944,7 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
     expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
     }));
     await expect(
       remote.onApprovalRequest({
@@ -2029,7 +2029,7 @@ describe('remote sessions share the same permission semantics', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
     expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
     }));
     await expect(
       failed.onApprovalRequest({
@@ -2041,6 +2041,55 @@ describe('remote sessions share the same permission semantics', () => {
     ).resolves.toMatchObject({ behavior: 'deny' });
     expect(permissionRequests(failed.seen)).toHaveLength(0);
     await failed.handle.close();
+  });
+});
+
+const USER_DRIVER_ROUTING = {
+  overrides: [
+    ...OUTPUT_DELIVERY_ROUTING.overrides,
+    {
+      capabilityId: 'computer-use',
+      source: { kind: 'user-mcp', harness: 'claude-code', surface: 'mcp', id: 'cua-driver' },
+      invocation: 'disabled',
+      replacement: { kind: 'cindy-host', id: 'cindy_computer' },
+    },
+  ],
+} as const satisfies CapabilityRoutingPolicy;
+
+// Review (#8227 round 12): the replacement exists only in a local in-process runtime, so
+// a remote (SSH) runtime must keep the remote user's own driver server.
+describe('user-registered MCP denials are local-only', () => {
+  it('denies a user cua-driver locally but not in a remote session', async () => {
+    const { handle } = await startSession(undefined, { capabilityRouting: USER_DRIVER_ROUTING });
+    const local = sdkMock.query.mock.calls.at(-1)?.[0]?.options as { settings?: { deniedMcpServers?: unknown } };
+    expect(local.settings?.deniedMcpServers).toEqual([
+      { serverName: 'claude.ai Claude Docs' },
+      { serverName: 'cua-driver' },
+    ]);
+    await handle.close();
+
+    const config = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = config;
+    const workingDir = await makeTempDir();
+    let startParams: Record<string, unknown> | undefined;
+    const deps = createDeps(() => 'auto-approve');
+    deps.capabilityRouting = USER_DRIVER_ROUTING;
+    deps.remoteCcQueryFactory = (async (args: { startParams: Record<string, unknown> }) => {
+      startParams = args.startParams;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+    const remote = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-remote-user-driver',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+    expect(
+      (startParams?.extraOptions as { settings?: { deniedMcpServers?: unknown } })?.settings?.deniedMcpServers,
+    ).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    expect(JSON.stringify(startParams?.toolGuards ?? [])).not.toContain('cua-driver');
+    await remote.close();
   });
 });
 

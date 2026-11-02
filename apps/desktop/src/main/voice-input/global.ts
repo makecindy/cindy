@@ -19,6 +19,7 @@ import {
 
 import { markAppearanceSettingsReaderWindow } from '../appearance-settings-reader.js';
 import { createLogger } from '../logger.js';
+import { acquireOverlayEscape } from '../overlayEscape.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -335,7 +336,7 @@ let registeredAccelerator: string | null = null;
 let registeredShortcut: VoiceInputShortcut | null = null;
 let registeredNativeShortcutLabel: string | null = null;
 let registeredNativeShortcutKey: string | null = null;
-let overlayCancelRegistered = false;
+let releaseOverlayCancel: (() => void) | null = null;
 let overlayWindow: BrowserWindow | null = null;
 let overlayLoaded = false;
 let overlayPresentationActive = false;
@@ -2208,23 +2209,21 @@ function cancelExternalDictionaryLearningWatch(): void {
 }
 
 function registerOverlayCancelShortcut(): void {
-  if (overlayCancelRegistered) return;
-  const ok = globalShortcut.register(OVERLAY_CANCEL_ACCELERATOR, () => {
+  if (releaseOverlayCancel) return;
+  releaseOverlayCancel = acquireOverlayEscape(() => {
     const overlay = getOverlayWindow();
     if (!overlay) return;
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'cancel' });
   });
-  if (!ok) {
+  if (!releaseOverlayCancel) {
     log.warn('overlay cancel shortcut registration failed', { accelerator: OVERLAY_CANCEL_ACCELERATOR });
     return;
   }
-  overlayCancelRegistered = true;
 }
 
 function unregisterOverlayCancelShortcut(): void {
-  if (!overlayCancelRegistered) return;
-  globalShortcut.unregister(OVERLAY_CANCEL_ACCELERATOR);
-  overlayCancelRegistered = false;
+  releaseOverlayCancel?.();
+  releaseOverlayCancel = null;
 }
 
 async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> {

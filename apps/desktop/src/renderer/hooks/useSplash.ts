@@ -69,22 +69,33 @@ export function readSplashPhaseFixture(
 ): SplashPhaseFixtureValue | null {
   if (!env.DEV) return null;
   const raw =
-    typeof env.VITE_SPLASH_PHASE_FIXTURE === 'string'
-      ? env.VITE_SPLASH_PHASE_FIXTURE.trim()
-      : '';
+    typeof env.VITE_SPLASH_PHASE_FIXTURE === 'string' ? env.VITE_SPLASH_PHASE_FIXTURE.trim() : '';
   if (!raw) return null;
   return (SPLASH_PHASE_FIXTURE_VALUES as readonly string[]).includes(raw)
     ? (raw as SplashPhaseFixtureValue)
     : null;
 }
 
-// 2026-07-19 用户拍板:1500 → 3000,splash 立绘一闪而过看不清,最短停留延长到 3s
-// (淡出仍需"加载完成 && 满足地板时长"双条件,慢加载时不叠加额外等待)。
-const MIN_DISPLAY_MS = 3000;
+// 2026-07-19 用户拍板:1500 → 3000,splash 立绘一闪而过看不清,首次打开与
+// 热更重启仍保留 3s。已有持久会话的返回启动用 2s：品牌展示仍可见，
+// 但不再在 env/auth/LocalDb 全部就绪后因纯展示地板多等 1s。慢加载仍由
+// "加载完成 && 满足地板时长"双条件保护，不会提前放行。
+const FIRST_LAUNCH_MIN_DISPLAY_MS = 3000;
+const RETURNING_SESSION_MIN_DISPLAY_MS = 2000;
 const FADE_FALLBACK_MS = 500;
+const RETURNING_SESSION_FADE_FALLBACK_MS = 350;
 // splash_update_done 阶段先让 "更新完成，等待自动重启..." 这段提示文案显示 1.5s，
 // 再自动触发 relaunch，避免下载条刚到 100% 用户还没看清就直接整个窗口黑掉。
 const AUTO_RELAUNCH_DELAY_MS = 1_500;
+
+function resolveReturningSession(): boolean {
+  try {
+    return window.electronAPI?.authHasPersistedSessionHintSync?.() === true;
+  } catch {
+    // 只读提示不可用时按首启保守处理，不因优化缩短未知启动。
+    return false;
+  }
+}
 
 export function useSplash() {
   const { t } = useTranslation();
@@ -104,20 +115,24 @@ export function useSplash() {
 
   const [phase, setPhase] = useState<SplashPhase>('init');
   const [minTimeElapsed, setMinTimeElapsed] = useState(false);
+  const [isReturningSession] = useState(resolveReturningSession);
+  const minDisplayMs = isReturningSession
+    ? RETURNING_SESSION_MIN_DISPLAY_MS
+    : FIRST_LAUNCH_MIN_DISPLAY_MS;
 
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const minTimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Effect 1: minimum display timer ──
   useEffect(() => {
-    minTimeTimerRef.current = setTimeout(() => setMinTimeElapsed(true), MIN_DISPLAY_MS);
+    minTimeTimerRef.current = setTimeout(() => setMinTimeElapsed(true), minDisplayMs);
     return () => {
       if (minTimeTimerRef.current !== null) {
         clearTimeout(minTimeTimerRef.current);
         minTimeTimerRef.current = null;
       }
     };
-  }, []);
+  }, [minDisplayMs]);
 
   // ── Effect 2: envStatus drives phase ──
   useEffect(() => {
@@ -173,7 +188,11 @@ export function useSplash() {
     if (phase !== 'fading_out') return;
 
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const delay = reducedMotion ? 10 : FADE_FALLBACK_MS;
+    const delay = reducedMotion
+      ? 10
+      : isReturningSession
+        ? RETURNING_SESSION_FADE_FALLBACK_MS
+        : FADE_FALLBACK_MS;
 
     fallbackTimerRef.current = setTimeout(() => {
       setPhase('splash_done');
@@ -185,7 +204,7 @@ export function useSplash() {
         fallbackTimerRef.current = null;
       }
     };
-  }, [phase]);
+  }, [phase, isReturningSession]);
 
   // ── Tips derivation ──
   const tips: TipsInfo = useMemo<TipsInfo>(() => {
@@ -259,8 +278,8 @@ export function useSplash() {
   // 自动触发 relaunch。用 ref 保证同一会话只触发一次;若期间 spawn 失败,Effect 2b
   // 会把 phase 切到 splash_spawn_failed,这里依然只是已经发过一次 IPC,由 spawn 失败
   // dialog 接管。
-  // 重启时机同时守两条契约(2026-07-19 review 收口):挂载累计 ≥ MIN_DISPLAY_MS
-  // (3s 地板对所有启动路径生效,热更路径不许提前销毁 renderer) 且 更新完成提示
+  // 重启时机同时守两条契约(2026-07-19 review 收口):挂载累计 ≥ 3s
+  // (热更路径仍守 3s,不许提前销毁 renderer) 且 更新完成提示
   // 至少展示 AUTO_RELAUNCH_DELAY_MS——取两者剩余量的较大者作为延时。
   const mountedAtRef = useRef(Date.now());
   const autoRelaunchFiredRef = useRef(false);
@@ -271,7 +290,10 @@ export function useSplash() {
     }
     if (autoRelaunchFiredRef.current) return;
 
-    const minDisplayRemaining = Math.max(0, MIN_DISPLAY_MS - (Date.now() - mountedAtRef.current));
+    const minDisplayRemaining = Math.max(
+      0,
+      FIRST_LAUNCH_MIN_DISPLAY_MS - (Date.now() - mountedAtRef.current),
+    );
     const relaunchDelay = Math.max(AUTO_RELAUNCH_DELAY_MS, minDisplayRemaining);
     const timer = setTimeout(() => {
       autoRelaunchFiredRef.current = true;
@@ -332,6 +354,7 @@ export function useSplash() {
 
   return {
     phase,
+    isReturningSession,
     isDownloading,
     downloadProgress,
     downloadInfo,

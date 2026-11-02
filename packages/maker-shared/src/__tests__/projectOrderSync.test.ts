@@ -41,6 +41,15 @@ describe('project order key remap', () => {
     expect(remapControllerOrderToHost(deviceId, controller, host)).toEqual(host);
   });
 
+  it('only treats a double leading backslash as a UNC prefix', () => {
+    const deviceId = 'posix-box';
+    // POSIX 允许前导单反斜杠作为文件名字符；UNC 则是双反斜杠开头。
+    const posix = remapHostProjectKeyToController(deviceId, String.raw`local:\Repo\App`);
+    expect(posix).toBe(String.raw`device:posix-box:\Repo\App`);
+    const unc = remapHostProjectKeyToController(deviceId, String.raw`local:\\Server\Share`);
+    expect(unc).toBe(`device:${encodeURIComponent(deviceId)}://server/share`);
+  });
+
   it('folds worktree host paths to the grouping key and restores the host spelling', () => {
     const deviceId = 'dev-1';
     const host = ['local:/repo/.cindy-worktrees/serene-lovelace'];

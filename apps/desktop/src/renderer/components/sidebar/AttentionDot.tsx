@@ -12,7 +12,7 @@
  *       权限 / AskUserQuestion / 计划审阅;Codex 无此态)。与灵动岛 needs-interaction 同色。
  *     • error      → 红 `--card-status-error`:任务出错(终止错误)。红专职表示出错。
  *     • info       → 信息蓝 `--status-info`(双模式取 info-700 的深浅两档):新功能入口
- *       提示(如伙伴「+」上的发现伙伴),不表示任何任务状态。
+ *       提示,不表示任何任务状态。
  *   running 不走本组件:橙(Thinking Orange)专职表达"正在跑"(vendor mark 呼吸 /
  *   spinner),不再用于任何"完成"语义。不用黑/前景色。
  *

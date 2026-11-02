@@ -1,3 +1,4 @@
+import { DocumentPreviewChrome } from "./DocumentPreviewChrome";
 import { Host } from "@expo/ui";
 import {
   Button,
@@ -40,6 +41,7 @@ import { MainWindowActionButton } from "@/components/MobilePrimitives";
 import { SystemNavigationBack, useSystemNavigationBack } from "@/platform/chrome/SystemNavigationBack";
 import { iconSize, lineHeight, navigationChrome, radius, spacing, typeScale, useTheme } from "@/theme";
 import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import {
   HTML_BROWSER_CONTROL_SIZE as size,
   type HtmlBrowserChromeProps,
@@ -48,17 +50,29 @@ import {
 
 /** Native SwiftUI controls float above the WebView; the empty space passes touches through. */
 export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChromeProps) {
+  return p.document ? (
+    <DocumentPreviewChrome {...p} />
+  ) : (
+    <WebsitePreviewChrome {...p} />
+  );
+}
+
+function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
   const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const glass = useLiquidGlassAvailable();
-  const systemBack = useSystemNavigationBack();
+  // A vertical system bar (Duo landscape) hosts close and the document menu as native items.
+  const systemBack = useSystemNavigationBack() && !p.standalone;
+  const sharedStatusRow = usePreviewChromeFrame().sharedStatusRow && !p.standalone;
+  // Center the document title on screen, except beside a status area sharing its row.
   const [editing, setEditing] = useState(false);
-  const addressText = useNativeState(p.document ? '' : p.address);
+  const addressText = useNativeState(p.address);
   const addressRef = useRef<TextFieldRef>(null);
-  const beginEditing = () => { if (!p.document) { addressText.set(p.address); setEditing(true); } };
-  const submitAddress = () => { if (!p.document && p.onNavigate(addressText.get())) setEditing(false); };
+  const beginEditing = () => {
+    { addressText.set(p.address); setEditing(true); } };
+  const submitAddress = () => { if (p.onNavigate(addressText.get())) setEditing(false); };
   const showFileInfo = () => Alert.alert(p.title, [p.meta, p.path].filter(Boolean).join('\n'));
-  const website = !p.document && p.website;
+  const website = p.website;
   // Size the visible glass itself, not an outer frame around a system-sized label.
   // Menu and Button have different intrinsic sizes (especially ellipsis vs share).
   // Untinted glass adapts to the page behind it: a light page in Dark mode turned it light
@@ -106,30 +120,27 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               accessibilityLabel(t("files.preview.browserMore")),
             ]}
           >
-            {p.document ? <Button
-              label={t("files.preview.a11yShare")}
-              systemImage="square.and.arrow.up"
-              onPress={p.onShare}
-              testID="filePreview.share"
-              modifiers={[disabled(p.busy)]}
-            /> : null}
-            {!website && <Section title={p.title}>
+            {!website && (
+          <Section title={p.title}>
               <Button
                 label={t("files.preview.browserFileInfo")}
                 systemImage="doc"
                 onPress={showFileInfo}
               />
-            </Section>}
-            {p.onToggleSource ? <Button
+            </Section>
+        )}
+            {p.onToggleSource ? (
+          <Button
               label={t(
                 website ? "files.preview.browserReturnToFile" : p.source
-                  ? p.document ? "files.preview.browserShowDocument" : "files.preview.browserShowPage"
+                  ? "files.preview.browserShowPage"
                   : "files.preview.browserShowSource",
               )}
               systemImage="chevron.left.forwardslash.chevron.right"
               onPress={p.onToggleSource}
               testID="filePreview.browser.source"
-            /> : null}
+            />
+        ) : null}
             <Divider />
             <Button
               label={t(website ? "files.preview.browserCopyAddress" : "files.preview.copyPath")}
@@ -138,39 +149,40 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               testID="filePreview.copyPath"
               modifiers={[disabled(p.busy)]}
             />
-            {!website && <Button
+            {!website && (
+          <Button
               label={t("files.preview.browserAddToTask")}
               systemImage="text.bubble"
               onPress={p.onAddToTask}
               testID="filePreview.sendToSession"
               modifiers={[disabled(p.busy)]}
-            />}
+            />
+        )}
           </Menu>
         </Host>
   );
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      <SystemNavigationBack
+      {p.standalone ? null : (
+        <SystemNavigationBack
         close
-        available={p.document === true}
         label={t("files.preview.done")}
         onPress={p.onClose}
       />
+      )}
       <View
         pointerEvents="box-none"
         style={{
           position: "absolute",
           top: p.top,
-          left: p.document ? Math.max(p.left, p.right) : p.left,
-          right: p.document ? Math.max(p.left, p.right) : p.right,
+          left: p.left,
+          right: p.right,
           flexDirection: "row",
           gap: spacing.sm,
         }}
       >
-        {p.document && systemBack ? (
-          // Duo owns close in its native toolbar; keep equal side widths for the title.
-          <View pointerEvents="none" style={{ width: size, height: size }} />
-        ) : <Host {...host} style={{ width: size, height: size }}>
+        {systemBack ? null : (
+          <Host {...host} style={{ width: size, height: size }}>
           <Button
             onPress={p.onClose}
             testID="filePreview.done"
@@ -182,21 +194,15 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               modifiers={[frame({ width: size, height: size })]}
             />
           </Button>
-        </Host>}
+        </Host>
+        )}
         <Host {...host} style={{ flex: 1, minWidth: 0, height: size }}>
           <HStack
             spacing={0}
             modifiers={[frame({ maxWidth: Infinity, height: size }), capsule]}
           >
-            {p.document ? <NativeText
-              testID="filePreview.title"
-              modifiers={[
-                font({ size: typeScale.body, weight: "semibold" }),
-                lineLimit(1),
-                padding({ horizontal: spacing.lg }),
-                frame({ maxWidth: Infinity, height: size, alignment: "center" }),
-              ]}
-            >{p.title}</NativeText> : editing ? <TextField
+            {editing ? (
+              <TextField
               ref={addressRef}
               text={addressText}
               autoFocus
@@ -211,7 +217,9 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
                 font({ size: typeScale.body }), padding({ leading: spacing.lg }),
                 frame({ maxWidth: Infinity, height: size }),
               ]}
-            /> : <Button
+            />
+            ) : (
+              <Button
               onPress={beginEditing}
               testID="filePreview.browser.editAddress"
               modifiers={[
@@ -251,14 +259,17 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
                   {p.title}
                 </NativeText>
               </HStack>
-            </Button>}
-            {p.document ? null : editing ? <Button
+            </Button>
+            )}
+            {editing ? (
+              <Button
               label={t("files.preview.browserCancelAddress")}
               systemImage="xmark"
               onPress={() => setEditing(false)}
               modifiers={icon}
               testID="filePreview.browser.cancelAddress"
-            /> : p.loading ? (
+            />
+            ) : p.loading ? (
               <ProgressView
                 modifiers={[
                   frame({ width: size, height: size }),
@@ -276,14 +287,13 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             )}
           </HStack>
         </Host>
-        {p.document ? moreMenu : null}
       </View>
       {p.notice ? (
         <View
           pointerEvents={p.onCancelNotice ? "box-none" : "none"}
           style={{
             position: "absolute",
-            bottom: p.bottom + (p.document ? spacing.sm : size + spacing.sm),
+            bottom: p.bottom + (size + spacing.sm),
             left: p.left,
             right: p.right,
             alignItems: "center",
@@ -299,7 +309,9 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               borderRadius: radius.container,
             }}
           >
-            {p.onCancelNotice ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
+            {p.onCancelNotice ? (
+              <ActivityIndicator color={colors.textTertiary} size="small" />
+            ) : null}
             <Text
               accessibilityLiveRegion="polite"
               testID="filePreview.notice"
@@ -325,7 +337,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
           </View>
         </View>
       ) : null}
-      {!p.document ? <View
+      {
+        <View
         pointerEvents="box-none"
         style={{
           position: "absolute",
@@ -336,7 +349,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
           gap: spacing.md,
         }}
       >
-        {!p.document ? <Host {...host} style={{ width: size * 2, height: size }}>
+        {
+            <Host {...host} style={{ width: size * 2, height: size }}>
           <HStack spacing={0} modifiers={[capsule]}>
             <Button
               label={t("files.preview.browserBack")}
@@ -353,7 +367,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
               modifiers={[...icon, disabled(!p.canGoForward)]}
             />
           </HStack>
-        </Host> : null}
+        </Host>
+          }
         <View pointerEvents="none" style={{ flex: 1 }} />
         <Host {...host} style={{ width: size, height: size }}>
           <Button
@@ -373,7 +388,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
           </Button>
         </Host>
         {moreMenu}
-      </View> : null}
+      </View>
+      }
     </View>
   );
 }

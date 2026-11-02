@@ -214,7 +214,7 @@ function validateNode(value, schema, root, path, errors) {
 
   if (typeOf(value) === 'object') {
     for (const key of schema.required ?? []) {
-      if (!(key in value)) errors.push(`${path}: 缺少必填字段 "${key}"`);
+      if (!Object.hasOwn(value, key)) errors.push(`${path}: 缺少必填字段 "${key}"`);
     }
     const known = new Set(Object.keys(schema.properties ?? {}));
     for (const [key, child] of Object.entries(value)) {

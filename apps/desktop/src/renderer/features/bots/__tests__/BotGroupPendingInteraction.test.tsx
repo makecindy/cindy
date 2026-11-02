@@ -10,7 +10,10 @@ const mocks = vi.hoisted(() => ({
   activity: null as null | { phase: string },
   respondToPermission: vi.fn(),
   ensureInitialMessages: vi.fn(),
+  navigate: vi.fn(),
 }));
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -52,6 +55,10 @@ vi.mock('@/components/new-chat/PermissionPrompt', () => ({
 vi.mock('@/components/new-chat/AskUserQuestionPrompt', () => ({
   AskUserQuestionPrompt: ({ sessionId }: { sessionId: string }) => <div>{`ask:${sessionId}`}</div>,
 }));
+// Handoff rendering has its own tests; it is not involved in the missing-card path.
+vi.mock('@/features/input-handoff/InputHandoffCard', () => ({
+  InputHandoffCard: () => <div>handoff</div>,
+}));
 
 const EMPTY = {
   pendingPermission: null,
@@ -73,6 +80,7 @@ beforeEach(() => {
   mocks.activity = null;
   mocks.respondToPermission.mockReset();
   mocks.ensureInitialMessages.mockReset();
+  mocks.navigate.mockReset();
 });
 
 afterEach(cleanup);
@@ -111,10 +119,14 @@ describe('BotGroupPendingInteraction', () => {
     expect(mocks.ensureInitialMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('only notes other pending interactions without re-reading', () => {
+  it('opens the original task for confirmations without an inline card', () => {
     mocks.light = { ...EMPTY, pendingPlanReview: { requestId: 'p1' } };
     render(<BotGroupPendingInteraction sessionId="lane" bot={bot} />);
     expect(screen.getByRole('status')).toBeTruthy();
     expect(mocks.ensureInitialMessages).not.toHaveBeenCalled();
+    // #7583, unit: a plan confirmation has no inline card; the existing tests
+    // only checked its label, leaving the user without a way to answer it.
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.progress.viewProcess' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lane');
   });
 });

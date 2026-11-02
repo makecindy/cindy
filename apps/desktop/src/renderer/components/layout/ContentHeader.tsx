@@ -27,7 +27,11 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { useFeatureContentHeader } from '@/features/feature-context';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { cn } from '@/lib/utils';
-import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
+import {
+  CHROME_ACTIONS_GEOMETRY,
+  CHROME_ACTIONS_MAC_RIGHT_EDGE,
+  chromeActionsHitHoleWidth,
+} from './chromeActionsGeometry';
 
 export const CONTENT_HEADER_HEIGHT_PX = 46;
 
@@ -75,6 +79,9 @@ interface ContentHeaderProps {
   showCollapsedActions: boolean;
   /** 左侧栏是否处于 rail 态（拖到最窄但仍保留图标列）。 */
   isSidebarRail: boolean;
+  /** 展开态侧栏宽度（窗口像素）。与按钮簇的几何一起决定本 header 要补挖多宽的
+   *  no-drag 区：侧栏窄于簇右缘时它的洞会被自身 overflow-hidden 裁掉。 */
+  sidebarWidth?: number;
   /** mac 右上固定唤起按钮是否在场。mac 据此在右端留按钮占位并决定是否留住空
    *  header；Windows 仅影响空 header 判定，
    *  占位恒为窗口控制按钮宽。 */
@@ -89,6 +96,7 @@ export function ContentHeader({
   sidebarVisible,
   showCollapsedActions,
   isSidebarRail,
+  sidebarWidth,
   rightSidebarAvailable,
   hidden,
   trailing,
@@ -104,7 +112,16 @@ export function ContentHeader({
   // main 的 drag header 左缘再挖一个洞，否则点击浮动的收放/菜单按钮会被 Electron
   // 当成窗口拖拽吞掉。完全收起态 main 从 x=0 开始，既有 spacer 已覆盖该位置；
   // 全屏态按钮回到 rail 内，也由 Sidebar 的既有洞覆盖。
-  const needsRailChromeActionsHitHole = isMac && !isFullscreen && isSidebarRail;
+  // 展开态同理但只挖溢出那一截：侧栏可拖到 180（useSidebarResize 的下限），比簇右缘
+  // 202 窄，超出侧栏右缘的按钮同样压在 header 拖拽区上。
+  const chromeActionsHitHole =
+    isMac && !isFullscreen && (isSidebarRail || sidebarVisible)
+      ? chromeActionsHitHoleWidth(
+          isSidebarRail
+            ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
+            : (sidebarWidth ?? CHROME_ACTIONS_MAC_RIGHT_EDGE),
+        )
+      : 0;
 
   // 设置页：Sidebar 隐藏且无折叠按钮占位 → header 退化为"隐形 chrome"
   // （仅拖拽区 + Windows 窗口控制），不画下边框。
@@ -148,14 +165,14 @@ export function ContentHeader({
       // 36px Tab 条那层(在面板身上,语义准)。
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {needsRailChromeActionsHitHole && (
+      {chromeActionsHitHole > 0 && (
         <div
           aria-hidden
           data-testid="content-header-rail-chrome-actions-hit-hole"
           className="absolute left-0 top-0 h-full"
           style={
             {
-              width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+              width: chromeActionsHitHole,
               WebkitAppRegion: 'no-drag',
             } as React.CSSProperties
           }
@@ -164,18 +181,21 @@ export function ContentHeader({
       {/* 折叠态占位 spacer：真实按钮在 MainLayout 的 ChromeActions 浮层里
           （钉死左上角、不随折叠重建的常驻实例）。本 spacer 以与侧栏宽度动画
           相同的时长/缓动伸缩，把标题平滑推到浮动按钮右侧（项目规则 8）。
-          68px = 折叠按钮 28 + gap 4 + 菜单 28 + 与标题间隙 8。
+          簇宽 + 8 = 折叠 / 菜单 / 后退 / 前进四个 28px 按钮 + 与标题间隙 8，
+          跟 CHROME_ACTIONS_GEOMETRY 一起变。
           ⚠️ spacer 自身必须 no-drag：Electron 的拖拽区域挖洞只在"drag 元素
           自己的后代"上可靠生效，浮层（非后代）的 no-drag 不被计入 ——
           否则浮层按钮点击会被窗口拖拽吞掉。 */}
       <div
         aria-hidden
-        className={cn(
-          'h-full shrink-0 overflow-hidden',
-          'transition-[max-width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]',
-          showCollapsedActions ? 'max-w-[68px] w-[68px]' : 'max-w-0 w-[68px]',
-        )}
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+        style={
+          {
+            WebkitAppRegion: 'no-drag',
+            width: CHROME_ACTIONS_GEOMETRY.clusterWidth + 8,
+            maxWidth: showCollapsedActions ? CHROME_ACTIONS_GEOMETRY.clusterWidth + 8 : 0,
+          } as React.CSSProperties
+        }
       />
 
       {/* 中部：feature 注入的 slot 内容。容器保持 drag，注入内容里的交互
@@ -212,6 +232,7 @@ export function ContentHeaderSlot({
   sidebarVisible,
   showCollapsedActions,
   isSidebarRail,
+  sidebarWidth,
   rightSidebarAvailable,
   trailing,
   children,
@@ -223,6 +244,7 @@ export function ContentHeaderSlot({
         sidebarVisible={sidebarVisible}
         showCollapsedActions={showCollapsedActions}
         isSidebarRail={isSidebarRail}
+        sidebarWidth={sidebarWidth}
         rightSidebarAvailable={rightSidebarAvailable}
         hidden={hidden}
         trailing={trailing}

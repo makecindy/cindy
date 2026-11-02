@@ -22,6 +22,9 @@ vi.mock("@/theme", async () => {
 vi.mock("@/platform/chrome/AnchoredPullDownMenu", () => ({
   AnchoredPullDownMenu: () => null,
 }));
+vi.mock("@/platform/chrome/useNativeMenuReminderImage", () => ({
+  useNativeMenuReminderImage: () => '/cache/filter-reminder.png',
+}));
 vi.mock("@react-native-menu/menu", () => ({
   MenuView: ({ actions, style }: { actions: MenuAction[]; style?: unknown }) => {
     native.actions = actions;
@@ -31,6 +34,28 @@ vi.mock("@react-native-menu/menu", () => ({
 }));
 
 describe("native menu symbol colors", () => {
+  // PR #7642: a reminder used to replace the whole UIMenu and lose its SF Symbols.
+  // Exercise the real presenter/conversion; the image preparation hook is isolated.
+  // Existing color tests did not cover presenter replacement or loss of row icons.
+  // Unit tier, minimum input: an on/off reminder beside a normal symbol and a checked row.
+  it.each([false, true])('keeps UIMenu, row icons and checks with reminder=%s', (active) => {
+    native.actions = [];
+    renderToStaticMarkup(createElement(NativePullDownMenu, {
+      actions: [
+        { id: 'sort', title: 'Sort', image: 'arrow.up.arrow.down' },
+        { id: 'status', title: 'Status', image: 'checklist', filterReminder: active,
+          subactions: [{ id: 'archived', title: 'Archived', state: 'on', filterReminder: active }] },
+      ],
+      children: null,
+      onAction: vi.fn(),
+    }));
+    expect(native.actions[0]).toMatchObject({ image: 'arrow.up.arrow.down' });
+    expect(native.actions[1]).toMatchObject({
+      image: active ? '/cache/filter-reminder.png' : 'checklist',
+      subactions: [{ id: 'archived', state: 'on', ...(active ? { image: '/cache/filter-reminder.png' } : {}) }],
+    });
+  });
+
   it.each(["light", "dark"] as const)(
     "supplies visible colors to Fabric in %s mode",
     (mode) => {

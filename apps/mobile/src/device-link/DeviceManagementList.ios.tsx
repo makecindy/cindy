@@ -1,7 +1,9 @@
+import { deviceDisplayName } from './deviceName';
 import { useMemo, useState } from 'react';
 import { Host, ListItem } from '@expo/ui';
 import { Button, Circle, HStack, List, Section, SwipeActions, Text } from '@expo/ui/swift-ui';
 import {
+  accessibilityLabel,
   disabled,
   font,
   foregroundStyle,
@@ -42,12 +44,17 @@ export function DeviceManagementList({
   const { t } = useTranslation();
   const [offlineExpanded, setOfflineExpanded] = useState(false);
   const sections = useMemo(() => buildDeviceManagementSections(rows), [rows]);
+  const devices = useMemo(() => rows.map((row) => row.device), [rows]);
   const offlineRows = visibleOfflineDeviceRows(sections.offline, offlineExpanded);
   const renderRow = (row: DeviceManagementListProps['rows'][number]) => {
     const { device } = row;
+    const name = deviceDisplayName(device.deviceId, device.name, devices);
     return (
       <SwipeActions key={device.deviceId} modifiers={[listRowBackground(colors.surfaceElevated)]}>
         <ListItem
+          modifiers={[accessibilityLabel([
+            t('devices.management.openDevice', { name }), deviceManagementStatusText(row),
+          ].filter(Boolean).join(', '))]}
           onPress={() => onOpen(device)}
           leading={
             <Monitor
@@ -86,7 +93,7 @@ export function DeviceManagementList({
               foregroundStyle({ type: 'hierarchical', style: 'primary' }),
             ]}
           >
-            {device.name}
+            {name}
           </Text>
         </ListItem>
         <SwipeActions.Actions edge="leading" allowsFullSwipe={false}>

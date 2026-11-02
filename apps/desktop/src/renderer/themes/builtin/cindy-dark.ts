@@ -112,9 +112,9 @@ const GENERATED_OVERRIDES = {
   "settings-theme-auto-dark": "#181818", // Auto 预览: 新暗色底
   "sidebar-action-icon": "0.0 0.0% 100.0% / 0.40", // 墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)
   "cmd-palette-item-meta": "rgba(255, 255, 255, 0.55)", // 墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)
-  "sidebar-item-active-foreground": "#151515", // 反相深字(浅钮上)
+  "sidebar-item-active-foreground": "#EEEEEE", // Soft selected pill with same-polarity readable foreground.
   "sidebar-item-active-border": "transparent", // 用户三次改稿 2026-07-20:选中胶囊彻底去描边
-  "sidebar-item-active": "0.0 0.0% 93.3%", // 用户二次改稿 2026-07-20:反相胶囊 #EEEEEE 浅底(同 accent-cta-bg)
+  "sidebar-item-active": "214.3 5.5% 24.9%", // Soft selected pill with same-polarity readable foreground.
   "splash-bg": "0 0% 9.4%", // 页底 -> HSL
   "splash-text": "0.0 0.0% 100.0% / 0.55", // 墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)
   "splash-text-destructive": "0.0 0.0% 100.0%", // destructive splash text

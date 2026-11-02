@@ -73,7 +73,9 @@ describe('project grouping hook references', () => {
   it('keeps enriched projects stable and shares identical filtered results', () => {
     const { result, rerender } = renderHook(
       ({ rows }) => {
-        const all = useProjectGroups(rows);
+        // #7469: the real sidebar rebuilds the complete alias-member array on
+        // every snapshot. Existing tests omitted it, hiding full regrouping.
+        const all = useProjectGroups(rows, undefined, false, undefined, '', undefined, [...rows]);
         const filtered = useProjectGroups(rows, undefined, false, undefined, '', all);
         return { all, filtered };
       },
@@ -96,7 +98,7 @@ describe('project grouping hook references', () => {
     const { result, rerender } = renderHook(({ rows }) => useProjectGroups(rows), {
       initialProps: { rows },
     });
-    expect(result.current.projects.every((p) => p.remoteMachineIdentity?.detail)).toBe(true);
+    expect(result.current.projects.map((p) => p.remoteMachineIdentity?.displayLabel).sort()).toEqual(['Same machine (1)', 'Same machine (2)']);
     const next = rows.slice();
     next[1] = { ...next[1], deviceLinkDeviceName: 'Renamed machine' };
     rerender({ rows: next });

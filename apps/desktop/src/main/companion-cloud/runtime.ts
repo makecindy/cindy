@@ -96,6 +96,8 @@ export interface CompanionCloudRuntime {
   /** Move the companion to `targetDeviceId` from any computer: hand over here, ask its home, or take over. */
   switchHome: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transcript: (botId: string, before?: string) => Promise<CompanionTranscriptPage>;
+  /** Import a server-delivered private report into the same local companion timeline. */
+  receivePrivateReport: (botId: string) => Promise<boolean>;
   /** The copies of Cindy in the cloud when there is more than one (otherwise empty). */
   cindyCopies: () => Promise<CompanionCindyCopy[]>;
   /** Merge the other copies into `keepBotId`, on its home (here, or asked over device-link). */
@@ -171,19 +173,26 @@ export function isCompanionTransferTarget(device: DeviceLinkDeviceView): boolean
 
 export function startCompanionCloud(input: {
   api: CompanionApi;
+  /** A local admission delay is not a failed ownership check. Keep this
+   * distinction with the transport; data sync and explicit actions keep api. */
+  backgroundIdentity?: { api: CompanionApi; isDeferred: (error: unknown) => boolean };
   host: CompanionCloudHost;
   endpoint: string;
   humanActorId: string;
   selfDeviceId?: string;
   current: () => boolean;
+  /** Durable Chat Server display projection; takeover and runtime reconstruction still read authoritative history. */
+  transcript?: (roomId: string, actorId: string, refresh: boolean) => Promise<CompanionTranscriptMessage[]>;
   /** Active local companions whose home is this computer (and not demoted). */
   bots: () => CompanionCloudBot[];
   /** A local companion the owner paused: not synced or moved, and a merge asks to resume it first. */
   paused?: (botId: string) => boolean;
   /** The account's actors as last read by register(). */
   actors?: () => CompanionRuntimeActor[];
-  /** Re-read actors now (forced register). */
+  /** Re-read actors for passive reconciliation (forced register). */
   refresh?: () => Promise<void>;
+  /** Explicit actions refresh through their own channel, not passive admission. */
+  refreshForeground?: () => Promise<void>;
   /** Publish the registry snapshot after a local home change. */
   publish?: () => void;
   /** The set of hidden local copies changed (a copy was demoted or taken over): what depends on it re-reads. */
@@ -198,6 +207,8 @@ export function startCompanionCloud(input: {
   /** Run a first pass shortly after start (default). Harnesses drive passes explicitly. */
   initialKick?: boolean;
 }): CompanionCloudRuntime {
+  const backgroundIdentityApi = input.backgroundIdentity?.api ?? input.api;
+  const refreshForeground = input.refreshForeground ?? input.refresh;
   const state = input.host.openState(input.endpoint, input.humanActorId, input.current);
   const uploader = createCompanionUploader({ api: input.api, state, readValues: input.host.readValues, log: input.log,
     confirmHome: async (_botId, actorId) => {
@@ -346,12 +357,12 @@ export function startCompanionCloud(input: {
         } });
       for (const actor of from) actor.disabled = true;
       input.log?.info?.('Copies of Cindy merged', { actorId: keepActor.id, merged: summary.merged, messages: summary.messages });
-      await input.refresh?.().catch(() => undefined);
+      await refreshForeground?.().catch(() => undefined);
       publish(); mirrors.kick(keepBotId); uploads.kick(keepBotId);
       return { ok: true, ...summary };
     } catch (error) {
       input.log?.warn('Merging copies of Cindy will need another try', { code: errorCode(error) });
-      await input.refresh?.().catch(() => undefined);
+      await refreshForeground?.().catch(() => undefined);
       publish();
       // A copy that got busy (or could not send) right before retiring: say why, as before the merge.
       const settled = (error as { companionResult?: CompanionCloudActionResult } | null)?.companionResult;
@@ -385,9 +396,9 @@ export function startCompanionCloud(input: {
    * `handed` (automatic take-over) also replaces another computer's record, never another
    * installation's claim on this computer; `takeover` (the user's explicit take-over) replaces any.
    */
-  async function claimInstall(actor: CompanionRuntimeActor, mode: 'check' | 'handed' | 'takeover'): Promise<InstallOwner> {
+  async function claimInstall(actor: CompanionRuntimeActor, mode: 'check' | 'handed' | 'takeover', api: CompanionApi): Promise<InstallOwner> {
     if (!installId) return 'mine';
-    const rows = await input.api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id);
+    const rows = await api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id);
     const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate.key === COMPANION_INSTALL_KEY);
     const record = row?.value && typeof row.value === 'object' ? row.value as { installationId?: unknown; deviceId?: unknown } : {};
     const current = record.installationId;
@@ -396,7 +407,7 @@ export function startCompanionCloud(input: {
     // A hand-over is completed by the take-over (which overwrites), never by this check.
     if ((owner === 'other' && (mode === 'takeover' || typeof current !== 'string')) || (owner === 'handed' && mode !== 'check')) {
       try {
-        await input.api('/preferences', 'POST', { operationId: `cinstall:${actor.id}:${installId}:${row?.revision ?? 0}`,
+        await api('/preferences', 'POST', { operationId: `cinstall:${actor.id}:${installId}:${row?.revision ?? 0}`,
           key: COMPANION_INSTALL_KEY, expectedRevision: row?.revision ?? 0,
           value: { installationId: installId, ...(input.selfDeviceId ? { deviceId: input.selfDeviceId } : {}) } }, actor.id);
         owner = 'mine';
@@ -413,13 +424,21 @@ export function startCompanionCloud(input: {
     if (!installId) return;
     const known = installs.get(actor.externalId);
     if (known && Date.now() - known.checkedAt < INSTALL_RECHECK_MS) return;
-    installs.set(actor.externalId, { owner: known?.owner ?? 'pending', checkedAt: Date.now() });
-    void claimInstall(actor, 'check').then(owner => {
+    const checking = { owner: known?.owner ?? 'pending' as const, checkedAt: Date.now() };
+    installs.set(actor.externalId, checking);
+    void claimInstall(actor, 'check', backgroundIdentityApi).then(owner => {
       // Handed here before this computer ever saw the move: take the existing copy over.
       if (owner === 'handed' && input.host.materializer) scheduleAuto(actor);
       if (owner !== known?.owner) { publish(); uploads.kick(actor.externalId); mirrors.kick(actor.externalId); }
     }, error => {
-      installs.delete(actor.externalId);
+      const deferred = input.backgroundIdentity?.isDeferred(error) === true;
+      if (installs.get(actor.externalId) === checking) {
+        // An unsent check cannot revoke a previous confirmation or refresh its
+        // age. Leave it due for the next reconcile; never confirm an unknown install.
+        if (deferred && known) installs.set(actor.externalId, known);
+        else installs.delete(actor.externalId);
+      }
+      if (deferred) return;
       input.log?.warn('Companion installation check will retry', { actorId: actor.id, code: errorCode(error) });
     });
   }
@@ -440,10 +459,10 @@ export function startCompanionCloud(input: {
     demoteNow(actor);
     // Confirm the home with the server before un-demoting: a stale actor cache must not
     // resurrect a copy whose companion has already moved on.
-    void input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId })
+    void backgroundIdentityApi(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId })
       .then(async () => {
         // Automatic: never take the companion from the other installation on this computer.
-        if (await claimInstall(actor, 'handed') !== 'mine') throw new Error('INSTALL_CLAIM_LOST');
+        if (await claimInstall(actor, 'handed', backgroundIdentityApi) !== 'mine') throw new Error('INSTALL_CLAIM_LOST');
         return materialize(actor);
       }).then(result => {
       autoRetryAt.delete(botId);
@@ -457,29 +476,31 @@ export function startCompanionCloud(input: {
   }
 
   /** Retire only from the installation that may run it: another Cindy on this computer may own it. */
-  async function retireOwned(actor: CompanionRuntimeActor) {
+  async function retireOwned(actor: CompanionRuntimeActor, mode: 'foreground' | 'background') {
+    const api = mode === 'background' ? backgroundIdentityApi : input.api;
     let owner = installOwner(actor.externalId);
     // Not confirmed yet (pending, failed, or just handed here): claim it the way the automatic
     // take-over does, so only one installation on this computer can win; a failure retries later.
-    if (owner !== 'mine' && owner !== 'other') owner = await claimInstall(actor, 'handed');
+    if (owner !== 'mine' && owner !== 'other') owner = await claimInstall(actor, 'handed', api);
     if (owner !== 'mine') {
       state.update(actor.externalId, actor.id, entry => { delete entry.retirePending; });
       return;
     }
-    await retireActor(actor);
+    await retireActor(actor, mode);
   }
 
-  async function retireActor(actor: CompanionRuntimeActor) {
+  async function retireActor(actor: CompanionRuntimeActor, mode: 'foreground' | 'background') {
+    const api = mode === 'background' ? backgroundIdentityApi : input.api;
     // Compare-and-set on the home: if another computer took the companion over meanwhile, this
     // was only a copy, and deleting it never retires the companion itself.
     try {
-      await input.api(`/actors/${actor.id}`, 'PATCH', { disabled: true, homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
+      await api(`/actors/${actor.id}`, 'PATCH', { disabled: true, homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
     } catch (error) {
       const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
       if (!conflict) throw error;
       actor.homeDeviceId = typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null;
       state.update(actor.externalId, actor.id, entry => { delete entry.retirePending; });
-      void input.refresh?.().catch(() => undefined);
+      void (mode === 'background' ? input.refresh : refreshForeground)?.().catch(() => undefined);
       publish();
       return;
     }
@@ -579,7 +600,7 @@ export function startCompanionCloud(input: {
       await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: targetDeviceId, expectedHomeDeviceId: input.selfDeviceId });
     } catch (error) {
       const failure = actionFailure(error);
-      if (!failure.ok && failure.code === 'HOME_CONFLICT') await input.refresh?.().catch(() => undefined);
+      if (!failure.ok && failure.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
       return failure;
     }
     actor.homeDeviceId = targetDeviceId;
@@ -603,8 +624,12 @@ export function startCompanionCloud(input: {
         if (actor.kind !== 'bot') continue;
         const botId = actor.externalId;
         const local = localProfiles.find(profile => profile.id === botId);
-        const entry = state.bot(botId);
+        let entry = state.bot(botId);
+        // A local id may now refer to a different cloud actor. In particular, an old
+        // retirement must never disable that replacement (state.update uses the same boundary).
+        if (entry && entry.actorId !== actor.id) entry = state.update(botId, actor.id, () => undefined);
         if (actor.disabled) {
+          if (entry?.retirePending) state.update(botId, actor.id, next => { delete next.retirePending; });
           // Deleted on its main computer (perhaps while this one was offline): a copy here is no
           // longer the companion, so it is hidden and stopped like any other old copy.
           if (local && local.status !== 'deleting' && !entry?.demoted) {
@@ -620,7 +645,7 @@ export function startCompanionCloud(input: {
         } else if (entry?.retirePending) {
           if (Date.now() >= (autoRetryAt.get(`retire:${botId}`) ?? 0)) {
             autoRetryAt.set(`retire:${botId}`, Date.now() + AUTO_RETRY_MS);
-            void retireOwned(actor).catch(error => input.log?.warn('Companion retire will retry', { actorId: actor.id, code: errorCode(error) }));
+            void retireOwned(actor, 'background').catch(error => input.log?.warn('Companion retire will retry', { actorId: actor.id, code: errorCode(error) }));
           }
           continue;
         }
@@ -644,7 +669,7 @@ export function startCompanionCloud(input: {
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
       if (!actor) {
-        try { await input.refresh?.(); } catch (error) { return actionFailure(error); }
+        try { await refreshForeground?.(); } catch (error) { return actionFailure(error); }
         actor = actorOf(botId);
       }
       if (!actor) return { ok: false, code: 'FAILED' };
@@ -662,7 +687,7 @@ export function startCompanionCloud(input: {
         const failure = actionFailure(error);
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
           actor.homeDeviceId = failure.homeDeviceId ?? null;
-          await input.refresh?.().catch(() => undefined);
+          await refreshForeground?.().catch(() => undefined);
           publish();
         }
         return failure;
@@ -671,7 +696,7 @@ export function startCompanionCloud(input: {
       try {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
-        if (await claimInstall(actor, 'takeover') !== 'mine') return { ok: false, code: 'FAILED' };
+        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return { ok: false, code: 'FAILED' };
         await materialize(actor);
       } catch (error) {
         input.log?.warn('Companion take-over could not finish locally', { actorId: actor.id, code: errorCode(error) });
@@ -748,14 +773,28 @@ export function startCompanionCloud(input: {
       try { result = await input.host.homeLink!.handOver(choices.homeDeviceId!, botId, targetDeviceId, options); }
       catch (error) {
         // A lost answer may still have moved it: show where it runs now.
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         publish();
         return actionFailure(error, 'OFFLINE');
       }
       // Moved here: re-read homes now so the automatic take-over starts without waiting for the push.
-      if (result.ok || result.code === 'HOME_CONFLICT') await input.refresh?.().catch(() => undefined);
+      if (result.ok || result.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
       publish();
       return result;
+    },
+
+    async receivePrivateReport(botId) {
+      const actor = actorOf(botId), host = input.host.materializer;
+      if (!actor || !host || !live() || actor.homeDeviceId !== input.selfDeviceId || runtime.isShadowed(botId)) return false;
+      const sessionId = await input.host.canonicalSession(botId);
+      if (!sessionId) throw new Error('COMPANION_TASK_UNAVAILABLE');
+      const roomId = await mirror.ensureRoom(botId,actor.id,actor.name);
+      const inserted = await importCloudHistory({api:input.api,host,sessionId,botActorId:actor.id,roomId,fence,
+        ...(input.media ? {download:input.media.download} : {})});
+      if (inserted > 0) state.update(botId,actor.id,entry => {entry.pendingRebuild=true;});
+      transcripts.delete(roomId);
+      publish();
+      return true;
     },
 
     async transcript(botId, before) {
@@ -763,9 +802,11 @@ export function startCompanionCloud(input: {
       if (!actor) throw new Error('COMPANION_NOT_FOUND');
       const roomId = await mirror.ensureRoom(actor.externalId, actor.id, actor.name);
       // The room orders by arrival (older history may be uploaded later): read it whole, show it
-      // by message time. The first page re-reads; older pages reuse that read.
+      // by message time. The durable reader validates its cached scan against room
+      // changes; the legacy reader reuses a recent scan for older pages.
       const cached = transcripts.get(roomId);
-      const messages = before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
+      const messages = input.transcript ? await input.transcript(roomId, actor.id, !before)
+        : before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
         : await readAllRoomMessages(input.api, roomId, actor.id);
       transcripts.set(roomId, { at: Date.now(), messages });
       return transcriptPageOf(messages, before ? Number(before) : undefined);
@@ -780,7 +821,7 @@ export function startCompanionCloud(input: {
         const profile = await profileOf(actor.id).catch(() => null);
         if (isCindyCompanion(actor.externalId, profile)) copies.push({ botId: actor.externalId, name: actor.name, homeDeviceId: actor.homeDeviceId ?? null });
       }
-      return copies.length > 1 ? copies : [];
+      return copies;
     },
 
     async mergeCindy(keepBotId, fromBotIds) {
@@ -797,11 +838,11 @@ export function startCompanionCloud(input: {
       if (version < REMOTE_HAND_OVER_VERSION) return { ok: false, code: 'HOME_OUTDATED' };
       try {
         const result = await link.merge(keep.homeDeviceId, keepBotId, fromBotIds);
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         publish();
         return result;
       } catch (error) {
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         return actionFailure(error, 'OFFLINE') as CompanionMergeResult;
       }
     },
@@ -833,11 +874,20 @@ export function startCompanionCloud(input: {
 
     async retire(botId) {
       const self = input.selfDeviceId;
-      const actor = actorOf(botId);
       // A demoted copy is not the companion: deleting it never touches the cloud.
-      if (!self || !live() || !actor || actor.homeDeviceId !== self || runtime.isShadowed(botId)) return;
+      if (!self || !live() || runtime.isShadowed(botId)) return;
+      const actor = actorOf(botId);
+      if (!actor) {
+        // The local deletion has already committed. Keep its intent for a previously
+        // known actor even when the registry cannot resolve it yet; reconcile checks the
+        // actor identity, current home and installation before sending any cloud mutation.
+        const entry = state.bot(botId);
+        if (entry) state.update(botId, entry.actorId, next => { next.retirePending = true; });
+        return;
+      }
+      if (actor.homeDeviceId !== self) return;
       state.update(botId, actor.id, entry => { entry.retirePending = true; });
-      await retireOwned(actor);
+      await retireOwned(actor, 'foreground');
     },
 
     isShadowed: botId => state.isDemoted(botId) || installOwner(botId) === 'other',

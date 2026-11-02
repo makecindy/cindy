@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * scheduledSessionGrouping — 自动化任务生成会话的来源识别
  * ---------------------------------------------------------------------------
@@ -70,10 +71,9 @@ const toMs = (iso: string | null | undefined): number => {
   return Number.isFinite(t) ? t : 0;
 };
 
-// 以 userSendAt（用户最近一次按下发送）为主键；null 时回落到 updatedAt，
-// 兼容 touchUserSendInDb 失败的 scheduler fire 与从未发送过的会话（历史存量）。
+// 自动化列表同样按换手时钟排序，旧数据保留既有回退。
 const sortTimeMs = (s: Session): number =>
-  s.userSendAt != null ? toMs(s.userSendAt) : toMs(s.updatedAt);
+  toMs(getSessionListActivityAt(s));
 
 type TFunc = (key: string) => string;
 

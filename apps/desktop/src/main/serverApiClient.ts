@@ -44,6 +44,12 @@ export interface ApiFetchOptions {
   cache?: RequestCache;
   /** 显式传 token；不传则取 authManager.getAccessToken()。 */
   token?: string | null;
+  /**
+   * 完整的 Authorization 头(如自建中转的 `CindyRelay <凭证>`)。提供时不注入 Cindy 账号
+   * token,调用方还应同时设置 skipAutoRefresh / skipSessionInvalidation,避免对方的 401
+   * 牵连官方登录态。
+   */
+  authorization?: string;
   /** 跳过 401 自动 refresh（避免无限循环；refresh 自身调用时禁用）。 */
   skipAutoRefresh?: boolean;
   /** Fixed-identity teardown requests must not invalidate a newer active account. */
@@ -71,6 +77,8 @@ export interface ApiFetchOptions {
    * by the caller. These codes are also safe to include in redacted logs.
    */
   allowedRedactedErrorCodes?: readonly string[];
+  /** Expected compatibility responses still throw, but log at debug instead of warn. */
+  expectedErrors?: readonly { status: number; code?: string }[];
 }
 
 interface RawResponse<T> {
@@ -88,9 +96,13 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     'Accept-Language': getResolvedMainLocale(),
     ...(opts.headers ?? {}),
   };
-  const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
-  if (token) {
-    headers['Authorization'] = 'Bearer ' + token;
+  if (opts.authorization !== undefined) {
+    headers['Authorization'] = opts.authorization;
+  } else {
+    const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
   }
   const timeoutMs = opts.timeoutMs ?? 0;
   const controller = timeoutMs > 0 ? new AbortController() : null;
@@ -172,8 +184,11 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     }
     // 网络异常 rawFetch 已 log;这里补 not-ok 响应(401/5xx 等)的日志,
     // 否则上层 catch 一吞,排查调用链时完全看不到原因。
+    const expected = opts.expectedErrors?.some(({ status, code }) =>
+      result.status === status && (code === undefined || code === errCode));
+    const logNotOk = expected ? log.debug.bind(log) : log.warn.bind(log);
     if (opts.redactErrorDetails) {
-      log.warn(
+      logNotOk(
         'serverApiFetch.redacted_not_ok',
         'path=' + (opts.logLabel ?? redactedLogPath(apiPath)),
         'method=' + (opts.method ?? 'GET'),
@@ -192,7 +207,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
         'code=' + errCode,
       ];
       if (!opts.logLabel) fields.push('msg=' + errMsg);
-      log.warn(...fields);
+      logNotOk(...fields);
     }
     throw new ServerApiError(
       publicCode,

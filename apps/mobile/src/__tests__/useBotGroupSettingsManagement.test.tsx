@@ -1,273 +1,178 @@
 // @vitest-environment jsdom
+// Regression: cloud group settings used to require an online computer. Unit tier exercises
+// the production hook + HTTP client with no device-link provider, including account fences,
+// server role revocation, edit conflicts and uncertain write receipts. Existing tests covered hosts only.
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-
-const h = vi.hoisted(() => ({
-  generation: 1, enabled: true, revoked: new Set<string>(), online: true, listOnline: true, syncing: false, listError: null as string | null,
-  targets: [{ deviceId: 'mac', deviceName: 'Mac' }, { deviceId: 'pc', deviceName: 'PC' }],
-  items: [] as any[], listeners: new Set<(id: string, payload: any) => void>(),
-  invoke: vi.fn(), openLink: vi.fn(async () => {}), epoch: 1,
-}));
-vi.mock('react-native', () => ({ AppState: {} }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.generation }) }));
-vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => h.revoked }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({
-  invoke: h.invoke, openLink: h.openLink, status: 'online', connectionEpoch: h.epoch,
-  getPresenceAvailability: () => h.online,
-  onRemoteResourceChanged: onChanged,
-}) }));
-function onChanged(listener: (id: string, payload: any) => void) { h.listeners.add(listener); return () => h.listeners.delete(listener); }
-vi.mock('@/session/useTeammateRoster', () => ({ useTeammateRoster: () => ({ groupTargets: h.targets, loading: h.syncing, error: h.listError, refresh: vi.fn() }) }));
-vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => ({
-  items: h.items, syncing: h.syncing, isOnline: () => h.online && h.listOnline, error: h.listError, refresh: vi.fn(),
-}) }));
-
-import { useBotGroupSettingsManagement } from '@/session/useBotGroupSettingsManagement';
-
-const host = { deviceId: 'mac', deviceName: 'Mac' };
-const row = (id = 'g1', target = host) => ({ host: target, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: 'v1' } });
-const resource = (role = 'owner', extra: Record<string, unknown> = {}) => ({
-  ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, revision: 'v1', display: { title: 'Group' }, links: [],
-  blocks: [{ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '', data: {
-    id: 'g1', name: 'Group', serverBacked: true, supportsSettingsManagement: true, revision: 4,
-    members: [{ botId: 'bot', name: 'Bot', isOwned: true, role, status: 'active' }],
-    messages: [], plans: [], round: { status: 'idle', speakers: [], canContinue: false }, ...extra,
-  } }],
-});
+import { chatGroupView, createChatServerClient, type ChatSnapshot } from '@/chat/chatServerClient';
+const h = vi.hoisted(() => ({ api: null as any, enabled: true, uuid: 0 }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => `operation-${++h.uuid}` }));
+vi.mock('@/chat/useChatServer', () => ({ useChatClient: () => h.api }));
+import { useBotGroupSettingsManagement, useCloudGroupCandidates } from '@/session/useBotGroupSettingsManagement';
+const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+let snapshot: ChatSnapshot;
 let root: Root | undefined;
 let result: ReturnType<typeof useBotGroupSettingsManagement>;
-function Probe() { result = useBotGroupSettingsManagement('g1', h.enabled); return null; }
+let candidates: ReturnType<typeof useCloudGroupCandidates>;
+let source: ReturnType<typeof chatGroupView>;
+const request = vi.fn();
+const writes = () => request.mock.calls.filter(call => call[1] === 'POST' || call[1] === 'PATCH');
+function Probe() { result = useBotGroupSettingsManagement(source, h.enabled); candidates = useCloudGroupCandidates(h.enabled); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
-const reads = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:remote-resources:get');
-const writes = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:remote-resources:invoke');
+function api(owner = 'account-1') {
+  return { owner, enabled: true, current: () => h.api.owner === owner, client: createChatServerClient(request) };
+}
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
-  vi.clearAllMocks(); h.enabled = true; h.generation = 1; h.epoch = 1; h.online = true; h.syncing = false; h.revoked = new Set(); h.listeners.clear();
-  h.listOnline = true; h.listError = null;
-  h.targets = [{ deviceId: 'mac', deviceName: 'Mac' }];
-  h.items = [row()]; h.openLink.mockResolvedValue();
-  h.invoke.mockImplementation(async (_id, channel) => channel === 'maker:remote-resources:get' ? resource() : { effects: [] });
+  vi.clearAllMocks(); h.enabled = true; h.uuid = 0;
+  snapshot = { room: { id: id(1), name: 'Group', description: 'Original', kind: 'group', archived: false, revision: 4,
+    response_mode: 'all', speaking_mode: 'auto', created_at: '2026-10-01', updated_at: '2026-10-01' }, cursor: '1', messages: [], members: [
+    { id: id(2), kind: 'human', ownerActorId: id(2), ownerName: '', name: 'Me', avatar: null, state: 'joined', role: 'owner' },
+    { id: id(3), kind: 'bot', ownerActorId: id(2), ownerName: '', name: 'Bot', avatar: null, state: 'joined', role: 'member' },
+  ] };
+  source = chatGroupView({ snapshot, messages: [], before: null }, id(2));
+  request.mockImplementation(async (path, method, body) => {
+    if (path === '/me') return { actor: { id: id(2), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path === '/actors') return [{ id: id(4), kind: 'bot', externalId: 'offline-bot', name: 'Offline bot', avatar: null, homeDeviceId: null }];
+    if (path.endsWith('/snapshot')) return structuredClone(snapshot);
+    if (method === 'PATCH') {
+      if (!['owner', 'admin'].includes(snapshot.members[0].role)) throw Object.assign(new Error('ROLE_REQUIRED'), { status: 403 });
+      if (body.expectedRevision !== snapshot.room.revision) throw Object.assign(new Error('REVISION_CONFLICT'), { status: 409 });
+      if (body.name !== undefined) snapshot.room.name = body.name;
+      if (body.description !== undefined) snapshot.room.description = body.description;
+      snapshot.room.revision++;
+      return { revision: snapshot.room.revision };
+    }
+    if (method === 'POST') return { state: 'joined' };
+    throw new Error(`Unexpected ${path}`);
+  });
+  h.api = api();
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
-it('reads the exact room and sends settings only to its verified host with a revision', async () => {
-  h.targets.push({ deviceId: 'pc', deviceName: 'PC' });
-  h.invoke.mockImplementation(async (id, channel) => channel === 'maker:remote-resources:get'
-    ? resource('owner', id === 'pc' ? { id: 'other' } : {}) : { effects: [] });
+it('reads and saves cloud settings and offers offline companions without any host connection', async () => {
+  // The chat page knows where your teammate runs; the settings read alone does not.
+  source = chatGroupView({ snapshot, messages: [], before: null }, id(2), [{ id: id(3), kind: 'bot', externalId: 'bot', name: 'Bot', avatar: null, homeDeviceId: 'pc' }]);
   await render();
-  expect(reads()).toHaveLength(2);
-  expect(result.selected?.host.deviceId).toBe('mac');
-  expect(result.reason).toBeNull();
-  await act(async () => { await result.act('update', { name: 'New name' }); });
-  expect(writes()[0]?.slice(0, 2)).toEqual(['mac', 'maker:remote-resources:invoke']);
-  expect(writes()[0]?.[2][0]).toMatchObject({ actionId: 'update', resourceRef: { id: 'g1' }, input: { name: 'New name', expectedRevision: 4 } });
+  expect(result.editable).toBe(true);
+  expect(result.group).toMatchObject({ description: 'Original', singleSpeaker: true });
+  expect(result.group?.members.find(member => member.actorId === id(3))?.homeDeviceId).toBe('pc');
+  expect(candidates.rows.map(row => row.id)).toEqual([id(4)]);
+  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3) }); });
+  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3) }, id(2)]);
+  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5 });
+  await act(async () => { await result.act('add-member', { botId: id(4) }); await result.act('set-member-role', { actorId: id(3), role: 'admin' }); await result.act('remove-member', { actorId: id(3) }); });
+  expect(writes().slice(1).map(call => call[2])).toEqual([
+    { operationId: 'operation-2', actorId: id(4), action: 'invite' },
+    { operationId: 'operation-3', actorId: id(3), action: 'role', role: 'admin' },
+    { operationId: 'operation-4', actorId: id(3), action: 'remove' },
+  ]);
 });
 
-it('probes the exact room even when it is absent from a truncated group list', async () => {
-  h.targets = [host];
-  h.items = Array.from({ length: 200 }, (_, index) => row(`other-${index}`));
-  await render();
-  expect(reads()).toHaveLength(1);
-  expect(reads()[0]?.[2][0].ref.id).toBe('g1');
-  expect(result.selected?.host.deviceId).toBe('mac');
+it.each(['member', 'guest'] as const)('keeps %s read-only based on account membership', async role => {
+  snapshot.members[0].role = role; await render();
+  expect(result.reason).toBe('permission');
+  await expect(result.act('update', { name: 'Denied' })).rejects.toThrow('PERMISSION_DENIED');
+  expect(writes()).toHaveLength(0);
+  // Your own nickname and teammates are written as yourself, never through a manager.
+  await act(async () => { await result.act('nickname', { actorId: id(2), nickname: ' Nana ' }); await result.act('add-member', { actorId: id(4) }); });
+  expect(writes().map(call => [call[0], call[2], call[3]])).toEqual([
+    [`/conversations/${id(1)}/nickname`, { operationId: 'operation-1', actorId: id(2), nickname: 'Nana' }, undefined],
+    [`/conversations/${id(1)}/members`, { operationId: 'operation-2', actorId: id(4), action: 'invite' }, undefined],
+  ]);
 });
 
-it('blocks consecutive edits until the successful write is read back with its new revision', async () => {
-  await render();
-  let revision = 4; let finishRead!: (value: unknown) => void;
-  h.invoke.mockImplementation(async (_id, channel, args) => {
-    if (channel === 'maker:remote-resources:get') return new Promise(resolve => { finishRead = resolve; });
-    if (args[0].input.expectedRevision !== revision) throw new Error('PRECONDITION_FAILED');
-    revision += 1;
-    return { effects: [] };
+it('selects only an owned manager, never a foreign owner', async () => {
+  snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin';
+  snapshot.members.push({ ...snapshot.members[0], id: id(9), ownerActorId: id(9), role: 'owner' });
+  await render(); await act(async () => { await result.act('remove-member', { actorId: id(4) }); });
+  expect(writes()[0][3]).toBe(id(3));
+});
+
+it('reloads revoked roles after a rejected write without reporting it saved', async () => {
+  await render(); snapshot.members[0].role = 'member';
+  await act(async () => { await expect(result.act('update', { name: 'Denied' })).rejects.toThrow('ROLE_REQUIRED'); });
+  expect(result.editable).toBe(false); expect(result.reason).toBe('permission');
+  expect(result.group?.name).toBe('Group');
+});
+
+it('preserves the edit revision and returns conflicts instead of overwriting a newer value', async () => {
+  await render(); snapshot.room.revision = 5; snapshot.room.name = 'Other edit';
+  await act(async () => { await expect(result.act('update', { name: 'My draft', expectedRevision: 4 })).rejects.toThrow('REVISION_CONFLICT'); });
+  expect(result.group).toMatchObject({ revision: 5, name: 'Other edit' });
+  await act(async () => { await result.act('update', { name: 'Reviewed draft', expectedRevision: 5 }); });
+  expect(writes()[1][2].operationId).not.toBe(writes()[0][2].operationId);
+});
+
+it('reuses the operation receipt on an explicit retry after an uncertain network result', async () => {
+  await render(); const original = request.getMockImplementation()!; let fail = true;
+  request.mockImplementation(async (...args) => { if (args[1] === 'POST' && fail) { fail = false; throw new Error('Network lost'); } return original(...args); });
+  await act(async () => { await expect(result.act('add-member', { botId: id(4) })).rejects.toThrow('Network lost'); });
+  await act(async () => { await result.act('add-member', { botId: id(4) }); });
+  expect(writes()).toHaveLength(2); expect(writes()[0]).toEqual(writes()[1]);
+});
+
+it('replays the original write after a lost acknowledgement advances the readback revision', async () => {
+  await render(); const original = request.getMockImplementation()!;
+  let receipt: unknown;
+  request.mockImplementation(async (...args) => {
+    if (args[1] !== 'PATCH') return original(...args);
+    if (receipt) return receipt;
+    receipt = await original(...args);
+    throw new Error('Acknowledgement lost');
   });
-  await act(async () => {
-    await result.act('update', { name: 'Renamed' });
-    // Also exercise the interval before React commits the refreshed controls.
-    await expect(result.act('update', { organizerBotId: 'bot' })).rejects.toThrow('PERMISSION_DENIED');
-  });
-  expect(writes()).toHaveLength(1); expect(result.selected).toBeUndefined(); expect(result.loading).toBe(true);
-  await act(async () => { finishRead(resource('owner', { name: 'Renamed', revision })); });
-  expect(result.selected?.group.revision).toBe(5);
-  await act(async () => { await result.act('update', { organizerBotId: 'bot' }); });
-  expect(writes()[1]?.[2][0].input.expectedRevision).toBe(5);
+  await act(async () => { await expect(result.act('update', { description: 'Saved once', expectedRevision: 4 })).rejects.toThrow('Acknowledgement lost'); });
+  expect(result.group?.revision).toBe(5);
+  await act(async () => { await result.act('update', { description: 'Saved once', expectedRevision: 5 }); });
+  expect(writes()).toHaveLength(2); expect(writes()[0]).toEqual(writes()[1]);
+  expect(result.group?.revision).toBe(5);
 });
 
-it('does not restore the pre-write revision from an already pending background read', async () => {
-  await render(); const finishes: ((value: unknown) => void)[] = [];
-  h.invoke.mockImplementation(async (_id, channel) => channel === 'maker:remote-resources:get'
-    ? new Promise(resolve => { finishes.push(resolve); }) : { effects: [] });
-  await act(async () => { result.refresh(); });
-  await act(async () => { await result.act('update', { name: 'Renamed' }); });
-  await act(async () => { finishes.shift()!(resource()); });
-  expect(result.selected).toBeUndefined(); expect(finishes).toHaveLength(1);
-  await expect(result.act('add-member', { botId: 'other' })).rejects.toThrow('PERMISSION_DENIED');
-  await act(async () => { finishes.shift()!(resource('owner', { revision: 5, name: 'Renamed' })); });
-  expect(result.selected?.group.revision).toBe(5); expect(writes()).toHaveLength(1);
+it('keeps a confirmed save successful but blocks edits until failed readback recovers', async () => {
+  await render(); const original = request.getMockImplementation()!;
+  request.mockImplementation(async (...args) => { if (args[0].endsWith('/snapshot')) throw new Error('Unavailable'); return original(...args); });
+  await act(async () => { await expect(result.act('update', { name: 'Saved' })).resolves.toEqual({ effects: [] }); });
+  expect(result.editable).toBe(false); expect(result.reason).toBe('unavailable');
+  request.mockImplementation(original); await act(async () => { await result.refresh(); });
+  expect(result.group?.name).toBe('Saved'); expect(result.editable).toBe(true);
 });
 
-it('keeps a confirmed save successful but disables further edits if readback fails', async () => {
+it('ignores pre-write snapshots and blocks duplicate edits while the write is pending', async () => {
+  await render(); const original = request.getMockImplementation()!; let finishRead!: (value: unknown) => void; let first = true;
+  request.mockImplementation(async (...args) => { if (args[0].endsWith('/snapshot') && first) { first = false; return new Promise(resolve => { finishRead = resolve; }); } return original(...args); });
+  let oldRead!: Promise<void>; await act(async () => { oldRead = result.refresh(); });
+  await expect(result.act('update', { name: 'Unverified' })).rejects.toThrow('PERMISSION_DENIED');
+  await act(async () => { finishRead(structuredClone(snapshot)); await oldRead; });
+  let finishWrite!: () => void;
+  request.mockImplementation(async (...args) => { if (args[1] === 'PATCH') await new Promise<void>(resolve => { finishWrite = resolve; }); return original(...args); });
+  let write!: Promise<unknown>; await act(async () => { write = result.act('update', { name: 'One write' }); });
+  await expect(result.act('update', { name: 'Duplicate' })).rejects.toThrow('PERMISSION_DENIED');
+  await act(async () => { finishWrite(); await write; });
+  expect(writes()).toHaveLength(1);
+});
+
+it('discards account and closed-sheet read results and never revives their authorization', async () => {
+  let finish!: (value: unknown) => void; const original = request.getMockImplementation()!;
+  request.mockImplementation(async (...args) => args[0].endsWith('/snapshot') ? new Promise(resolve => { finish = resolve; }) : original(...args));
+  await render(); const oldAct = result.act;
+  h.enabled = false; h.api = api('account-2'); await render();
+  await act(async () => { finish(structuredClone(snapshot)); });
+  expect(result.group).toBeUndefined(); expect(result.editable).toBe(false);
+  await expect(oldAct('update', { name: 'Late' })).rejects.toThrow('PERMISSION_DENIED');
+  expect(writes()).toHaveLength(0);
+});
+
+// New on the phone: join links come from the manager you control and are checked before shown.
+it('creates an invite link as the manager and rejects a malformed token', async () => {
   await render();
-  h.invoke.mockImplementation(async (_id, channel) => {
-    if (channel === 'maker:remote-resources:get') throw new Error('Read failed');
-    return { effects: [] };
-  });
-  await act(async () => { await expect(result.act('update', { name: 'Renamed' })).resolves.toEqual({ effects: [] }); });
-  expect(result.selected).toBeUndefined(); expect(result.reason).toBe('unavailable');
-  await expect(result.act('add-member', { botId: 'other' })).rejects.toThrow('PERMISSION_DENIED');
-  h.invoke.mockResolvedValue(resource('owner', { revision: 5 }));
-  await act(async () => { result.refresh(); });
-  expect(result.selected?.group.revision).toBe(5); expect(writes()).toHaveLength(1);
-});
-
-it.each(['member', 'guest'])('keeps %s read-only even on an online matching computer', async role => {
-  h.invoke.mockResolvedValue(resource(role)); await render();
-  expect(result.selected).toBeUndefined(); expect(result.reason).toBe('permission');
-  await expect(result.act('update', { name: 'Denied' })).rejects.toThrow('PERMISSION_DENIED'); expect(writes()).toHaveLength(0);
-});
-
-it.each([{ supportsSettingsManagement: false }, { revision: undefined }, { archived: true }, { members: [{ botId: 'foreign', name: 'Foreign', role: 'owner', isOwned: false }] }])('does not grant management for an unsupported or unauthorized projection: %j', async extra => {
-  h.invoke.mockResolvedValue(resource('owner', extra)); await render(); expect(result.selected).toBeUndefined();
-});
-
-it('never uses offline or revoked cached rows as authority', async () => {
-  h.online = false; await render(); expect(reads()).toHaveLength(0); expect(result.selected).toBeUndefined();
-  h.online = true; h.revoked = new Set(['mac']); await render(); expect(reads()).toHaveLength(0);
-});
-
-it('allows choosing among multiple independently verified computers', async () => {
-  h.targets.push({ deviceId: 'pc', deviceName: 'PC' });
-  h.items = [row(), row('g1', h.targets[1])]; await render(); expect(result.managers).toHaveLength(2);
-  await act(async () => { result.select('pc'); });
-  await act(async () => { await result.act('add-member', { botId: 'local-pc-bot' }); });
-  expect(writes()[0]?.[0]).toBe('pc');
-});
-
-it('does not send a write if the account changes while opening its link', async () => {
-  await render(); let finish!: () => void;
-  h.openLink.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
-  let pending!: Promise<unknown>; await act(async () => { pending = result.act('update', { name: 'Late' }); });
-  h.generation = 2; h.enabled = false; await render(); finish();
-  await expect(pending).rejects.toThrow('PERMISSION_DENIED'); expect(writes()).toHaveLength(0);
-});
-
-it('ignores a late read after closing settings', async () => {
-  let finish!: (value: unknown) => void;
-  h.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; })); await render();
-  h.enabled = false; await render(); await act(async () => { finish(resource()); });
-  expect(result.selected).toBeUndefined(); expect(writes()).toHaveLength(0);
-});
-
-it('preserves the revision of a name draft when sending it', async () => {
-  await render(); await act(async () => { await result.act('update', { name: 'Draft', expectedRevision: 2 }); });
-  expect(writes()[0]?.[2][0].input.expectedRevision).toBe(2);
-});
-
-it('disables a previously verified computer when presence goes offline', async () => {
-  await render(); expect(result.selected).toBeDefined();
-  h.online = false; await render(); expect(result.selected).toBeUndefined();
-  await expect(result.act('update')).rejects.toThrow('PERMISSION_DENIED');
-});
-
-it('keeps the selected device name through reconnecting without retaining write authority', async () => {
-  h.targets.push({ deviceId: 'pc', deviceName: 'PC' });
-  h.items = [row(), row('g1', h.targets[1])]; await render();
-  await act(async () => { result.select('pc'); });
-  h.online = false; h.items = []; await render();
-  expect(result.displayHost?.deviceName).toBe('PC');
-  expect(result.selected).toBeUndefined();
-  await expect(result.act('update')).rejects.toThrow('PERMISSION_DENIED');
-  h.enabled = false; await render(); h.enabled = true; h.syncing = true; await render();
-  expect(result.loading).toBe(true);
-  expect(result.displayHost?.deviceName).toBe('PC');
-  h.generation = 2; await render();
-  expect(result.displayHost).toBeUndefined();
-});
-
-it('does not reuse the previous authorization while a reopened sheet is being verified', async () => {
-  await render(); h.enabled = false; await render();
-  let finish!: (value: unknown) => void;
-  h.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  h.enabled = true; await render();
-  expect(result.loading).toBe(true); expect(result.selected).toBeUndefined();
-  await act(async () => { finish(resource('member')); });
-  expect(result.selected).toBeUndefined(); expect(result.reason).toBe('permission');
-});
-
-it('rejects a receipt from an earlier opening of the same sheet', async () => {
-  await render(); let finish!: (value: unknown) => void;
-  h.invoke.mockImplementation(async (_id, channel) => channel === 'maker:remote-resources:invoke'
-    ? new Promise(resolve => { finish = resolve; }) : resource());
-  let pending!: Promise<unknown>;
-  await act(async () => { pending = result.act('update', { name: 'Late' }); });
-  h.enabled = false; await render(); h.enabled = true; await render();
-  await act(async () => { finish({ effects: [] }); await expect(pending).rejects.toThrow('PERMISSION_DENIED'); });
-});
-
-it('checks the sheet identity again when a queued write actually leaves the transport', async () => {
-  await render(); let send!: () => void; let sent = false;
-  h.invoke.mockImplementation(async (_id, channel, _args, opts) => channel === 'maker:remote-resources:invoke'
-    ? new Promise((resolve, reject) => { send = () => { try { opts?.preSend?.(); sent = true; resolve({ effects: [] }); } catch (error) { reject(error); } }; }) : resource());
-  let pending!: Promise<unknown>;
-  await act(async () => { pending = result.act('update', { name: 'Queued' }); });
-  h.enabled = false; await render(); h.enabled = true; await render();
-  await act(async () => { send(); await expect(pending).rejects.toThrow('PERMISSION_DENIED'); });
-  expect(sent).toBe(false);
-  expect(writes()[0]?.[3]?.preSend).toBeTypeOf('function');
-});
-
-it.each(['reading', 'refreshed'])('keeps a queued write authorized through a content refresh (%s)', async phase => {
-  await render(); let send!: () => void; let finishRead!: (value: unknown) => void;
-  h.invoke.mockImplementation(async (_id, channel, _args, opts) => channel === 'maker:remote-resources:invoke'
-    ? new Promise((resolve, reject) => { send = () => { try { opts?.preSend?.(); resolve({ effects: [] }); } catch (error) { reject(error); } }; })
-    : new Promise(resolve => { finishRead = resolve; }));
-  let pending!: Promise<unknown>;
-  await act(async () => { pending = result.act('update', { name: 'Queued' }); });
-  h.syncing = true; await render();
-  if (phase === 'refreshed') {
-    h.items = [{ ...row(), item: { ...row().item, revision: 'v2' } }];
-    h.syncing = false; await render();
-    await act(async () => { result.refresh(); });
-    await act(async () => { finishRead(resource()); });
-  }
-  await act(async () => { send(); await expect(pending).resolves.toEqual({ effects: [] }); });
-  expect(writes()[0]?.[2][0].input.expectedRevision).toBe(4);
-});
-
-it.each(['permission', 'revoked', 'host removed', 'room removed', 'offline', 'epoch'])('rejects a queued write after authorization changes: %s', async change => {
-  await render(); let send!: () => void;
-  h.invoke.mockImplementation(async (_id, channel, _args, opts) => channel === 'maker:remote-resources:invoke'
-    ? new Promise((resolve, reject) => { send = () => { try { opts?.preSend?.(); resolve({ effects: [] }); } catch (error) { reject(error); } }; })
-    : change === 'room removed' ? null : resource(change === 'permission' ? 'member' : 'owner'));
-  let pending!: Promise<unknown>;
-  await act(async () => { pending = result.act('update', { name: 'Denied' }); });
-  if (change === 'permission') await act(async () => { result.refresh(); });
-  if (change === 'revoked') h.revoked = new Set(['mac']);
-  if (change === 'host removed') h.targets = h.targets.filter(target => target.deviceId !== 'mac');
-  if (change === 'room removed') await act(async () => { result.refresh(); });
-  if (change === 'offline') h.online = false;
-  if (change === 'epoch') h.epoch += 1;
-  await render();
-  await act(async () => { send(); await expect(pending).rejects.toThrow('PERMISSION_DENIED'); });
-});
-
-it('coalesces refreshes while an earlier detail read is still in flight', async () => {
-  const finishes: ((value: unknown) => void)[] = [];
-  h.invoke.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
-  await render(); expect(reads()).toHaveLength(1);
-  h.syncing = true; await render(); h.syncing = false; await render();
-  await act(async () => { result.refresh(); result.refresh(); });
-  expect(reads()).toHaveLength(1);
-  await act(async () => { finishes.shift()!(resource()); });
-  expect(reads()).toHaveLength(2);
-  await act(async () => { finishes.shift()!(resource()); });
-  expect(result.selected).toBeDefined(); expect(result.loading).toBe(false);
-});
-
-it('distinguishes a failed online roster read from a disconnected computer', async () => {
-  h.listError = 'Read failed'; h.invoke.mockRejectedValue(new Error('Read failed')); await render();
-  expect(result.reason).toBe('unavailable'); expect(result.selected).toBeUndefined();
-  h.online = false; await render(); expect(result.reason).toBe('noHost');
+  const token = 'A'.repeat(43);
+  request.mockImplementationOnce(async () => ({ token, expiresAt: null, reusable: true }));
+  let link: Awaited<ReturnType<typeof result.invite>> = null;
+  await act(async () => { link = await result.invite(); });
+  expect(link).toEqual({ link: `cindy://chat-invite/${token}`, expiresAt: null, reusable: true });
+  expect(writes().at(-1)?.slice(0, 2)).toEqual([`/conversations/${id(1)}/invite-links`, 'POST']);
+  expect(writes().at(-1)?.[3]).toBe(id(2));
+  request.mockImplementationOnce(async () => ({ token: 'short', expiresAt: null, reusable: true }));
+  await act(async () => { await expect(result.invite()).rejects.toThrow('CHAT_RESPONSE_INVALID'); });
 });

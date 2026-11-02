@@ -34,6 +34,8 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => state.ripgrepPath,
+  // Cache route identities now resolve the real upstream even for local Pi.
+  claudeUpstreamEndpoint: () => 'https://upstream.test/v1',
 }));
 
 vi.mock('../../mcp-integrations/piEnvironment.js', () => ({

@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 把过去要真机验证的**被控端那一半**变成 CI 可跑:驱动**真实** runInvoke(dispatch.ts),
  * 串起真实双层门禁(remoteControlEnabled + allowlist)+ **真实 workingDir guard**
- * (`checkRemoteWorkingDir` 跑真实异步 fs 探测)
+ * (`createRemoteWorkingDirGuard` 解析 SSH 归属,本地目录跑真实异步 fs 探测)
  * + dispatchLocalInvoke 路由到本机 handler + set-* 回流 + throwIpcError `[CODE]` 透传。
  *
  * 真实 vs 忠实替身的边界(诚实声明):
@@ -58,24 +58,25 @@ import {
   setRemoteSettingsPersist,
   __testing as dispatchTesting,
 } from '../device-link/dispatch';
-import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard';
+import { createRemoteWorkingDirGuard } from '../device-link/remote-workdir-guard';
+import { createIpcError } from '../../shared/ipc-errors';
 import { __testing as registry } from '../device-link/invoke-registry';
 import type { InvokeResultPayload } from '@cindy/device-link';
 
 const SRC = 'controller-device';
+const kimiRead = vi.hoisted(() => vi.fn());
+vi.mock('../maker-host/provider-account-usage.js', () => ({ readKimiCodingAccountUsage: kimiRead }));
 const TMP_DIR = os.tmpdir(); // 真实存在的目录(模拟"浏览到/新建的远程目录")
 let managedWorktreeTestRoot = '';
 let managedWorktreeDir = '';
+const localStat = vi.fn((dir: string) => stat(dir));
+const findSshHosts = vi.fn<(dir: string) => Promise<readonly string[]>>();
+const probeSshWorkingDirectory = vi.fn<(hostId: string, dir: string) => Promise<string>>();
 
 beforeAll(() => {
   managedWorktreeTestRoot = mkdtempSync(path.join(os.tmpdir(), 'device-link-worktree-'));
   managedWorktreeDir = path.join(managedWorktreeTestRoot, '.cindy-worktrees', 'auto-test');
   mkdirSync(managedWorktreeDir, { recursive: true });
-
-  // 接入与生产相同的结构化 guard。
-  // 此集成测试在纯 Node 中运行，显式注入真实异步 stat；utilityProcess 的
-  // 并发、超时与回收由 workdir-probe-host 专属测试覆盖。
-  setRemoteWorkingDirGuard((dir) => checkRemoteWorkingDir(dir, { stat }));
 });
 
 afterAll(() => {
@@ -88,6 +89,15 @@ beforeEach(() => {
   registry.reset();
   h.settings.remoteControlEnabled = true;
   h.settings.revokedControllers = [];
+  findSshHosts.mockReset().mockResolvedValue([]);
+  probeSshWorkingDirectory.mockReset().mockImplementation(async (_hostId, dir) => dir);
+  localStat.mockClear();
+  // 与生产相同的端点解析 + 结构化 guard;仅 SSH/DB 注入内存依赖。
+  // 本地目录使用真实异步 stat,utilityProcess 的调度由其专属测试覆盖。
+  setRemoteWorkingDirGuard(createRemoteWorkingDirGuard({
+    findSshHosts,
+    probeSshWorkingDirectory,
+  }, { stat: localStat }));
   persistSpy = vi.fn();
   setRemoteSettingsPersist(persistSpy);
 });
@@ -106,6 +116,120 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
 }
 
 describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
+  // #7117:生产 runInvoke 必须把 SSH 的 POSIX 路径交给对应主机,而非 Windows fs。
+  // 既有覆盖只有本机路径;最小失败输入为不存在于本机的路径 + remoteHostId。
+  // tier:unit,SSH/数据库用内存依赖,dispatch 与目录守卫使用真实生产入口。
+  // 单文件实测(2026-10-25,Windows):38.38s,其中收集38.00s、用例37ms。
+  // 超预算来自既有 dispatch 静态依赖图;复用本文件,不新增同模块加载或真实等待。
+  it('#7117:SSH 新建任务保留主机归属,不被本机目录探测拦截', async () => {
+    registerHandler('maker:create-session', (opts: unknown) => opts);
+    const opts = { workingDir: '/home/user/project', remoteHostId: 'wsl-host' };
+    const res = await runInvoke(SRC, { channel: 'maker:create-session', args: [opts] });
+    expect(res).toEqual({ ok: true, result: opts });
+    expect(localStat).not.toHaveBeenCalled();
+    expect(findSshHosts).not.toHaveBeenCalled();
+    expect(probeSshWorkingDirectory).toHaveBeenCalledWith('wsl-host', opts.workingDir);
+  });
+
+  it('#7117:旧控制端缺主机时将唯一 SSH 归属和远端规范化目录传给创建 handler', async () => {
+    findSshHosts.mockResolvedValue(['wsl-host']);
+    probeSshWorkingDirectory.mockResolvedValue('/home/user/canonical-project');
+    registerHandler('maker:create-session', (opts: unknown) => opts);
+    const opts = { id: 'new-task', workingDir: '/home/user/project' };
+    expect(await runInvoke(SRC, { channel: 'maker:create-session', args: [opts] })).toEqual({
+      ok: true,
+      result: { ...opts, remoteHostId: 'wsl-host', workingDir: '/home/user/canonical-project' },
+    });
+    expect(opts).toEqual({ id: 'new-task', workingDir: '/home/user/project' });
+  });
+
+  it.each([
+    { name: '本地目录与 SSH 同时命中', workingDir: TMP_DIR, hosts: ['wsl-host'] },
+    { name: '多个 SSH 主机有同路径', workingDir: '/home/user/project', hosts: ['wsl-host', 'another-host'] },
+  ])('#7117:$name 时拒绝猜测执行位置', async ({ workingDir, hosts }) => {
+    findSshHosts.mockResolvedValue(hosts);
+    const handler = registerHandler('maker:create-session', () => 'must not create');
+    expect(await runInvoke(SRC, { channel: 'maker:create-session', args: [{ workingDir }] })).toEqual({
+      ok: false,
+      error: { code: 'IPC_ERROR', message: expect.stringContaining('[REMOTE_WORKDIR_INVALID]') },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(probeSshWorkingDirectory).not.toHaveBeenCalled();
+  });
+
+  it.each([{ remoteHostId: null }, { agentDeviceId: 'agent-device' }])(
+    '#7117:显式本地/另一电脑 Agent 的任务保留本地文件归属 %j', async (route) => {
+      findSshHosts.mockResolvedValue(['wsl-host']);
+      registerHandler('maker:create-session', (opts: unknown) => opts);
+      const opts = { workingDir: TMP_DIR, ...route };
+      expect(await runInvoke(SRC, { channel: 'maker:create-session', args: [opts] })).toEqual({ ok: true, result: opts });
+      expect(findSshHosts).not.toHaveBeenCalled();
+      expect(probeSshWorkingDirectory).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { error: createIpcError('SSH_HOST_NOT_FOUND', 'Unknown SSH host'), code: 'SSH_HOST_NOT_FOUND' },
+    { error: createIpcError('SSH_CONNECT_FAILED', 'SSH connection failed'), code: 'SSH_CONNECT_FAILED' },
+    { error: new Error('remote stderr with private/path'), code: 'REMOTE_WORKDIR_UNAVAILABLE' },
+  ])('#7117:SSH 探测失败返回 $code,不回落本机创建', async ({ error, code }) => {
+    probeSshWorkingDirectory.mockRejectedValue(error);
+    const handler = registerHandler('maker:create-session', () => 'must not create');
+    const res = await runInvoke(SRC, {
+      channel: 'maker:create-session',
+      args: [{ workingDir: '/home/user/project', remoteHostId: 'wsl-host' }],
+    });
+    expect(res).toEqual({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining(`[${code}]`) } });
+    expect(JSON.stringify(res)).not.toContain('private/path');
+    expect(handler).not.toHaveBeenCalled();
+    expect(localStat).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { remoteHostId: '' },
+    { remoteHostId: 123 },
+    { remoteHostId: 'wsl-host', agentDeviceId: 'agent-device' },
+  ])('#7117:非法或冲突的执行端参数在连接 SSH 前拒绝 %j', async (route) => {
+    const handler = registerHandler('maker:create-session', () => 'must not create');
+    expect(await runInvoke(SRC, {
+      channel: 'maker:create-session', args: [{ workingDir: TMP_DIR, ...route }],
+    })).toEqual({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[REMOTE_WORKDIR_INVALID]') } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(probeSshWorkingDirectory).not.toHaveBeenCalled();
+  });
+
+  it('#7117:归属查询失败不猜测端点或泄露数据库错误', async () => {
+    findSshHosts.mockRejectedValue(new Error('private database path'));
+    const handler = registerHandler('maker:create-session', () => 'must not create');
+    const res = await runInvoke(SRC, { channel: 'maker:create-session', args: [{ workingDir: TMP_DIR }] });
+    expect(res).toEqual({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[REMOTE_WORKDIR_UNAVAILABLE]') } });
+    expect(JSON.stringify(res)).not.toContain('private database path');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('#7117:探测期间撤回远控授权后不再创建任务', async () => {
+    probeSshWorkingDirectory.mockImplementation(async (_hostId, dir) => {
+      h.settings.remoteControlEnabled = false;
+      return dir;
+    });
+    const handler = registerHandler('maker:create-session', () => 'must not create');
+    expect(await runInvoke(SRC, {
+      channel: 'maker:create-session', args: [{ workingDir: '/home/user/project', remoteHostId: 'wsl-host' }],
+    })).toEqual({ ok: false, error: { code: 'ACCESS_REVOKED', message: expect.any(String) } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('#7117:worktree:create 不能借 SSH 参数绕过本地目录检查', async () => {
+    findSshHosts.mockResolvedValue(['wsl-host']);
+    const handler = registerHandler('worktree:create', () => 'must not create');
+    expect(await runInvoke(SRC, {
+      channel: 'worktree:create', args: [{ baseRepo: '/home/user/project', remoteHostId: 'wsl-host' }],
+    })).toEqual({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[REMOTE_WORKDIR_NOT_FOUND]') } });
+    expect(handler).not.toHaveBeenCalled();
+    expect(findSshHosts).not.toHaveBeenCalled();
+    expect(probeSshWorkingDirectory).not.toHaveBeenCalled();
+  });
+
   it('Bug1:create-session 的 workingDir 是真实存在的新目录 → 放行到 handler', async () => {
     const handler = registerHandler('maker:create-session', () => ({ sessionId: 's-new' }));
     const res = (await runInvoke(SRC, {
@@ -326,4 +450,36 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
     expect(res.error.code).toBe('IPC_ERROR');
     expect(res.error.message).toContain('[NOT_FOUND]');
   });
+});
+
+// Tier 2: the real remote dispatch admits the dedicated read, sanitizes inputs,
+// and retains the existing remote-control gate before accessing credentials.
+describe('Kimi same-account quota read', () => {
+  it('forwards only the validated query and preserves the read-only result', async () => {
+    kimiRead.mockResolvedValueOnce({ status: 'unavailable', error: 'auth' });
+    const result = await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi', agent: 'pi', forceRefresh: true, endpoint: 'https://untrusted.invalid', token: 'untrusted' }] });
+    expect(result).toEqual({ ok: true, result: { status: 'unavailable', error: 'auth' } });
+    expect(kimiRead).toHaveBeenLastCalledWith({ providerId: 'kimi', agent: 'pi', forceRefresh: true });
+  });
+  it('rejects malformed queries and disabled remote access before querying', async () => {
+    kimiRead.mockClear();
+    expect(await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi', agent: 'invalid' }] })).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
+    h.settings.remoteControlEnabled = false;
+    expect(await runInvoke(SRC, { channel: 'maker:usage:kimi-coding', args: [{ providerId: 'kimi' }] })).toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(kimiRead).not.toHaveBeenCalled();
+  });
+});
+
+// Tier 2: the real tunnel must advertise quota support without releasing routes.
+it('advertises Kimi quota only from official routes in the redacted remote catalog', async () => {
+  registerHandler('maker:provider:list', async () => ({ providers: [
+    { id: 'kimi', name: 'Kimi', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } },
+    { id: 'proxy', name: 'Proxy', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, kimiCodingUsageAgents: ['pi'], routing: { pi: { upstream: 'https://proxy.example/coding/v1' } } },
+  ] }));
+  const result = await runInvoke(SRC, { channel: 'maker:provider:list', args: [] });
+  expect(result).toMatchObject({ ok: true, result: { providers: [{ id: 'kimi', kimiCodingUsageAgents: ['pi'] }, { id: 'proxy' }] } });
+  const text = JSON.stringify(result);
+  expect(text).not.toContain('api.kimi.com');
+  expect(text).not.toContain('proxy.example');
+  expect(text.match(/kimiCodingUsageAgents/g)).toHaveLength(1);
 });

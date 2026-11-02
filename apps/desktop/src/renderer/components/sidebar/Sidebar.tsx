@@ -206,7 +206,8 @@ export function Sidebar({
         >
           <div
             aria-hidden
-            // 60px = 折叠按钮 28 + gap 4 + 菜单 28(ChromeActions 簇宽)。
+            // 占位宽 = ChromeActions 簇宽(折叠/菜单/后退/前进四个按钮,见
+            // CHROME_ACTIONS_GEOMETRY.clusterWidth)。
             className="h-full shrink-0"
             style={
               {

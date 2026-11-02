@@ -38,7 +38,7 @@ type SubscriptionReplaySchedulerOptions = {
   snapshotSubscriptions: (deviceId?: string) => SubscriptionReplayRef[];
   remoteSubscribe: (deviceId: string, topics: string[]) => Promise<unknown>;
   isLinkTornDown: () => boolean;
-  isRelayOnline: () => boolean;
+  isRelayOnline: (deviceId: string) => boolean;
   isDeviceUnresponsive: (deviceId: string) => boolean;
   /** undefined means this relay generation has not observed the peer yet. */
   getPresenceAvailability: (deviceId: string) => boolean | undefined;
@@ -64,7 +64,7 @@ export function createSubscriptionReplayScheduler(
   // Reuse Mobile's per-peer serialization, cancellation and retry accounting.
   // The adapter owns only Desktop's subscription snapshot and availability gates.
   const scheduler = new PeerRecoveryScheduler(async (deviceId) => {
-    if (options.isLinkTornDown() || !options.isRelayOnline()) return { retry: false };
+    if (options.isLinkTornDown() || !options.isRelayOnline(deviceId)) return { retry: false };
     if (options.isDeviceUnresponsive(deviceId)) return { retry: false };
     if (options.getPresenceAvailability(deviceId) === false) return { retry: false };
     const current = options.snapshotSubscriptions(deviceId)

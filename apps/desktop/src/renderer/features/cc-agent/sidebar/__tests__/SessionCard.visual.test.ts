@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
@@ -267,6 +268,25 @@ describe('SessionCard visual cases', () => {
       delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     }
   });
+
+  it.each(['list', 'card'] as const)(
+    'shows the sorting timestamp in the %s row with legacy fallback',
+    (variant) => {
+      const session: Session = {
+        ...sessionCardVisualCases[0].session,
+        updatedAt: '2026-10-24T09:00:00.000Z',
+        userSendAt: '2026-10-24T08:00:00.000Z',
+        lastActivityAt: '2026-10-24T10:00:00.000Z',
+      };
+      for (const expected of [session.lastActivityAt, session.userSendAt, session.updatedAt]) {
+        const view = renderCase(sessionCardVisualCases[0].id, { session, variant });
+        expect(view.container.querySelector('time')?.getAttribute('dateTime')).toBe(expected);
+        view.unmount();
+        if (session.lastActivityAt) delete session.lastActivityAt;
+        else session.userSendAt = null;
+      }
+    },
+  );
 
   it('scrolls a text row into nearest view only when it becomes active', () => {
     const props = {

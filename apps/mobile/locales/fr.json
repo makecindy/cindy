@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy a besoin d’accéder au microphone pour la saisie vocale dans les sessions à distance.",
+    "NSCameraUsageDescription": "Cindy a besoin d’accéder à l’appareil photo pour joindre des photos aux sessions à distance.",
+    "NSPhotoLibraryUsageDescription": "Cindy a besoin d’accéder à la photothèque pour afficher les photos et captures d’écran récentes et les joindre rapidement."
+  }
+}

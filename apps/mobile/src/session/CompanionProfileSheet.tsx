@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
 import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Brain, Camera, FileText, Hand, History, Info, Link2, Monitor, Settings2, Sparkles } from 'lucide-react-native';
+import { Brain, Camera, FileText, Hand, History, Info, Link2, MessageCircle, Monitor, Settings2, Sparkles } from 'lucide-react-native';
 import { resolveRemoteText, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
@@ -23,8 +23,9 @@ import { CompanionModelChain, CompanionModelPicker, readCompanionModelChain } fr
 import { CompanionCreateNativeView } from './CompanionCreateNativeView';
 import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPortraitPicker';
 import { CompanionProfileNativeView } from './CompanionProfileNativeView';
+import { CompanionChannelTasks } from './CompanionChannelTasks';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
-import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
@@ -356,6 +357,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     name={name} page={page} deviceId={deviceId} deviceName={deviceName} resource={resource} data={data} editor={editor} panel={panel}
     values={editing ? values : panel?.values ?? values} busy={busy || memory.busy} online={online} dirty={dirty || memory.dirty} loading={editorLoading}
     error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
+    channels={resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
     memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
@@ -396,7 +398,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       {note('showReplyTargetHint')}
     </View>
     {data?.panels.filter(item => item.id === 'projects' || item.id === 'followUp').flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
-    <View style={styles.group}>{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
+    <View style={styles.group}>{row('channels', MessageCircle)}{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
     {onOpenHome ? <View style={styles.group}>{row('home', Monitor, onOpenHome)}</View> : null}
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
     {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
@@ -405,13 +407,24 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const editorView = panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
-  </> : editor ? <View style={styles.group}>{editor.panels.flatMap(item => item.entries?.length
-    ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} />)
-    : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
-      : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View> : null;
+  </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
+    // Same sections as iOS: a host block title heads its own group, subtitles sit under the row title.
+    const group = <View key={section.key} style={styles.group}>{section.panels.flatMap(item => item.entries?.length
+      ? item.entries.map(entry => <ContextSheetRow key={`${item.id}:${entry.resourceId}`} icon={null} trailing="chevron" label={label(entry.title)}
+        detail={entry.subtitle ? label(entry.subtitle) : undefined} detailLines={2} onPress={() => void openEditor(entry.resourceId)} />)
+      : [item.action ? <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => selectEditorPanel(item)} />
+        : <Text key={item.id} style={[styles.body, styles.groupText]}>{item.text || t('devices.companionProfile.emptyEditor')}</Text>])}</View>;
+    return section.title ? <View key={section.key} style={styles.field}>
+      <Text accessibilityRole="header" style={styles.groupLabel}>{label(section.title)}</Text>{group}
+    </View> : group;
+  })}</> : null;
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
       preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}
+      trailingAction={page === 'models' && panel?.action && !editorLoading && !deleted && !confirmation ? {
+        label: t('devices.common.save'), busy, testID: 'companionProfile.models.save',
+        disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel),
+      } : undefined}
       onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
@@ -428,12 +441,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <MainWindowActionButton action={{ label: label(confirmation.action.confirmation.confirmLabel ?? confirmation.action.label), busy, disabled: !online || confirmation.id === 'delete' && values.confirmName !== name, tone: confirmation.action.tone === 'destructive' ? 'danger' : 'primary', onPress: () => void submit(confirmation, true) }} />
         <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: () => confirm(null) }} />
       </> : page === 'home' ? home : editorLoading ? spinner : page === 'editor' ? editorView
-        : page === 'models' ? panel?.action ? <>{models}{save(panel, false)}</> : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
+        : page === 'models' ? panel?.action ? models : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}
           {connections?.entries?.length ? <View style={styles.group}>{row('connections', Link2)}</View> : noteText(connections?.text || t('devices.companionProfile.emptyEditor'))}
         </>
+        : page === 'channels' ? resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null
         : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')
         : page === 'memoryEntries' ? memoryPage : <>
           {page === 'profile' && actionPanel('avatar')?.entries?.length ? <View style={styles.group}>{row('avatar', Camera)}</View> : null}

@@ -30,6 +30,8 @@ export interface BotPromptCapabilitySignals {
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
   routinesEnabled?: boolean;
+  /** `follow` system Skill (shared/botSystemSkills.ts); false drops its workbench line. */
+  followEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_teammate_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
@@ -154,10 +156,13 @@ const SESSION_CONTROL_GUIDANCE = [
   '## 你能看、能管主人的任务',
   '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
   '每一轮代表谁由宿主判定。主人这一轮亲口要求时（宿主核实的主人输入，包括群里和 IM 专线里核实为主人的请求），你可以代主人去操作他的任务：找到对应任务、发话、追加需求、停止、改名、归档等，照常走当前任务的权限档；你转达时宿主会附上核实过的主人原话。',
-  '不是主人开口的轮次（宿主唤醒的跟进、例行任务、别的伙伴发来的消息、非主人的发言）代表你自己：可以读、记待办、通知主人、给伙伴发消息、管你自己开的后台任务，并让已经交给你跟进的任务按原目标接着做或按建议换模型；其它对主人任务的改动宿主会拒绝（NEEDS_OWNER_REQUEST），改为写待办或通知主人，等主人开口。主人自己设的例行任务按那条指令办事。',
+  '主人输入、例行任务和自主跟进都沿用当前任务的权限档；缺少本轮主人输入标记不代表主人拒绝，也不阻止普通任务操作或保存例行任务。自主执行只对少数明确风险（删除自动化、代答授权、恢复暂停、本机调度的命令执行、设定新的常驻指令）等待主人决定：宿主显示授权请求，同意后继续本次调用，拒绝或取消后停止，不要换工具重试。来源身份与账号访问范围仍由宿主核验；自动唤醒和别人的消息不会变成主人原话。',
   '转达时 Agent 补充只写对方完成任务需要的背景，不要复述「用户已授权」之类的话，也不要让对方用 send_to_session 回传；需要结果时自己用 `get_task_digest` 去看。工具回执决定实际结果；账号、连接或平台未就绪时如实说明。',
-  '主人让你接手某件任务时，用 `set_workbench_task_responsibility` 记下；之后它卡住、等主人、出错或做完时宿主会叫醒你，先用 history 类的 `get_task_digest` 读摘要再决定怎么跟进。',
 ].join('\n');
+
+/** Only with the `follow` system Skill on; its tools are denied otherwise. */
+const WORKBENCH_RESPONSIBILITY_GUIDANCE =
+  '主人让你接手某件任务时，用 `set_workbench_task_responsibility` 记下；之后它卡住、等主人、出错或做完时宿主会叫醒你，先用 history 类的 `get_task_digest` 读摘要再决定怎么跟进。';
 
 const AUTOMATION_GUIDANCE = [
   '## 你能建普通自动化',
@@ -247,14 +252,7 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
-  if (botModeEnabled && input.capabilities.routinesEnabled) {
-    capabilityParts.push([
-      '## 例行任务',
-      '用户要求定时、重复提醒或事件触发时，直接调用已提供的 routine_list / routine_save / routine_sources / routine_history / routine_delete / routine_run_now 管理自己的例行任务，不需要先发现工具。仅在当前运行环境未提供这些直接入口时，使用 cindy_helper 的 bots 类目。归属由宿主识别，不传 botId。',
-      '先读取 routine_list，避免重复创建；用 routine_save 保存后再读回，核实名称、enabled 和 triggers，成功才说已安排。工具报错或未保存就如实说明。',
-      '例行任务由 Cindy 持久调度，不要改用 start_session_task、sleep 循环或系统定时器。按用户要求设置频率，不擅自增加一小时等结束限制。实际执行沿用当前伙伴权限，触发后的普通消息会回到这里。',
-    ].join('\n'));
-  }
+  // Routines are the `routine` system Skill: the core lists it and read_teammate_skill has its text.
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
   const botCreationEnabled =
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;
@@ -263,7 +261,9 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
     capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
   if (botModeEnabled && input.capabilities.sessionControlEnabled) {
-    capabilityParts.push(SESSION_CONTROL_GUIDANCE);
+    capabilityParts.push(input.capabilities.followEnabled === false
+      ? SESSION_CONTROL_GUIDANCE
+      : `${SESSION_CONTROL_GUIDANCE}\n${WORKBENCH_RESPONSIBILITY_GUIDANCE}`);
     if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
   }
   if (capabilityParts.length > 0) {

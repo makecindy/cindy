@@ -83,6 +83,13 @@ export const SPEAKER_GATE_DEFAULTS = {
   finishTimeoutMs: 1_500,
 } as const;
 
+/**
+ * How long the "ignored another voice" notice stays after the most recent
+ * rejected window. Every surface uses it so a misjudged phrase is explained
+ * the same way on desktop and mobile.
+ */
+export const SPEAKER_FILTER_NOTICE_MS = 4_000;
+
 export type SpeakerGateStrictness = 'relaxed' | 'standard' | 'strict';
 
 export const SPEAKER_GATE_STRICTNESS_VALUES: readonly SpeakerGateStrictness[] = [

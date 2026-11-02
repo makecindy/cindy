@@ -621,7 +621,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
+  it('passes user null effort through catalog normalization before model side effects', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
@@ -629,7 +629,7 @@ describe('session runtime control wiring', () => {
     );
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -641,12 +641,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
-    expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
-    );
-    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
-    expect(fixedEffortValidation).toBeLessThan(prepare);
+    // #7449: a null wire axis must reach catalog normalization, otherwise the
+    // pending selection fails again on every queued-send retry.
+    expect(setModel).not.toContain('`effort "null" is unavailable for model "${model}"`');
+    expect(axisResolution).toBeGreaterThan(selectionValidation);
+    expect(axisResolution).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).toContain(
       '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
@@ -733,7 +732,6 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');

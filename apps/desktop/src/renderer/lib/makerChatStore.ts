@@ -136,7 +136,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -162,7 +162,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { isInputHandoffAwaitingOwner, parsePendingInputHandoff } from '@/features/input-handoff/inputHandoffModel';
+import { inputHandoffDialogHasContent, isInputHandoffAwaitingOwner, parsePendingInputHandoff } from '@/features/input-handoff/inputHandoffModel';
 import { clearCachedMessages, readCachedMessages, persistListMessage, sessionCacheInvalidationToken } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
@@ -586,6 +586,7 @@ export interface ChatMessage {
    * agentMeta.goalCompletion 派生(仿 fork divider 从 session 元数据派生),重开会话仍在。
    */
   systemCardType?:
+    | 'plugin-model-route'
     | 'voice-call'
     | 'voice-call-task'
     | 'cindy-make-doctor'
@@ -625,6 +626,8 @@ export interface ChatMessage {
     /** 代输入结束留痕:由隐藏续接行派生,只有步数、设备与域名,没有任何输入值。 */
     | 'input-handoff'
     | 'context-rebuild'
+    /** 任务导入的时间线标记：开头的来源说明与结尾的分隔。 */
+    | 'session-import'
     | 'mcp-app';
   mcpAppClientId?: string;
   systemCardData?: Record<string, unknown>;
@@ -821,6 +824,10 @@ export interface PendingPermission {
   submissionFailed?: boolean;
 }
 
+export interface PendingAppPermission extends PendingPermission {
+  mcpApp: { clientId: string; serverId: string; title: string; scope: string };
+}
+
 function parsePendingPermissionRequest(
   request: Record<string, unknown> | undefined,
 ): PendingPermission | null {
@@ -998,10 +1005,11 @@ export interface PendingGhostGrantConfirm {
    * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
    * 为工作区在侧边栏创建/复用会话入口(不过户字节);
    * forge_source = Forge 打包/骨架/安装的源码目录在工作目录外;
+   * handoff = 非媒体文件交给插件一份 7 天后自动删除的副本;
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -2326,7 +2334,6 @@ export function invalidateLiveIngressForDataOwnerBoundary(): void {
   pendingTextDeltaBatches.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
-  pendingMessageCreatedPatches.clear();
   remotePresenceOnlineByDevice.clear();
   resetRemoteDataOwnerPushFence();
 }
@@ -2667,6 +2674,7 @@ export interface SessionChatState {
    * 这里把“能不能重试、重试哪条”收口到 store，避免展示层猜错。
    */
   errorRetryText: string | null;
+  errorCanContinue?: boolean;
   /**
    * 当前 live 终态错误预留的持久化 error 行 clientId。广播 payload.persistId
    * 写入;无可靠恢复依据(计划内升级关闭 / 自愈压住)时为 null。同一 turn 的重复
@@ -2750,6 +2758,7 @@ export interface SessionChatState {
    * overwriting the displayed request when Claude emits parallel tool_use calls.
    */
   pendingPermissionQueue: PendingPermission[];
+  pendingAppPermissions?: PendingAppPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2987,6 +2996,7 @@ export type SessionChatLightState = Pick<
   | 'toolLoop'
   | 'recoverableError'
   | 'errorRetryText'
+  | 'errorCanContinue'
   | 'errorPersistId'
   | 'disposedErrorPersistId'
   | 'credentialSwitchWait'
@@ -3394,11 +3404,10 @@ const HIGH_FREQUENCY_NOTIFY_INTERVAL_MS = 32;
 const TYPING_PRIORITY_NOTIFY_INTERVAL_MS = 250;
 const HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK = 8;
 const pendingDeferredStateNotifications = new Set<string>();
-const pendingMessageCreatedPatches = new Map<string, string>();
 let deferredStateNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 
 function hasDeferredStateWork(): boolean {
-  return pendingDeferredStateNotifications.size > 0 || pendingMessageCreatedPatches.size > 0;
+  return pendingDeferredStateNotifications.size > 0;
 }
 
 function clearDeferredStateNotificationTimer(): void {
@@ -3423,18 +3432,12 @@ function emitStateNotifications(sessionId: string): void {
   });
 }
 
-function flushPendingMessageCreatedPatch(sessionId: string): void {
-  const updatedAt = pendingMessageCreatedPatches.get(sessionId);
-  if (!updatedAt) return;
-  pendingMessageCreatedPatches.delete(sessionId);
-  emitPatch(sessionId, { updatedAt });
-}
-
 function flushDeferredStateNotifications(): void {
   deferredStateNotificationTimer = null;
-  const sessionIds = [
-    ...new Set([...pendingDeferredStateNotifications, ...pendingMessageCreatedPatches.keys()]),
-  ].slice(0, HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK);
+  const sessionIds = [...pendingDeferredStateNotifications].slice(
+    0,
+    HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK,
+  );
   let stateChanged = false;
   for (const sessionId of sessionIds) {
     if (pendingDeferredStateNotifications.delete(sessionId)) {
@@ -3447,7 +3450,6 @@ function flushDeferredStateNotifications(): void {
       cb();
     });
   }
-  for (const sessionId of sessionIds) flushPendingMessageCreatedPatch(sessionId);
   if (hasDeferredStateWork()) scheduleDeferredStateNotifications();
 }
 
@@ -3456,16 +3458,8 @@ function queueDeferredStateNotification(sessionId: string): void {
   scheduleDeferredStateNotifications();
 }
 
-function queueMessageCreatedPatch(sessionId: string, updatedAt: string): void {
-  pendingMessageCreatedPatches.set(sessionId, updatedAt);
-  // patch 也进入同一个 FIFO session 集合。否则 Map-only 的 no-op DB echo 会永远排在
-  // 持续活跃的前 8 个 state session 之后，slice 上限会让 sidebar patch 饥饿。
-  queueDeferredStateNotification(sessionId);
-}
-
 function discardDeferredStateWork(sessionId: string): void {
   pendingDeferredStateNotifications.delete(sessionId);
-  pendingMessageCreatedPatches.delete(sessionId);
   if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
 }
 
@@ -4591,11 +4585,20 @@ function getOrCreateState(sessionId: string): SessionChatState {
 function setState(
   sessionId: string,
   updater: (prev: SessionChatState) => SessionChatState,
-  opts: { deferNotification?: boolean } = {},
+  opts: { deferNotification?: boolean; fromInputProjection?: boolean } = {},
 ): void {
   const prev = getOrCreateState(sessionId);
-  const next = updater(prev);
+  let next = updater(prev);
   if (next === prev) return;
+  // Only an input projection can confirm eligibility. Every other transition
+  // may retain it solely for an unchanged live error (e.g. its paired done).
+  // Clearing/replacing the error therefore revokes it at one shared boundary,
+  // including direct turns and deferred persistence without another projection.
+  if (next.errorCanContinue && (!next.error || (!opts.fromInputProjection
+    && (!prev.errorCanContinue || !prev.error
+      || !liveErrorTextMatchesRow(next.error, prev.error, next.errorReason ?? undefined))))) {
+    next = { ...next, errorCanContinue: false };
+  }
   if (prev.error !== next.error) {
     _liveErrorEpoch.set(sessionId, (_liveErrorEpoch.get(sessionId) ?? 0) + 1);
   }
@@ -4622,9 +4625,6 @@ function setState(
   globalListeners.forEach((cb) => {
     cb();
   });
-  // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
-  flushPendingMessageCreatedPatch(sessionId);
-  if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
 }
 
 /**
@@ -5118,6 +5118,7 @@ function applyInputProjection(
       recoverableError:
         projection.error || projection.credentialSwitchWait ? null : s.recoverableError,
       errorRetryText: projection.errorRetryText,
+      errorCanContinue: projection.errorCanContinue === true,
       errorPersistId: projection.error ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       usageLimitWait:
@@ -5134,7 +5135,7 @@ function applyInputProjection(
       inputRecovery: projection.recovery ?? null,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
-  });
+  }, { fromInputProjection: true });
   if (deferredPersistFromProjection.payload) {
     persistTurnErrorDeferredTracked(
       projection.sessionId,
@@ -6832,13 +6833,18 @@ export function handleStreamEvent(
       ) {
         return state;
       }
-      // A newer request supersedes a card whose decision is in flight: that
-      // receipt race is already lost, so the newest authoritative request takes
-      // the head. The superseded card is not requeued — it was already answered,
-      // and anything the Host still holds surface again through the pending
-      // interaction snapshot read below the failed receipt.
+      // A decision is already in flight for the head card. Keep that identity at
+      // the head and queue the newer request behind it instead of replacing the
+      // card: overwriting A here strands it when the in-flight resolve later
+      // rejects (device-link drop / receipt timeout) — the Host is still waiting
+      // on A, but the control surface would only ever show B, and the receipt
+      // catch returns early because the head no longer matches A's id. A's
+      // receipt (FIFO promote) or its dismissal push is what advances to B.
       if (state.pendingPermission?.submitting) {
-        return { ...state, pendingPermission: permission };
+        return {
+          ...state,
+          pendingPermissionQueue: [...state.pendingPermissionQueue, permission],
+        };
       }
       // FIFO: an actionable card keeps the head; parallel requests queue behind.
       // A fresh head is the incoming request itself (identical field set, incl.
@@ -6870,6 +6876,9 @@ export function handleStreamEvent(
         data.reason === 'resolved' && data.decision && typeof data.decision === 'object'
           ? (data.decision as Record<string, unknown>)
           : null;
+      if (state.pendingAppPermissions?.some(p => p.requestId === data.requestId)) {
+        return { ...state, pendingAppPermissions: state.pendingAppPermissions.filter(p => p.requestId !== data.requestId) };
+      }
       if (state.pendingPermission?.requestId === data.requestId) {
         const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
         return {
@@ -6950,7 +6959,7 @@ export function handleStreamEvent(
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
@@ -6974,7 +6983,9 @@ export function handleStreamEvent(
                     askUserReply,
                     askUserAnswers: answers,
                   }
-                : { ...m, askUserStatus: 'expired' as const }
+                : m.askUserStatus === 'pending'
+                  ? { ...m, askUserStatus: 'expired' as const }
+                  : m
               : m,
           ),
         };
@@ -7255,6 +7266,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   const stoppedTasks = stopRunningAgentTasks(state.taskUpdates, 'all');
   // 已经不在跑 + 没有 pending 也没有 streaming → no-op, 不要无谓地新建对象触发订阅
   if (
+    !state.pendingAppPermissions?.length &&
     !state.agentStatus.isRunning &&
     !state.agentStatus.startedAt &&
     !state.streamingClientId &&
@@ -7322,6 +7334,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingQueue: finalized.pendingQueue.filter((item) => item.autoResume !== true),
     pendingPermission: null,
     pendingPermissionQueue: [],
+    pendingAppPermissions: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -8787,18 +8800,32 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if (request.kind === 'input_handoff') {
-      const parsed = parsePendingInputHandoff(request);
-      if (!parsed) return;
-      setState(sessionId, (s) => {
-        const current = s.pendingInputHandoff;
-        if (current?.requestId === parsed.requestId && parsed.revision < current.revision) return s;
-        return { ...s, pendingInputHandoff: parsed };
-      });
+      applyInputHandoffInteractionRequest(sessionId, request);
       return;
     }
 
     if (request.kind === 'permission') {
       const metadata = request.metadata as Record<string, unknown> | undefined;
+      const app = metadata?.mcpApp as Record<string, unknown> | undefined;
+      if (app && typeof app.clientId === 'string' && typeof app.serverId === 'string' && typeof app.title === 'string') {
+        const permission: PendingAppPermission = {
+          requestId: request.requestId as string, toolName: request.toolName as string,
+          input: (request.input as Record<string, unknown>) ?? {},
+          title: typeof request.title === 'string' ? request.title : undefined,
+          description: typeof request.description === 'string' ? request.description : undefined,
+          autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+          autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
+          suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+          mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
+        };
+        setState(sessionId, s => {
+          const previous = s.pendingAppPermissions ?? [];
+          // Snapshot reconciliation must not re-enable a submitted decision.
+          if (previous.some(p => p.requestId === permission.requestId)) return s;
+          return { ...s, pendingAppPermissions: [...previous, permission] };
+        });
+        return;
+      }
       const data: CCAgentPermissionRequestPayload = {
         sessionId,
         requestId: request.requestId,
@@ -9140,10 +9167,6 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       },
       { deferNotification },
     );
-    // sidebar 排序时间轴 — 让接管路径下新消息也能 bump session 顺序。
-    const updatedAt = new Date().toISOString();
-    if (deferNotification) queueMessageCreatedPatch(sessionId, updatedAt);
-    else emitPatch(sessionId, { updatedAt });
   }
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
@@ -10034,7 +10057,6 @@ function __teardownGlobalListeners(): void {
   remoteMessageRepairTimers.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
-  pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
   _deferredTurnErrorPersist.clear();
   _liveErrorEpoch.clear();
@@ -10115,6 +10137,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     toolLoop: state.toolLoop,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
     credentialSwitchWait: state.credentialSwitchWait,
@@ -10167,6 +10190,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.toolLoop === b.toolLoop &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
@@ -10303,8 +10327,12 @@ export interface SessionStatusInfo {
   hasPendingPermission: boolean;
   hasPendingPlanReview: boolean;
   hasPendingPluginSetup: boolean;
-  /** 代输入: owner input requested for an on-screen step (survives the turn). */
+  /** A nonterminal input-handoff card exists, including reading/working/finishing phases. */
   hasPendingInputHandoff?: boolean;
+  /** The current handoff step actually needs an owner action and may trigger a reminder. */
+  hasActionableInputHandoff?: boolean;
+  /** Stable identities for pending interactions; changes even when pending booleans stay true. */
+  pendingRequestKeys?: readonly string[];
 }
 
 /**
@@ -10357,6 +10385,40 @@ function scheduleStopTransitionClear(): void {
   }, 0);
 }
 
+function pendingRequestKeys(state: SessionChatState): string[] {
+  const keys: string[] = [];
+  if (state.pendingAskUser) keys.push(`ask:${state.pendingAskUser.requestId}`);
+  if (state.pendingPermission) keys.push(`permission:${state.pendingPermission.requestId}`);
+  if (state.pendingPlanReview) keys.push(`plan:${state.pendingPlanReview.requestId}`);
+  const visibleSetup = state.pendingPluginSetup && !state.pendingPluginSetup.terminal
+    ? state.pendingPluginSetup
+    : state.pendingPluginSetupQueue.find((setup) => !setup.terminal);
+  if (visibleSetup) keys.push(`plugin:${visibleSetup.requestId}`);
+  if (isInputHandoffAwaitingOwner(state.pendingInputHandoff)) {
+    const handoff = state.pendingInputHandoff!;
+    keys.push(`handoff:${handoff.requestId}:${handoff.stepNumber}`);
+  }
+  return keys.sort();
+}
+
+function applyInputHandoffInteractionRequest(sessionId: string, raw: unknown): void {
+  const parsed = parsePendingInputHandoff(raw);
+  if (!parsed) return;
+  setState(sessionId, (state) => {
+    const current = state.pendingInputHandoff;
+    if (current?.requestId === parsed.requestId && parsed.revision < current.revision) return state;
+    return { ...state, pendingInputHandoff: parsed };
+  });
+}
+
+function samePendingRequestKeys(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return !right?.some((key, index) => left?.[index] !== key);
+}
+
 function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
   const next = new Map<string, SessionStatusInfo>();
   for (const [id, state] of sessions) {
@@ -10368,6 +10430,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       state.pendingPluginSetupQueue,
     );
     const hasPendingInputHandoff = isInputHandoffAwaitingOwner(state.pendingInputHandoff);
+    const hasActionableInputHandoff = !!state.pendingInputHandoff &&
+      inputHandoffDialogHasContent(state.pendingInputHandoff, false);
+    const requestKeys = pendingRequestKeys(state);
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10390,6 +10455,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingPlanReview,
         hasPendingPluginSetup,
         hasPendingInputHandoff,
+        hasActionableInputHandoff,
+        pendingRequestKeys: requestKeys,
       });
     } else if (
       hasPendingAskUser ||
@@ -10408,6 +10475,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingPlanReview,
         hasPendingPluginSetup,
         hasPendingInputHandoff,
+        hasActionableInputHandoff,
+        pendingRequestKeys: requestKeys,
       });
     }
   }
@@ -10432,6 +10501,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         state.pendingPluginSetupQueue,
       ),
       hasPendingInputHandoff: isInputHandoffAwaitingOwner(state.pendingInputHandoff),
+      hasActionableInputHandoff: !!state.pendingInputHandoff &&
+        inputHandoffDialogHasContent(state.pendingInputHandoff, false),
+      pendingRequestKeys: pendingRequestKeys(state),
     });
   }
 
@@ -10470,7 +10542,9 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
         prev.hasPendingPermission !== info.hasPendingPermission ||
         prev.hasPendingPlanReview !== info.hasPendingPlanReview ||
         prev.hasPendingPluginSetup !== info.hasPendingPluginSetup ||
-        !!prev.hasPendingInputHandoff !== !!info.hasPendingInputHandoff
+        !!prev.hasPendingInputHandoff !== !!info.hasPendingInputHandoff ||
+        !!prev.hasActionableInputHandoff !== !!info.hasActionableInputHandoff ||
+        !samePendingRequestKeys(prev.pendingRequestKeys, info.pendingRequestKeys)
       ) {
         same = false;
         break;
@@ -10869,6 +10943,8 @@ function reconcilePendingInteractions(
           }
           return message;
         });
+        const appPermissions = state.pendingAppPermissions?.filter(p => authoritativePermissionIds.has(p.requestId));
+        const appPermissionsChanged = appPermissions?.length !== state.pendingAppPermissions?.length;
         // Terminal snapshots are not listed by the Host; keep them for their
         // short visual grace until the dismissal push arrives.
         const nextInputHandoff = state.pendingInputHandoff &&
@@ -10925,6 +11001,7 @@ function reconcilePendingInteractions(
         if (
           !permissionChanged &&
           !currentChanged &&
+          !appPermissionsChanged &&
           !queueChanged &&
           !messagesChanged &&
           nextAskUser === state.pendingAskUser &&
@@ -10948,6 +11025,7 @@ function reconcilePendingInteractions(
           lastExpandedPlanViewerState: nextPlanReview ? state.lastExpandedPlanViewerState : 'expanded',
           pendingPermission: nextPermission,
           pendingPermissionQueue: nextPermissionQueue,
+          pendingAppPermissions: appPermissions,
           pendingInputHandoff: nextInputHandoff,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
@@ -14580,8 +14658,7 @@ function prewarmSession(
 function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
-  // 侧栏时间轴读 sessions.updatedAt,乐观更新同步 bump 让 sidebar 立即跳到"刚发过"
-  // (main 侧 touchUserSendInDb 也会写 updatedAt,广播回来的 patch 值一致、幂等)。
+  // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
   emitPatch(
     sessionId,
     wasFirst
@@ -15846,13 +15923,14 @@ function steerMessage(
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
-    // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
-    // main 拉一次 projection 自愈: 若镜像 stale (漏收 emit), 下一次点击就能恢复。
+    // 明确未受理：立即反馈，返回 false 让输入框恢复草稿；projection 刷新只修镜像，
+    // 不替用户重发。此时尚未创建消息或处理附件，不涉及已派发后的 ACK 边界。
     log.warn('steerMessage rejected: steering marker present in mirror', {
       sessionId,
       steeringQueueClientIds: current.steeringQueueClientIds,
       queueAbortPending: current.queueAbortPending,
     });
+    toast.warning(i18n.t('newChat.chatInput.steerNotSent'));
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }
@@ -16998,6 +17076,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       errorRetryText: null,
       pendingPermission: null,
       pendingPermissionQueue: [],
+      pendingAppPermissions: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -17540,17 +17619,30 @@ function respondToPluginSetup(
 /**
  * Keep the card until the host acknowledges the decision (or dismisses it).
  */
-function respondToPermission(
-  sessionId: string,
-  result: CCAgentPermissionResult,
-  capturedRequestId?: string,
-): void {
+function respondToPermission(sessionId: string, result: CCAgentPermissionResult, requestIdHint?: string): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
-  if (!state.pendingPermission || state.pendingPermission.submitting) return;
-
-  const requestId = capturedRequestId ?? state.pendingPermission.requestId;
-
+  // `requestIdHint` carries one of two identities: an MCP-app permission id
+  // (upstream) or the requestId the UI captured at render time (parallel
+  // permission queue). Resolve which one before selecting the target card.
+  const isAppRequest = requestIdHint
+    ? state.pendingAppPermissions?.some(p => p.requestId === requestIdHint) === true
+    : false;
+  const selected = (s: SessionChatState) => isAppRequest
+    ? s.pendingAppPermissions?.find(p => p.requestId === requestIdHint)
+    : s.pendingPermission;
+  const permission = selected(state);
+  if (!permission || permission.submitting) return;
+  // Never silently retarget a different request: when the caller captured an id
+  // at render time, answer that identity. The ownership check below rejects it
+  // if the queue head has already moved on, so a stale card cannot authorize
+  // the request that replaced it.
+  const requestId = !isAppRequest && requestIdHint ? requestIdHint : permission.requestId;
+  const update = (patch: Partial<PendingPermission> | null) => setState(sessionId, s => {
+    if (isAppRequest) return { ...s, pendingAppPermissions: s.pendingAppPermissions?.flatMap(p =>
+      p.requestId === requestId ? patch ? [{ ...p, ...patch }] : [] : [p]) };
+    return { ...s, pendingPermission: patch && s.pendingPermission ? { ...s.pendingPermission, ...patch } : null };
+  });
   const owner = getDataOwnerGeneration();
   const messagesEpoch = _messagesEpoch.get(sessionId) ?? 0;
   const authorityEpoch = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
@@ -17562,7 +17654,8 @@ function respondToPermission(
     (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authorityEpoch &&
     remoteProjectsStore.getSessionDeviceId(sessionId) === origin &&
     (!stickyDevice || !isRemoteTerminalSessionTombstoned(sessionId, stickyDevice));
-  const hasCurrentCard = () => isCurrent() && sessions.get(sessionId)?.pendingPermission?.requestId === requestId;
+  const hasCurrentCard = () => isCurrent() &&
+    !!sessions.get(sessionId) && selected(sessions.get(sessionId)!)?.requestId === requestId;
   // The guard doubles as the duplicate-gesture gate: if the same requestId is
   // already armed (double-click / key repeat), this response is a duplicate.
   if (permissionResponseInFlight.get(sessionId) === requestId) return;
@@ -17578,10 +17671,7 @@ function respondToPermission(
 
   // Receipt protocol: keep the card on screen with submitting=true until the
   // host acknowledges the decision (or dismisses it).
-  setState(sessionId, (s) => ({
-    ...s,
-    pendingPermission: { ...s.pendingPermission!, submitting: true, submissionFailed: false },
-  }));
+  update({ submitting: true, submissionFailed: false });
 
   // Bound both local IPC and remote delivery; a lost reply must not disable the
   // card forever. Never resend an allow automatically after an uncertain reply.
@@ -17621,15 +17711,19 @@ function respondToPermission(
       }
       if (receipt?.accepted === true) {
         bumpInteractionReconcileEpoch(sessionId);
-        // FIFO promote: the decision was accepted — show the next queued card.
-        setState(sessionId, (s) => {
-          const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
-          return {
-            ...s,
-            pendingPermission: nextPermission,
-            pendingPermissionQueue: remainingPermissions,
-          };
-        });
+        if (isAppRequest) {
+          update(null);
+        } else {
+          // FIFO promote: the decision was accepted — show the next queued card.
+          setState(sessionId, (s) => {
+            const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
+            return {
+              ...s,
+              pendingPermission: nextPermission,
+              pendingPermissionQueue: remainingPermissions,
+            };
+          });
+        }
         armPermissionResponseGuard(sessionId, requestId);
         return;
       }
@@ -17639,14 +17733,20 @@ function respondToPermission(
         // pendingPermissionQueue 里会让它永远隐藏，用户看着「没有待处理权限」却
         // 仍被输入门禁挡着。accepted=false 同样是队列推进点，把 B 提上来。
         bumpInteractionReconcileEpoch(sessionId);
-        setState(sessionId, (s) => {
-          const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
-          return {
-            ...s,
-            pendingPermission: nextPermission,
-            pendingPermissionQueue: remainingPermissions,
-          };
-        });
+        if (isAppRequest) {
+          update(null);
+        } else {
+          // accepted=false 同样是队列推进点：轻量 UI 只读取 pendingPermission，
+          // 把 B 留在 pendingPermissionQueue 里会让它永远隐藏。
+          setState(sessionId, (s) => {
+            const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
+            return {
+              ...s,
+              pendingPermission: nextPermission,
+              pendingPermissionQueue: remainingPermissions,
+            };
+          });
+        }
         toast.warning(i18n.t('newChat.permissionPrompt.requestEnded'));
         armPermissionResponseGuard(sessionId, requestId);
         return;
@@ -17666,10 +17766,7 @@ function respondToPermission(
         // Leave the card retryable when the host cannot be reached at all.
       }
       if (!hasCurrentCard()) return;
-      setState(sessionId, (s) => ({
-        ...s,
-        pendingPermission: { ...s.pendingPermission!, submitting: false, submissionFailed: true },
-      }));
+      update({ submitting: false, submissionFailed: true });
     }
   })();
 }
@@ -17760,6 +17857,7 @@ function parseGhostGrantConfirmRequest(request: {
   const lane = request.lane;
   if (
     lane !== 'attachments' &&
+    lane !== 'handoff' &&
     lane !== 'dir' &&
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
@@ -18933,6 +19031,8 @@ export const makerChatStore = {
     setState(sessionId, (s) => handleStreamEvent(s, event));
     scheduleWakeBridgeReconciliation(sessionId);
   },
+  /** Exposed for tests only: use the same request path as the live interaction handler. */
+  __applyInputHandoffRequestForTest: applyInputHandoffInteractionRequest,
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
     if (!isTurnContinuationBoundaryEvent(update) && !update.skipTurnReset && !update.isRunning) {
@@ -19188,9 +19288,12 @@ function oldestServerMessageIdForWindow(
 /**
  * 把一条窗口内消息换算回"落库那条时间线"上的可比对象(与原始 DB 行同口径)。
  *
- * 只有 thinking 需要换算:mapServerMessages 会把它的 createdAt 改写成 `finishedAt - durationMs`
- * (渲染层拿它当块的开始时刻算时长)。拿改写后的值去跟原始 DB 行比大小,就是在混两条时间线。
- * 换算不出来(没有 thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ * thinking 的锚点是块的开始时刻(`finishedAt - durationMs`):mapServerMessages 按它改写
+ * createdAt,main 落库也按它写 createdAt,两条时间线已经重合。换算不出来(没有
+ * thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ *
+ * 存量行(锚点仍是 finishedAt)用开始时刻比会偏早:只会多判一次脱离、多做一次补齐,
+ * 不会把有损通道造成的缺口当成连续。
  */
 function thinkingSafeTimelineRow(
   message: ChatMessage,
@@ -19198,10 +19301,7 @@ function thinkingSafeTimelineRow(
   if (message.role !== 'thinking') return message;
   if (typeof message.thinkingFinishedAtMs !== 'number') return null;
   if (!Number.isFinite(message.thinkingFinishedAtMs)) return null;
-  return {
-    createdAt: new Date(message.thinkingFinishedAtMs).toISOString(),
-    rowid: message.rowid,
-  };
+  return { createdAt: message.createdAt, rowid: message.rowid };
 }
 
 /**
@@ -19465,7 +19565,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -19681,6 +19781,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardType: 'agent-switch' as const, systemCardData: { ...m.agentMeta.modelChange },
       };
     }
+    const sessionImport =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { sessionImport?: unknown }).sessionImport
+        : undefined;
+    if (sessionImport && typeof sessionImport === 'object') {
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'session-import' as const,
+        systemCardData: { ...(sessionImport as Record<string, unknown>) },
+      };
+    }
     // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
     const contextRebuild =
       m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
@@ -19722,6 +19836,13 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
           resumed: c.resumed === true,
+          ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
+            ? { nativeHistory: c.nativeHistory } : {}),
+          ...(c.toAgentDeviceId === null || typeof c.toAgentDeviceId === 'string'
+            ? { toAgentDeviceId: c.toAgentDeviceId } : {}),
+          ...(typeof c.toAgentDeviceName === 'string'
+            ? { toAgentDeviceName: c.toAgentDeviceName } : {}),
+          ...(c.switchReason === 'quota-rebalance' ? { switchReason: c.switchReason } : {}),
         },
       };
     }
@@ -19916,6 +20037,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         systemCardType: 'cindy-make-complete' as const,
         systemCardData: { ...m.agentMeta.cindyMakeCompletion },
+      };
+    }
+    // 新任务「让插件选」的结果 → 第一条消息下方的一行说明。
+    if (m.role === 'assistant' && m.agentMeta?.pluginModelRoute) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'plugin-model-route' as const,
+        systemCardData: { ...m.agentMeta.pluginModelRoute },
       };
     }
     // /goal 提示记录(usageLimited 到点自动续跑)→ 'goal-resumed' system card,同上派生。

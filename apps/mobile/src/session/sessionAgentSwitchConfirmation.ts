@@ -3,6 +3,7 @@ import { Alert, type AlertButton, type AlertOptions } from 'react-native';
 
 import { i18n } from '@/i18n';
 
+import { isProviderShareAgentDeviceId } from './providerShareAgentDevice';
 import {
   mobileAgentLabel,
   resolveAgentLocationPick,
@@ -60,6 +61,9 @@ export async function confirmAgentLocationForPick(
     movable: boolean;
     session: Pick<RemoteSession, 'agentDeviceId'> | null | undefined;
     intent: RemoteSessionAgentSwitchIntent | null | undefined;
+    /** 任务正在跑的引擎与这一行的引擎:决定确认文案说原生接续还是交接摘要。 */
+    sourceAgentKind: MobileSessionAgentKind;
+    targetAgentKind: MobileSessionAgentKind;
     /** 这一行来自哪台电脑的目录(null = 被控电脑)。 */
     catalogDeviceId: string | null;
     /** 其他电脑的展示名。 */
@@ -75,18 +79,24 @@ export async function confirmAgentLocationForPick(
     const target = input.catalogDeviceId
       ? { kind: 'device' as const, name: input.deviceName(input.catalogDeviceId) }
       : { kind: 'host' as const, name: input.hostName };
-    if (!await confirmMobileAgentRelocation(target, showAlert)) return null;
+    // 与桌面同一判据(provider-groups.md §6.2):跨引擎和分享中转只能走交接摘要。
+    const keepsNativeHistory = input.sourceAgentKind === input.targetAgentKind
+      && !isProviderShareAgentDeviceId(input.session?.agentDeviceId)
+      && !isProviderShareAgentDeviceId(input.catalogDeviceId);
+    if (!await confirmMobileAgentRelocation(target, keepsNativeHistory, showAlert)) return null;
   }
   return pick.relocateTo !== undefined ? { agentDeviceId: pick.relocateTo } : {};
 }
 
 /**
  * 远程 Agent:选中另一台电脑(或被控电脑)目录里的模型 = 把 Agent 换到那台电脑运行,
- * 下一条消息发出时生效。与桌面同一份风险说明;取消 / 系统 dismiss = 什么都不变。
+ * 下一条消息发出时生效。与桌面同一份说明:同引擎优先复制原生记录,否则走交接摘要;
+ * 取消 / 系统 dismiss = 什么都不变。
  * target.kind = 'host' 指任务所在的被控电脑,name 未知时用不带名字的说法。
  */
 export function confirmMobileAgentRelocation(
   target: { kind: 'device'; name: string } | { kind: 'host'; name: string | null },
+  keepsNativeHistory: boolean,
   showAlert: ShowAlert = Alert.alert,
 ): Promise<boolean> {
   const title = target.kind === 'device'
@@ -103,7 +113,7 @@ export function confirmMobileAgentRelocation(
     };
     showAlert(
       title,
-      i18n.t('models.agentRelocation.message'),
+      i18n.t(keepsNativeHistory ? 'models.agentRelocation.messageNativeHistory' : 'models.agentRelocation.message'),
       [
         { text: i18n.t('models.agentRelocation.cancel'), style: 'cancel', onPress: () => finish(false) },
         { text: i18n.t('models.agentRelocation.confirm'), onPress: () => finish(true) },

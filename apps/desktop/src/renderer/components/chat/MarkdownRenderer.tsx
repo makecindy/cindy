@@ -2,6 +2,7 @@ import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
+import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
 /**
  * MarkdownRenderer
  * ---------------------------------------------------------------------------
@@ -66,6 +67,7 @@ import {
   MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
   resolveLocalPath,
+  resolveLocalPathSmart,
   resolveLocalPathSmartCached,
   peekResolveLocalPathSmart,
   toLocalFileUrl,
@@ -348,6 +350,13 @@ interface MarkdownRendererProps {
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
   isStreaming?: boolean;
+  /**
+   * Whether the message holding embedded media is still streaming, when it differs
+   * from `isStreaming`: a cindy-ui image renders its Markdown statically inside a
+   * streaming answer. Missing media are re-checked when this turns false.
+   * Defaults to `isStreaming`.
+   */
+  mediaStreaming?: boolean;
   /**
    * Stable identity of the streaming message. Keeps the word-fade timeline
    * across task-view remounts so already-rendered text cannot replay.
@@ -862,7 +871,7 @@ function LightboxImage({
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
-  const { status: imageStatus, onError } = useImageLoadFailure(src, streaming);
+  const { status: imageStatus, onError, canRetry, retry } = useImageLoadFailure(src, streaming);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -876,7 +885,13 @@ function LightboxImage({
   if (imageStatus) {
     let fallbackName = src?.split(/[\\/]/).pop() ?? 'image';
     try { fallbackName = decodeURIComponent(fallbackName); } catch { /* malformed link */ }
-    return <ImageMissingPlaceholder filename={alt || fallbackName} status={imageStatus} />;
+    return (
+      <ImageMissingPlaceholder
+        filename={alt || fallbackName}
+        status={imageStatus}
+        onRetry={canRetry ? retry : undefined}
+      />
+    );
   }
 
   const zoomLabel = alt || t('chat.media.clickToZoom');
@@ -1522,7 +1537,7 @@ function MarkdownTargetLink({
     return allowPrivilegedLinks ? target : stripPrivilegedMarkdownTarget(target);
   }, [href, localFileRefs, allowPrivilegedLinks]);
   const target = useResolvedMarkdownTarget(initialTarget, workingDir, isStreaming);
-  const openInlineTarget = () => {
+  const openInlineTarget = async () => {
     if (target.kind === 'anchor') {
       if (!target.id) return;
       const element = document.getElementById(target.id);
@@ -1530,6 +1545,48 @@ function MarkdownTargetLink({
       else toast.error(t('chat.markdownRenderer.anchorNotFound'));
     } else if (target.kind === 'local-image-url') {
       setLightboxSrc(rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin));
+    } else if (target.kind === 'local-candidate' && !fromBarePath) {
+      // An authored link keeps its destination even after the file moves. Retry
+      // resolution on click instead of trusting a cached "not found" result.
+      try {
+        let result: SmartResolveResult;
+        if (isRemoteFileOrigin(fileCtx.origin)) {
+          const absPath = resolveLocalPath(target.href, workingDir);
+          const { verdict } = await window.electronAPI.fileBrowser.chatStat({
+            origin: fileCtx.origin,
+            workdir: workingDir,
+            absPath,
+          });
+          if (verdict === 'nonfile') {
+            toast.error(t('chat.markdownRenderer.fileUnavailable'));
+            return;
+          }
+          // Unknown may mean offline: the existing preview can still serve a
+          // cached copy or explain the connection failure. Never open locally.
+          result = { status: 'unique', absPath, kind: verdict === 'directory' ? 'directory' : 'file' };
+        } else {
+          result = await resolveLocalPathSmart(target.href, workingDir, { refresh: true });
+        }
+        if (result.status === 'multiple') {
+          toast.error(t('chat.markdownRenderer.duplicateFiles', { count: result.candidates.length }));
+          return;
+        }
+        const resolved = resolvedLocalFromResult(target, result);
+        if (!resolved) {
+          toast.error(t('chat.markdownRenderer.fileUnavailable'));
+          return;
+        }
+        if (resolved.localKind !== 'directory' && isHtmlFilePath(resolved.absPath) && sidebarTargetSessionId) {
+          await openHtmlFileByPreference(sidebarTargetSessionId, resolved.absPath, t, fileCtx);
+        } else {
+          await activateResolvedLocalTarget(
+            resolved, { ...fileCtx, sidebarTargetSessionId },
+            setLightboxSrc, setTextLightboxFile, setModelLightboxPath,
+          );
+        }
+      } catch {
+        toast.error(t('chat.markdownRenderer.openLinkFailed'));
+      }
     }
   };
   const inlineMenu = useLinkContextMenu(href ?? '', [{
@@ -1550,11 +1607,8 @@ function MarkdownTargetLink({
   //   - resolved-local (path uniquely resolves to an existing file) → chip if
   //     the label reads as a file reference, underlined link if the label is
   //     freeform prose.
-  //   - local-candidate (not yet resolved, OR resolved to multiple, OR not
-  //     found) and code-reference (directory / unsupported scheme) → plain
-  //     <span>. We don't reserve a chip slot for paths that may never become
-  //     clickable; instead the chip only appears as a one-shot "lit up"
-  //     upgrade once unique resolution lands after streaming.
+  //   - unresolved authored links remain underlined and resolve again on click.
+  //   - automatically detected paths still require a verified target.
   if (target.kind === 'resolved-local') {
     const openResolvedTarget = () =>
       activateResolvedLocalTarget(
@@ -1600,13 +1654,11 @@ function MarkdownTargetLink({
     );
   }
 
-  if (target.kind === 'code-reference' || target.kind === 'local-candidate') {
+  if (target.kind === 'code-reference' || (target.kind === 'local-candidate' && fromBarePath)) {
     return <span>{children}</span>;
   }
 
-  // Remaining: external / anchor / local-image-url — none of these flow
-  // through the streaming → resolution transition, so the underlined-link
-  // visual is stable from first paint. No jitter risk here.
+  // Explicit local candidates retain the same open/copy-link menu as links.
   return (
     <>
     <a
@@ -1717,6 +1769,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   workingDir,
   content,
   isStreaming = false,
+  mediaStreaming,
   streamFadeKey,
   localFileRefs,
   currentSessionId,
@@ -1724,6 +1777,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   emitSourceLines = false,
 }: MarkdownRendererProps) {
+  const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
@@ -1785,6 +1839,10 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : undefined,
     [currentSessionId, sessionFileCtx],
   );
+  // 本机会话消息里的相对媒体路径，直接拼接找不到时按任务目录搜索（见 useWorkspaceMediaPath）。
+  // 不传 currentSessionId 的调用方渲染的是文件内容而非会话消息，保持原拼接行为。
+  // 远程归属注入前 origin 会暂时是 local，所以以「已确认本机」为准，不看 origin。
+  const resolveMediaInWorkspace = Boolean(currentSessionId) && allowPrivilegedLinks && sessionFileCtx.localConfirmed === true;
   // F1: text-local <a> click → open TextLightbox with the resolved abs path.
   const [textLightboxFile, setTextLightboxFile] = useState<{
     path: string;
@@ -1806,33 +1864,40 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
-        const normalized = normalizeMarkdownImageSrc(
-          typeof rawLocalSrc === 'string' ? rawLocalSrc : src,
-          workingDir,
-          allowPrivilegedLinks,
-        );
-        if (isManagedMarkdownVideoUrl(normalized)) {
-          // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
-          // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
-          return (
-            <ChatVideoView
-              src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
-              filename={markdownMediaFilename(normalized, alt)}
-              variant="tool-output"
-              sessionId={currentSessionId}
-            />
-          );
-        }
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (
-          <LightboxImage
-            streaming={isStreaming}
-            src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
-            alt={alt}
-            onZoom={setLightboxSrc}
-            {...imageProps}
-          />
+          <WorkspaceMediaSrc
+            src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
+            workingDir={workingDir}
+            enabled={resolveMediaInWorkspace}
+            streaming={embeddedMediaStreaming}
+          >
+            {(localSrc) => {
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
+              if (isManagedMarkdownVideoUrl(normalized)) {
+                // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
+                // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
+                return (
+                  <ChatVideoView
+                    src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+                    filename={markdownMediaFilename(normalized, alt)}
+                    variant="tool-output"
+                    sessionId={currentSessionId}
+                  />
+                );
+              }
+              return (
+                <LightboxImage
+                  streaming={isStreaming}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
+                  alt={alt}
+                  onZoom={setLightboxSrc}
+                  {...imageProps}
+                />
+              );
+            }}
+          </WorkspaceMediaSrc>
         );
       },
       // text-lightbox-trigger-extension v2: inline `<code>` whose content
@@ -1967,6 +2032,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       currentSessionTitle,
       allowPrivilegedLinks,
       remoteMediaOrigin,
+      resolveMediaInWorkspace,
+      embeddedMediaStreaming,
     ],
   );
 
@@ -2033,14 +2100,27 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   const sessionFileCtx = useChatSessionFile();
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
   const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} />;
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
-    const normalized = raw.startsWith('xdt-audio://') && props.allowPrivilegedLinks !== false ? raw : normalizeMarkdownImageSrc(raw, props.workingDir, props.allowPrivilegedLinks !== false);
-    if (!normalized) return null;
-    const src = rewriteToRemoteMediaOrigin(normalized, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
-    return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+    const allowPrivilegedLinks = props.allowPrivilegedLinks !== false;
+    // 与 Markdown 图片同一条判定：只在本机会话消息里按任务目录搜索相对路径。
+    const resolveInWorkspace = Boolean(props.currentSessionId) && allowPrivilegedLinks && sessionFileCtx.localConfirmed === true;
+    return (
+      <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
+        {(localSrc = raw) => {
+          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          if (!normalized) return null;
+          // Local audio has its own extension-checked protocol; xdt-file serves
+          // images/documents/video and rejects MP3. Preserve the encoded path and
+          // select the handler before wrapping the URL for a remote source device.
+          const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
+          const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+        }}
+      </WorkspaceMediaSrc>
+    );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
   if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
@@ -2048,5 +2128,5 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
         renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
 });

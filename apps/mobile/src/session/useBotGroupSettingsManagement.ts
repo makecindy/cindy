@@ -1,131 +1,156 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { BOT_GROUP_REMOTE_COLLECTION_ID, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { useAuth } from '@/auth/AuthContext';
-import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
-import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
-import { getRemoteResource, invokeRemoteResourceAction, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
-import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupResourceRef, canManageBotGroup } from './botGroupRemote';
-import { useTeammateRoster } from './useTeammateRoster';
+import { randomUUID } from 'expo-crypto';
+import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
+import { useChatClient } from '@/chat/useChatServer';
+import { canManageBotGroup } from './botGroupRemote';
 
-type Manager = { host: RemoteResourceHostTarget; group: BotGroupRemoteChatData };
+/**
+ * `archive` also restores an archived group; `nickname`, `avatar`, `bot-access` and adding your
+ * own teammate are written as yourself, every other write as the owner or admin you control.
+ */
+export type GroupSettingsActionId = BotGroupRemoteActionId | 'set-member-role' | 'archive' | 'transfer' | 'nickname' | 'avatar' | 'bot-access';
+const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member']);
+type Settings = { group: BotGroupRemoteChatData; managerId?: string };
 
-/** Associate a direct server chat with computers that actually expose this exact room. */
-export function useBotGroupSettingsManagement(groupId: string, enabled: boolean) {
-  const { accountGeneration } = useAuth();
-  const { i18n } = useTranslation();
-  const { invoke, openLink, connectionEpoch, status, getPresenceAvailability, onRemoteResourceChanged } = useDeviceLink();
-  const revoked = useRevokedDevices();
-  const roster = useTeammateRoster(enabled);
-  const scope = JSON.stringify([accountGeneration, groupId, enabled, connectionEpoch]);
-  // Reopening the same group must not revive an earlier authorization or receipt.
-  const binding = useMemo(() => Symbol(scope), [scope]);
-  const bindingRef = useRef(binding); bindingRef.current = binding;
-  const activeBinding = useRef<typeof binding | null>(null);
-  useEffect(() => {
-    activeBinding.current = binding;
-    return () => { if (activeBinding.current === binding) activeBinding.current = null; };
-  }, [binding]);
-  const [selectedId, select] = useState('');
-  const [refreshVersion, setRefreshVersion] = useState(0);
-  const [snapshot, setSnapshot] = useState<{ binding: typeof binding; key: string; managers: Manager[]; reason: 'noHost' | 'permission' | 'upgrade' | 'unavailable' | null }>();
-  const writing = useRef(false);
-  const candidates = roster.groupTargets.filter(host => status === 'online'
-    && !revoked.has(host.deviceId) && getPresenceAvailability(host.deviceId) !== false);
-  const candidateKey = JSON.stringify(candidates.map(host => host.deviceId));
-  const onlineHost = roster.groupTargets.some(host => !revoked.has(host.deviceId) && getPresenceAvailability(host.deviceId) !== false);
-  const emptyReason = status === 'online' && roster.error && (!roster.groupTargets.length || onlineHost)
-    ? 'unavailable' : 'noHost';
-  const key = JSON.stringify([candidateKey, refreshVersion, status, emptyReason, i18n.language]);
-  const ready = !roster.loading;
-  const currentRef = useRef({ key, enabled, ready, managers: [] as Manager[] });
-  const own = snapshot?.binding === binding && snapshot.key === key;
-  // Content refreshes preserve verified authority until a new detail read replaces it.
-  const managers = snapshot?.binding === binding ? snapshot.managers.filter(manager =>
-    candidates.some(host => host.deviceId === manager.host.deviceId) && canManageBotGroup(manager.group)) : [];
-  currentRef.current = { key, enabled, ready, managers };
-  const selected = managers.find(manager => manager.host.deviceId === selectedId) ?? managers[0];
-  // Remember only the display name, never authorization or an editable snapshot.
-  const displayIdentity = JSON.stringify([accountGeneration, groupId]);
-  const rememberedHost = useRef<{ identity: string; host: RemoteResourceHostTarget } | undefined>(undefined);
-  const previousHost = rememberedHost.current?.identity === displayIdentity
-    && !revoked.has(rememberedHost.current.host.deviceId) ? rememberedHost.current.host : undefined;
-  const displayHost = selected?.host ?? previousHost ?? candidates[0];
-  useEffect(() => {
-    if (displayHost) rememberedHost.current = { identity: displayIdentity, host: displayHost };
-    else if (rememberedHost.current?.identity !== displayIdentity) rememberedHost.current = undefined;
-  }, [displayIdentity, displayHost]);
-
-  const read = useRemoteSyncCoordinator(async run => {
-    if (!enabled || !ready) return;
-    const current = () => !run.isStale() && bindingRef.current === binding && currentRef.current.key === key && currentRef.current.ready;
-    const found: Manager[] = [];
-    let reason: NonNullable<typeof snapshot>['reason'] = candidates.length ? 'unavailable' : emptyReason;
-    for (let offset = 0; offset < candidates.length; offset += 2) {
-      const replies = await Promise.allSettled(candidates.slice(offset, offset + 2).map(async host => {
-        await openLink(host.deviceId);
-        if (!current()) return null;
-        const resource = await getRemoteResource(invoke, host, botGroupResourceRef(groupId), i18n.language, BOT_GROUP_CLIENT_PRIMITIVES);
-        const group = botGroupChatDataFromResource(resource);
-        return group?.id === groupId && group.serverBacked ? { host, group } : null;
-      }));
-      if (!current()) return;
-      for (const reply of replies) {
-        if (reply.status !== 'fulfilled' || !reply.value) continue;
-        const manager = reply.value;
-        if (canManageBotGroup(manager.group)) found.push(manager);
-        else if (!manager.group.supportsSettingsManagement) reason = 'upgrade';
-        else reason = 'permission';
-      }
-    }
-    if (current()) setSnapshot({ binding, key, managers: found, reason: found.length ? null : reason });
-  }, scope);
-  useEffect(() => {
-    if (enabled && ready) void read({ reason: 'settings' });
-  }, [binding, key, enabled, ready, read]);
-
-  const refresh = useCallback(() => { setRefreshVersion(value => value + 1); }, []);
-  useEffect(() => {
-    if (!enabled) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const off = onRemoteResourceChanged((deviceId, payload) => {
-      if (!candidates.some(host => host.deviceId === deviceId) || payload.collectionId !== BOT_GROUP_REMOTE_COLLECTION_ID) return;
-      if (payload.resourceRefs?.length && !payload.resourceRefs.some(ref => ref.id === groupId)) return;
-      if (!timer) timer = setTimeout(() => { timer = undefined; refresh(); }, 150);
-    });
-    return () => { off(); if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, groupId, candidateKey, onRemoteResourceChanged, refresh]);
-
-  const act = useCallback(async (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) => {
-    const manager = selected;
-    if (!currentRef.current.enabled || !manager || writing.current) throw new Error('PERMISSION_DENIED');
-    writing.current = true;
-    const valid = () => activeBinding.current === binding && bindingRef.current === binding && currentRef.current.enabled
-      && currentRef.current.managers.some(current => current.host.deviceId === manager.host.deviceId && canManageBotGroup(current.group))
-      && getPresenceAvailability(manager.host.deviceId) !== false;
+/** Cloud settings use the account's chat service, never device discovery or a host link. */
+export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, enabled: boolean) {
+  const api = useChatClient();
+  const groupId = source.id;
+  const binding = useMemo(() => Symbol(), [api.owner, groupId, enabled]);
+  const active = useRef<typeof binding | null>(binding); active.current = binding;
+  useEffect(() => { active.current = binding; return () => { active.current = null; }; }, [binding]);
+  const sequence = useRef(0);
+  const verified = useRef<{ binding: typeof binding; settings: Settings } | null>(null);
+  const writing = useRef<symbol | null>(null);
+  const [state, setState] = useState<{ binding: typeof binding; settings?: Settings; loading: boolean; failed: boolean }>();
+  const pending = useRef<{ binding: typeof binding; key: string; operationId: string; managerId: string | undefined; action: ChatGroupSettingsAction } | null>(null);
+  const valid = useCallback(() => enabled && api.enabled && api.current() && active.current === binding, [api, enabled, binding]);
+  const refresh = useCallback(async () => {
+    if (!valid()) return;
+    const run = ++sequence.current;
+    verified.current = null;
+    setState(previous => ({ binding, settings: previous?.binding === binding ? previous.settings : undefined, loading: true, failed: false }));
     try {
-      await openLink(manager.host.deviceId);
-      if (!valid()) throw new Error('PERMISSION_DENIED');
-      const receipt = await invokeRemoteResourceAction(<T,>(deviceId: string, channel: string, args?: unknown[]) =>
-        invoke<T>(deviceId, channel, args, { preSend: () => { if (!valid()) throw new Error('PERMISSION_DENIED'); } }), manager.host, {
-        collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, resourceRef: botGroupResourceRef(groupId), actionId,
-        input: { expectedRevision: manager.group.revision, ...input },
-      }, i18n.language);
-      // A reply from a prior account/sheet must not close the current screen.
-      if (bindingRef.current !== binding || activeBinding.current !== binding) throw new Error('PERMISSION_DENIED');
-      // Fence pre-write reads and edits until the new revision is verified.
-      currentRef.current = { ...currentRef.current, key: '', managers: [] };
-      setSnapshot(undefined);
-      return receipt;
-    } finally {
-      writing.current = false;
-      if (bindingRef.current === binding && activeBinding.current === binding) refresh();
+      const { snapshot, self, manager } = await api.client.groupSettings(groupId);
+      if (!valid() || sequence.current !== run) return;
+      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...api.client.lifecycleCapabilities() }, managerId: manager?.id };
+      verified.current = { binding, settings };
+      setState({ binding, settings, loading: false, failed: false });
+    } catch {
+      if (valid() && sequence.current === run) setState({ binding, loading: false, failed: true });
     }
-  }, [binding, groupId, selected, getPresenceAvailability, openLink, invoke, i18n.language, refresh]);
+  }, [api, binding, groupId, valid]);
+  // The parent already subscribes to server changes. Recheck only settings/membership changes.
+  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt,
+    source.members.map(member => [member.actorId, member.role, member.status])]);
+  useEffect(() => { void refresh(); }, [refresh, sourceVersion]);
 
-  const loading = enabled && !selected && (roster.loading || !own);
-  return { selected, displayHost, managers, select, act, loading, reason: loading ? null : snapshot ? snapshot.reason : 'noHost',
-    refresh: () => { void roster.refresh(); refresh(); } };
+  const act = useCallback(async (actionId: GroupSettingsActionId, input: Record<string, unknown> = {}) => {
+    const current = verified.current?.binding === binding ? verified.current.settings : undefined;
+    const asSelf = SELF_ACTIONS.has(actionId);
+    // An archived group only takes 取消归档 from its managers.
+    const allowed = asSelf ? !current?.group.archived : actionId === 'archive'
+      ? !!current?.managerId && chatGroupMembership(current.group).manager : !!current?.managerId && canManageBotGroup(current.group);
+    if (!valid() || !current || !allowed || current.group.dissolvedAt || writing.current) throw new Error('PERMISSION_DENIED');
+    const revision = (value: unknown) => {
+      const expected = value ?? current.group.revision;
+      if (!Number.isSafeInteger(expected) || Number(expected) < 1) throw new Error('REVISION_CONFLICT');
+      return Number(expected);
+    };
+    const actor = () => { const id = String(input.actorId ?? ''); if (!id) throw new Error('INVALID_PARAMS'); return id; };
+    let action: ChatGroupSettingsAction;
+    if (actionId === 'nickname') {
+      action = { type: 'nickname', actorId: actor(), nickname: typeof input.nickname === 'string' && input.nickname.trim() ? input.nickname.trim() : null };
+    } else if (actionId === 'avatar') {
+      if (!current.group.supportsMemberAvatar) throw new Error('CHAT_UNAVAILABLE');
+      action = { type: 'avatar', actorId: actor(), avatar: typeof input.avatar === 'string' ? input.avatar : null };
+    } else if (actionId === 'transfer') {
+      action = { type: 'transfer', actorId: actor() };
+    } else if (actionId === 'bot-access') {
+      if (input.access !== 'none' && input.access !== 'chat' && input.access !== 'tools') throw new Error('INVALID_PARAMS');
+      action = { type: 'botAccess', actorId: actor(), access: input.access, expectedRevision: revision(input.expectedRevision) };
+    } else if (actionId === 'update' || actionId === 'delete' || actionId === 'archive') {
+      action = { type: 'update', expectedRevision: revision(input.expectedRevision) };
+      if (actionId !== 'update') action.archived = actionId === 'delete' || input.archived !== false;
+      else {
+        if (typeof input.name === 'string') action.name = input.name;
+        if (typeof input.topic === 'string') action.topic = input.topic;
+        if (typeof input.description === 'string') action.description = input.description;
+        if (typeof input.allowMentionAllBots === 'boolean') action.allowMentionAllBots = input.allowMentionAllBots;
+        if (input.replyMode === 'all' || input.replyMode === 'mentioned') action.responseMode = input.replyMode;
+        if (input.speakingMode === 'auto' || input.speakingMode === 'sequential') action.speakingMode = input.speakingMode;
+        if (typeof input.organizerBotId === 'string' || input.organizerBotId === null) action.organizerId = input.organizerBotId;
+      }
+    } else if (actionId === 'add-member' || actionId === 'remove-member' || actionId === 'set-member-role') {
+      action = { type: 'member', actorId: String(input.actorId ?? input.botId ?? ''),
+        action: actionId === 'add-member' ? 'invite' : actionId === 'remove-member' ? 'remove' : 'role' };
+      if (actionId === 'set-member-role') {
+        if (input.role !== 'admin' && input.role !== 'member') throw new Error('INVALID_PARAMS');
+        action.role = input.role;
+      }
+    } else throw new Error('UNSUPPORTED_CHAT_ACTION');
+    // A readback may advance the revision after a lost acknowledgement. Retry the original
+    // receipt and body for the same intended edit, rather than creating another mutation.
+    const key = JSON.stringify(action.type === 'update' ? { ...action, expectedRevision: undefined } : action);
+    const prior = pending.current;
+    const operation = prior?.binding === binding && prior.key === key ? prior
+      : { binding, key, operationId: randomUUID(), managerId: asSelf ? undefined : current.managerId, action };
+    pending.current = operation;
+    const write = Symbol(); writing.current = write;
+    // Fence reads started before this mutation, including the parent subscription refresh.
+    ++sequence.current; verified.current = null;
+    try {
+      await api.client.manageGroup(groupId, operation.managerId, operation.action, operation.operationId);
+      if (!valid()) throw new Error('OWNER_CHANGED');
+      pending.current = null;
+      return { effects: [] };
+    } catch (error) {
+      // A definite rejection may be corrected; an uncertain network result keeps its receipt ID.
+      const status = (error as { status?: number } | null)?.status;
+      if (valid() && status && status >= 400 && status < 500) pending.current = null;
+      throw error;
+    } finally {
+      if (writing.current === write) writing.current = null;
+      if (valid()) await refresh();
+    }
+  }, [api, binding, groupId, refresh, valid]);
+  /** A join link from the owner or admin you control; revoking takes the same link back. */
+  const invite = useCallback(async (revoke?: string) => {
+    const current = verified.current?.binding === binding ? verified.current.settings : undefined;
+    if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
+    const operationId = randomUUID();
+    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, operationId); return null; }
+    const link = await api.client.createInvite(groupId, current.managerId, operationId);
+    if (!valid()) throw new Error('OWNER_CHANGED');
+    return link;
+  }, [api, binding, groupId, valid]);
+  const own = state?.binding === binding;
+  const settings = own ? state.settings : undefined;
+  const loading = enabled && (!own || state.loading);
+  const editable = !loading && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
+  // Settings reads skip `/actors`; the chat page already knows which computer runs each of your teammates.
+  const homes = new Map(source.members.flatMap(member => member.homeDeviceId && member.actorId ? [[member.actorId, member.homeDeviceId] as const] : []));
+  const group = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
+    member.homeDeviceId === null && member.actorId && homes.has(member.actorId) ? { ...member, homeDeviceId: homes.get(member.actorId) } : member) }
+    : settings?.group;
+  return { group, act, invite, refresh, loading, editable, ready: !loading && !!settings,
+    reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
+}
+
+/** Own cloud actors remain addable while their execution computers are offline. */
+export function useCloudGroupCandidates(enabled: boolean) {
+  const api = useChatClient();
+  const [state, setState] = useState<{ owner: string; rows: ChatActor[]; loading: boolean; failed: boolean }>();
+  useEffect(() => {
+    if (!enabled || !api.enabled) return;
+    let cancelled = false;
+    setState({ owner: api.owner, rows: [], loading: true, failed: false });
+    void api.client.actors().then(rows => {
+      if (!cancelled && api.current()) setState({ owner: api.owner, rows: rows.filter(row => row.kind === 'bot'), loading: false, failed: false });
+    }).catch(() => { if (!cancelled && api.current()) setState({ owner: api.owner, rows: [], loading: false, failed: true }); });
+    return () => { cancelled = true; };
+  }, [api, enabled]);
+  return state?.owner === api.owner && enabled && api.enabled ? state : { rows: [], loading: enabled && api.enabled, failed: false };
 }

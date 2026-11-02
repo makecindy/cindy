@@ -81,7 +81,7 @@ export {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from './shared/context-overflow-error.js';
-export { isRemoteCompactEncryptedContentError } from './shared/remote-compact-encrypted-error.js';
+export { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from './shared/remote-compact-encrypted-error.js';
 export { isDeterministicHostCompactFailure } from './shared/auto-compact-controller.js';
 // ErrorBanner 用人话替换 LiteLLM / Responses 空壳流中断,不驱动自动续跑。
 export {
@@ -133,6 +133,13 @@ export {
 } from './shared/auto-review-decision.js';
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
+// 桌面键鼠只走 cindy_computer:shell 模拟输入的判定与拒绝理由(Claude PreToolUse 守卫与
+// auto-review 共用一份,见 shared/desktop-input-shell.ts)。
+export {
+  isShellDesktopInputCommand,
+  SHELL_DESKTOP_INPUT_DENIAL_CODE,
+  SHELL_DESKTOP_INPUT_DENIAL_REASON,
+} from './shared/desktop-input-shell.js';
 export type { CredentialCommandOptions, GitRead, ReviewableAction } from './shared/auto-review.js';
 export { classifyShellCommand, reviewAction, shellCommandReadsCredentials } from './shared/auto-review.js';
 export type {

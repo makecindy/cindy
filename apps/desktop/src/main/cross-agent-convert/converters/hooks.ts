@@ -32,6 +32,40 @@ export interface ConvertOutcome {
 const CLAUDE_HOOKS_PATH_PATTERN = /\.claude\/hooks\//g;
 const CODEX_HOOKS_PATH_PATTERN = /\.codex\/hooks\//g;
 
+/** 判断是否为普通 JSON 对象。 */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * 取出 Codex hooks.json 里的事件表。
+ * Codex 规范顶层是 `{ "hooks": { <Event>: [...] } }`；同时兼容早期平铺写法 `{ <Event>: [...] }`
+ * （平铺时忽略非事件的 "hooks" 键本身）。
+ */
+function extractCodexEvents(root: Record<string, unknown>): Record<string, unknown> {
+  if (isPlainObject(root.hooks)) return root.hooks;
+  const flat: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(root)) {
+    if (k === 'hooks') continue;
+    flat[k] = v;
+  }
+  return flat;
+}
+
+/** 修复存量错误嵌套的 settings.hooks.hooks：把内层事件拍平到 settings.hooks 上（已有同名事件不覆盖）。 */
+function unwrapNestedClaudeHooks(hooks: Record<string, unknown>): Record<string, unknown> {
+  const nested = hooks.hooks;
+  if (!isPlainObject(nested)) return hooks;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(hooks)) {
+    if (k !== 'hooks') out[k] = v;
+  }
+  for (const [k, v] of Object.entries(nested)) {
+    if (!(k in out)) out[k] = v;
+  }
+  return out;
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -137,35 +171,44 @@ async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
   const hadExisting = await exists(codexHooksJson);
   if (hadExisting) {
     const parsed = await readJsonIfExists(codexHooksJson);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      existing = parsed as Record<string, unknown>;
-    }
+    if (isPlainObject(parsed)) existing = parsed;
+  }
+  // Codex 规范：事件放在顶层 "hooks" 对象内；旧的平铺文件就地升级为包装结构
+  const codexEvents = extractCodexEvents(existing);
+  // 旧平铺文件（有事件但无顶层 hooks 包装）即使没有新增也要写回升级
+  const upgraded = hadExisting && !isPlainObject(existing.hooks) && Object.keys(codexEvents).length > 0;
+  const codexRoot: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(existing)) {
+    if (k === 'hooks' || k in codexEvents) continue;
+    codexRoot[k] = v;
   }
 
   let added = 0;
   let skipped = 0;
   if (claudeHooks) {
-    for (const [eventName, eventConfig] of Object.entries(claudeHooks)) {
-      if (eventName in existing) {
+    for (const [eventName, eventConfig] of Object.entries(unwrapNestedClaudeHooks(claudeHooks))) {
+      if (eventName in codexEvents) {
         skipped += 1;
         continue;
       }
-      existing[eventName] = rewriteHookEntry(eventConfig, 'to-codex');
+      codexEvents[eventName] = rewriteHookEntry(eventConfig, 'to-codex');
       added += 1;
     }
   }
 
-  if (added === 0 && scriptResult.copied === 0) {
+  if (added === 0 && scriptResult.copied === 0 && !upgraded) {
     return { status: 'skipped', detail: '所有 hook 已存在' };
   }
 
   await fs.mkdir(path.dirname(codexHooksJson), { recursive: true });
-  await fs.writeFile(codexHooksJson, JSON.stringify(existing, null, 2), 'utf8');
+  codexRoot.hooks = codexEvents;
+  await fs.writeFile(codexHooksJson, JSON.stringify(codexRoot, null, 2), 'utf8');
 
   const parts: string[] = [];
   if (scriptResult.copied > 0) parts.push(`脚本 ${scriptResult.copied}`);
   if (added > 0) parts.push(`索引 ${added}`);
   if (skipped > 0) parts.push(`跳过 ${skipped}`);
+  if (upgraded) parts.push('升级为 hooks 包装结构');
   return { status: 'success', detail: parts.join(', ') };
 }
 
@@ -188,9 +231,7 @@ async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
   let codexHooks: Record<string, unknown> = {};
   try {
     const parsed = await readJsonIfExists(codexHooksJson);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      codexHooks = parsed as Record<string, unknown>;
-    }
+    if (isPlainObject(parsed)) codexHooks = extractCodexEvents(parsed);
   } catch (err) {
     return { status: 'failed', detail: `hooks.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -204,7 +245,10 @@ async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
       settings = parsed as Record<string, unknown>;
     }
   }
-  const existingHooks = (settings.hooks ?? {}) as Record<string, unknown>;
+  // 存量错误嵌套 settings.hooks.hooks 一并拍平修复
+  const rawHooks = isPlainObject(settings.hooks) ? settings.hooks : {};
+  const existingHooks = unwrapNestedClaudeHooks(rawHooks);
+  const repaired = existingHooks !== rawHooks;
 
   let added = 0;
   let skipped = 0;
@@ -217,7 +261,7 @@ async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
     added += 1;
   }
 
-  if (added === 0 && scriptResult.copied === 0) {
+  if (added === 0 && scriptResult.copied === 0 && !repaired) {
     return { status: 'skipped', detail: '所有 hook 已存在' };
   }
 
@@ -229,6 +273,7 @@ async function convertToClaude(item: MigrationItem): Promise<ConvertOutcome> {
   if (scriptResult.copied > 0) parts.push(`脚本 ${scriptResult.copied}`);
   if (added > 0) parts.push(`索引 ${added}`);
   if (skipped > 0) parts.push(`跳过 ${skipped}`);
+  if (repaired) parts.push('修复嵌套 hooks.hooks');
   return { status: 'success', detail: parts.join(', ') };
 }
 

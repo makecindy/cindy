@@ -7,6 +7,7 @@
  */
 
 import { useMemo, useSyncExternalStore } from 'react';
+import { useStableTranslation } from '@/hooks/useStableTranslation';
 import { createProjectGroupsSelector } from '../lib/projectGroupsSelector';
 import { useProvisionalDraftProjectTaskId } from './useProvisionalDraftProjectTaskId';
 
@@ -21,7 +22,7 @@ import {
   type ProjectNode,
 } from '../lib/projectGrouping';
 import {
-  collectAmbiguousDeviceNames,
+  collectProjectDevices,
   resolveRemoteProjectMachineIdentity,
 } from '../lib/remoteProjectIdentity';
 
@@ -35,6 +36,8 @@ export function useProjectGroups(
   equivalentResult?: ProjectGroupsResult,
   projectAliasMembers?: readonly Session[],
 ): ProjectGroupsResult {
+  const { i18n } = useStableTranslation();
+  const language = i18n.resolvedLanguage ?? i18n.language;
   const sshHosts = useRemoteSshHosts();
   const hostProjectAliases = useSyncExternalStore(remoteProjectAliases.subscribe, remoteProjectAliases.getSnapshot);
   const selectGroups = useMemo(() => createProjectGroupsSelector(), []);
@@ -71,16 +74,16 @@ export function useProjectGroups(
     botOwnerBySessionId,
     provisionalDraftTaskId,
   ]);
-  const ambiguousDeviceNames = useMemo(
-    () => collectAmbiguousDeviceNames(groups.projects),
+  const projectDevices = useMemo(
+    () => collectProjectDevices(groups.projects),
     [groups.projects],
   );
-  const ambiguityKey = JSON.stringify([...ambiguousDeviceNames].sort());
-  // Weak keys keep only live grouping nodes. Registry/collision changes must
+  const ambiguityKey = JSON.stringify(projectDevices);
+  // Weak keys keep only live grouping nodes. Registry/collision/language changes must
   // re-enrich even unchanged nodes so remote labels never retain stale names.
   const enrichedProjects = useMemo(
     () => new WeakMap<ProjectNode, ProjectNode>(),
-    [sshHosts, ambiguityKey],
+    [sshHosts, ambiguityKey, language],
   );
   return useMemo(() => {
     if (equivalentResult) return equivalentResult;
@@ -92,12 +95,12 @@ export function useProjectGroups(
         const enriched = {
           ...project,
           remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts, {
-            ambiguousDeviceNames,
+            devices: projectDevices,
           }),
         };
         enrichedProjects.set(project, enriched);
         return enriched;
       }),
     };
-  }, [groups, equivalentResult, enrichedProjects, sshHosts, ambiguousDeviceNames]);
+  }, [groups, equivalentResult, enrichedProjects, sshHosts, projectDevices, language]);
 }

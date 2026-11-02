@@ -8,7 +8,7 @@
  * 换模型、协同 Worker、定时任务的默认来源都只能落在这些供应商上。
  */
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
-import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isModelVisible, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
 
 type RemoteInvoke = (
   deviceId: string,
@@ -49,14 +49,25 @@ export function parseDeviceProviderViews(value: unknown): ProviderView[] {
 }
 
 /** 读那台电脑允许被远程调用的供应商视图。 */
-export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: string): Promise<ProviderView[]> {
+export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: string, options: { visibleOnly?: boolean } = {}): Promise<ProviderView[]> {
   const result = await invoke(deviceId, 'maker:provider:list', [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
   ]);
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }
-  return parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
+  const providers = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
+  if (!options.visibleOnly) return providers;
+  const visibility = isRecord(result.result) && isRecord(result.result.modelVisibilityOverrides)
+    ? result.result.modelVisibilityOverrides : {};
+  return providers.map((provider) => ({ ...provider, models: {
+    ...provider.models,
+    ...Object.fromEntries(provider.agents.map((agent) => [agent,
+      (provider.models[agent] ?? []).filter((model) => {
+        const override = visibility[`${agent}:${provider.id}:${model.id}`];
+        return isModelVisible(typeof override === 'boolean' ? override : undefined, model.defaultEnabled);
+      }).map((model) => ({ ...model, defaultEnabled: true }))])),
+  } }));
 }
 
 /** 与普通任务共用授权目录；失败不回落到本机的同名供应商。 */

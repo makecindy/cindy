@@ -608,6 +608,67 @@ describe('startGhostOauthFlow', () => {
     expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
   });
 
+  it('服务端签发应用身份失败:不拉浏览器,保留错误分类', async () => {
+    const openExternal = vi.fn();
+    const broker: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(async () => ({ ok: false as const, error: 'SERVICE_UNAVAILABLE' as const })),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, clientId: undefined, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(broker.exchange).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份时卡住:再点连接即顶掉前一单,不拉浏览器、不阻塞新一单', async () => {
+    const firstOpen = vi.fn();
+    let secondDone: Promise<unknown> = Promise.resolve();
+    const hanging: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(() => {
+        // 前一单卡在请求上时，用户再次点连接。
+        secondDone = startGhostOauthFlow({
+          config: BASE_CONFIG,
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-next' })) as unknown as typeof fetch,
+          openExternal: (url) => browserRedirect(url, (au) => ({
+            code: 'c-next',
+            state: au.searchParams.get('state') ?? '',
+          })),
+        });
+        return new Promise<never>(() => undefined);
+      }),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const first = startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: hanging,
+      openExternal: firstOpen,
+    });
+    await expect(first).resolves.toMatchObject({ ok: false, error: 'CANCELLED' });
+    await expect(secondDone).resolves.toMatchObject({ ok: true });
+    expect(firstOpen).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份超过整单时限 → TIMEOUT,不拉浏览器', async () => {
+    const openExternal = vi.fn();
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: { bootstrap: () => new Promise<never>(() => undefined), exchange: vi.fn(), refresh: vi.fn() },
+      openExternal,
+      timeoutMs: 50,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'TIMEOUT' });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {
     const broker: GhostOauthBrokerClient = {
       exchange: vi.fn(
