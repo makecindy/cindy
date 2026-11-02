@@ -6,6 +6,18 @@
 没有新帧、能力位或 relay 行为，中转（含自建）只转发，不需要适配。旧被控端返回 `CHANNEL_NOT_ALLOWED`，控制端显示 `update_required`；
 解析按字段容错，新版本多报的字段被忽略，缺的字段是 `null`，只有 CPU 核数与内存总量缺失才视为无效。
 
+## 分享来的供应商组按组判断可选（2026-11-02）
+
+不新增字段、channel 或错误码，只改受邀者对既有分享目录的解读：带合法 `groupSize` 的供应商，
+`connected: false` 在受邀者侧记为 `true`（`scrubSharedProvider`），因为它只代表组所在电脑本机那一份，
+组会把任务分给组里其他电脑（[供应商分享](../product-rules/provider-sharing.md) §5.1）。
+主进程 `readDeviceProviderViews` 与被控电脑代读分享目录时也过同一份投影，与 Renderer 直读一致；只有供应商组
+读组内电脑时保留原始 `connected`（`groupMember`），因为带 `groupAssigned` 的任务在那台直接运行。
+分享者电脑投影时还没有 `groupSize`，发出的数据不变；旧分享者不带 `groupSize` 时按原连接状态处理。
+旧受邀者仍按本机那一份隐藏；新受邀者对组里一台都不能用的分享会在发送时收到既有的
+`REMOTE_AGENT_UNAVAILABLE`。手机经新版被控电脑代读即生效，手机自身解析同样走该函数。
+官方与自建中转只透传既有 invoke，无需改动。
+
 ## 仓库自动任务导入确认（2026-11-01）
 
 同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。
