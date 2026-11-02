@@ -4528,7 +4528,7 @@
       "clearAria": "IM-Bot-Verknüpfung aufheben",
       "clearConfirm": {
         "title": "Verknüpfung mit IM-Bot aufheben?",
-        "description": "Beim Aufheben der Verknüpfung wird die WebSocket-Verbindung geschlossen und die lokal gespeicherte App ID / das App Secret / die openId des Eigentümers werden entfernt. Zum erneuten Aktivieren musst du die Zugangsdaten neu erstellen oder erneut eingeben.",
+        "description": "Beim Trennen werden die Verbindung beendet und die lokal gespeicherten Zugangsdaten sowie die Eigentümerzuordnung gelöscht. Du kannst dich per QR-Code oder Link erneut autorisieren.",
         "confirm": "Verknüpfung aufheben",
         "cancel": "Abbrechen"
       },
@@ -4543,7 +4543,17 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
-      "bind": "Verknüpfen"
+      "bind": "Verknüpfen",
+      "qr": {
+        "description": "Scanne den QR-Code mit Feishu oder Lark oder öffne den Autorisierungslink. Nach deiner Bestätigung wird dein Bot automatisch verbunden.",
+        "qrAlt": "QR-Code zur Autorisierung von Feishu / Lark",
+        "expiresIn": "QR-Code läuft in {{seconds}} Sekunden ab",
+        "openLink": "Autorisierungslink öffnen",
+        "cancel": "Autorisierung abbrechen",
+        "begin": "Bot autorisieren",
+        "retry": "Erneut autorisieren",
+        "connecting": "Bot wird verbunden…"
+      }
     },
     "wechatBot": {
       "title": "Persönliches WeChat",

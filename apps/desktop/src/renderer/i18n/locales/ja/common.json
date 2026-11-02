@@ -4485,7 +4485,7 @@
       "clearAria": "IM ボットの連携を解除",
       "clearConfirm": {
         "title": "IM ボットの連携を解除しますか？",
-        "description": "連携を解除すると WebSocket 接続が切れ、ローカルに保存された App ID / App Secret / オーナー openId が削除されます。再度使うには、再作成または再入力が必要です。",
+        "description": "連携を解除すると接続が切断され、この端末の認証情報とオーナーの紐付けが削除されます。QR コードまたはリンクから再度認証できます。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
@@ -4500,7 +4500,17 @@
         "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
         "disabledHint": "先に Bot を設定し、バインドを完了するために DM を送信してください。"
       },
-      "bind": "連携"
+      "bind": "連携",
+      "qr": {
+        "description": "Feishu または Lark で QR コードをスキャンするか、認証リンクを開いてください。承認するとボットが自動で接続されます。",
+        "qrAlt": "Feishu / Lark 認証用 QR コード",
+        "expiresIn": "QR コードはあと {{seconds}} 秒で期限切れになります",
+        "openLink": "認証リンクを開く",
+        "cancel": "認証をキャンセル",
+        "begin": "認証を開始",
+        "retry": "再度認証する",
+        "connecting": "ボットに接続中…"
+      }
     },
     "wechatBot": {
       "title": "個人 WeChat",

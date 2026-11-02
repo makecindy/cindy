@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Trash2, Check, RefreshCw, Link } from 'lucide-react';
+import { Trash2, Check, RefreshCw, Link } from 'lucide-react';
 
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -13,12 +12,7 @@ import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feish
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
-
-const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
-  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
-  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
-};
-const FEISHU_SERVICES = ['feishu', 'lark'] as const;
+import { FeishuBotQrConfig } from './FeishuBotQrConfig';
 
 const statusKey: Record<FeishuBotStatus, string> = {
   idle: 'settings.feishuBot.status.needsConfig',
@@ -69,24 +63,17 @@ export function FeishuBotSection({
     service,
     setService,
     appId,
-    setAppId,
-    appSecret,
-    setAppSecret,
     status,
     errorMessage,
     hasSavedCreds,
     hasLoadedState,
     ownerOpenId,
-    validationError,
-    isSaving,
     isClearing,
     isReconnecting,
-    save,
     reconnect,
     clear,
   } = useFeishuBot();
 
-  const [showSecret, setShowSecret] = useState(false);
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
@@ -97,7 +84,6 @@ export function FeishuBotSection({
 
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
   const displayStatus = isReconnecting ? 'testing' : status;
-  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
 
   const handleClearClick = useCallback(async () => {
     const confirmed = await confirm({
@@ -109,10 +95,6 @@ export function FeishuBotSection({
     if (!confirmed) return;
     await clear();
   }, [confirm, clear, t]);
-
-  const openLauncher = useCallback(() => {
-    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[service]);
-  }, [service]);
 
   return (
     <ImChannelSettingsCard
@@ -162,22 +144,7 @@ export function FeishuBotSection({
           onClear={handleClearClick}
         />
       ) : (
-        <ManualConfig
-          service={service}
-          setService={setService}
-          appId={appId}
-          setAppId={setAppId}
-          appSecret={appSecret}
-          setAppSecret={setAppSecret}
-          showSecret={showSecret}
-          setShowSecret={setShowSecret}
-          validationError={validationError}
-          errorMessage={errorMessage}
-          isSaving={isSaving}
-          canSave={canSave}
-          onSave={save}
-          onOpenLauncher={openLauncher}
-        />
+        <FeishuBotQrConfig service={service} setService={setService} />
       )}
       <div className="h-px w-full bg-[var(--border-default)]" />
       <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
@@ -310,149 +277,6 @@ function SavedCredentialsCard(props: {
           {t('settings.feishuBot.connected.clear')}
         </Button>
       </div>
-    </div>
-  );
-}
-
-function ManualConfig(props: {
-  service: FeishuBotService;
-  setService: (service: FeishuBotService) => void;
-  appId: string;
-  setAppId: (v: string) => void;
-  appSecret: string;
-  setAppSecret: (v: string) => void;
-  showSecret: boolean;
-  setShowSecret: (v: boolean) => void;
-  validationError: string | null;
-  errorMessage: string | null;
-  isSaving: boolean;
-  canSave: boolean;
-  onSave: () => Promise<boolean>;
-  onOpenLauncher: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-col gap-3">
-      <fieldset className="flex flex-col gap-2">
-        <legend
-          className="text-12 font-medium text-[var(--settings-section-desc)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
-          {t('settings.feishuBot.serviceLabel')}
-        </legend>
-        <SegmentedControl
-          aria-label={t('settings.feishuBot.serviceAria')}
-          value={props.service}
-          onValueChange={props.setService}
-          options={FEISHU_SERVICES.map((service) => ({
-            value: service,
-            label: t(`settings.feishuBot.services.${service}`),
-          }))}
-          fullWidth
-          height={44}
-          optionHeight={34}
-        />
-      </fieldset>
-
-      <label
-        className="text-12 font-medium text-[var(--settings-section-desc)]"
-        style={{ letterSpacing: '0.12px' }}
-      >
-        {t('settings.feishuBot.appIdLabel')}
-      </label>
-      <input
-        type="text"
-        value={props.appId}
-        onChange={(e) => props.setAppId(e.target.value)}
-        placeholder={t('settings.feishuBot.appIdPlaceholder')}
-        spellCheck={false}
-        autoComplete="off"
-        className={cn(
-          'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
-          'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
-          'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-          'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
-        )}
-        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-      />
-
-      <label
-        className="text-12 font-medium text-[var(--settings-section-desc)]"
-        style={{ letterSpacing: '0.12px' }}
-      >
-        {t('settings.feishuBot.appSecretLabel')}
-      </label>
-      <div className="relative">
-        <input
-          type={props.showSecret ? 'text' : 'password'}
-          value={props.appSecret}
-          onChange={(e) => props.setAppSecret(e.target.value)}
-          placeholder={t('settings.feishuBot.appSecretPlaceholder')}
-          spellCheck={false}
-          autoComplete="off"
-          className={cn(
-            'h-[42px] w-full rounded-full pl-[14px] pr-10',
-            'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
-            'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-            'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
-          )}
-          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-        />
-        <button
-          type="button"
-          onClick={() => props.setShowSecret(!props.showSecret)}
-          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-          aria-label={
-            props.showSecret
-              ? t('settings.feishuBot.hideSecret')
-              : t('settings.feishuBot.showSecret')
-          }
-        >
-          {props.showSecret ? <Eye size={18} /> : <EyeOff size={18} />}
-        </button>
-      </div>
-
-      <div className="flex min-h-[18px] items-center justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {props.validationError ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.validationError}
-            </p>
-          ) : props.errorMessage ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-              {props.errorMessage}
-            </p>
-          ) : (
-            <p
-              className="text-12 text-[var(--settings-source-meta)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              <button
-                type="button"
-                onClick={props.onOpenLauncher}
-                className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
-              >
-                {t('settings.feishuBot.createLink', {
-                  service: t(`settings.feishuBot.services.${props.service}`),
-                })}
-              </button>
-              <span>{t('settings.feishuBot.createLinkSuffix')}</span>
-            </p>
-          )}
-        </div>
-      </div>
-
-      <Button
-        variant="cta"
-        size="lg"
-        loading={props.isSaving}
-        type="button"
-        onClick={props.onSave}
-        disabled={!props.canSave}
-        className="w-full"
-      >
-        {t('settings.feishuBot.bind')}
-      </Button>
     </div>
   );
 }

@@ -4485,7 +4485,7 @@
       "clearAria": "IM 봇 연동 해제",
       "clearConfirm": {
         "title": "IM 봇 연동을 해제하시겠습니까?",
-        "description": "연동을 해제하면 WebSocket 연결이 끊기고, 로컬에 저장된 App ID / App Secret / 소유자 openId가 삭제됩니다. 다시 사용하려면 재생성하거나 자격 증명을 다시 입력해야 합니다.",
+        "description": "연결을 해제하면 봇 연결이 끊기고 이 기기에 저장된 인증 정보와 소유자 연결이 삭제됩니다. QR 코드나 링크로 다시 인증할 수 있습니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
       },
@@ -4500,7 +4500,17 @@
         "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
         "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
       },
-      "bind": "연동"
+      "bind": "연동",
+      "qr": {
+        "description": "Feishu 또는 Lark로 QR 코드를 스캔하거나 인증 링크를 여세요. 승인하면 봇이 자동으로 연결됩니다.",
+        "qrAlt": "Feishu / Lark 인증 QR 코드",
+        "expiresIn": "QR 코드가 {{seconds}}초 후 만료됩니다",
+        "openLink": "인증 링크 열기",
+        "cancel": "인증 취소",
+        "begin": "인증 시작",
+        "retry": "다시 인증",
+        "connecting": "봇에 연결 중…"
+      }
     },
     "wechatBot": {
       "title": "개인 WeChat",

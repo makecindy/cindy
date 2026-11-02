@@ -4581,7 +4581,7 @@
       "clearAria": "Desassociar bot de mensagens instantâneas",
       "clearConfirm": {
         "title": "Desassociar bot de mensagens instantâneas?",
-        "description": "A desassociação fechará a ligação WebSocket e removerá o App ID / App Secret / openId do proprietário guardados localmente. Para voltar a ativar, terá de recriar ou reintroduzir as credenciais.",
+        "description": "Ao desvincular, a ligação é terminada e as credenciais locais e a associação ao proprietário são eliminadas. Pode voltar a autorizar com um código QR ou uma ligação.",
         "confirm": "Desassociar",
         "cancel": "Cancelar"
       },
@@ -4596,7 +4596,17 @@
         "hint": "Envia uma mensagem privada através do bot Feishu ou Lark associado; apenas quando a janela não está em foco.",
         "disabledHint": "Configure primeiro o bot e envie-lhe uma mensagem privada para concluir a associação."
       },
-      "bind": "Associar"
+      "bind": "Associar",
+      "qr": {
+        "description": "Leia o código com o Feishu ou Lark, ou abra a ligação de autorização. Confirme para ligar o bot automaticamente.",
+        "qrAlt": "Código QR de autorização do Feishu / Lark",
+        "expiresIn": "O código QR expira em {{seconds}} segundos",
+        "openLink": "Abrir ligação de autorização",
+        "cancel": "Cancelar autorização",
+        "begin": "Autorizar bot",
+        "retry": "Autorizar novamente",
+        "connecting": "A ligar o bot…"
+      }
     },
     "wechatBot": {
       "title": "WeChat pessoal",

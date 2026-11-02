@@ -4528,7 +4528,7 @@
       "clearAria": "Unbind IM bot",
       "clearConfirm": {
         "title": "Unbind IM bot?",
-        "description": "Unbinding will close the WebSocket connection and remove the locally stored App ID / App Secret / owner openId. To re-enable, you'll need to recreate or re-enter the credentials.",
+        "description": "Unlinking disconnects the bot and removes its locally saved credentials and owner binding. You can authorize again by scanning a QR code or opening a link.",
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
@@ -4543,7 +4543,17 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind"
+      "bind": "Bind",
+      "qr": {
+        "description": "Scan with Feishu or Lark, or open the authorization link. Confirm to connect your bot automatically.",
+        "qrAlt": "Feishu / Lark authorization QR code",
+        "expiresIn": "QR code expires in {{seconds}} seconds",
+        "openLink": "Open authorization link",
+        "cancel": "Cancel authorization",
+        "begin": "Authorize bot",
+        "retry": "Authorize again",
+        "connecting": "Connecting your bot…"
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",

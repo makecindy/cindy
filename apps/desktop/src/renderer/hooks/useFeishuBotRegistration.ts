@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as QRCode from 'qrcode';
 
@@ -24,10 +24,16 @@ export function toQrColors(darkRaw: string, lightRaw: string): { dark: string; l
 
 function getQrColors(): { dark: string; light: string } {
   if (document.documentElement.classList.contains('dark')) {
-    return toQrColors(getCssVar('--settings-btn-primary-text'), getCssVar('--settings-btn-primary-bg'));
+    return toQrColors(
+      getCssVar('--settings-btn-primary-text'),
+      getCssVar('--settings-btn-primary-bg'),
+    );
   }
 
-  return toQrColors(getCssVar('--settings-section-title'), getCssVar('--settings-btn-primary-text'));
+  return toQrColors(
+    getCssVar('--settings-section-title'),
+    getCssVar('--settings-btn-primary-text'),
+  );
 }
 
 export type FeishuBotRegistrationPhase =
@@ -56,6 +62,27 @@ export function useFeishuBotRegistration(
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const generationRef = useRef(0);
+  const activeRunRef = useRef<number | null>(null);
+
+  const invalidateRegistration = useCallback(() => {
+    generationRef.current += 1;
+    if (activeRunRef.current === null) return;
+    activeRunRef.current = null;
+    void window.electronAPI.feishuBot.registrationCancel().catch((err: unknown) => {
+      log.warn('registration cancel failed:', err);
+    });
+  }, []);
+
+  useEffect(() => {
+    setPhase('idle');
+    setVerificationUrl(null);
+    setUserCode(null);
+    setExpiresAt(null);
+    setQrDataUrl(null);
+    setErrorMessage(null);
+    return invalidateRegistration;
+  }, [service, invalidateRegistration]);
 
   useEffect(() => {
     if (!expiresAt || phase !== 'qr') return;
@@ -70,13 +97,17 @@ export function useFeishuBotRegistration(
 
   useEffect(() => {
     if (phase === 'qr' && secondsLeft === 0) {
+      invalidateRegistration();
       setPhase('expired');
     }
-  }, [phase, secondsLeft]);
+  }, [phase, secondsLeft, invalidateRegistration]);
 
   useEffect(() => {
     const off = window.electronAPI.feishuBot.onRegistrationStatus((payload) => {
       if (payload.status === 'pending') return;
+      if (activeRunRef.current === null || payload.status === 'cancelled') return;
+      activeRunRef.current = null;
+      generationRef.current += 1;
 
       if (payload.status === 'success') {
         setPhase('success');
@@ -95,12 +126,6 @@ export function useFeishuBotRegistration(
         return;
       }
 
-      if (payload.status === 'cancelled') {
-        setPhase('cancelled');
-        setErrorMessage(null);
-        return;
-      }
-
       setPhase('error');
       setErrorMessage(payload.error ?? t('logic.errors.registrationFailed'));
     });
@@ -108,43 +133,59 @@ export function useFeishuBotRegistration(
   }, [t]);
 
   const beginRegistration = useCallback(async () => {
-    if (phase === 'starting') return;
+    if (activeRunRef.current !== null) return;
+    const runId = ++generationRef.current;
+    activeRunRef.current = runId;
     setPhase('starting');
     setErrorMessage(null);
     setQrDataUrl(null);
 
     try {
       const result = await window.electronAPI.feishuBot.registrationBegin(service);
+      if (generationRef.current !== runId) return;
       if (!result.ok || !result.verificationUrl || !result.expiresIn) {
+        invalidateRegistration();
         setPhase('error');
         setErrorMessage(result.error ?? t('logic.errors.registrationFailed'));
         return;
       }
 
+      const deadline = Date.now() + result.expiresIn * 1000;
       const dataUrl = await QRCode.toDataURL(result.verificationUrl, {
         margin: 1,
         width: 180,
         color: getQrColors(),
       });
+      if (generationRef.current !== runId) return;
 
       setVerificationUrl(result.verificationUrl);
       setUserCode(result.userCode ?? null);
-      setExpiresAt(Date.now() + result.expiresIn * 1000);
+      setExpiresAt(deadline);
       setNow(Date.now());
       setQrDataUrl(dataUrl);
       setPhase('qr');
     } catch (err) {
+      if (generationRef.current !== runId) return;
+      invalidateRegistration();
       const msg = err instanceof Error ? err.message : String(err);
       log.error('registration begin failed:', msg);
       setPhase('error');
       setErrorMessage(msg);
     }
-  }, [phase, service, t]);
+  }, [invalidateRegistration, service, t]);
 
   const cancelRegistration = useCallback(async () => {
-    await window.electronAPI.feishuBot.registrationCancel();
+    const runId = ++generationRef.current;
+    activeRunRef.current = null;
     setPhase('cancelled');
     setErrorMessage(null);
+    try {
+      await window.electronAPI.feishuBot.registrationCancel();
+    } catch (err) {
+      if (generationRef.current !== runId) return;
+      setPhase('error');
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+    }
   }, []);
 
   return {

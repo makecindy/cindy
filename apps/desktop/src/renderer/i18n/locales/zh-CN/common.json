@@ -4485,7 +4485,7 @@
       "clearAria": "解绑 IM 机器人",
       "clearConfirm": {
         "title": "解绑 IM 机器人？",
-        "description": "解绑后将断开 WebSocket 连接，并删除本机保存的 App ID / App Secret / 主人 openId。如需重新使用，需要重新创建或重新填写凭证。",
+        "description": "解绑后将断开连接，并删除本机保存的机器人凭证及主人绑定。之后可重新扫码或打开链接授权。",
         "confirm": "解绑",
         "cancel": "取消"
       },
@@ -4500,7 +4500,17 @@
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
       },
-      "bind": "绑定"
+      "bind": "绑定",
+      "qr": {
+        "description": "使用飞书或 Lark 扫码，或打开授权链接，确认后自动绑定机器人。",
+        "qrAlt": "飞书 / Lark 授权二维码",
+        "expiresIn": "二维码还有 {{seconds}} 秒过期",
+        "openLink": "打开授权链接",
+        "cancel": "取消授权",
+        "begin": "开始授权",
+        "retry": "重新授权",
+        "connecting": "正在连接机器人…"
+      }
     },
     "wechatBot": {
       "title": "个人微信",

@@ -4581,7 +4581,7 @@
       "clearAria": "Dissocier le bot de messagerie",
       "clearConfirm": {
         "title": "Dissocier le bot de messagerie ?",
-        "description": "La dissociation fermera la connexion WebSocket et supprimera l'App ID, l'App Secret et l'openId du propriétaire stockés localement. Pour le réactiver, vous devrez recréer ou saisir à nouveau les identifiants.",
+        "description": "La dissociation déconnecte le bot et supprime ses identifiants locaux et son association au propriétaire. Vous pouvez l’autoriser à nouveau avec un code QR ou un lien.",
         "confirm": "Dissocier",
         "cancel": "Annuler"
       },
@@ -4596,7 +4596,17 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
-      "bind": "Lier"
+      "bind": "Lier",
+      "qr": {
+        "description": "Scannez le code avec Feishu ou Lark, ou ouvrez le lien d’autorisation. Confirmez pour connecter votre bot automatiquement.",
+        "qrAlt": "Code QR d’autorisation Feishu / Lark",
+        "expiresIn": "Le code QR expire dans {{seconds}} secondes",
+        "openLink": "Ouvrir le lien d’autorisation",
+        "cancel": "Annuler l’autorisation",
+        "begin": "Autoriser le bot",
+        "retry": "Autoriser à nouveau",
+        "connecting": "Connexion du bot…"
+      }
     },
     "wechatBot": {
       "title": "WeChat personnel",
