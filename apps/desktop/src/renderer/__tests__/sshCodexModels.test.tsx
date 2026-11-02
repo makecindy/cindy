@@ -6,6 +6,9 @@ import { loadSshSessionModelSelection } from '@/features/cc-agent/sshSessionMode
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { connectedProvidersForAgent } from '@cindy/model-providers';
+import { mergeSshCodexCatalog } from '@/lib/sshCodexCatalog';
+import { sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const list = vi.fn();
 let statusChanged: (snapshot: RemoteHostSnapshot) => void;
@@ -19,6 +22,16 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 const providers = (model: string) => [sshNativeCodexProvider([sshModel(model)])];
+
+// PR #8444, unit: the mixed catalog's real route resolver must keep a local
+// suspension effective without suspending remote Codex. Discovery tests lacked
+// a same-ID local/remote provider with different suspension states.
+it.each(['claude-code', 'pi'] as const)('does not re-enable suspended local %s routes when merging remote Codex', (agent) => {
+  const local = { ...sshProvider('openai', [sshModel('local-model')], agent), suspended: true };
+  const merged = mergeSshCodexCatalog([local], providers('remote-model'));
+  expect(connectedProvidersForAgent(merged, agent)).toEqual([]);
+  expect(connectedProvidersForAgent(merged, 'codex')[0].models.codex?.[0].id).toBe('remote-model');
+});
 
 // #8413 review regression, unit: discovery tests did not exercise editable draft preferences.
 // The production draft hook feeds both the composer and submission. A same-name local

@@ -216,6 +216,8 @@ export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwit
  * 首页草稿的 props 则由 NewMakerDraftRoute 从同一份全局预设派生,没有“当前会话保护”。
  */
 export interface ModelMemoryAccessors {
+  /** False for engines without a memory store; edits then use the configuration callback. */
+  supportsAgent?: (agent: AgentKind) => boolean;
   getEffort: (agent: AgentKind, providerId: string, modelId: string) => Effort | undefined;
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */

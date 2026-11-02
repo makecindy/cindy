@@ -972,6 +972,7 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
 const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
   const local = (agent: AgentKind) => agent !== 'codex';
   return {
+    supportsAgent: local,
     getEffort: (agent, providerId, modelId) =>
       local(agent) ? getProviderModelEffort(agent, providerId, modelId) : undefined,
     setEffort: (agent, providerId, modelId, effort) => {

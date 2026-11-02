@@ -23,8 +23,8 @@ export function mergeSshCodexCatalog(
     const remote = remoteById.get(provider.id);
     if (remote) {
       remoteById.delete(provider.id);
-      // The host login must not mark a disconnected local connection usable for other engines.
-      merged.push(provider.connected && otherAgents.length > 0
+      // The host login must not enable disconnected or suspended local routes.
+      merged.push(provider.connected && !provider.suspended && otherAgents.length > 0
         ? {
             ...remote,
             agents: [...otherAgents, 'codex'],

@@ -727,7 +727,7 @@ describe('SSH 项目 · 远端 Codex 只替换 Codex 行', () => {
   const localProviders = providersRef.providers;
   beforeEach(() => { providersRef.providers = [...localProviders, piProvider]; });
   afterEach(() => { providersRef.providers = localProviders; });
-  const remote = [sshNativeCodexProvider([sshModel('gpt-remote', { name: 'GPT Remote' })])];
+  const remote = [sshNativeCodexProvider([sshModel('gpt-remote', { name: 'GPT Remote', supportsFastMode: true })])];
   const renderSsh = (sshCodex: React.ComponentProps<typeof ModelSelectorContent>['sshCodex']) => {
     const onUnifiedSelect = vi.fn();
     renderPanel({
@@ -753,6 +753,34 @@ describe('SSH 项目 · 远端 Codex 只替换 Codex 行', () => {
       await act(async () => { fireEvent.click(rowFor(name)); });
       expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining(selection));
     }
+  });
+
+  // PR #8444: a mixed memory accessor exists but intentionally does not store Codex.
+  // Editing a non-selected Codex row must reach the draft, not disappear into a no-op.
+  it.each(['effort', 'fast'] as const)('未选中 Codex 行的 %s 配置应用到草稿', async (setting) => {
+    const onUnifiedSelect = vi.fn();
+    const setEffort = vi.fn();
+    const setFast = vi.fn();
+    renderPanel({
+      vendorKey: 'pi', modelId: 'deepseek-v4', currentProviderId: 'deepseek',
+      unifiedAgents: ['claude-code', 'codex', 'pi'],
+      sshCodex: { providers: remote, status: 'ready', refresh: vi.fn() }, onUnifiedSelect,
+      modelMemory: {
+        supportsAgent: agent => agent !== 'codex',
+        getEffort: () => undefined, getFast: () => undefined, setEffort, setFast,
+      },
+    });
+    const flyout = await openRowFlyout('GPT Remote');
+    await act(async () => {
+      if (setting === 'effort') fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, { key: 'ArrowLeft' });
+      else fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      engine: 'codex', providerId: 'openai', modelId: 'gpt-remote',
+      ...(setting === 'effort' ? { effort: 'low' } : { fast: true }),
+    }));
+    expect(setEffort).not.toHaveBeenCalled();
+    expect(setFast).not.toHaveBeenCalled();
   });
 
   it.each(['loading', 'error'] as const)('远端 Codex 清单 %s 时其余引擎照常可选，提示只占一行', async (status) => {
