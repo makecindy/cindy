@@ -28,7 +28,7 @@ summary: Automations run a prompt (or a script) for you on a schedule, once, or 
 
 **Notes:**
 
-- Automations run locally: they only fire while Cindy is running on this computer (closing the window to the tray is fine). Runs missed while the app was closed are not made up — the next one fires at the next scheduled time. To stop the computer from sleeping, turn on **Keep computer awake** in **Settings > General > App Behavior**.
+- Automations run locally: they only fire while Cindy is running on this computer (closing the window to the tray is fine). Runs missed while the app was closed are not made up — the next one fires at the next scheduled time. To stop the computer from sleeping, turn on **Keep computer awake** in **Settings > General > App Behavior**. It prevents idle sleep only: closing a laptop's lid (with no external display) or choosing Sleep still puts the computer to sleep.
 - Automation runs are normal sessions; in the sidebar they're grouped under the automation's name (marked "Created by automation"), with Run now / Edit / Pause there too.
 - A limited number of runs execute at the same time; others show "Waiting for a slot" and start as soon as one frees up.
 - If several Cindy instances share the same account data on this computer, they coordinate so a due run fires only once.

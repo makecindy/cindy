@@ -44,5 +44,5 @@ Your computer then shows up on the phone automatically. If the phone says the co
 
 **Notes:**
 
-- The phone has no agent of its own: if the computer is asleep, offline, or signed out, its tasks can't run. Turn on **Keep computer awake** in **Settings > General > App Behavior** to keep it reachable.
+- The phone has no agent of its own: if the computer is asleep, offline, or signed out, its tasks can't run. Turn on **Keep computer awake** in **Settings > General > App Behavior** to keep it reachable; it prevents idle sleep only, so a laptop whose lid is closed (with no external display) still sleeps.
 - The Mainland China edition is a separate app with its own accounts (it signs in with a phone number). Use the same edition and the same account on the phone and the computer.
