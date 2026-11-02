@@ -35,6 +35,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
 import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
+import { applySkillFolderFiles, listSkillFolderFiles, type BotSkillFile, type LocalBotSkillFile } from './botSkillFiles.js';
 export { unescapeFrontmatterValue } from './botSkillFrontmatter.js';
 
 /** 一个技能在磁盘上的完整形态。 */
@@ -590,6 +591,26 @@ export async function saveBotSkillSource(userDataDir: string, botId: string, slu
     }
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), source, 'utf8');
+    invalidateBotSkillRuntime(key);
+  });
+  skillWrites.set(key, pending);
+  try { await pending; }
+  finally { if (skillWrites.get(key) === pending) skillWrites.delete(key); }
+}
+
+/** The files beside a skill's SKILL.md, for cloud sync; a read error throws instead of reading as "none". */
+export async function listBotSkillFiles(userDataDir: string, botId: string, slug: string, enabled: boolean): Promise<LocalBotSkillFile[]> {
+  return listSkillFolderFiles(resolveSkillDir(userDataDir, botId, slug, enabled));
+}
+
+/** Restore a skill's files from the cloud, in the skill's write queue. A skill that is gone stays gone. */
+export async function applyBotSkillFiles(userDataDir: string, botId: string, slug: string, files: BotSkillFile[],
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean }): Promise<void> {
+  const key = botSkillRootDir(userDataDir, botId);
+  const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const previous = await readBotSkill(userDataDir, botId, slug);
+    if (!previous) return;
+    await applySkillFolderFiles(resolveSkillDir(userDataDir, botId, slug, previous.enabled !== false), files, fetch, options);
     invalidateBotSkillRuntime(key);
   });
   skillWrites.set(key, pending);

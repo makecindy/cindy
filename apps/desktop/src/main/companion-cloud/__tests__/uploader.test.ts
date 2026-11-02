@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canonicalJson, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
+import { resolveCompanionSkillFiles } from '../skillFiles.js';
+import { canonicalJson, COMPANION_VALUE_MAX_BYTES, createCompanionUploader, valueHash as canonicalHash, type CompanionPreferenceValue } from '../uploader.js';
 import { fakeApi, memoryState, rejection } from './fakes.js';
 
 const profile = (soul: string): CompanionPreferenceValue =>
@@ -173,5 +174,60 @@ describe('companion profile uploader', () => {
 
   it('serialises JSON with sorted keys', () => {
     expect(canonicalJson({ b: 1, a: [{ d: null, c: 'x' }], e: undefined })).toBe('{"a":[{"c":"x","d":null}],"b":1}');
+  });
+});
+
+describe('skill files', () => {
+  const key = 'companion.skill-files.v1:brew';
+  const local = (name: string, sha256 = `sha-${name}`) =>
+    ({ path: `scripts/${name}`, size: 3, sha256, absolutePath: `/skills/brew/scripts/${name}` });
+  const run = async (localFiles: ReturnType<typeof local>[], upload: (file: { name: string }) => Promise<string>, known: Record<string, string> = {}) => {
+    const retain = vi.fn();
+    const values = await resolveCompanionSkillFiles([memory('a.md', 'a'), { key, value: null, localFiles }],
+      { known: sha => known[sha], upload, retain, log: { warn: vi.fn() } });
+    return { values, retain, list: values.find(value => value.key === key)! };
+  };
+
+  it('sends only what the room does not have, and reuses identical content', async () => {
+    const upload = vi.fn(async (file: { name: string }) => `media-${file.name}`);
+    const { values, list, retain } = await run([local('old.py'), local('new.py'), local('copy.py', 'sha-new.py')], upload, { 'sha-old.py': 'media-old' });
+    expect(upload.mock.calls.map(([file]) => file.name)).toEqual(['new.py']);
+    expect(values[0]?.key).toBe('companion.memory.v1:a.md');
+    expect(list.value).toEqual({ slug: 'brew', files: [
+      { path: 'scripts/old.py', size: 3, sha256: 'sha-old.py', mediaId: 'media-old' },
+      { path: 'scripts/new.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' },
+      { path: 'scripts/copy.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' }] });
+    expect(retain).toHaveBeenCalledWith({ 'sha-old.py': 'media-old', 'sha-new.py': 'media-new.py' });
+  });
+
+  it('holds the skill back while a failure may pass, so the upload cycle leaves its cloud list alone', async () => {
+    const { list, retain } = await run([local('a.py')], async () => { throw new Error('ECONNRESET'); });
+    expect(list).toEqual({ key, value: null, unread: true });
+    expect(retain).not.toHaveBeenCalled();
+  });
+
+  it('moves on without a file that can never be sent, and says the list is incomplete', async () => {
+    const upload = vi.fn(async (file: { name: string }) => {
+      if (file.name === 'big.bin') throw new Error('ATTACHMENT_TOO_LARGE');
+      return `media-${file.name}`;
+    });
+    const { list } = await run([local('big.bin'), local('a.py')], upload);
+    expect(list.value).toEqual({ slug: 'brew', omitted: 1, files: [{ path: 'scripts/a.py', size: 3, sha256: 'sha-a.py', mediaId: 'media-a.py' }] });
+  });
+
+  it('stops asking a server without file storage', async () => {
+    const upload = vi.fn(async () => { throw rejection(503, 'MEDIA_STORAGE_UNAVAILABLE'); });
+    const { list } = await run([local('a.py'), local('b.py')], upload);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(list.value).toEqual({ slug: 'brew', omitted: 2, files: [] });
+  });
+
+  it('keeps the list inside one value', async () => {
+    const many = Array.from({ length: 800 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`));
+    const { list } = await run(many, async file => `media-${file.name}`);
+    const value = list.value as { files: unknown[]; omitted: number };
+    expect(Buffer.byteLength(canonicalJson(value))).toBeLessThanOrEqual(COMPANION_VALUE_MAX_BYTES);
+    expect(value.files.length + value.omitted).toBe(800);
+    expect(value.omitted).toBeGreaterThan(0);
   });
 });

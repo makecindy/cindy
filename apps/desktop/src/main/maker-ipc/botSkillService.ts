@@ -27,11 +27,14 @@ import {
   readBotSkill,
   readBotSkillSource,
   listBotSkillSources,
+  applyBotSkillFiles,
+  listBotSkillFiles,
   saveBotSkill,
   saveBotSkillSource,
   setBotSkillEnabled,
   type BotSkillSummary,
 } from './botSkillStore.js';
+import type { BotSkillFile, LocalBotSkillFile } from './botSkillFiles.js';
 import type {
   BotSkillDetail,
   BotSkillSummary as SharedBotSkillSummary,
@@ -350,6 +353,22 @@ export async function saveBotSkillSourceForBot(botId: string, slug: string, sour
   options: { enabled?: boolean; expectedUpdatedAt?: string } = {}, deps: BotSkillServiceDeps = {}): Promise<void> {
   const boundary = captureOwnerBoundary(deps);
   await saveBotSkillSource(await skillHomeOf(deps, botId, boundary), botId, slug, source, options);
+  assertOwnerBoundary(deps, boundary);
+}
+
+/** The files beside one own skill's SKILL.md (cloud companions). */
+export async function listBotSkillFilesForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await listBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** Restore the files beside one own skill's SKILL.md (cloud companions). */
+export async function applyBotSkillFilesForBot(botId: string, slug: string, files: BotSkillFile[],
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean }, deps: BotSkillServiceDeps = {}): Promise<void> {
+  const boundary = captureOwnerBoundary(deps);
+  await applyBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, files, fetch, options);
   assertOwnerBoundary(deps, boundary);
 }
 

@@ -46,6 +46,8 @@ const bot = z.object({
    * after the move, then cleared by the owner.
    */
   arrivalNotices: z.array(z.enum(['permissions', 'model'])).optional(),
+  /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
+  skillFileMedia: z.record(z.string(), z.string()).optional(),
   /** Deleted here while this computer was the home; disable the cloud actor until it succeeds. */
   retirePending: z.boolean().optional(),
 });

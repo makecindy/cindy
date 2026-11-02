@@ -13,9 +13,10 @@ import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import type { CompanionHistoryAttachment, CompanionMaterializeHost, CompanionWriteFence } from './materialize.js';
 import type { CompanionMediaUpload, CompanionMirrorAttachment } from './mirror.js';
 import { readAllRoomMessages, readRoomPage } from './room.js';
+import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import { isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
 } from './uploader.js';
 
@@ -94,7 +95,7 @@ export function mergedTodoId(keepBotId: string, sourceActorId: string, todoId: s
 
 export async function mergeCompanionsInto(input: {
   api: CompanionApi;
-  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
+  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'applySkillFiles' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
   keep: CompanionMergeActor;
   from: CompanionMergeActor[];
   humanActorId: string;
@@ -142,6 +143,12 @@ export async function mergeCompanionsInto(input: {
       if (target !== slug) summary.renamed.push(target);
       fence.assertCurrent();
       await host.saveSkill(keep.externalId, target, content, record(row.value)?.enabled !== false, fence);
+      // The kept companion's home sends these to its own room with its next upload.
+      const list = parseCompanionSkillFiles(prefs.find(candidate => candidate.key === `${COMPANION_SKILL_FILES_PREFIX}${slug}`)?.value);
+      if (list && host.applySkillFiles && input.media) {
+        const fetch = companionSkillFileFetch(await input.roomOf(source), list.files, input.media.download, input.log);
+        await host.applySkillFiles(keep.externalId, target, list.files, fetch, { removeOthers: false }, fence);
+      }
       summary.skills += 1;
     }
 

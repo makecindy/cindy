@@ -3,12 +3,15 @@
  * (credentials-and-local-storage.md「测试生成物」)。
  */
 
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  applyBotSkillFiles,
+  listBotSkillFiles,
   BOT_SKILL_MAX_BODY_BYTES,
   BotSkillStoreError,
   botSkillRootDir,
@@ -449,5 +452,76 @@ describe('strict skill reads (cloud companions)', () => {
     } finally {
       await fs.chmod(dir, 0o700);
     }
+  });
+});
+
+describe('skill files for cloud companions', () => {
+  const skillDir = () => path.join(botSkillsDir(userDataDir, 'bot_a'), 'brew');
+  const write = async (relative: string, content: string, mode = 0o644) => {
+    const file = path.join(skillDir(), relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
+    await fs.chmod(file, mode);
+  };
+  const source = async (content: string) => {
+    const file = path.join(userDataDir, `download-${createHash('sha256').update(content).digest('hex')}`);
+    await fs.writeFile(file, content);
+    return file;
+  };
+  const sha = (content: string) => createHash('sha256').update(content).digest('hex');
+  const entry = (relative: string, content: string, executable = false) =>
+    ({ path: relative, size: content.length, sha256: sha(content), ...(executable ? { executable: true as const } : {}) });
+
+  beforeEach(async () => { await saveBotSkillSource(userDataDir, 'bot_a', 'brew', '---\nname: "brew"\n---\n\nsteps\n'); });
+
+  it('lists what belongs to the skill, leaving hidden files, dependencies and keys behind', async () => {
+    await write('scripts/run.sh', '#!/bin/sh\n', 0o755);
+    await write('references/a.md', 'a');
+    await write('.env', 'TOKEN=1');
+    await write('node_modules/x/index.js', 'x');
+    await write('deploy.pem', 'secret');
+    await fs.symlink('/etc/hosts', path.join(skillDir(), 'link'));
+    const files = await listBotSkillFiles(userDataDir, 'bot_a', 'brew', true);
+    expect(files.map(file => file.path)).toEqual(['references/a.md', 'scripts/run.sh']);
+    expect(files[1]).toMatchObject({ sha256: sha('#!/bin/sh\n'), executable: true });
+    expect(files[0]?.executable).toBeUndefined();
+  });
+
+  it('restores files with their executable bit and removes the ones the home no longer has', async () => {
+    await write('old.md', 'old');
+    await write('.env', 'TOKEN=1');
+    const content = '#!/bin/sh\n';
+    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('scripts/run.sh', content, true)], async () => source(content), { removeOthers: true });
+    const restored = path.join(skillDir(), 'scripts/run.sh');
+    expect(await fs.readFile(restored, 'utf8')).toBe(content);
+    if (process.platform !== 'win32') expect((await fs.stat(restored)).mode & 0o111).not.toBe(0);
+    await expect(fs.access(path.join(skillDir(), 'old.md'))).rejects.toThrow();
+    expect(await fs.readFile(path.join(skillDir(), '.env'), 'utf8')).toBe('TOKEN=1');
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toContain('steps');
+  });
+
+  it('keeps the local copy when a file is gone for good, its bytes are wrong, or the list is incomplete', async () => {
+    await write('a.md', 'local a');
+    await write('b.md', 'local b');
+    await write('c.md', 'local c');
+    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('a.md', 'cloud a'), entry('b.md', 'cloud b')],
+      async file => (file.path === 'a.md' ? null : source('tampered')), { removeOthers: false });
+    expect(await fs.readFile(path.join(skillDir(), 'a.md'), 'utf8')).toBe('local a');
+    expect(await fs.readFile(path.join(skillDir(), 'b.md'), 'utf8')).toBe('local b');
+    expect(await fs.readFile(path.join(skillDir(), 'c.md'), 'utf8')).toBe('local c');
+  });
+
+  it('never writes outside the skill folder', async () => {
+    const outside = await fs.mkdtemp(path.join(userDataDir, 'outside-'));
+    await fs.symlink(outside, path.join(skillDir(), 'linked'));
+    const fetch = async () => source('x');
+    for (const unsafe of ['../escape.md', '/abs.md', 'a\\b.md', '.hidden/a.md', 'SKILL.md', 'node_modules/a.js']) {
+      await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(unsafe, 'x')], fetch, { removeOthers: false });
+    }
+    await expect(applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('linked/a.md', 'x')], fetch, { removeOthers: false }))
+      .rejects.toThrow('SKILL_FILE_PATH_BLOCKED');
+    expect(await fs.readdir(outside)).toEqual([]);
+    await expect(fs.access(path.join(botSkillsDir(userDataDir, 'bot_a'), 'escape.md'))).rejects.toThrow();
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toContain('steps');
   });
 });

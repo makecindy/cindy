@@ -11,10 +11,12 @@ import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
 import { readAllRoomMessages } from './room.js';
+import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
+import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import type { CompanionCloudState } from './state.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -61,6 +63,9 @@ export interface CompanionMaterializeHost {
   readSkill: (botId: string, slug: string) => Promise<string | null>;
   saveSkill: (botId: string, slug: string, content: string, enabled: boolean, fence: CompanionWriteFence) => Promise<void>;
   removeSkill: (botId: string, slug: string, fence: CompanionWriteFence) => Promise<void>;
+  /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. */
+  applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
+    options: { removeOthers: boolean }, fence: CompanionWriteFence) => Promise<void>;
   /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
   applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
@@ -219,6 +224,25 @@ export async function materializeCompanion(input: {
         // Always written: also sets the cloud's enabled state, even when the body is unchanged.
         await step(() => host.saveSkill(botId, slug, content, record(value)?.enabled !== false, fence));
         applied.set(key, { hash: valueHash(value), revision: row.revision });
+      });
+    }
+  }
+
+  // After every SKILL.md: the files go into folders that now exist. Each skill's list says exactly
+  // what its folder holds; a skill without a list (an older home) keeps the files it has here.
+  if (host.applySkillFiles && input.download) {
+    for (const [key, row] of prefs) {
+      if (!key.startsWith(COMPANION_SKILL_FILES_PREFIX)) continue;
+      const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
+      const list = row.value === null ? { files: [], omitted: 0 } : parseCompanionSkillFiles(row.value);
+      if (!list) continue;
+      await apply('skill-files', async () => {
+        const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
+        await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: list.omitted === 0 }, fence));
+        state.update(botId, actor.id, entry => {
+          entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.map(file => [file.sha256, file.mediaId])) };
+        });
+        applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
       });
     }
   }

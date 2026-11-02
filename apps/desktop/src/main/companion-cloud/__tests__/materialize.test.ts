@@ -447,3 +447,59 @@ describe('materializeCompanion', () => {
   });
 });
 
+describe('skill files on take-over', () => {
+  const skill = { key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 'steps' } };
+  const file = { path: 'run.sh', size: 2, sha256: 'abc', mediaId: 'media-1', executable: true };
+  const take = async (prefs: Array<{ key: string; value: unknown }>, download = vi.fn(async () => ({ name: 'run.sh', category: 'file', mimeType: 'application/octet-stream', size: 2, url: null, path: '/downloads/run.sh' }))) => {
+    const { api } = cloud([profilePref, ...prefs]);
+    const local = fakeLocal();
+    const order: string[] = [];
+    const fetched: Array<string | null> = [];
+    const applySkillFiles = vi.fn(async (_bot: string, _slug: string, files: Array<{ path: string }>, fetch: (f: never) => Promise<string | null>, _options: { removeOthers: boolean }, _fence: unknown) => {
+      order.push('files');
+      for (const entry of files) fetched.push(await fetch(entry as never));
+    });
+    const { state } = memoryState();
+    const run = materializeCompanion({ api, state, host: { ...local.host, applySkillFiles, saveSkill: async () => { order.push('skill'); } } as never, actor, roomId: async () => ROOM, download });
+    return { run, state, applySkillFiles, order, fetched, download };
+  };
+
+  it('fills the folder after SKILL.md and remembers the upload, so the new home does not send it again', async () => {
+    const list = { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file] } };
+    const { run, state, applySkillFiles, order, fetched, download } = await take([list, skill]);
+    await run;
+    expect(order).toEqual(['skill', 'files']);
+    expect(applySkillFiles).toHaveBeenCalledWith('bot_mia', 'brew', [file], expect.any(Function), { removeOthers: true }, expect.anything());
+    expect(download).toHaveBeenCalledWith(ROOM, 'media-1');
+    expect(fetched).toEqual(['/downloads/run.sh']);
+    expect(state.bot('bot_mia')?.skillFileMedia).toEqual({ abc: 'media-1' });
+    expect(state.bot('bot_mia')?.prefs['companion.skill-files.v1:brew']).toMatchObject({ hash: valueHash(list.value), local: true });
+  });
+
+  it('removes nothing on an incomplete list, and empties the folder on a tombstone', async () => {
+    const partial = await take([skill, { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file], omitted: 1 } }]);
+    await partial.run;
+    expect(partial.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: false });
+    const removed = await take([skill, { key: 'companion.skill-files.v1:brew', value: null }]);
+    await removed.run;
+    expect(removed.applySkillFiles.mock.calls[0]?.slice(2, 3)).toEqual([[]]);
+    expect(removed.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: true });
+  });
+
+  it('leaves a skill alone when an older home sent no list', async () => {
+    const { run, applySkillFiles } = await take([skill]);
+    await run;
+    expect(applySkillFiles).not.toHaveBeenCalled();
+  });
+
+  it('retries a download that may still work, and takes over without one that never will', async () => {
+    const list = { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file] } };
+    const failing = await take([skill, list], vi.fn(async () => { throw new Error('ECONNRESET'); }));
+    await expect(failing.run).rejects.toThrow('RESTORE_INCOMPLETE');
+    expect(failing.state.bot('bot_mia')?.demoted).toBe(true);
+    const gone = await take([skill, list], vi.fn(async () => { throw Object.assign(new Error('MEDIA_NOT_FOUND'), { status: 404 }); }));
+    await gone.run;
+    expect(gone.fetched).toEqual([null]);
+    expect(gone.state.bot('bot_mia')?.demoted).toBeUndefined();
+  });
+});
