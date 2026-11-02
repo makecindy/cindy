@@ -5,7 +5,9 @@
 #undef main
 #import <objc/runtime.h>
 #include <assert.h>
+#include <errno.h>
 #include <spawn.h>
+#include <sys/event.h>
 #include <sys/wait.h>
 extern char **environ;
 
@@ -137,18 +139,33 @@ static void testFirstDisplayQueryDoesNotHang(const char *self) {
     fprintf(stderr, "FAIL first display query: spawn failed (%d)\n", spawnErr);
     exit(1);
   }
-  int status = 0, ticks = 0;
-  for (;;) {
-    pid_t r = waitpid(pid, &status, WNOHANG);
-    if (r == pid) break;
-    if (ticks++ >= 50) { // 5s budget: a hung display query fails here.
-      if (pid > 0) kill(pid, SIGKILL);
-      waitpid(pid, &status, 0);
-      fprintf(stderr, "FAIL first display query: fresh process hung\n");
-      exit(1);
-    }
-    usleep(100000);
+  int status = 0;
+  // Event-driven bounded wait for the child's exit (kqueue NOTE_EXIT); no
+  // fixed sleeps. The 5s budget is only consumed when the display query
+  // hangs, which is exactly the failure this test exists to catch.
+  int kq = kqueue();
+  struct kevent change;
+  EV_SET(&change, pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+  if (kq < 0 || kevent(kq, &change, 1, NULL, 0, NULL) != 0) {
+    fprintf(stderr, "FAIL first display query: kqueue setup failed\n");
+    if (pid > 0) kill(pid, SIGKILL);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    exit(1);
   }
+  struct timespec budget = {5, 0};
+  struct kevent event;
+  int ready;
+  do { // an EINTR retry may only relax the bound marginally; fine for a test.
+    ready = kevent(kq, NULL, 0, &event, 1, &budget);
+  } while (ready < 0 && errno == EINTR);
+  close(kq);
+  if (ready != 1) { // timeout: the display query hung.
+    if (pid > 0) kill(pid, SIGKILL);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    fprintf(stderr, "FAIL first display query: fresh process hung\n");
+    exit(1);
+  }
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {} // reap
   assert(WIFEXITED(status) && WEXITSTATUS(status) == 2);
   puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
 }
