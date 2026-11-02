@@ -7,9 +7,15 @@
  * the device's own buttons, how the picture is turned and sized, volume,
  * settings and leaving. Glass is never faded (UIGlassEffect hollows out when
  * its opacity animates), so idle and opening use movement and scale only.
+ *
+ * With Liquid Glass the panel is laid out like Control Center: the screen
+ * behind blurs and darkens, and every control is its own interactive glass
+ * piece (one container, so neighbours blend) instead of flat fills on a glass
+ * slab, which would put glass on glass. It is always dark there, like the
+ * scrim under it. Without Liquid Glass it stays a frosted card.
  */
 import SegmentedControl from "@expo/ui/community/segmented-control";
-import { GlassView } from "expo-glass-effect";
+import { GlassContainer, GlassView } from "expo-glass-effect";
 import {
   LogOut,
   Monitor,
@@ -18,7 +24,15 @@ import {
   Tablet,
   type LucideIcon,
 } from "lucide-react-native";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Animated,
   PanResponder,
@@ -38,6 +52,7 @@ import {
   radius,
   spacing,
   textStyles,
+  ThemeOverrideProvider,
   useTheme,
   useThemedStyles,
   type ThemeColors,
@@ -112,6 +127,9 @@ const ACTION = 52;
 const PICTURES: LiveScreenPicture[] = ["fit", "fill", "zoom"];
 
 type Side = "left" | "right";
+
+/** Whether the open panel draws its controls as separate Liquid Glass. */
+const PanelGlass = createContext(false);
 type Bounds = { left: number; right: number; top: number; bottom: number };
 
 export function LiveScreenControls(props: LiveScreenControlsProps) {
@@ -120,6 +138,7 @@ export function LiveScreenControls(props: LiveScreenControlsProps) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const reduceMotion = useReduceMotionEnabled();
+  const liquidGlass = useLiquidGlassAvailable();
   const [open, setOpen] = useState(false);
   const bounds = useMemo<Bounds>(
     () => ({
@@ -279,7 +298,7 @@ export function LiveScreenControls(props: LiveScreenControlsProps) {
             { transform: position.getTranslateTransform() },
           ]}
         >
-          <Glass style={styles.buttonGlass}>
+          <Glass interactive style={styles.buttonGlass}>
             <DeviceIcon
               size={iconSize.xl}
               strokeWidth={iconStroke.regular}
@@ -289,13 +308,17 @@ export function LiveScreenControls(props: LiveScreenControlsProps) {
         </Animated.View>
       )}
       {open && !hidden && (
-        <LiveScreenPanel
-          {...props}
-          anchor={anchor}
-          bounds={bounds}
-          onClose={close}
-          animated={reduceMotion === false}
-        />
+        <ThemeOverrideProvider mode={liquidGlass ? "dark" : null}>
+          <PanelGlass.Provider value={liquidGlass}>
+            <LiveScreenPanel
+              {...props}
+              anchor={anchor}
+              bounds={bounds}
+              onClose={close}
+              animated={reduceMotion === false}
+            />
+          </PanelGlass.Provider>
+        </ThemeOverrideProvider>
       )}
     </View>
   );
@@ -326,6 +349,7 @@ function LiveScreenPanel({
   const window = useWindowDimensions();
   const { colors, mode } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const glass = useContext(PanelGlass);
   const [height, setHeight] = useState(0);
   const scale = useRef(new Animated.Value(animated ? 0.92 : 1)).current;
   useEffect(() => {
@@ -371,22 +395,25 @@ function LiveScreenPanel({
 
   const footerControls = (
     <View style={styles.footer}>
-      <FooterButton
+      <Tile
         icon={SlidersHorizontal}
         label={labels.settings}
         color={colors.textPrimary}
         onPress={run(onSettings)}
+        style={styles.footerTile}
         testID="liveScreen.settings"
       />
-      <FooterButton
+      <Tile
         icon={LogOut}
         label={labels.exit}
         color={colors.destructive}
         onPress={run(onExit)}
+        style={styles.footerTile}
         testID="liveScreen.exit"
       />
     </View>
   );
+  const Slab = glass ? GlassContainer : Glass;
 
   return (
     <Pressable
@@ -396,6 +423,7 @@ function LiveScreenPanel({
       style={StyleSheet.absoluteFill}
       testID="liveScreen.panelBackdrop"
     >
+      {glass && <BlurBackdrop />}
       <Animated.View
         onLayout={({ nativeEvent }) => setHeight(nativeEvent.layout.height)}
         style={[
@@ -418,7 +446,16 @@ function LiveScreenPanel({
           onAccessibilityEscape={onClose}
           testID="liveScreen.panel"
         >
-          <Glass style={[styles.panelGlass, wide && styles.panelWide]}>
+          <Slab
+            // Glass pieces moved by a relayout (one column to two) can lose
+            // their effect: build them afresh for each shape instead.
+            key={wide ? "wide" : "tall"}
+            spacing={spacing.sm}
+            style={[
+              glass ? styles.panelOpen : styles.panelGlass,
+              wide && styles.panelWide,
+            ]}
+          >
             <View style={wide ? styles.column : styles.stack}>
               <View style={styles.header}>
                 <View style={[styles.dot, { backgroundColor: dot }]} />
@@ -446,39 +483,21 @@ function LiveScreenPanel({
               {wide && <View style={styles.spacer} />}
               {wide && footerControls}
             </View>
-            {wide && <View style={styles.verticalDivider} />}
+            {wide && !glass && <View style={styles.verticalDivider} />}
             <View style={wide ? styles.column : styles.stack}>
               {orientation && (
                 <Row label={labels.orientation}>
                   <View style={styles.volume}>
                     {orientation.onFollow && (
-                      <Pressable
-                        accessibilityRole="switch"
-                        accessibilityLabel={labels.follow}
-                        accessibilityState={{
-                          checked: orientation.following === true,
-                          disabled: inputDisabled,
-                        }}
+                      <Tile
+                        role="switch"
+                        on={orientation.following === true}
+                        label={labels.follow}
                         disabled={inputDisabled}
                         onPress={orientation.onFollow}
-                        style={({ pressed }) => [
-                          styles.follow,
-                          orientation.following && styles.followOn,
-                          pressed && styles.pressed,
-                          inputDisabled && styles.disabled,
-                        ]}
+                        style={styles.follow}
                         testID="liveScreen.follow"
-                      >
-                        <Text
-                          numberOfLines={1}
-                          style={[
-                            styles.followLabel,
-                            orientation.following && styles.followLabelOn,
-                          ]}
-                        >
-                          {labels.follow}
-                        </Text>
-                      </Pressable>
+                      />
                     )}
                     {[orientation.rotate.left, orientation.rotate.right].map(
                       (action) => (
@@ -496,7 +515,7 @@ function LiveScreenPanel({
                 <SegmentedControl
                   values={PICTURES.map((value) => labels.pictures[value])}
                   selectedIndex={PICTURES.indexOf(picture.value)}
-                  appearance={mode}
+                  appearance={glass ? "dark" : mode}
                   style={styles.segments}
                   onChange={({ nativeEvent }) => {
                     const value = PICTURES[nativeEvent.selectedSegmentIndex];
@@ -521,10 +540,10 @@ function LiveScreenPanel({
                   </View>
                 </Row>
               )}
-              {!wide && <View style={styles.divider} />}
+              {!wide && !glass && <View style={styles.divider} />}
               {!wide && footerControls}
             </View>
-          </Glass>
+          </Slab>
         </Pressable>
       </Animated.View>
     </Pressable>
@@ -542,6 +561,7 @@ function ActionButton({
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const glass = useContext(PanelGlass);
   const Icon = action.icon;
   return (
     <Pressable
@@ -552,18 +572,18 @@ function ActionButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.action,
-        pressed && styles.pressed,
+        pressed && !glass && styles.pressed,
         disabled && styles.disabled,
       ]}
       testID={`liveScreen.action.${action.key}`}
     >
-      <View style={styles.actionCircle}>
+      <Surface style={styles.actionCircle}>
         <Icon
           size={iconSize.xl}
           strokeWidth={iconStroke.regular}
           color={colors.textPrimary}
         />
-      </View>
+      </Surface>
       <Text numberOfLines={1} style={styles.actionLabel}>
         {action.label}
       </Text>
@@ -579,29 +599,117 @@ function ChipButton({
   action: LiveScreenAction;
   disabled: boolean;
 }) {
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const Icon = action.icon;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={action.label}
-      accessibilityState={{ disabled }}
+    <Tile
+      icon={action.icon}
+      label={action.label}
+      iconOnly
       disabled={disabled}
       onPress={action.onPress}
+      style={styles.chip}
+      testID={`liveScreen.${action.key}`}
+    />
+  );
+}
+
+/**
+ * One control: a glass piece of its own with Liquid Glass (the system lights
+ * and stretches it under the finger), a filled pill otherwise. `on` marks a
+ * switch that is on with the prominent fill.
+ */
+function Tile({
+  icon: Icon,
+  label,
+  iconOnly = false,
+  color,
+  role = "button",
+  on,
+  disabled = false,
+  onPress,
+  style,
+  testID,
+}: {
+  icon?: LucideIcon;
+  label: string;
+  iconOnly?: boolean;
+  color?: string;
+  role?: "button" | "switch";
+  on?: boolean;
+  disabled?: boolean;
+  onPress(): void;
+  style: object;
+  testID: string;
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const glass = useContext(PanelGlass);
+  const foreground = on ? colors.ctaText : (color ?? colors.textPrimary);
+  return (
+    <Pressable
+      accessibilityRole={role}
+      accessibilityLabel={label}
+      accessibilityState={
+        role === "switch" ? { checked: on === true, disabled } : { disabled }
+      }
+      disabled={disabled}
+      onPress={onPress}
       style={({ pressed }) => [
-        styles.volumeButton,
-        pressed && styles.pressed,
+        style,
+        pressed && !glass && styles.pressed,
         disabled && styles.disabled,
       ]}
-      testID={`liveScreen.${action.key}`}
+      testID={testID}
     >
-      <Icon
-        size={iconSize.lg}
-        strokeWidth={iconStroke.regular}
-        color={colors.textPrimary}
-      />
+      <Surface on={on} style={styles.tileSurface}>
+        {Icon && (
+          <Icon
+            size={iconSize.lg}
+            strokeWidth={iconStroke.regular}
+            color={foreground}
+          />
+        )}
+        {!iconOnly && (
+          <Text
+            numberOfLines={1}
+            style={[styles.tileLabel, { color: foreground }]}
+          >
+            {label}
+          </Text>
+        )}
+      </Surface>
     </Pressable>
+  );
+}
+
+/** The fill under one control: interactive Liquid Glass, or a chip fill. */
+function Surface({
+  on,
+  style,
+  children,
+}: {
+  on?: boolean;
+  style: object;
+  children: ReactNode;
+}) {
+  const { colors, mode } = useTheme();
+  const glass = useContext(PanelGlass);
+  return glass ? (
+    <GlassView
+      colorScheme={mode}
+      glassEffectStyle="regular"
+      isInteractive
+      tintColor={on ? colors.cta : undefined}
+      style={style}
+    >
+      {children}
+    </GlassView>
+  ) : (
+    <View
+      style={[style, { backgroundColor: on ? colors.cta : colors.surfaceChip }]}
+    >
+      {children}
+    </View>
   );
 }
 
@@ -617,40 +725,27 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function FooterButton({
-  icon: Icon,
-  label,
-  color,
-  onPress,
-  testID,
-}: {
-  icon: LucideIcon;
-  label: string;
-  color: string;
-  onPress(): void;
-  testID: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.footerButton, pressed && styles.pressed]}
-      testID={testID}
-    >
-      <Icon size={iconSize.lg} strokeWidth={iconStroke.regular} color={color} />
-      <Text style={[styles.footerLabel, { color }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 /** System Liquid Glass where available; otherwise the app's blurred sheet. */
-function Glass({ style, children }: { style: object; children: ReactNode }) {
+function Glass({
+  interactive = false,
+  style,
+  children,
+}: {
+  interactive?: boolean;
+  spacing?: number;
+  style: object;
+  children: ReactNode;
+}) {
   const { colors, mode } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const liquidGlass = useLiquidGlassAvailable();
   return liquidGlass ? (
-    <GlassView colorScheme={mode} glassEffectStyle="regular" style={style}>
+    <GlassView
+      colorScheme={mode}
+      glassEffectStyle="regular"
+      isInteractive={interactive}
+      style={style}
+    >
       {children}
     </GlassView>
   ) : (
@@ -708,6 +803,8 @@ const makeStyles = (colors: ThemeColors) =>
       paddingHorizontal: spacing.lg,
       gap: spacing.md,
     },
+    // Liquid Glass: no slab, only the pieces over the blurred screen.
+    panelOpen: { paddingVertical: spacing.sm, gap: spacing.md },
     panelWide: { flexDirection: "row", gap: spacing.lg },
     stack: { gap: spacing.md },
     column: { flex: 1, gap: spacing.md },
@@ -735,7 +832,7 @@ const makeStyles = (colors: ThemeColors) =>
       width: ACTION,
       height: ACTION,
       borderRadius: radius.pill,
-      backgroundColor: colors.surfaceChip,
+      overflow: "hidden",
       alignItems: "center",
       justifyContent: "center",
     },
@@ -750,43 +847,25 @@ const makeStyles = (colors: ThemeColors) =>
     rowControl: { flex: 1 },
     segments: { height: spacing.xxl },
     volume: { flexDirection: "row", gap: spacing.sm },
-    follow: {
-      flex: 2,
-      height: spacing.xxl,
+    follow: { flex: 2, height: spacing.xxl },
+    chip: { flex: 1, height: spacing.xxl },
+    tileSurface: {
+      flex: 1,
+      flexDirection: "row",
+      gap: spacing.sm,
       borderRadius: radius.pill,
-      backgroundColor: colors.surfaceChip,
+      overflow: "hidden",
       alignItems: "center",
       justifyContent: "center",
       paddingHorizontal: spacing.sm,
     },
-    followOn: { backgroundColor: colors.cta },
-    followLabel: {
-      ...textStyles.bodySmall,
-      fontWeight: fontWeight.medium,
-      color: colors.textPrimary,
-    },
-    followLabelOn: { color: colors.ctaText },
-    volumeButton: {
-      flex: 1,
-      height: spacing.xxl,
-      borderRadius: radius.pill,
-      backgroundColor: colors.surfaceChip,
-      alignItems: "center",
-      justifyContent: "center",
-    },
+    tileLabel: { ...textStyles.bodySmall, fontWeight: fontWeight.medium },
     divider: {
       height: StyleSheet.hairlineWidth,
       backgroundColor: colors.border,
     },
-    footer: { flexDirection: "row", justifyContent: "space-between" },
-    footerButton: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.sm,
-      minHeight: BUTTON - spacing.xs,
-      paddingHorizontal: spacing.xs,
-    },
-    footerLabel: { ...textStyles.body, fontWeight: fontWeight.medium },
+    footer: { flexDirection: "row", gap: spacing.sm },
+    footerTile: { flex: 1, height: BUTTON - spacing.xs },
     zoomBar: {
       position: "absolute",
       left: 0,

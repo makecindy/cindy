@@ -45,6 +45,7 @@ vi.mock("@/session/useLiquidGlassAvailable", () => ({
 vi.mock("@/session/BlurBackdrop", () => ({ BlurBackdrop: () => null }));
 vi.mock("expo-glass-effect", async () => ({
   GlassView: (await import("react-native")).View,
+  GlassContainer: (await import("react-native")).View,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: storage,
@@ -376,6 +377,7 @@ vi.mock("@/theme", async () => {
   return {
     ...tokens,
     monoFont: "Menlo",
+    ThemeOverrideProvider: ({ children }: any) => children,
     useTheme: () => ({
       colors:
         fixture.themeMode === "dark" ? tokens.darkColors : tokens.lightColors,
