@@ -5285,14 +5285,14 @@ let applyPiImModelSelectionHolder: ((
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }>) | null = null;
+) => Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }>) | null = null;
 
 /** IM model cards already own the send lock; reuse Desktop's window-safe Pi transaction. */
 export async function applyPiImModelSelectionUnderLock(
   sessionId: string, model: string, providerId: string | null | undefined,
   previousRoute: { model: string; providerId: string | null } | null,
   options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
-): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null }> {
+): Promise<{ status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null; effectiveModelId?: string }> {
   if (!applyPiImModelSelectionHolder) throw new Error('Pi model selection is not ready');
   return applyPiImModelSelectionHolder(sessionId, model, providerId, previousRoute, options);
 }
@@ -16946,6 +16946,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     superseded: boolean;
     generation?: number;
     effectiveProviderId?: string | null;
+    effectiveModelId?: string;
     contextWindowConfirmationRequired?: number;
     contextTokensForConfirmation?: number;
   }> = async () => {
@@ -23214,6 +23215,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
     const requestedModelId = model;
+    let effectiveModelId = requestedModelId;
     const normalizedWireArgs =
       internalOptions.source === 'user'
         ? normalizeDeviceLinkSetModelWireArgs(
@@ -23437,11 +23439,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Existing sessions may retain the old bare ID after the same provider
       // publishes it with a bridge namespace. Only migrate an unchanged route
       // when that provider and engine expose exactly one matching replacement.
-      if (model === runtimeStatus.model && currentProviderId &&
+      if (routeExplicit && model === runtimeStatus.model && currentProviderId &&
           guardProviderId === currentProviderId && !sshCodexProviders) {
         const sourceProvider = runtimeProviders.find(p => p.id === currentProviderId);
         const replacement = uniqueRenamedSessionModelId(sourceProvider, model, currentAgentKind);
-        if (replacement) model = replacement;
+        if (replacement) model = effectiveModelId = replacement;
       }
       const currentSourceId = currentProviderId ?? actualSourceIdForModel(
         runtimeProviders, null, currentModelId, currentAgentKind,
@@ -24776,7 +24778,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw err;
       }
     };
-    return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
+    const result = await (internalOptions.sessionLockHeld
+      ? applyLocked() : withSendToSessionLock(sessionId, applyLocked));
+    return Object.assign(result, { effectiveModelId });
   };
   recoverRenamedSessionModelOnSend = async (sessionId) => {
     if (agentSwitchPending.get(sessionId)) return;
@@ -24855,6 +24859,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       status: result.deferred ? 'deferred' : 'applied',
       generation: result.generation,
       effectiveProviderId: result.effectiveProviderId,
+      effectiveModelId: result.effectiveModelId,
     };
   };
   applySessionRuntimeSelection = (sessionId, model, providerId, selection, options) =>
