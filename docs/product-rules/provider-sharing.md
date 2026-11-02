@@ -203,6 +203,9 @@ Desktop 与 Mobile 使用同一写法。
 组所在电脑本机没登录时组不会选它，任务照样分给组里其他电脑，所以受邀者直接选用这条分享时，模型列表、
 定时任务发送前的核对、协同 Worker 与插件的模型来源都照常列出；组里一台都不能用时，发送时由分享者电脑
 提示没有电脑能运行。
+分享者的启动入口在组分配前照常核对成员、供应商与模型授权，但不以本机登录状态拒绝整组；
+选中本机、续接本机或启动失败换回本机时，在实际启动前重新核对本机连接状态。已分配、已中转与受托
+执行不进入这项组预检。分享者与受邀者均更新才完整生效；只更新受邀者仍可能被旧分享者的启动检查拒绝。
 受邀者自己的组是例外：把这条分享当组内电脑时仍看组所在电脑本机那一份，本机没登录就不能用，因为组分过去的
 任务在那台直接运行，不再分给它自己组里的电脑。
 受邀者读到带组规模（`groupSize`）的分享目录时由 `scrubSharedProvider` 统一处理，桌面 Renderer 直读、
@@ -213,6 +216,8 @@ Desktop 与 Mobile 使用同一写法。
 `groupMember`）与 `apps/desktop/src/main/maker-ipc/controlledModelCatalog.ts`；回归见同名测试与
 `packages/device-link/src/__tests__/providerShare.test.ts`、
 `apps/desktop/src/main/provider-group/__tests__/runtime.test.ts`。
+分享者启动预检见 `apps/desktop/src/main/remote-agent/host/{providerAccess,runHost,service}.ts`；
+`remote-agent/__tests__/groupRelay.test.ts` 经真实启动与发送入口覆盖本机断连、组分配及本机执行拒绝。
 
 Desktop 模型列表底部的「配置模型」在看分享来的供应商时同样显示，点开直接进入设置里这条分享的详情
 （§5.2；2026-10-15 用户确认）。同账号其他电脑上的远程供应商与远程控制的电脑上的任务不显示，它们的设置
