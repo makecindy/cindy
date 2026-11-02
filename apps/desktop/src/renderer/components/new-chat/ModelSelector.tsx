@@ -92,6 +92,7 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
+import type { SessionUsageLimitFallbackState } from '@/hooks/useSessionUsageLimitFallback';
 import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
@@ -723,6 +724,10 @@ interface ModelSelectorProps {
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   currentSelection?: SessionRuntimeProfileProjection;
+  /**
+   * 任务级额度备用路线（已建任务才有）。只透传给统一面板的配置浮层；草稿与设置类入口不传。
+   */
+  usageLimitFallback?: SessionUsageLimitFallbackState | null;
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
   modelId: string;
@@ -933,6 +938,8 @@ interface ModelSelectorContentProps {
   pluginModels?: PluginModelsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
+  /** 语义同 ModelSelectorProps.usageLimitFallback。 */
+  usageLimitFallback?: SessionUsageLimitFallbackState | null;
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
@@ -1233,6 +1240,7 @@ function ModelSelectorContentView({
   onProviderChange,
   onNavigateToProviders,
   followSession,
+  usageLimitFallback = null,
   configurationEnabled = true,
   fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
@@ -3584,6 +3592,7 @@ function ModelSelectorContentView({
             deviceId={deviceId}
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
+            usageLimitFallback={usageLimitFallback}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -4088,6 +4097,7 @@ export function ModelSelector({
   onProviderChange,
   onNavigateToProviders,
   agentSwitch,
+  usageLimitFallback = null,
 }: ModelSelectorProps) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -4933,6 +4943,7 @@ export function ModelSelector({
       optionsPanelUsesLayoutPositioning={isCreateAgentVariant}
       fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
+      usageLimitFallback={usageLimitFallback}
       discoveringModels={showDiscoveryPending && discovery.pending}
       interactionDisabled={switching || disabled}
       gatewayPricing={gatewayPricing}

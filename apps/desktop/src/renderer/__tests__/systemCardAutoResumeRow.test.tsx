@@ -237,3 +237,24 @@ describe('SystemCard auto-resume 行', () => {
     expect(slot?.querySelector('svg')).toBeNull();
   });
 });
+
+describe('SystemCard 额度回切提示行', () => {
+  it('带两个模型名 → 一行低调提示，写清从哪个切回哪个', () => {
+    render(
+      <SystemCard
+        cardType="usage-limit-revert"
+        data={{ fromModel: 'deepseek-v4-flash', toModel: 'gpt-6.1-sol', at: 0 }}
+      />,
+    );
+    const row = screen.getByRole('status');
+    // 本套件把 t 打成「key(变量 JSON)」：断言落在用了哪个 key、带没带两个模型名。
+    expect(row.textContent).toContain(
+      'chat.systemCard.usageLimitRevert.message({"from":"deepseek-v4-flash","to":"gpt-6.1-sol"})',
+    );
+  });
+
+  it('缺模型名（旧载荷）→ 整行不渲染，不显示半截句子', () => {
+    render(<SystemCard cardType="usage-limit-revert" data={{ at: 0 }} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});

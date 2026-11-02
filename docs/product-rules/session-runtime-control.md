@@ -21,7 +21,8 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
 ## Agent 控制面
 
 - `get_session_runtime`：`session_id` 可省略；省略时查询当前任务。返回活动状态、baseline、
-  effective、pending、generation 和自动降级开关。
+  effective、pending、generation、自动降级开关，以及任务级额度备用路线 `usage_limit_fallback`
+  （`{provider_id, model}`，未配置为 `null`）。
 - `set_session_runtime`：`session_id` 可省略；原子提交来源、模型、推理强度与 Fast 的任意子集。
 - 当前或目标任务忙碌时不修改进行中的 turn，返回 `deferred`，在下一个 turn 边界生效。
 - 省略 `harness` 时，Agent 的修改不写回任务 baseline。语义失败是否提高推理强度或换更强模型，由 Agent 或 Skill 明确请求。
@@ -47,11 +48,26 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
 2. 切换到同一模型的其他已连接、未停用来源。
 3. 若仍失败，只尝试目录通过 `newSessionDefault` 为当前 Harness 明确声明的模型。
 
-账号 5 小时 / 周用量上限不在此白名单内：那类失败等额度重置后自动继续，见
-[usage-limit-auto-continue.md](usage-limit-auto-continue.md)。
+账号 5 小时 / 周用量上限不在此白名单内：默认等额度重置后自动继续；给任务配了额度备用路线的先换路，
+见下节与 [usage-limit-auto-continue.md](usage-limit-auto-continue.md)。
 
 自动降级不采用“可用列表第一个”之类的隐式兜底，不跨 Harness；每个任务最多换路两次，
 记录已访问的 `(来源, 模型)`，禁止 `A → B → A` 回环。用户修改运行时选择后立即清空本轮降级轨迹。
+
+## 额度用尽换模型
+
+`set_session_runtime.usage_limit_fallback` 单独提交（不能与选模、推理强度或 Fast 合并），
+给单个任务指定「额度用尽时换到哪个来源与模型」：
+
+- 只保存策略，不改 baseline 与当前生效组合，也不登记待切换选择；`null` 清除。
+- 目标必须在同一个 Harness 下可用（来源已连接、目录里有该模型），且不能与原组合相同。
+  适用范围同 [usage-limit-auto-continue.md](usage-limit-auto-continue.md)，这里不重复枚举。
+- `get_session_runtime` 投影 `usage_limit_fallback`：目标 `{provider_id, model}`、锁定时任务跑的
+  原组合 `source`，以及 `active`（这条策略现在还会不会触发；false = 配了但当前组合已变）。
+  失效信息必须对 Agent 可见，否则它分不清“没配”与“配了但不生效”。
+- 真正触发时复用原子选模路径换路，再走额度重置后的同一条自动继续入口；
+  不是自动降级的白名单，也不占自动降级的换路次数；但它走 Agent 显式选模语义，会顺带把本轮
+  自动降级的换路次数与已访路轨迹清零（额度事件重新计两跳）。
 
 ## 跨端边界
 

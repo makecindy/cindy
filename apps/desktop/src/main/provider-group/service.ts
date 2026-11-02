@@ -1594,7 +1594,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         attempt: 1,
         maxAttempts: 1,
         sessionTotal: 0,
-        agentSwitch: { from: fromLabel, to: pick.label, cause },
+        agentSwitch: { from: fromLabel, to: pick.label, cause, kind: 'computer' },
       });
       if (outcome === 'resumed') hooks?.resumed?.();
       else deps.cancelContinue(sessionId, continueToken);

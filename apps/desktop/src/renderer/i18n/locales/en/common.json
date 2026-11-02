@@ -11659,6 +11659,22 @@
     }
   },
   "newChat": {
+    "usageLimitFallback": {
+      "label": "Switch to when the usage limit is reached",
+      "unset": "Off",
+      "empty": "No other models available on this engine",
+      "staleHint": "No longer active: this fallback is bound to a model the task no longer uses, so it won't trigger.",
+      "reset": "Reset",
+      "error": "Not saved: ",
+      "sectionLabel": "Fallback model when the usage limit is reached",
+      "errors": {
+        "INVALID_ARGS": "This task can't use a fallback route - local ordinary tasks only",
+        "ROUTE_UNAVAILABLE": "That fallback model isn't available right now - pick another source or model",
+        "CONFLICT": "A model switch is still pending; set this once it lands",
+        "NOT_FOUND": "This task no longer exists",
+        "HOST_NOT_READY": "The host isn't ready yet - try again in a moment"
+      }
+    },
     "homeSuggestions": {
       "shuffle": "Show more",
       "dismiss": "Don't show again",
@@ -13329,6 +13345,9 @@
       }
     },
     "systemCard": {
+      "usageLimitRevert": {
+        "message": "Usage limit recovered; switched back from {{from}} to {{to}}"
+      },
       "help": {
         "title": "Available Commands",
         "builtInCommands": "Built-in Commands",

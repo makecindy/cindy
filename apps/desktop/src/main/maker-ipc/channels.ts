@@ -443,6 +443,16 @@ export const MAKER_INVOKE = {
   SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
   SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
+   * 任务级额度备用路线（per task，不是全局开关）——
+   *  - GET: 读当前任务配置的备用目标与是否已失效
+   *  - SET: 复用 MCP 控制面同一套校验与门禁写入；target=null 等价清除
+   *  - CLEAR: target=null 的语义化入口
+   * 设置类写操作: 仅本机主页面可调, **不进 device-link / 手机 allowlist**。
+   */
+  SESSION_USAGE_LIMIT_FALLBACK_GET: 'maker:session-usage-limit-fallback:get',
+  SESSION_USAGE_LIMIT_FALLBACK_SET: 'maker:session-usage-limit-fallback:set',
+  SESSION_USAGE_LIMIT_FALLBACK_CLEAR: 'maker:session-usage-limit-fallback:clear',
+  /**
    * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
@@ -987,6 +997,11 @@ export const MAKER_PUSH = {
    * 据此显示会话内横幅 +「全部停止」入口;false = 已静默 / 已被全停,横幅熄灭。
    */
   SESSION_BACKGROUND_ACTIVITY_CHANGED: 'maker:session-background-activity-changed',
+  /**
+   * 额度恢复后已自动切回原路线。payload = { sessionId, fromModel, toModel, at }。
+   * 只驱动会话内的一条**瞬态**提示（不落库、不进历史），用于解释模型为什么自己变了。
+   */
+  SESSION_USAGE_LIMIT_REVERTED: 'maker:session-usage-limit-reverted',
   /**
    * Scheduler (Phase 4) — 单一 channel 承载 'fired' / 'completed' / 'failed' / 'changed'
    * 4 个事件类型；renderer 按 payload.type 分支。

@@ -113,6 +113,7 @@ function setup(opts?: {
       },
       pendingMutation: null,
       fallbackEnabled: false,
+      usageLimitFallback: null,
     })),
     setSessionRuntime: vi.fn(async () => ({
       ok: true as const,
