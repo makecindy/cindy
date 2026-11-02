@@ -17,7 +17,7 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 - **Approve after the fix ✅** (accidental click): wrote `~/.cindy-harness/experts/uk-facility-manager-linkedin/expert.md`, description one quoted line. Moved aside (not deleted) to `~/.cindy-harness/experts-removed/uk-facility-manager-linkedin.bak-2026-11-02`.
 - **Reject ✅:** with note "make it more comapct" the tool returned `{"status":"rejected","message":"The owner rejected the draft. Nothing was written.","ownerNote":"make it more comapct"}` and the creator proposed a shorter draft (`uk-fm-linkedin-writer`). Rejected with no note: `rejected`, creator replied "What would you like changed?" and did not re-propose. Evidence read from the Cindy DB (`messages` rows 396-403, read-only). `ls ~/.cindy-harness/experts`: same 6 folders.
 - Rows: 3.8 ✅ `live-proven`. Debt added: draft card repeats its header rows; banner 137% vs footer 100% (same banner bug).
-- Docs only, no code changed. Gates (Node 22.23.4): `pnpm typecheck`, `pnpm test:runner`, `pnpm check:test-hygiene` exit 0; `test:unit:related` selects nothing for a docs-only diff.
+- Docs only, no code changed. Gates (Node 22.23.4): `pnpm typecheck`, `pnpm test:runner`, `pnpm check:test-hygiene` exit 0; `test:unit:related` selected whole workspaces (not just the docs diff): `apps/mobile` PASS, then stopped by a 5-minute cap in `packages/maker-core`, so it was not completed. These were already green on `ebd8ea0a` on the owner's Mac.
 - **Next:** context banner bug in its own session (handoff step 3), then 3.9.
 
 ---
