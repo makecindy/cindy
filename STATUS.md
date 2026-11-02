@@ -10,6 +10,25 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-02 — 3.5b starter experts, live (owner): 1 pass, 2 open
+
+All on Hermes + `qwen3-8b (lmstudio-local)`, header chip correct in every case.
+- **Prompt Engineer ✅.** "Make me a prompt that plans my daily sales route from a list of postcodes" → improved prompt with input/output/method/constraints, two worked examples, an evaluation checklist and weaknesses-to-test, as `expert.md` asks.
+- **Research Analyst ❌ (prompt applied, output not trustworthy).** Followed the format (restated question, answer, sources, "Unverified" section) but the content is wrong for Node 22 (claims V8 13.9; Node 22.0 shipped V8 12.4; cites a CVE and "vm2" that are not Node 22 changes) and it claimed "no unverified claims". No web tool call was visible, so it likely answered from the small model's memory while presenting sources. The expert prompt says "using sources you actually opened"; qwen3-8b did not obey. Needs a run with web search confirmed available in Hermes and/or a stronger route before it counts.
+- **Repo Explainer ❌ (environment).** Opened as a Chat with no project folder, so there was no repo to read; it correctly said it had no files. Retry from a project task (a code folder as the working directory).
+- **Surprise:** Repo Explainer's reply mentioned a codeword "BLUEBIRD7". It is not in this repo or in the expert files; most likely an earlier owner test stored it in Hermes memory under `~/.hermes-cindy`. Owner checked: the only live source was line 1 of `~/.hermes-cindy/memories/MEMORY.md` ("Codeword the user asked to remember: BLUEBIRD7", a leftover memory test); the other hits are session history, logs and the 2026-10-29 pre-restore backup. Backed up to `MEMORY.md.bak-20261102` and the line removed by the owner; grep now empty. Not an expert defect: Hermes injects `MEMORY.md` into every session, expert or not (relevant to 3.4 per-expert memory).
+
+---
+
+## 2026-11-02 — 3.2a fail-closed route check `live-proven` (owner)
+
+- Throwaway expert `~/.cindy-harness/experts/route-test` (`model: lmstudio-local/google/gemma-4-26b-a4b-qat`), new Hermes task on `qwen3-8b (lmstudio-local)`, sent "hi".
+- Observed: "Could not complete the reply" with details `Expert "Route Test": this expert runs on route "lmstudio-local/google/gemma-4-26b-a4b-qat" (lmstudio-local/google/gemma-4-26b-a4b-qat), but the session is on "qwen3-8b". Pick google/gemma-4-26b-a4b-qat in the model menu and send again.` No model reply (0% context), model unchanged.
+- First attempt used `model: local-small`; it was correctly *allowed*, because the owner's `local-small` route is `lmstudio-local/qwen3-8b` (same model as the session). The expert prompt was visibly applied ("testing tasks"). A second Code Reviewer session also answered in role.
+- Learned (polish, 2.4-style): the named reason sits behind "Details"; the generic banner says only "Could not complete the reply". Logged under 2.4 polish, not fixed here.
+
+---
+
 ## 2026-11-01 — ROADMAP 3.2a `live-proven`; 3.5b Code Reviewer passed (owner)
 
 - Setup: `docs/experts-examples/code-reviewer` copied to `~/.cindy-harness/experts/code-reviewer` (new file, nothing overwritten). App restarted on `main` at `c958a9e7` (PR #4 merged).
