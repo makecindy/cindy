@@ -603,6 +603,12 @@ export async function listBotSkillFiles(userDataDir: string, botId: string, slug
   return listSkillFolderFiles(resolveSkillDir(userDataDir, botId, slug, enabled));
 }
 
+/** The same, wherever the skill lives now; a skill that is not here has none. */
+export async function readBotSkillFiles(userDataDir: string, botId: string, slug: string): Promise<LocalBotSkillFile[]> {
+  const skill = await readBotSkill(userDataDir, botId, slug);
+  return skill ? listBotSkillFiles(userDataDir, botId, slug, skill.enabled !== false) : [];
+}
+
 /** Restore a skill's files from the cloud, in the skill's write queue. A skill that is gone stays gone. */
 export async function applyBotSkillFiles(userDataDir: string, botId: string, slug: string, files: BotSkillFile[],
   fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean }): Promise<void> {

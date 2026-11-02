@@ -29,6 +29,7 @@ import {
   listBotSkillSources,
   applyBotSkillFiles,
   listBotSkillFiles,
+  readBotSkillFiles,
   saveBotSkill,
   saveBotSkillSource,
   setBotSkillEnabled,
@@ -360,6 +361,14 @@ export async function saveBotSkillSourceForBot(botId: string, slug: string, sour
 export async function listBotSkillFilesForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
   const boundary = captureOwnerBoundary(deps);
   const files = await listBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** The same, wherever the skill lives now. */
+export async function readBotSkillFilesForBot(botId: string, slug: string, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await readBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug);
   assertOwnerBoundary(deps, boundary);
   return files;
 }

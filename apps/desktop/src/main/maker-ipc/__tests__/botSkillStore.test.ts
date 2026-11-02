@@ -480,6 +480,7 @@ describe('skill files for cloud companions', () => {
     await write('.env', 'TOKEN=1');
     await write('node_modules/x/index.js', 'x');
     await write('deploy.pem', 'secret');
+    await write('Skill.MD', 'another spelling of the entry file');
     await fs.symlink('/etc/hosts', path.join(skillDir(), 'link'));
     const files = await listBotSkillFiles(userDataDir, 'bot_a', 'brew', true);
     expect(files.map(file => file.path)).toEqual(['references/a.md', 'scripts/run.sh']);
@@ -515,7 +516,7 @@ describe('skill files for cloud companions', () => {
     const outside = await fs.mkdtemp(path.join(userDataDir, 'outside-'));
     await fs.symlink(outside, path.join(skillDir(), 'linked'));
     const fetch = async () => source('x');
-    for (const unsafe of ['../escape.md', '/abs.md', 'a\\b.md', '.hidden/a.md', 'SKILL.md', 'node_modules/a.js']) {
+    for (const unsafe of ['../escape.md', '/abs.md', 'a\\b.md', '.hidden/a.md', 'SKILL.md', 'Skill.MD', 'node_modules/a.js']) {
       await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry(unsafe, 'x')], fetch, { removeOthers: false });
     }
     await expect(applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('linked/a.md', 'x')], fetch, { removeOthers: false }))

@@ -63,6 +63,7 @@ export interface CompanionMaterializeHost {
   readSkill: (botId: string, slug: string) => Promise<string | null>;
   saveSkill: (botId: string, slug: string, content: string, enabled: boolean, fence: CompanionWriteFence) => Promise<void>;
   removeSkill: (botId: string, slug: string, fence: CompanionWriteFence) => Promise<void>;
+  readSkillFiles?: (botId: string, slug: string) => Promise<BotSkillFile[]>;
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
     options: { removeOthers: boolean }, fence: CompanionWriteFence) => Promise<void>;

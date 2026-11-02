@@ -25,7 +25,8 @@ function travels(name: string, folder: boolean): boolean {
 
 /** A path from the cloud is written only when this computer's own listing could have produced it. */
 export function isSkillFilePath(value: string): boolean {
-  if (/[\\:\0]/.test(value) || value === 'SKILL.md' || value === 'skill.md') return false;
+  // Any spelling of the entry file: restoring one on a case-insensitive disk would overwrite it.
+  if (/[\\:\0]/.test(value) || value.toLowerCase() === 'skill.md') return false;
   const parts = value.split('/');
   return parts.every((part, index) => part !== '..' && travels(part, index < parts.length - 1));
 }
