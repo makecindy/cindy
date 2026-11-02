@@ -90,7 +90,7 @@ function productionSteer(
   const live = deps.maker.getSession();
   deps.maker.getSession = () => live;
   return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
-    (sessionId: string, message: string) => Promise<void>;
+    (sessionId: string, message: string, sendOpts?: Record<string, unknown>) => Promise<void>;
 }
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
@@ -2215,6 +2215,35 @@ describe('GoalController', () => {
     await steer('s1', '/compact');
     expect(String(payloads[0])).not.toContain('[Card closed]');
     expect(delivered).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a shared-task guest', { sharedTaskAuthor: { accountId: 'guest' } }],
+    ['a plugin', { sourcePlugin: 'some-plugin' }],
+  ] as const)('does not close the owner\'s input handoff card for a steered message from %s', async (_who, sendOpts) => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    const delivered = vi.fn();
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+      inputHandoffNoteDelivered: delivered,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', 'hello from someone else', sendOpts);
+    // Neither closes the card nor claims a note was handled for this message.
+    expect(noteFor).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('closes the owner\'s card for the owner\'s own steered message', async () => {
+    const noteFor = vi.fn(() => '[Card closed]');
+    h.session.running = true;
+    const steer = productionSteer(h.session, async () => {}, false, {
+      inputHandoffSteerNote: noteFor,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', 'my own message');
+    expect(noteFor).toHaveBeenCalledOnce();
   });
 
   it.each(['new turn', 'same-turn steer'] as const)(
