@@ -4,6 +4,8 @@
 // so its off -> on -> off comparison could accept the wrong initial theme color.
 // Exercise the production injector and observer in separate host/guest documents;
 // assert concrete light/dark canvas and control colors, not an unchecked baseline.
+// Also cover ordinary author background-image rules: a host background shorthand
+// used to erase them on every injection, despite the main-view image contract.
 // Uses the installed Electron in a hidden, isolated profile; no network or user data.
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -56,7 +58,11 @@ try {
       const frame = document.createElement('iframe');
       document.body.append(frame);
       const guest = frame.contentWindow;
-      guest.document.head.innerHTML = '<style>html {background:var(--surface)} input {background:var(--surface-elevated)}</style>';
+      guest.document.head.innerHTML = `<style>
+        html {background:var(--surface)}
+        body {background-image:linear-gradient(rgb(10, 20, 30), rgb(40, 50, 60));background-size:12px 24px;background-repeat:no-repeat}
+        input {background:var(--surface-elevated)}
+      </style>`;
       guest.document.body.innerHTML = '<input>';
       let id = 0;
       const styles = new Map();
@@ -75,16 +81,22 @@ try {
       const settle = () => new Promise(resolve => setTimeout(resolve, 0));
       const colors = () => [guest.document.documentElement, guest.document.body, guest.document.querySelector('input')]
         .map(element => guest.getComputedStyle(element).backgroundColor);
+      const artwork = () => {
+        const style = guest.getComputedStyle(guest.document.body);
+        return [style.backgroundImage, style.backgroundSize, style.backgroundRepeat];
+      };
       try {
         injector.onDomReady();
         await settle();
         const off = colors();
+        const artworkOff = artwork();
         root.setAttribute('data-wallpaper-active', 'true');
         await settle();
         const on = colors();
+        const artworkOn = artwork();
         root.removeAttribute('data-wallpaper-active');
         await settle();
-        return { off, on, restored: colors(), styles: styles.size };
+        return { off, on, restored: colors(), artwork: [artworkOff, artworkOn, artwork()], styles: styles.size };
       } finally {
         unobserve();
         injector.dispose();
@@ -96,6 +108,11 @@ try {
     assert.deepEqual(result.off, [theme.canvas, theme.canvas, theme.control], `${theme.scheme}: initial theme colors`);
     assert.deepEqual(result.on, ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', theme.control], `${theme.scheme}: wallpaper canvas and opaque control`);
     assert.deepEqual(result.restored, [theme.canvas, theme.canvas, theme.control], `${theme.scheme}: restored theme colors`);
+    for (const artwork of result.artwork) {
+      assert.deepEqual(artwork, [
+        'linear-gradient(rgb(10, 20, 30), rgb(40, 50, 60))', '12px 24px', 'no-repeat',
+      ], `${theme.scheme}: author background image and layout survive every wallpaper state`);
+    }
     assert.equal(result.styles, 1, `${theme.scheme}: stale injected styles removed`);
     console.log(`PASS ${theme.scheme}: concrete canvas/control colors across off -> on -> off`);
   }
