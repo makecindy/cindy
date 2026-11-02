@@ -366,8 +366,10 @@ export function RemoteKeySurface({
     touches.current.delete(touch);
     emit(input.release(touch, cancelled));
     if (!rect.code && !cancelled && (rect.id === KEY_PAGE || allowInput())) {
+      // A shortcut must reach the host alone: a key still down would change it.
+      if (rect.id !== KEY_PAGE) emit(input.suspend());
       actionsRef.current[rect.id]?.();
-      // Shortcuts bypass this input, so restore any modifier they let go of.
+      // Shortcuts bypass this input, so restore what it still holds.
       if (rect.id !== KEY_PAGE) emit(input.resync());
     }
     showPressed();

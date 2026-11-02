@@ -115,6 +115,13 @@ export class RemoteKeyInput {
     return released.map((code) => ({ kind: "key", code, down: false }));
   }
 
+  /** Lets go of everything held on the host, keeping this input's own record. */
+  suspend(): RemoteKeyEvent[] {
+    return [...this.remote]
+      .reverse()
+      .map((code) => ({ kind: "key", code, down: false }));
+  }
+
   /**
    * Presses again whatever this input still holds. A shortcut sent around it
    * (the strip's undo, search) lets go of the modifiers it used, which may be

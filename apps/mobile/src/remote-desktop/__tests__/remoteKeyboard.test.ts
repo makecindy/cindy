@@ -110,6 +110,15 @@ describe("RemoteKeyInput", () => {
     expect(input.press(2, "Tab")).toEqual([down("Tab")]);
   });
 
+  it("clears the host before a shortcut and restores it after", () => {
+    const input = new RemoteKeyInput();
+    input.press("shift", "ShiftLeft");
+    input.press(1, "KeyA");
+    input.release(1);
+    expect(input.suspend()).toEqual([up("ShiftLeft")]);
+    expect(input.resync()).toEqual([down("ShiftLeft")]);
+  });
+
   it("does not latch a modifier whose touch was cancelled", () => {
     const input = new RemoteKeyInput();
     input.press(1, "AltLeft");
