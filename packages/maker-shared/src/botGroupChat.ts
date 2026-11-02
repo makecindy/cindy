@@ -46,6 +46,26 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
+/** Non-terminal host notices: these never settle a turn or change execution status. */
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE'] as const;
+export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
+export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
+  return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
+}
+export function readBotGroupCapabilityNotice(message: {
+  deleted?: unknown; author?: { kind?: unknown };
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
+}): BotGroupCapabilityNoticeCode | undefined {
+  if (message.deleted === true || message.author?.kind !== 'bot' || message.content.length !== 1) return undefined;
+  const card = message.content[0];
+  if (card?.type !== 'card' || card.namespace !== 'cindy.capability-notice' || card.schemaRevision !== 1) return undefined;
+  const code = card.data && typeof card.data === 'object' ? (card.data as { code?: unknown }).code : undefined;
+  return isBotGroupCapabilityNoticeCode(code) ? code : undefined;
+}
+export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode, fallback: string) {
+  return { type: 'card' as const, namespace: 'cindy.capability-notice', schemaRevision: 1, fallback, data: { code } };
+}
+
 /** Public failure categories only; never transport raw Agent errors into a group. */
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
   'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
@@ -178,6 +198,7 @@ export interface BotGroupMessageView {
   noticeCode: BotGroupNoticeCode | null;
   /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
+  capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */

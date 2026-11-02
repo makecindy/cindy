@@ -10558,6 +10558,11 @@
           "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
           "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
           "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
+          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
         }
       },
       "settings": {

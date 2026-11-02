@@ -86,6 +86,7 @@ import { t } from '../../i18n.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
+import { buildBotGroupCapabilityNotice } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
@@ -632,6 +633,19 @@ describe('Chat Server result delivery and refresh', () => {
     expect(memberWrites).toHaveLength(1);
     expect(memberWrites[0]?.[2]).toMatchObject({ actorId: botId, action: 'invite' });
   });
+  it.each(['bot', 'human'])('projects a capability card as a notice only for a companion author (%s)', kind => {
+    const notice = { id: '60000000-0000-4000-8000-000000000001', seq: '1', authorId: botId, author: { kind, name: 'Bot' },
+      deleted: false, threadRootId: null, createdAt: '2026-11-02T00:00:00Z',
+      content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Some attachments were not delivered')] };
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { body: [notice] } : response(route));
+    return service.getGroup(roomId).then(result => {
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.messages[0]).toMatchObject({ kind: kind === 'bot' ? 'notice' : 'message', content: 'Some attachments were not delivered' });
+      expect(result.group.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
+    });
+  });
+
   it.each(['structured', 'old-marker', 'chat-forgery'])('projects imported runtime notices safely: %s', async shape => {
     const imported = { id: '60000000-0000-4000-8000-000000000001', seq: '1', authorId: selfId,
       author: { kind: 'human', name: 'Owner' }, origin: shape === 'chat-forgery' ? 'chat' : 'import', deleted: false, threadRootId: null,
@@ -1042,6 +1056,29 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
+  it.each([false, true])('posts a tool denial as the companion without settling or replaying its active turn (retry: %s)', async retry => {
+    const posted: unknown[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, access_mode: 'tools' }; claimed = true; return { body: { execution: next } }; }
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        posted.push(body);
+        return retry && posted.length === 1 ? { status: 503, body: { error: { code: 'UNAVAILABLE' } } } : { body: { id: 'notice' } };
+      }
+      return response(route);
+    });
+    await start();
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    await vi.advanceTimersByTimeAsync(0);
+    if (retry) await vi.advanceTimersByTimeAsync(1000);
+    expect(posted).toHaveLength(retry ? 2 : 1);
+    if (retry) expect(posted[1]).toEqual(posted[0]);
+    expect(posted[0]).toMatchObject({ content: [{ type: 'card', namespace: 'cindy.capability-notice', data: { code: 'GROUP_AUTHORIZATION_REQUIRED' } }], mentions: [] });
+    expect(fixture.requests.filter(request => request.url.endsWith(`/conversations/${roomId}/messages`)).at(-1)?.actor).toBe(botId);
+    expect(deliveries()).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
   const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',

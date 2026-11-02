@@ -1,3 +1,5 @@
+import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
+import { isBotGroupCapabilityNoticeCode } from '../../../shared/botGroupChat';
 import { BotGroupProcess } from './BotGroupProcess';
 /**
  * 群聊时间线的一行（主时间线与话题面板共用），与伙伴私聊同一套气泡：
@@ -352,6 +354,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
+    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+    </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
         <Row {...rowProps} block="system">

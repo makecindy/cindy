@@ -10642,6 +10642,11 @@
           "NETWORK_ERROR": "{{name}} não conseguiu responder: a conexão de rede falhou.\nVerifique sua rede ou proxy e envie sua mensagem novamente.",
           "RUNTIME_TIMEOUT": "{{name}} não respondeu dentro do tempo limite.\nEnvie sua mensagem novamente ou escolha outro modelo disponível.",
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nEnvie sua mensagem novamente. Se a falha persistir, verifique os logs e relate o problema."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
       },
       "settings": {

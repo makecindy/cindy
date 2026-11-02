@@ -5,7 +5,7 @@ import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentatio
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
@@ -861,4 +861,15 @@ describe('personal mask transport', () => {
     const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };
     expect(chatGroupView(page, id(10)).messages[0]).toMatchObject({ authorKind: 'user', isSelf: true, maskAttribution: attribution });
   });
+});
+
+// Unit: direct mobile reads must match the Desktop projection; human-authored
+// copies remain ordinary messages and the original fallback stays readable.
+it.each(['bot', 'human'] as const)('projects a capability notice only from its companion author (%s)', kind => {
+  const item = { ...message(50), author: { kind, name: 'Writer' }, content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Some attachments were not delivered')] };
+  const page = { snapshot: snapshot(), messages: [item], hasMore: false, executions: [], plans: [] } as unknown as ChatPage;
+  const view = chatGroupView(page, id(11));
+  expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
+  expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
+  expect(view.messages[0].content).toBe('Some attachments were not delivered');
 });

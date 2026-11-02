@@ -1,5 +1,13 @@
 # 跨端协议兼容
 
+## 群内能力提示（非执行终态）
+
+复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一 clientId，投递重试不创建执行、不结算模型轮次。
+
+Desktop 和 Mobile 共用 shared parser，仅认可未删除的伙伴作者消息、单个完整 card、已知版本及白名单类别；普通人或未知／混合内容继续普通消息展示。Desktop 发往手机的既有消息视图可选追加 `capabilityNoticeCode`，content 保留 fallback，旧手机忽略新字段仍可读；手机直连自行投影，新手机连旧电脑仍用旧内容。旧桌面／手机直连把未知卡片显示为伙伴消息的 fallback，不丢失提示。
+
+不改服务端接口、权限档、原生配置、schema 或数据库 migration。提示只有原因，没有原始工具参数、路径或错误正文。回滚客户端后沿用 fallback，不修改已有历史。
+
 ## 仓库自动任务导入确认（2026-11-01）
 
 同账号 invoke 新增 `maker:project-automation:pending-imports`，返回已知项目目录的待导入配置。

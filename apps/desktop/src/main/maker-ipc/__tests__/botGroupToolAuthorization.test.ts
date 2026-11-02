@@ -66,3 +66,23 @@ describe('live group tool authority', () => {
     });
   });
 });
+
+// Unit: denied operations previously reached only the model. Reporting cannot
+// authorize them, leak the transport error, or announce another execution's denial.
+it.each(['mode', 'transport', 'stale', 'report-fails'])('reports the fixed reason without changing a %s denial', async condition => {
+  const onDenied = vi.fn(async (_error: GroupToolAuthorizationError) => { if (condition === 'report-fails') throw new Error('report unavailable'); });
+  releases.push(registerGroupToolAuthority('notice-lane', {
+    botId: 'bot', mode: condition === 'transport' ? 'owner' : 'tools', isCurrent: () => condition !== 'stale', onDenied,
+    validate: async () => { throw new Error('private test-only transport detail'); },
+  }));
+  await expect(authorizeGroupTool('notice-lane', 'bot', 'owner-action')).rejects.toMatchObject({
+    code: condition === 'transport' ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED',
+  });
+  await Promise.resolve();
+  if (condition === 'stale') expect(onDenied).not.toHaveBeenCalled();
+  else {
+    expect(onDenied).toHaveBeenCalledOnce();
+    expect(onDenied.mock.calls[0][0]).toBeInstanceOf(GroupToolAuthorizationError);
+    expect(onDenied.mock.calls[0][0].message).not.toContain('private test-only');
+  }
+});

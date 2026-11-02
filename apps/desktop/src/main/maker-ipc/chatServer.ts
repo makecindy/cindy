@@ -1,3 +1,4 @@
+import { readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode } from '../../shared/botGroupChat.js';
 import { botGroupProcessCard, readBotGroupProcessCard } from '../../shared/botGroupChat.js';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
@@ -127,6 +128,7 @@ interface Running {
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
   releaseToolAuthority?: () => void;
+  capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
 }
 export class ChatResponseError extends Error {
   constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
@@ -210,7 +212,7 @@ const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.
 const taskCardOf = (m: Message) => m.author.kind === 'bot' ? m.content.map(readBotGroupTaskCard).find(Boolean) ?? null : null;
 const bodyBlocks = (m: Message) => m.content.filter(b => !readBotGroupProcessCard(b) && (b.namespace !== 'cindy.local-history' || b.data?.activity === true) && !readBotGroupQuoteCard(b)
   && !(m.author.kind === 'bot' && readBotGroupTaskCard(b)));
-const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已删除）' : readImportedBotGroupRuntimeFailureCode(m) ? '' : bodyBlocks(m)
+const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已删除）' : forModel && readBotGroupCapabilityNotice(m) ? '' : readImportedBotGroupRuntimeFailureCode(m) ? '' : bodyBlocks(m)
   .flatMap(b => b.type !== 'media' ? [b.text ?? b.fallback ?? ''] : forModel ? [b.text ?? b.fallback ?? `[附件: ${b.caption ?? '文件'}]`] : []).join('\n');
 /** What a Bot reads: each attachment stays a `[附件: …]` line beside the text. */
 // A share's fallback is an old-client display only, never authoritative model context.
@@ -519,6 +521,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let profileRefreshedAt = 0;
   /** Turns in progress by execution ID: one companion may answer in several conversations at once. */
   const running = new Map<string, Running>();
+  const capabilityNoticeRetries = new Map<ReturnType<typeof setTimeout>, () => void>();
   /** Work announced as queued for a companion (execution ID → room), read when it is busy elsewhere. */
   // Each arrival has its own identity, including repeated hints for the same
   // room. An older read may retire only the exact arrivals it observed.
@@ -1399,6 +1402,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       content: displayText(m), threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
       noticeCode, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt),
     };
+    const capabilityNoticeCode = readBotGroupCapabilityNotice(m);
     const member = members.find(member => member.id === m.authorId);
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
@@ -1411,7 +1415,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const quote = m.deleted || planCard ? null : readBotGroupQuote(m.content);
     const task = m.deleted || planCard ? null : taskCardOf(m);
     const process = !m.deleted && m.author.kind === 'bot' ? m.content.map(readBotGroupProcessCard).find(Boolean) : null;
-    return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: planCard ? 'plan' : 'message', authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
+    return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
@@ -2011,6 +2015,40 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       executorId, epoch: run.execution.epoch, action, ...extra,
     }, run.execution.bot_id);
   }
+  function postCapabilityNotice(run: Running, code: BotGroupCapabilityNoticeCode, threadRootId?: string): Promise<void> {
+    if (!current() || running.get(run.execution.id) !== run || run.execution.mask_owner_id) return Promise.resolve();
+    const notices = run.capabilityNotices ??= new Map();
+    const existing = notices.get(code);
+    if (existing) return existing;
+    const name = actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '';
+    // Freeze the payload and client id for bounded retries, even after this turn ends.
+    const payload = {
+      clientId: `capability:${run.execution.id}:${run.execution.epoch}:${code}`,
+      content: [buildBotGroupCapabilityNotice(code, t(`bots.groupChat.notice.capability.${code}`).replaceAll('{{name}}', () => name))],
+      mentions: [], ...(threadRootId ? { threadRootId } : {}),
+    };
+    const pending = (async () => {
+      for (let attempt = 0; attempt < 3 && current(); attempt++) {
+        try {
+          await api(`/conversations/${run.execution.conversation_id}/messages`, 'POST', payload, run.execution.bot_id);
+          if (current()) changed(run.execution.conversation_id);
+          return;
+        } catch (error) {
+          if (attempt === 2 || error instanceof ChatResponseError && !retryableResponse(error)) {
+            notices.delete(code);
+            deps.log?.warn('Group capability notice could not be delivered', { noticeCode: code, ...chatErrorDiagnostic(error) });
+            return;
+          }
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(() => { capabilityNoticeRetries.delete(timer); resolve(); }, 1000 * (attempt + 1));
+            capabilityNoticeRetries.set(timer, resolve);
+          });
+        }
+      }
+    })();
+    notices.set(code, pending);
+    return pending;
+  }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
     const assertCurrent = () => {
@@ -2356,6 +2394,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           sourceGroup: { groupId: s.room.id, name: s.room.name },
           isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
           validate: () => validateExecutionAuthority(run),
+          onDenied: error => postCapabilityNotice(run, error.temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED', threadRootId),
         });
         if (run.plan && run.workspace?.ownerSessionId) {
           const settings = workspaces().read(s.room.id)!;
@@ -2454,6 +2493,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const lane = await laneSetup;
       const { history, source, threadRootId, thread, focusMessages, attachments, missingAttachments, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
+      if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
       // A quote resolves against every message this run read; otherwise its card snapshot stands.
       const readMessages = [...history, ...focusMessages];
       const promptMessage = (m: Message) => {
@@ -3675,7 +3715,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       postedThreads.clear();
       for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
-      disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
+      disposed = true;
+      for (const [timer, finish] of capabilityNoticeRetries) { clearTimeout(timer); finish(); }
+      capabilityNoticeRetries.clear();
+      threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
       attachmentRefreshes.clear();
