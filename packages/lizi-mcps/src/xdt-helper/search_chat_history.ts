@@ -283,7 +283,10 @@ function cloudHitsPage(hits: NonNullable<Awaited<ReturnType<NonNullable<XdtHelpe
   for (const hit of hits) {
     const entry = { ...hit, createdAt: new Date(hit.createdAt).toISOString() };
     bytes += Buffer.byteLength(JSON.stringify(entry));
-    if (page.length && bytes > CLOUD_PAGE_BUDGET_BYTES) return { hits: page, continueTo: page.at(-1)!.createdAt };
+    // 长消息分成多段时时间相同，续读按时间切（to 不含），所以同一时间的段不能拆开。
+    if (page.length && bytes > CLOUD_PAGE_BUDGET_BYTES && entry.createdAt !== page.at(-1)!.createdAt) {
+      return { hits: page, continueTo: page.at(-1)!.createdAt };
+    }
     page.push(entry);
   }
   return { hits: page, continueTo: null };

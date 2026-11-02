@@ -271,11 +271,12 @@ describe('search_chat_history cloud companion rooms', () => {
 
   it('keeps long room messages to one page and says where to continue', async () => {
     const long = (id: string, createdAt: number) => ({ ...room, messageId: id, text: 'x'.repeat(30_000), createdAt });
+    let parts = [long('a', 9_000), long('b', 8_000), long('c', 7_000), long('d', 6_000)];
     const registry = new XdtHelperToolRegistry();
     registerSearchChatHistoryTool(registry, {
       history: {
         searchChatHistory: async () => ({ ok: true, result: makeResult() }),
-        searchCompanionRooms: async () => ({ hits: [long('a', 9_000), long('b', 8_000), long('c', 7_000), long('d', 6_000)], failed: [], incomplete: false }),
+        searchCompanionRooms: async () => ({ hits: parts, failed: [], incomplete: false }),
       } as unknown as XdtHelperHistoryDeps,
       getSessionContext: () => ({ sessionId: 's1' }) as never,
     });
@@ -284,6 +285,12 @@ describe('search_chat_history cloud companion rooms', () => {
     expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['a', 'b']);
     expect(payload.cloud_incomplete).toBe(true);
     expect(payload.cloud_continue_to).toBe(new Date(8_000).toISOString());
+
+    // The parts of one long message share a time, and continuing by time would skip the rest of them.
+    parts = [long('p1', 9_000), long('p2', 9_000), long('p3', 9_000), long('later', 8_000)];
+    const split = JSON.parse(((await registry.call('search_chat_history', { query: 'brew' })).content[0] as { text: string }).text);
+    expect(split.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['p1', 'p2', 'p3']);
+    expect(split.cloud_continue_to).toBe(new Date(9_000).toISOString());
   });
 
   it('stays local for a remote query, a scoped caller, later pages and filters the room cannot honor', async () => {
