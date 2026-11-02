@@ -1103,6 +1103,40 @@ describe('official preset OAuth contracts', () => {
     expect(stored.refresh_token).toBeUndefined();
   });
 
+  it('Devin uses CLI PKCE JSON exchange and stores the JWT token', async () => {
+    // header.payload.sig — payload exp = 2000000000
+    const jwt = 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify({ exp: 2000000000 })).toString('base64url') + '.sig';
+    let authorization!: URL;
+    configureGenericOAuth({ openExternal: async url => {
+      authorization = new URL(url);
+      const redirect = authorization.searchParams.get('redirect_uri')!;
+      const state = authorization.searchParams.get('state')!;
+      const callback = new URL(redirect);
+      callback.searchParams.set('code', 'devin-callback-code');
+      callback.searchParams.set('state', state);
+      void fetch(callback).catch(() => {});
+    } });
+    fetchResponder = () => new Response(JSON.stringify({ token: jwt }));
+    const oauth = providerPresetOAuth('devin')!;
+    const result = await runGenericOAuthLogin({ id: 'devin-test', name: 'Devin' }, oauth);
+    expect(result.ok).toBe(true);
+    expect(authorization.origin + authorization.pathname).toBe('https://app.devin.ai/auth/cli/continue');
+    expect(authorization.searchParams.get('prompt')).toBe('select_account');
+    expect(authorization.searchParams.has('client_id')).toBe(false);
+    expect(authorization.searchParams.get('redirect_uri')).toContain('127.0.0.1:59653');
+    expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(fetchCalls[0]!.url).toBe('https://api.devin.ai/auth/cli/token');
+    expect(fetchCalls[0]!.headers?.['content-type']).toBe('application/json');
+    expect(JSON.parse(fetchCalls[0]!.body!)).toEqual({
+      code: 'devin-callback-code',
+      code_verifier: expect.any(String),
+    });
+    const stored = JSON.parse(storage.map.get('devin-test')!);
+    expect(stored.access_token).toBe(jwt);
+    expect(stored.expires_at).toBe(2000000000 * 1000);
+    expect(stored.refresh_token).toBeUndefined();
+  });
+
   it('Nous rotates its refresh credential via the required header', async () => {
     seedBlob('nous-test', { access_token: 'test-old', refresh_token: 'test-refresh', expires_at: nowMs - 1 });
     fetchResponder = () => new Response(JSON.stringify({ access_token: 'test-new', refresh_token: 'test-rotated', expires_in: 600 }));

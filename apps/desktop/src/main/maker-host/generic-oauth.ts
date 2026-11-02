@@ -49,6 +49,25 @@ const TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
 /** 响应缺 expires_in 时的兜底 TTL（不能沿用旧 expires_at，防刷新自打转，同 grok）。 */
 const DEFAULT_TOKEN_TTL_MS = 60 * 60 * 1000;
 
+/** Devin CLI JWT expiry (oh-my-pi credential expires="jwt"); fall back to one year. */
+const DEVIN_TOKEN_FALLBACK_TTL_MS = 31_536_000_000;
+
+function jwtExpiresAtMs(token: string, fallbackMs: number, now: number): number {
+  try {
+    const payloadPart = token.split('.')[1];
+    if (!payloadPart) return now + fallbackMs;
+    const json = Buffer.from(payloadPart.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const payload = JSON.parse(json) as { exp?: unknown };
+    if (typeof payload.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > 0) {
+      return payload.exp * 1000;
+    }
+  } catch {
+    /* ignore malformed JWT */
+  }
+  return now + fallbackMs;
+}
+
+
 // ── 注入点（默认 no-op，host 启动期接线；测试注入内存实现）──────────────────────
 export interface GenericOAuthStorage {
   read(providerId: string): string | null;
@@ -719,7 +738,9 @@ export async function runGenericOAuthLogin(
       if (abort.signal.aborted) throw new Error('login_cancelled');
       const redirectUri = `http://127.0.0.1:${listener!.port}/callback`;
 
-      const openrouter = providerOAuthContract(oauth) === 'openrouter';
+      const contract = providerOAuthContract(oauth);
+      const openrouter = contract === 'openrouter';
+      const devin = contract === 'devin';
       const authUrl = new URL(oauth.authorizeUrl);
       for (const [k, v] of Object.entries(oauth.extraAuthParams ?? {})) {
         authUrl.searchParams.append(k, v);
@@ -729,10 +750,11 @@ export async function runGenericOAuthLogin(
         callback.searchParams.set('state', state);
         authUrl.searchParams.set('callback_url', callback.toString());
       } else {
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('client_id', oauth.clientId);
-      authUrl.searchParams.set('redirect_uri', redirectUri);
-      if (oauth.scopes) authUrl.searchParams.set('scope', oauth.scopes);
+        authUrl.searchParams.set('response_type', 'code');
+        // Devin CLI auth omits client_id (oh-my-pi auth/devin.kdl has none).
+        if (!devin && oauth.clientId) authUrl.searchParams.set('client_id', oauth.clientId);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
+        if (oauth.scopes) authUrl.searchParams.set('scope', oauth.scopes);
       }
       authUrl.searchParams.set('code_challenge', challenge);
       authUrl.searchParams.set('code_challenge_method', 'S256');
@@ -761,13 +783,24 @@ export async function runGenericOAuthLogin(
       await io.openExternal(authUrl.toString());
       const code = await codePromise;
 
+      const jsonTokenBody = openrouter || devin;
       const response = await io.fetchImpl(oauth.tokenUrl, {
         method: 'POST',
-        headers: { 'content-type': openrouter ? 'application/json' : 'application/x-www-form-urlencoded', accept: 'application/json' },
+        headers: {
+          'content-type': jsonTokenBody ? 'application/json' : 'application/x-www-form-urlencoded',
+          accept: 'application/json',
+        },
         body: openrouter
           ? JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' })
-          : new URLSearchParams({ grant_type: 'authorization_code', client_id: oauth.clientId,
-              code, redirect_uri: redirectUri, code_verifier: verifier }).toString(),
+          : devin
+            ? JSON.stringify({ code, code_verifier: verifier })
+            : new URLSearchParams({
+                grant_type: 'authorization_code',
+                client_id: oauth.clientId,
+                code,
+                redirect_uri: redirectUri,
+                code_verifier: verifier,
+              }).toString(),
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
       });
       if (!response.ok) {
@@ -775,7 +808,19 @@ export async function runGenericOAuthLogin(
         throw new Error(`Token exchange failed (${response.status}): ${body.slice(0, 200)}`);
       }
       const payload = await response.json();
-      tok = openrouter ? { access_token: payload.key, expires_at: Number.MAX_SAFE_INTEGER } : payload as TokenResponse;
+      if (openrouter) {
+        tok = { access_token: payload.key, expires_at: Number.MAX_SAFE_INTEGER };
+      } else if (devin) {
+        const token = typeof payload?.token === 'string' ? payload.token : '';
+        if (!token.trim()) throw new Error('token 响应缺 token');
+        tok = {
+          access_token: token,
+          // oh-my-pi maps refresh to the same JWT but refresh rule is "none".
+          expires_at: jwtExpiresAtMs(token, DEVIN_TOKEN_FALLBACK_TTL_MS, io.now()),
+        };
+      } else {
+        tok = payload as TokenResponse;
+      }
       if (typeof tok.access_token !== 'string' || !tok.access_token.trim()) throw new Error('token 响应缺 access_token');
     }
 
