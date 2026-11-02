@@ -269,6 +269,23 @@ describe('search_chat_history cloud companion rooms', () => {
     expect(payload.cloud_failed).toEqual([{ teammateId: 'bot_b', teammateName: 'Vela', code: 'TIMEOUT' }]);
   });
 
+  it('keeps long room messages to one page and says where to continue', async () => {
+    const long = (id: string, createdAt: number) => ({ ...room, messageId: id, text: 'x'.repeat(30_000), createdAt });
+    const registry = new XdtHelperToolRegistry();
+    registerSearchChatHistoryTool(registry, {
+      history: {
+        searchChatHistory: async () => ({ ok: true, result: makeResult() }),
+        searchCompanionRooms: async () => ({ hits: [long('a', 9_000), long('b', 8_000), long('c', 7_000), long('d', 6_000)], failed: [], incomplete: false }),
+      } as unknown as XdtHelperHistoryDeps,
+      getSessionContext: () => ({ sessionId: 's1' }) as never,
+    });
+    const result = await registry.call('search_chat_history', { query: 'brew' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+    expect(payload.cloud_hits.map((hit: { messageId: string }) => hit.messageId)).toEqual(['a', 'b']);
+    expect(payload.cloud_incomplete).toBe(true);
+    expect(payload.cloud_continue_to).toBe(new Date(8_000).toISOString());
+  });
+
   it('stays local for a remote query, a scoped caller, later pages and filters the room cannot honor', async () => {
     for (const [input, opts] of [
       [{}, {}],
