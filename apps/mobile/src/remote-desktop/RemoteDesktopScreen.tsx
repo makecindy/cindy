@@ -37,7 +37,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import { Keyboard as KeyboardIcon, Monitor } from "lucide-react-native";
+import { Monitor } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -3569,17 +3569,9 @@ export function RemoteDesktopSession({
   const volumeUp = liveScreenAction("volume-up");
   const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
     .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
-    .slice(0, liveScreen?.keyboard ? 3 : 4)
+    .slice(0, 4)
     .map((b) => liveScreenAction(b.id)!)
     .filter(Boolean);
-  // Typing goes through the phone's keyboard, opened from the panel.
-  if (liveScreen?.keyboard)
-    liveScreenActions.push({
-      key: "keyboard",
-      icon: KeyboardIcon,
-      label: t("remoteDesktop.keyboard"),
-      onPress: toggleKeyboard,
-    });
   const rotation = (direction: "left" | "right") => {
     const action = rotatable && liveScreenAction(`rotate-${direction}`);
     return action
