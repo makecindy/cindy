@@ -950,7 +950,11 @@ export function RemoteDesktopSession({
       // Android resizes the window for the keyboard, leaving only this field reliable.
       const measured = event.endCoordinates.height;
       if (measured > 0) {
-        const { width: w, height: h } = Dimensions.get("window");
+        // The stable orientation, as `landscape` uses: adjustResize can make
+        // an Android portrait window wider than tall while the IME is open.
+        const { width: w, height: h } = Dimensions.get(
+          Platform.OS === "android" ? "screen" : "window",
+        );
         systemKeyboardHeight.current[w > h ? "landscape" : "portrait"] =
           measured;
       }
@@ -1040,7 +1044,7 @@ export function RemoteDesktopSession({
       }
       const lockScreen = Boolean(
         (exiting && exitLock.current) ||
-          (forceLock && capsRef.current?.value.lockOnExit === true),
+        (forceLock && capsRef.current?.value.lockOnExit === true),
       );
       return viewerSession
         .current!.stop(lockScreen, preserveLease)
@@ -1323,7 +1327,11 @@ export function RemoteDesktopSession({
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
               // Automatic recovery must never unlock before the host can reject resume.
               // A deliberate new connection may still use the saved password.
-              if (!resuming && !handoff && supportsAutoUnlock(result.platform)) {
+              if (
+                !resuming &&
+                !handoff &&
+                supportsAutoUnlock(result.platform)
+              ) {
                 // Linux capture may be unavailable until its locker releases the session.
                 if (result.platform === "linux") {
                   return securityRef.current.maybeUnlock(async () => {
@@ -3262,9 +3270,7 @@ export function RemoteDesktopSession({
             t("remoteDesktop.settingFailed"),
           ),
         )
-      : shortcut(
-          caps?.platform === "darwin" ? ["F11"] : ["MetaLeft", "KeyD"],
-        );
+      : shortcut(caps?.platform === "darwin" ? ["F11"] : ["MetaLeft", "KeyD"]);
   const toggleOperations = () => {
     Keyboard.dismiss();
     setKeyboard(false);
@@ -3279,7 +3285,10 @@ export function RemoteDesktopSession({
     selectKeyboardMode(false);
   };
   const foldUndo = () =>
-    shortcut([caps?.platform === "darwin" ? "MetaLeft" : "ControlLeft", "KeyZ"]);
+    shortcut([
+      caps?.platform === "darwin" ? "MetaLeft" : "ControlLeft",
+      "KeyZ",
+    ]);
   const foldRedo = () =>
     shortcut(
       caps?.platform === "darwin"
@@ -3405,12 +3414,16 @@ export function RemoteDesktopSession({
         : 300;
   const keyboardSurfaceHeight = Math.min(
     KEY_BAR_HEIGHT +
-      Math.max(landscape ? 160 : 220, Math.min(landscape ? 240 : 320, keysHeight)),
+      Math.max(
+        landscape ? 160 : 220,
+        Math.min(landscape ? 240 : 320, keysHeight),
+      ),
     foldLayout ? foldControls.height : windowSize.height * 0.7,
   );
   const keySurface = {
     platform: caps?.platform,
-    enabled: canInput,
+    // Inactive already released host input; latched modifiers must not outlive it.
+    enabled: canInput && appState === "active",
     allowInput: foldKeyInputAllowed,
     send,
     systemActions: foldSystemActions,
@@ -4110,7 +4123,9 @@ export function RemoteDesktopSession({
         >
           <View
             testID="remoteDesktop.keyboardSurface"
-            style={{ height: panelKeys ? keyboardSurfaceHeight : KEY_BAR_HEIGHT }}
+            style={{
+              height: panelKeys ? keyboardSurfaceHeight : KEY_BAR_HEIGHT,
+            }}
           >
             <RemoteKeySurface
               key={panelKeys ? "keys" : "bar"}
