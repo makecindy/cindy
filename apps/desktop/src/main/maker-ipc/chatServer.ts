@@ -1,3 +1,4 @@
+import { createTeammateGroupHistoryReader } from './teammateGroupHistory.js';
 import { botGroupProcessCard, readBotGroupProcessCard } from '../../shared/botGroupChat.js';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
@@ -324,6 +325,7 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
   };
   return {
     get chatServer() { return service().chatServer; },
+    teammateHistory: input => service().teammateHistory!(input),
     listGroups: (...args) => service().listGroups(...args),
     getGroup: (...args) => service().getGroup(...args),
     createGroup: (...args) => service().createGroup(...args),
@@ -3373,8 +3375,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // A lost controller ACK must not consume the phone upload or submit the same message twice.
   const pendingSends = new Map<string, ReturnType<BotGroupChatService['sendMessage']>>();
   const sendReceipts = new Map<string, Awaited<ReturnType<BotGroupChatService['sendMessage']>>>();
+  const readTeammateHistory = createTeammateGroupHistoryReader({
+    api: (route, actorId) => api(route, 'GET', undefined, actorId),
+    assertCurrent: () => { if (!current()) throw new Error('OWNER_CHANGED'); },
+  });
   return {
     chatServer,
+    teammateHistory: async input => {
+      await ensureRegistered();
+      const actor = actors.find(actor => actor.kind === 'bot' && actor.externalId === input.botId && !actor.disabled);
+      if (!actor || localBot(actor.id)?.status !== 'active') throw new Error('CALLER_UNAVAILABLE');
+      return readTeammateHistory(actor.id, input);
+    },
     refreshPendingInteraction: local.refreshPendingInteraction,
     listGroups: () => safe(async () => {
       await ensureRegistered(); await syncPersonalList(); beginUpgrade();

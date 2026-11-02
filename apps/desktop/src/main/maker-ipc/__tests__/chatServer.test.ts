@@ -1,3 +1,4 @@
+import { createTeammateGroupHistoryReader } from '../teammateGroupHistory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const avatarUpload = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
@@ -5044,5 +5045,53 @@ describe('Chat authentication recovery and polling backoff', () => {
     await service.chatServer!.refreshProfile();
     expect(fixture.refresh).toHaveBeenCalledTimes(2);
     expect(fixture.requests.slice(1).every(r => r.token === 'Bearer new-owner-test-token')).toBe(true);
+  });
+});
+
+// Unit: membership-scoped server reads were missing from companion history. These
+// cases cover the reader production entry, actor identity, pagination and revocation.
+describe('companion membership-scoped history', () => {
+  const message = (seq: number, text = `message ${seq}`) => ({ id: String(seq), seq: String(seq), deleted: false,
+    createdAt: '2026-11-02T00:00:00Z', threadRootId: null, author: { name: 'Member', kind: 'human' }, content: [{ type: 'text', text }] });
+  const members = [{ id: 'companion', kind: 'bot', state: 'joined' }];
+  it('reads whole records as the companion and paginates before an oversized next record', async () => {
+    const api = vi.fn(async (route: string, actor: string) => {
+      expect(actor).toBe('companion');
+      return route.endsWith('/snapshot') ? { room: { kind: 'group' }, members } : route.endsWith('/members') ? members : [message(1, 'c'.repeat(8000)), message(2, 'b'.repeat(8000)), message(3, 'a'.repeat(8000))];
+    });
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
+    const page = await read('companion', { groupId: 'group', limit: 3 });
+    expect(page.messages?.map(message => message.sequence)).toEqual(['3', '2']);
+    expect(page.messages?.[0].text).toHaveLength(8000);
+    expect(page).toMatchObject({ nextCursor: '2', hasMore: true });
+  });
+  it.each(['left', 'missing', 'revoked-during-read'])('denies %s membership without returning content', async condition => {
+    let checks = 0;
+    const membership = () => (++checks === 1 && condition === 'revoked-during-read' ? members : condition === 'left' ? [{ ...members[0], state: 'left' }] : []);
+    const api = vi.fn(async (route: string) => route.endsWith('/snapshot') ? { room: { kind: 'group' }, members: membership() }
+      : route.endsWith('/members') ? membership() : [message(1)]);
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
+    await expect(read('companion', { groupId: 'group' })).rejects.toThrow('PERMISSION_DENIED');
+    if (condition !== 'revoked-during-read') expect(api).toHaveBeenCalledTimes(1);
+  });
+  it('keeps a cursor after a search page with no matches and never returns deleted text', async () => {
+    const api = vi.fn(async (route: string) => route.endsWith('/snapshot') ? { room: { kind: 'group' }, members } : route.endsWith('/members') ? members : [{ ...message(2, 'target'), deleted: true }, message(1)]);
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
+    expect(await read('companion', { groupId: 'group', query: 'target', limit: 2 })).toEqual({ messages: [], nextCursor: '1', hasMore: true });
+  });
+  it('refuses a direct room even when the companion is a member', async () => {
+    const api = vi.fn(async () => ({ room: { kind: 'direct' }, members }));
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
+    await expect(read('companion', { groupId: 'private' })).rejects.toThrow('PERMISSION_DENIED');
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+  it('discovers only joined group rooms and rejects a late response after account change', async () => {
+    let current = true;
+    const api = vi.fn(async () => [{ id: 'joined', name: 'Group', state: 'joined', kind: 'group' },
+      { id: 'private', name: 'Private', state: 'joined', kind: 'direct' }, { id: 'left', name: 'Left', state: 'left', kind: 'group' }]);
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => { if (!current) throw new Error('OWNER_CHANGED'); } });
+    expect((await read('companion', {})).groups).toEqual([{ id: 'joined', name: 'Group' }]);
+    api.mockImplementationOnce(async () => { current = false; return []; });
+    await expect(read('companion', {})).rejects.toThrow('OWNER_CHANGED');
   });
 });
