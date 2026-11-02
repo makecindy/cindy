@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Arrêter"
+  },
+  "work": {
+    "queued": "En attente {{count}}",
+    "active": "En cours {{count}}",
+    "expand": "Développer l’activité des coéquipiers",
+    "collapse": "Réduire l’activité des coéquipiers"
+  },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",
@@ -191,6 +200,7 @@
     "eyebrow_many": "Plan · {{count}} étapes"
   },
   "speaking": {
+    "queued": "En attente",
     "stopping": "Arrêt en cours…",
     "planning": "Répartition du travail…",
     "step": "Travail en cours…"
