@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -479,5 +479,62 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     fireEvent.click(within(pickerDialog).getByRole('button', { name: 'settings.providers.custom.cancel' }));
     expect(screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('ProviderConnectionDialog name search', () => {
+  // PR #8065: unit regression through the real form; existing cases did not hold
+  // createCustomProvider pending while a supplier option could suspend the form.
+  it('keeps the form mounted until an in-flight save completes instead of navigating to a supplier', async () => {
+    let completeSave!: () => void;
+    vi.mocked(createCustomProvider).mockImplementationOnce(() => new Promise<Awaited<ReturnType<typeof createCustomProvider>>>(resolve => { completeSave = () => resolve({ ok: true }); }));
+    const onSelect = vi.fn();
+    const onSaved = vi.fn();
+    render(<ProviderConnectionDialog onSaved={onSaved} onClose={vi.fn()} onSelectProvider={onSelect} />);
+    fireEvent.click(await findReadyPresetTrigger());
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const input = screen.getByRole('combobox');
+    fireEvent.focus(input);
+    const option = screen.queryByRole('option', { name: /繁體供應商/ });
+    if (option) fireEvent.click(option);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await act(async () => completeSave());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(createCustomProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects the existing preset entry without applying it to the custom draft', async () => {
+    const onSelect = vi.fn();
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} onSelectProvider={onSelect} />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'english' } });
+    const option = await screen.findByRole('option', { name: /繁體供應商/ });
+    fireEvent.click(option);
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'preset', presetId: localizedPreset.id });
+    expect((input as HTMLInputElement).value).toBe('english');
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('keeps free text, closes search before the form, and preserves the draft while suspended', async () => {
+    const onClose = vi.fn();
+    const props = { onSaved: vi.fn(), onClose, onSelectProvider: vi.fn() };
+    const { rerender } = render(<ProviderConnectionDialog {...props} />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'my private gateway' } });
+    expect(await screen.findByRole('listbox')).toBeTruthy();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(<ProviderConnectionDialog {...props} suspended />);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(<ProviderConnectionDialog {...props} />);
+    expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('my private gateway');
   });
 });
