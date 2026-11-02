@@ -115,6 +115,7 @@ interface VoiceInputSelectOption<T extends string> {
 }
 
 interface VoiceInputSelectProps<T extends string> {
+  'data-setting-id': string;
   value: T;
   options: ReadonlyArray<VoiceInputSelectOption<T>>;
   onChange: (value: T) => void;
@@ -194,6 +195,7 @@ function formatHistoryTime(createdAt: number, locale: string): string {
 }
 
 function VoiceInputSelect<T extends string>({
+  'data-setting-id': settingId,
   value,
   options,
   onChange,
@@ -206,7 +208,7 @@ function VoiceInputSelect<T extends string>({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button data-setting-id={voiceInputSettings.voiceInput.id}
+        <button data-setting-id={settingId}
           type="button"
           aria-label={ariaLabel}
           aria-haspopup="listbox"
@@ -260,7 +262,7 @@ function VoiceInputSelect<T extends string>({
           {options.map((option) => {
             const selected = option.value === value;
             return (
-              <button data-setting-id={voiceInputSettings.voiceInput.id}
+              <button data-setting-id={settingId}
                 key={option.value}
                 type="button"
                 role="option"

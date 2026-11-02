@@ -167,6 +167,24 @@ export function inspectSettingsControls(
     hooks.size > 0 ||
     definitionImports.size > 0 ||
     /\buseSettingDefinition\b|\.settings-search['"]/.test(previous);
+  // Reusable controls may forward the caller's ID. Only accept a destructured
+  // data-setting-id in controls whose call sites this checker already validates.
+  const forwardsSettingId = (node, value) => {
+    if (!value || !ts.isIdentifier(value)) return false;
+    for (let owner = node.parent; owner; owner = owner.parent) {
+      if (!ts.isFunctionDeclaration(owner)) continue;
+      if (!owner.name || !controls.has(owner.name.text)) return false;
+      return owner.parameters.some(({ name }) =>
+        ts.isObjectBindingPattern(name) && name.elements.some((binding) =>
+          binding.propertyName && ts.isStringLiteral(binding.propertyName) &&
+          binding.propertyName.text === "data-setting-id" &&
+          ts.isIdentifier(binding.name) && binding.name.text === value.text &&
+          !binding.initializer && !binding.dotDotDotToken,
+        ),
+      );
+    }
+    return false;
+  };
   for (const node of getControls(file)) {
     const signature = canonical(node, file);
     const allowance = legacy.get(signature) ?? 0;
@@ -193,6 +211,7 @@ export function inspectSettingsControls(
         ts.isJsxExpression(attribute.initializer)
       ) {
         const value = attribute.initializer.expression;
+        if (forwardsSettingId(node, value)) return true;
         return (
           value &&
           ts.isPropertyAccessExpression(value) &&

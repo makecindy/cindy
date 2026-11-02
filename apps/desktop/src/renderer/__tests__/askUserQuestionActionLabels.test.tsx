@@ -75,11 +75,17 @@ describe('AskUserQuestionPrompt action labels', () => {
     link.focus();
     fireEvent.click(link);
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
+    await view.findByRole('tooltip');
     vi.useFakeTimers();
+    // The focused preview toolbar tooltip consumes the first Escape, preserving
+    // the preview and unanswered question; the next press dismisses the document.
     fireEvent.keyDown(link, { key: 'Escape' });
+    expect(view.queryByRole('tooltip')).toBeNull();
+    expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull();
     expect(onAnswer).not.toHaveBeenCalled();
     fireEvent.keyDown(link, { key: '1' });
     expect(onAnswer).not.toHaveBeenCalled();
+    fireEvent.keyDown(link, { key: 'Escape' });
     act(() => vi.advanceTimersByTime(200));
     expect(document.querySelector('[data-text-lightbox-card]')).toBeNull();
     expect(onAnswer).not.toHaveBeenCalled();

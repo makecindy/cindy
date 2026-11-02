@@ -86,6 +86,16 @@ describe("settings search coverage gate", () => {
       1,
     );
   });
+  it("accepts forwarded IDs only inside checked controls and still checks their callers", () => {
+    const wrapper = `function VoiceInputSelect({ value, 'data-setting-id': settingId }) {
+      return <button data-setting-id={settingId} />;
+    }`;
+    const source = `${imports}\n${wrapper}\nconst page = <VoiceInputSelect data-setting-id={settings.enabled.id} />;`;
+    assert.deepEqual(inspectSettingsControls(source, "", registered), []);
+    assert.equal(inspectSettingsControls(source.replace('data-setting-id={settings.enabled.id}', ''), "", registered).length, 1);
+    assert.equal(inspectSettingsControls(wrapper.replace('VoiceInputSelect', 'UntrackedControl')).length, 1);
+    assert.equal(inspectSettingsControls(wrapper.replace('data-setting-id={settingId}', 'data-setting-id={unrelated}')).length, 1);
+  });
   it("recognizes aliased controls and native form controls", () => {
     assert.equal(
       inspectSettingsControls(

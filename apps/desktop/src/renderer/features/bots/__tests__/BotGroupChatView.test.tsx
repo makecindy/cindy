@@ -923,6 +923,16 @@ describe('BotGroupChatView', () => {
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
     }
+    // Focused preview toolbar buttons open a tooltip. Its Escape precedes the
+    // document's Escape, just as the header tooltip above precedes the thread.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
+    }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
