@@ -5935,7 +5935,7 @@
           "check": {
             "checking": "Server wird geprüft…",
             "checkingHint": "Verbindung zum Server wird hergestellt, um System, Ports und vorhandene Dienste zu prüfen.",
-            "idle": "Nachdem du einen Server ausgewählt hast, prüft Cindy, ob eine Bereitstellung darauf möglich ist.",
+            "idle": "Nach der Serverauswahl prüft Cindy, ob die Bereitstellung möglich ist.",
             "ready": "Bereit zur Bereitstellung",
             "blocked": "Automatische Bereitstellung nicht möglich",
             "recheck": "Erneut prüfen",
