@@ -766,6 +766,16 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.start')).toBeNull();
     expect(byId('botGroup.plan.stepMenu.0')).toBeNull();
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    // #5759 runtime: stopping a queued execution can leave its step running.
+    // The real card must not continue to claim active work after the plan stops.
+    data.plans[0] = { ...data.plans[0]!, status: 'stopped', currentStep: 1,
+      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] };
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.stopped');
+    expect(byId('botGroup.plan.running')).toBeNull();
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
+    expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
+    expect(byId('botGroup.plan.start')).toBeNull();
   });
 
   it('shows one row per speaker with its lane session', async () => {

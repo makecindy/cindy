@@ -78,7 +78,7 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
     <CircleCheck size={iconSize.md} color={colors.textSecondary} />
   </CompanionFadeIn>;
   // K7: running breathes in Heart Orange, the list's running language.
-  if (step.status === 'running') return <RunningDot />;
+  if (step.status === 'running' && plan.status !== 'stopped') return <RunningDot />;
   if (step.status === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
   return <CircleDashed size={iconSize.md} color={colors.textTertiary} />;
 }
@@ -89,13 +89,19 @@ const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> 
   failed: 'groupChat.plan.stepFailed',
 };
 
+function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
+  // A server stop ends the plan before the executor necessarily updates its step.
+  return plan.status === 'stopped' && step.status === 'running'
+    ? 'groupChat.plan.stopped' : STEP_STATUS_KEYS[step.status];
+}
+
 function StepRowContent({ plan, step, index, identity, deviceId, online, muted }: {
   plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number; identity: BotGroupIdentity;
   deviceId: string; online: boolean; muted: boolean;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const statusKey = started(plan) ? STEP_STATUS_KEYS[step.status] : undefined;
+  const statusKey = started(plan) ? stepStatusKey(plan, step) : undefined;
   return <>
     <View style={styles.stepLead}><StepLead plan={plan} step={step} index={index} /></View>
     <View style={muted ? styles.muted : undefined}>
@@ -112,7 +118,7 @@ function StepRowContent({ plan, step, index, identity, deviceId, online, muted }
 function stepAccessibility(t: (key: string, options?: Record<string, unknown>) => string, plan: BotGroupPlanView,
   step: BotGroupPlanStepView, index: number, name: string): string {
   const status = started(plan)
-    ? t(STEP_STATUS_KEYS[step.status] ?? 'groupChat.plan.stepPending')
+    ? t(stepStatusKey(plan, step) ?? 'groupChat.plan.stepPending')
     : `${index + 1}`;
   return [status, name, step.task].filter(Boolean).join(', ');
 }
