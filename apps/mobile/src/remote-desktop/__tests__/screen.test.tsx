@@ -6362,6 +6362,10 @@ describe("live screen controls", () => {
       { id: "shake", icon: "shake", label: "Shake" },
     ],
   };
+  let shape: { width: number; height: number } | null = null;
+  beforeEach(() => {
+    shape = null;
+  });
   const open = async () => {
     act(() => root.unmount());
     fixture.liveScreen = `${screen.plugin}|${screen.id}`;
@@ -6370,6 +6374,7 @@ describe("live screen controls", () => {
       const result = await original(...args);
       const op = args[2][0].op;
       if (op === "capabilities") return { ...result, liveScreens: true };
+      if (op === "heartbeat" && shape) return { controlling: true, shape };
       return op === "start" ? { ...result, screen } : result;
     });
     root = createRoot(host);
@@ -6460,5 +6465,23 @@ describe("live screen controls", () => {
 
     press("liveScreen.follow");
     expect(presses().at(-1)).toBe("orientation-landscape");
+  });
+
+  it("lays the picture out at the shape the device reports", async () => {
+    await open();
+    const geometry = () =>
+      sent()
+        .filter((m) => m.type === "displayGeometry")
+        .map((m) => `${m.width}x${m.height}`);
+    if (!control("liveScreen.panel")) openPanel();
+    act(() => control("liveScreen.rotate-right")!.click());
+    expect(geometry().at(-1)).toBe("1920x1080");
+    // The device refused the pose (an App that only stands upright): the
+    // picture follows what it shows, not what was asked for.
+    shape = { width: 1080, height: 1920 };
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(geometry().at(-1)).toBe("1080x1920");
   });
 });

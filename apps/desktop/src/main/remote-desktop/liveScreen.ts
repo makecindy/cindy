@@ -118,6 +118,8 @@ export class LiveScreenSession {
   private awaitingKey = false;
   private connectGeneration = 0;
   private closed = false;
+  /** Upright picture size from the plugin's last `screen` message. */
+  private uprightShape: { width: number; height: number } | null = null;
   private inputChain = Promise.resolve();
   private waiting: LiveScreenEvent[] = [];
   private waitingTyping = 0;
@@ -193,8 +195,17 @@ export class LiveScreenSession {
     });
   }
 
+  /**
+   * The picture's current upright size: the device as it shows now, turned by
+   * the plugin's reported rotation. Null until the plugin has described it.
+   */
+  get shape(): { width: number; height: number } | null {
+    return this.uprightShape;
+  }
+
   private enqueue(message: Uint8Array): void {
     const type = message[0];
+    if (type === LIVE_SCREEN_MESSAGE.screen) this.uprightShape = uprightShape(message);
     if (type === LIVE_SCREEN_MESSAGE.key) this.awaitingKey = false;
     if (type === LIVE_SCREEN_MESSAGE.delta && this.awaitingKey) return;
     if (this.queuedBytes + message.length > MAX_QUEUED_BYTES) {
@@ -337,4 +348,27 @@ export class LiveScreenSession {
     const close = () => this.source.close(this.plugin, this.id).catch(() => {});
     void this.inputChain.then(close, close);
   }
+}
+
+/** `{"type":"screen","width","height","rotation"}` as the upright size it shows. */
+function uprightShape(message: Uint8Array): { width: number; height: number } | null {
+  let value: { type?: unknown; width?: unknown; height?: unknown; rotation?: unknown };
+  try {
+    value = JSON.parse(Buffer.from(message.subarray(1)).toString('utf8'));
+  } catch {
+    return null;
+  }
+  const { width, height, rotation } = value;
+  if (
+    value?.type !== 'screen' ||
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    (width as number) <= 0 ||
+    (height as number) <= 0
+  )
+    return null;
+  const turned = Number.isInteger(rotation) && (rotation as number) % 2 === 1;
+  return turned
+    ? { width: height as number, height: width as number }
+    : { width: width as number, height: height as number };
 }

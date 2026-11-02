@@ -139,6 +139,35 @@ describe('live screen session', () => {
     session.close();
   });
 
+  it('reports the upright shape the plugin last described', async () => {
+    const described = (value: object) => {
+      const json = Buffer.from(JSON.stringify(value));
+      const header = Buffer.alloc(5);
+      header.writeUInt32BE(json.length + 1, 0);
+      header[4] = 0x10;
+      return Buffer.concat([header, json]);
+    };
+    const url = await serve((res) => {
+      res.write(described({ type: 'screen', width: 1206, height: 2622, rotation: 0 }));
+      res.write(described({ type: 'screen', width: 1206, height: 2622, rotation: 3 }));
+    });
+    const session = new LiveScreenSession(
+      'sim',
+      'UDID-1',
+      screen,
+      { width: 10, height: 20 },
+      { url, screen: { ...screen, width: 10, height: 20 } },
+      source(url),
+      vi.fn(),
+    );
+    expect(session.shape).toBeNull();
+    await session.connect();
+    await session.pull(1000);
+    if (session.shape?.width !== 2622) await session.pull(1000);
+    expect(session.shape).toEqual({ width: 2622, height: 1206 });
+    session.close();
+  });
+
   it('asks for a keyframe and drops stale deltas when the page lost its decoder', async () => {
     let response: http.ServerResponse | null = null;
     const url = await serve((res) => {

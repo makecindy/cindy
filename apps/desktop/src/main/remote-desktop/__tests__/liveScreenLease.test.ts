@@ -28,11 +28,12 @@ const screen = {
 
 function harness(screenRecording: 'granted' | 'missing' = 'granted') {
   let ended: (() => void) | null = null;
+  let shape: { width: number; height: number } | null = null;
   const liveScreens = {
     list: vi.fn(async () => [listed]),
     open: vi.fn(async (_plugin: string, _id: string, onEnded: () => void) => {
       ended = onEnded;
-      return { screen, width: 1179, height: 2556 };
+      return { screen, width: 1179, height: 2556, shape: () => shape };
     }),
     close: vi.fn(),
   };
@@ -64,7 +65,16 @@ function harness(screenRecording: 'granted' | 'missing' = 'granted') {
       screen: { plugin: 'sim', id: 'UDID-1' },
       ...extra,
     }) as Promise<RemoteDesktopLease>;
-  return { controller, deps, liveScreens, start, end: () => ended?.() };
+  return {
+    controller,
+    deps,
+    liveScreens,
+    start,
+    end: () => ended?.(),
+    turn: (next: typeof shape) => {
+      shape = next;
+    },
+  };
 }
 
 describe('live screen leases', () => {
@@ -136,6 +146,12 @@ describe('live screen leases', () => {
       await h.controller.request('phone', { op: 'heartbeat', lease, lockOnExit: true }),
     ).toEqual({
       controlling: true,
+    });
+    // Once the screen describes itself, heartbeats carry what it shows now.
+    h.turn({ width: 2556, height: 1179 });
+    expect(await h.controller.request('phone', { op: 'heartbeat', lease })).toEqual({
+      controlling: true,
+      shape: { width: 2556, height: 1179 },
     });
     // Ending a look at a simulator never locks the computer.
     await h.controller.request('phone', { op: 'stop', lease, lockScreen: true });

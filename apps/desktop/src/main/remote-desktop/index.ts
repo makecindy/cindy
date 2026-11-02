@@ -625,7 +625,7 @@ function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
           },
         );
         liveSession = session;
-        return { screen, width, height };
+        return { screen, width, height, shape: () => session.shape };
       },
       close: () => {
         const session = liveSession;

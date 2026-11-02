@@ -449,6 +449,12 @@ export function RemoteDesktopSession({
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
   const inputBusy = useRef<{ lease: string } | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
+  // What a device screen actually shows now, as its host last reported it.
+  const [deviceShape, setDeviceShape] = useState<{
+    lease: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [windowsOpen, setWindowsOpen] = useState(false);
   useEffect(() => {
     setWindowsOpen(false);
@@ -1706,11 +1712,14 @@ export function RemoteDesktopSession({
       )
         return;
       heartbeatBusy = current.lease;
-      void request<{ controlling: boolean }>({
+      void request<{ controlling: boolean; shape?: unknown }>({
         op: "heartbeat",
         lease: current.lease,
       })
         .then((result) => {
+          const shape = liveScreenShape(result.shape);
+          if (shape && active.current === current)
+            setDeviceShape({ lease: current.lease, ...shape });
           // The host owns the control bit. Follow it when it retracts control;
           // when a local transition timed out, retry a release or restore the
           // local bit so a held key cannot stay down behind a view-only phone.
@@ -3357,6 +3366,28 @@ export function RemoteDesktopSession({
   const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
   const following = turn === null;
   const deviceLandscape = following ? landscape : turn % 2 === 1;
+  // After a turn, ask for the shape soon instead of waiting for a heartbeat.
+  const shapeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => shapeTimers.current.forEach(clearTimeout), []);
+  const checkShapeSoon = () => {
+    shapeTimers.current.forEach(clearTimeout);
+    shapeTimers.current = [800, 1600, 3000].map((delay) =>
+      setTimeout(() => {
+        const current = active.current;
+        if (!current?.screen) return;
+        void request<{ shape?: unknown }>({
+          op: "heartbeat",
+          lease: current.lease,
+        })
+          .then((result) => {
+            const shape = liveScreenShape(result.shape);
+            if (shape && active.current === current)
+              setDeviceShape({ lease: current.lease, ...shape });
+          })
+          .catch(() => {});
+      }, delay),
+    );
+  };
   useEffect(() => {
     if (!lease || !frameReady || !canInput) return;
     if (following) {
@@ -3375,17 +3406,33 @@ export function RemoteDesktopSession({
             },
           ],
         });
+        checkShapeSoon();
       }
     }
-    // The picture turns with it: lay the viewer out for the new shape now,
-    // on the same stream, instead of fitting a landscape picture in a
-    // portrait frame.
+  }, [lease, turnable, following, frameReady, canInput, deviceLandscape, send]);
+  // Lay the picture out at the shape the device shows. The host reports it
+  // (a pose the device or app refuses, such as upside down, changes nothing;
+  // an app may also turn the device itself); older hosts do not, and then the
+  // pose asked for is the best guess.
+  const reported = deviceShape?.lease === lease?.lease ? deviceShape : null;
+  useEffect(() => {
+    if (!lease?.screen || !frameReady) return;
     const { width, height } = lease.display;
-    if (width > height === deviceLandscape) return;
-    const display = { ...lease.display, width: height, height: width };
+    let shape = reported;
+    if (!shape) {
+      if ((following && !turnable) || width > height === deviceLandscape)
+        return;
+      shape = { lease: lease.lease, width: height, height: width };
+    }
+    if (shape.width === width && shape.height === height) return;
+    const display = {
+      ...lease.display,
+      width: shape.width,
+      height: shape.height,
+    };
     send({ type: "displayGeometry", ...display, restore: true });
     setLease({ ...lease, display });
-  }, [lease, turnable, following, frameReady, canInput, deviceLandscape, send]);
+  }, [lease, reported, following, turnable, frameReady, deviceLandscape, send]);
   const rotateDevice = (direction: "left" | "right") => {
     if (!canInput) return;
     // Following, the device was last set upright or to landscape-left.
@@ -3396,6 +3443,7 @@ export function RemoteDesktopSession({
       events: [{ kind: "press", button: `rotate-${direction}` }],
     });
     setTurn((from + (direction === "right" ? 1 : 3)) % 4);
+    checkShapeSoon();
   };
   // Filling depends on both shapes: size it again whenever either one turns.
   // A free zoom does not survive a new shape; the picture fits again.
@@ -4509,7 +4557,12 @@ export function RemoteDesktopSession({
             rotateLeft && rotateRight
               ? {
                   following,
-                  onFollow: turnable ? () => setTurn(null) : undefined,
+                  onFollow: turnable
+                    ? () => {
+                        setTurn(null);
+                        checkShapeSoon();
+                      }
+                    : undefined,
                   rotate: { left: rotateLeft, right: rotateRight },
                 }
               : undefined
@@ -4804,3 +4857,19 @@ const makeStyles = (colors: ThemeColors) =>
       overflow: "hidden",
     },
   });
+
+/** A device screen's reported upright size, or null when absent or malformed. */
+function liveScreenShape(
+  value: unknown,
+): { width: number; height: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const { width, height } = value as { width?: unknown; height?: unknown };
+  return Number.isInteger(width) &&
+    Number.isInteger(height) &&
+    (width as number) > 0 &&
+    (height as number) > 0 &&
+    (width as number) <= 16384 &&
+    (height as number) <= 16384
+    ? { width: width as number, height: height as number }
+    : null;
+}

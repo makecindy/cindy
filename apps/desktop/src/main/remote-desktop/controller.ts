@@ -69,6 +69,8 @@ export interface DesktopLiveScreen {
   /** Picture size at rotation 0; the viewer lays the video out from its own frames. */
   width: number;
   height: number;
+  /** The picture's upright size now, once the screen has described itself. */
+  shape?(): { width: number; height: number } | null;
 }
 
 /** What a live screen lease may do: nothing that reaches the desktop itself. */
@@ -214,6 +216,8 @@ export interface DesktopControllerDeps {
 
 /** One human lease, peer-bound, with finite lifetime even if the relay disappears. */
 export class RemoteDesktopController {
+  /** The open live screen's current upright shape. */
+  private liveShape: DesktopLiveScreen['shape'] = undefined;
   private active:
     | (RemoteDesktopLease & {
         peer: string;
@@ -1088,6 +1092,7 @@ export class RemoteDesktopController {
         throw new Error('DESKTOP_STOPPED');
       }
       if (!request.resume) this.userStopped.delete(peer);
+      this.liveShape = opened.shape;
       const lease: RemoteDesktopLease = {
         lease: leaseId,
         display: {
@@ -1340,7 +1345,14 @@ export class RemoteDesktopController {
           active.lockOnExit = request.lockOnExit;
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
         active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'relay-accepted' });
-        return { controlling: active.controlling };
+        {
+          // A device screen turns (by the viewer, the device or an app): the
+          // viewer lays the picture out at the shape it actually shows.
+          const shape = active.screen ? this.liveShape?.() : null;
+          return shape
+            ? { controlling: active.controlling, shape }
+            : { controlling: active.controlling };
+        }
       case 'presentation': {
         this.setBackgroundViewing(active, request.enabled);
         if (request.enabled) {
