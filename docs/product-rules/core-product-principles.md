@@ -38,7 +38,7 @@
 静默或短暂提示，复制新内容、聚焦或连接恢复后自动继续。后台状态提示要轻：正常时尽量
 不提示，单台设备离线不是全局失败；持续提示不占列表纵向布局，不让列表跳动。
 
-高风险动作有与风险匹配的告知、授权、停止和恢复；已有授权不因换入口重复索取。代输入的
+高风险动作有与风险匹配的告知、授权、停止和恢复。代输入的
 秘密值只交给宿主执行，不进模型、记录、日志、IM 与推送。约定见[设计规范](../design-rules/DESIGN.md)、
 [配置契约](../dev-rules/configuration-and-overrides.md)、[代输入](input-handoff.md)与
 [权限确认](im-permission-confirmation.md)。
@@ -56,9 +56,17 @@ Cindy 连接人、Agent、工具、设备和成果。底层智能持续演进，
 与自动任务都遵循这一点。IM 入站上下文与 App 完成提醒见[IM 消息呈现](im-message-presentation.md)，
 目标运行中的补充消息、停止与手机 `/goal` 见[目标模式](goal-mode.md)。
 
+Cindy 是 Agent 的上游 GUI，价值是连接、呈现和降低操作成本，不把上游已允许的能力做成更保守、
+更难恢复的宿主流程，也不因“更安全”降级原生体验。用户发出的完整、确定性命令或精确点击，就是
+该操作的授权，不再叠加确认；Cindy 自己的分析只提供可跳过的诊断，不确定、超时或遇到新格式时
+退回上游原生行为，且不把 Cindy 的失败伪装成上游不兼容。授权只在同一已验证身份、任务和安装内
+成立：共享访客、非主人的 IM 参与者和被替换的插件实例不继承。Pi 的具体红线见
+[Pi 上游 GUI 非退化](../dev-rules/pi-harness.md)，身份边界见[伙伴授权](teammate-authority.md)与
+[插件安全](../dev-rules/plugin-security-and-authoring.md)。
+
 用户能操作的自己的资源，Agent 也有可发现的工具，含跨电脑操作，且在索引第一步即可发现。
 执行边界由权限档与自动审核承担，共享访客和群成员沿用各自身份。约定见[能力同权](agent-user-parity.md)、
-[Pi 原生能力非退化](../dev-rules/pi-harness.md)、[多端适配](../dev-rules/remote-and-mobile-adaptation.md)
+[多端适配](../dev-rules/remote-and-mobile-adaptation.md)
 与[消息来源](message-source.md)。
 
 自动任务与目标任务共享一条生命线：归档只是收起任务，不暂停自动任务；自动任务失败也不
