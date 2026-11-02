@@ -1,14 +1,27 @@
 /** Test value: new public request/resolve round trip, not covered by the read-only catalog tests.
  * Protects plugin-security §3/§5 and Electron §5: minimal foreign-window answer, account switch
  * during async validation, revoked source and closed page must never deliver a route. Tier: unit.
- * No Electron, filesystem, network or real waits. Standalone wall time: 2.18s (2026-10-28).
+ * No Electron, user data, network or real waits; routing source is read once as a fixture.
+ * Standalone wall time: 1.09s (2026-11-02).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
 import { GhostModelPicker, readPluginModelRouteCatalog, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
+
+// Run the production routing entry without booting Electron or loading the IPC registry.
+const hostSource = ts.createSourceFile('index.ts', readFileSync(new URL('../index.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const routeEntry = hostSource.statements.find((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'routeGhostNewTask');
+if (!routeEntry) throw new Error('routeGhostNewTask entry missing');
+const routeEntryCode = ts.transpileModule(`(${routeEntry.getText(hostSource).replace(/^export\s+/, '')})`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -197,6 +210,36 @@ it('reports a routed Harness as missing only when the host says so', async () =>
   expect(await isPluginRouteHarnessInstalled('codex')).toBe(true);
   setPluginRouteAgentStatusProvider(async () => ({ binaryReady: false }));
   expect(await isPluginRouteHarnessInstalled('claude-code')).toBe(true);
+});
+
+// PR #8460 / unit: a remote catalog can advertise Pi when that source has no Pi runtime.
+// Previous cases checked only local status or catalog availability, not the routed/kept outcome.
+// Minimal input: connected Pi model, explicit share source, and a definitive binaryReady value.
+it.each([false, true])('checks the remote runtime before accepting a route (binaryReady=%s)', async (binaryReady) => {
+  const localStatus = vi.fn(async (agent: string) => ({ binaryReady: agent !== 'pi' }));
+  setPluginRouteAgentStatusProvider(localStatus);
+  const remoteStatus = vi.fn(async () => ({ binaryReady }));
+  const remoteRoute = { agentKind: 'pi', providerId: 'mine', model: 'model', agentDeviceId: 'share:fixture' };
+  const remoteView = {
+    id: 'mine', source: 'user', connected: true, agents: ['pi'], routing: { pi: { enabled: true } },
+    models: { pi: [{ id: 'model', name: 'Remote model', mode: 'chat', efforts: [] }] },
+  } as unknown as ProviderView;
+  const ghost = { manifest: { name: 'Example' } };
+  const run = runInNewContext(routeEntryCode, {
+    activeOwnerScopeKey: () => 'owner', availableGhosts: () => [ghost],
+    findInstalledGhostByInstanceId: () => ghost, publishedRouteModels: () => [{ id: 'auto' }],
+    screenGhostControlPoint: async () => ({ action: 'route', route: remoteRoute, ghostName: 'Example' }),
+    getDesktopProviderService: () => ({ listProviders: async () => [] }),
+    readPluginModelRouteCatalog, readGhostAgentRemoteViews: async () => [remoteView],
+    getPluginModelPickerAgents: () => ['codex'], readGhostAgentRemoteStatus: remoteStatus,
+    isPluginRouteHarnessInstalled, isPluginModelPickerRouteAvailable, log: { warn: vi.fn() },
+  });
+  const result = await run('plugin', { modelId: 'auto', route });
+  expect(result).toMatchObject(binaryReady
+    ? { outcome: 'routed', route: remoteRoute }
+    : { outcome: 'kept', why: 'unavailable-route' });
+  expect(remoteStatus).toHaveBeenCalledExactlyOnceWith('share:fixture', 'pi');
+  expect(localStatus).not.toHaveBeenCalled();
 });
 
 // Bug: plugin routing validated only the local catalog; a share with the same provider/model

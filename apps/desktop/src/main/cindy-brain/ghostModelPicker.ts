@@ -40,6 +40,7 @@ export function getPluginModelPickerAgents(): readonly string[] {
 }
 
 type AgentBinaryStatus = (agent: string) => Promise<{ binaryReady?: boolean } | null | undefined>;
+export type RemotePluginRouteAgentStatus = (agentDeviceId: string, agent: string) => ReturnType<AgentBinaryStatus>;
 let agentBinaryStatus: AgentBinaryStatus = async () => null;
 
 export function setPluginRouteAgentStatusProvider(provider: AgentBinaryStatus): void {
@@ -49,12 +50,20 @@ export function setPluginRouteAgentStatusProvider(provider: AgentBinaryStatus): 
 /**
  * A plugin may route to another Harness. If that Harness is not installed the send gate would stop the
  * message with a dialog, so the route must fall back instead. Only a definite "missing" counts: when the
- * check itself fails, the send gate still has the final say. Claude Code ships with the app.
+ * check itself fails, the send gate still has the final say. Local Claude Code ships with the app;
+ * a remote route must query its own execution source and never use the plugin computer's status.
  */
-export async function isPluginRouteHarnessInstalled(agent: string): Promise<boolean> {
-  if (agent === 'claude-code') return true;
+export async function isPluginRouteHarnessInstalled(
+  agent: string,
+  agentDeviceId?: string,
+  readRemoteStatus?: RemotePluginRouteAgentStatus | null,
+): Promise<boolean> {
+  if (!agentDeviceId && agent === 'claude-code') return true;
   try {
-    return (await agentBinaryStatus(agent))?.binaryReady !== false;
+    const status = agentDeviceId
+      ? await readRemoteStatus?.(agentDeviceId, agent)
+      : await agentBinaryStatus(agent);
+    return status?.binaryReady !== false;
   } catch {
     return true;
   }
