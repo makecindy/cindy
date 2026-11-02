@@ -119,8 +119,6 @@
   "deviceMenu": "设备菜单",
   "orientation": "方向",
   "orientationFollow": "跟随手机",
-  "orientationPortrait": "竖屏",
-  "orientationLandscape": "横屏",
   "picture": "画面",
   "pictureFit": "适应",
   "pictureFill": "填满",

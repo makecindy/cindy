@@ -160,7 +160,6 @@ import {
 import {
   LiveScreenControls,
   type LiveScreenAction,
-  type LiveScreenOrientation,
   type LiveScreenPicture,
 } from "./LiveScreenControls";
 
@@ -3343,38 +3342,41 @@ export function RemoteDesktopSession({
     </Pressable>
   );
   // A device screen turns with the phone by default: hold the phone sideways
-  // and the device goes landscape; upright again, and it turns back. A fixed
-  // pose (an iPad on an iPhone, a landscape game) stays whatever the phone
-  // does. The pose is absolute, so it holds from any starting orientation.
-  const [deviceOrientation, setDeviceOrientation] =
-    useState<LiveScreenOrientation>("follow");
+  // and the device goes landscape; upright again, and it turns back. Turning
+  // it by hand (an iPad on an iPhone, a landscape game, upside down) stops
+  // following, and the device stays put whatever the phone does. `turn`
+  // counts quarter turns clockwise from portrait, as the plugin does.
+  const [turn, setTurn] = useState<number | null>(null);
   const [picture, setPicture] = useState<LiveScreenPicture>("fit");
   const [zoomEditing, setZoomEditing] = useState(false);
   const deviceTurn = useRef<string | null>(null);
-  const turnable = Boolean(
-    lease?.screen?.buttons.some((b) => b.id === "orientation-portrait") &&
-    lease.screen.buttons.some((b) => b.id === "orientation-landscape"),
-  );
-  const deviceLandscape =
-    deviceOrientation === "follow"
-      ? landscape
-      : deviceOrientation === "landscape";
+  const hasButton = (id: string) =>
+    Boolean(lease?.screen?.buttons.some((b) => b.id === id));
+  const turnable =
+    hasButton("orientation-portrait") && hasButton("orientation-landscape");
+  const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
+  const following = turn === null;
+  const deviceLandscape = following ? landscape : turn % 2 === 1;
   useEffect(() => {
-    if (!lease || !turnable || !frameReady || !canInput) return;
-    const turn = `${lease.lease}:${deviceLandscape}`;
-    if (deviceTurn.current === turn) return;
-    deviceTurn.current = turn;
-    send({
-      type: "events",
-      events: [
-        {
-          kind: "press",
-          button: deviceLandscape
-            ? "orientation-landscape"
-            : "orientation-portrait",
-        },
-      ],
-    });
+    if (!lease || !frameReady || !canInput) return;
+    if (following) {
+      if (!turnable) return;
+      const pose = `${lease.lease}:${deviceLandscape}`;
+      if (deviceTurn.current !== pose) {
+        deviceTurn.current = pose;
+        send({
+          type: "events",
+          events: [
+            {
+              kind: "press",
+              button: deviceLandscape
+                ? "orientation-landscape"
+                : "orientation-portrait",
+            },
+          ],
+        });
+      }
+    }
     // The picture turns with it: lay the viewer out for the new shape now,
     // on the same stream, instead of fitting a landscape picture in a
     // portrait frame.
@@ -3383,7 +3385,18 @@ export function RemoteDesktopSession({
     const display = { ...lease.display, width: height, height: width };
     send({ type: "displayGeometry", ...display, restore: true });
     setLease({ ...lease, display });
-  }, [lease, turnable, frameReady, canInput, deviceLandscape, send]);
+  }, [lease, turnable, following, frameReady, canInput, deviceLandscape, send]);
+  const rotateDevice = (direction: "left" | "right") => {
+    if (!canInput) return;
+    // Following, the device was last set upright or to landscape-left.
+    const from = turn ?? (deviceLandscape ? 1 : 0);
+    deviceTurn.current = null;
+    send({
+      type: "events",
+      events: [{ kind: "press", button: `rotate-${direction}` }],
+    });
+    setTurn((from + (direction === "right" ? 1 : 3)) % 4);
+  };
   // Filling depends on both shapes: size it again whenever either one turns.
   // A free zoom does not survive a new shape; the picture fits again.
   const pictureShape = `${lease?.display.width}x${lease?.display.height}:${landscape}`;
@@ -3480,6 +3493,14 @@ export function RemoteDesktopSession({
     .slice(0, 4)
     .map((b) => liveScreenAction(b.id)!)
     .filter(Boolean);
+  const rotation = (direction: "left" | "right") => {
+    const action = rotatable && liveScreenAction(`rotate-${direction}`);
+    return action
+      ? { ...action, onPress: () => rotateDevice(direction) }
+      : undefined;
+  };
+  const rotateLeft = rotation("left");
+  const rotateRight = rotation("right");
   const latency = network?.latencyMs;
   return (
     <KeyboardAvoidingView
@@ -4485,8 +4506,12 @@ export function RemoteDesktopSession({
               : undefined
           }
           orientation={
-            turnable
-              ? { value: deviceOrientation, onChange: setDeviceOrientation }
+            rotateLeft && rotateRight
+              ? {
+                  following,
+                  onFollow: turnable ? () => setTurn(null) : undefined,
+                  rotate: { left: rotateLeft, right: rotateRight },
+                }
               : undefined
           }
           picture={{
@@ -4515,11 +4540,7 @@ export function RemoteDesktopSession({
           labels={{
             menu: t("remoteDesktop.deviceMenu"),
             orientation: t("remoteDesktop.orientation"),
-            orientations: {
-              follow: t("remoteDesktop.orientationFollow"),
-              portrait: t("remoteDesktop.orientationPortrait"),
-              landscape: t("remoteDesktop.orientationLandscape"),
-            },
+            follow: t("remoteDesktop.orientationFollow"),
             picture: t("remoteDesktop.picture"),
             pictures: {
               fit: t("remoteDesktop.pictureFit"),

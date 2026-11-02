@@ -119,8 +119,6 @@
   "deviceMenu": "기기 메뉴",
   "orientation": "방향",
   "orientationFollow": "휴대폰 따라가기",
-  "orientationPortrait": "세로",
-  "orientationLandscape": "가로",
   "picture": "화면",
   "pictureFit": "맞춤",
   "pictureFill": "채우기",

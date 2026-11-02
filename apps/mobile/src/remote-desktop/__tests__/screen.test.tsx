@@ -6355,6 +6355,8 @@ describe("live screen controls", () => {
       { id: "volume-up", icon: "volume-up", label: "Volume Up" },
       { id: "orientation-portrait", icon: "rotate-left", label: "Portrait" },
       { id: "orientation-landscape", icon: "rotate-right", label: "Landscape" },
+      { id: "rotate-left", icon: "rotate-left", label: "Rotate Left" },
+      { id: "rotate-right", icon: "rotate-right", label: "Rotate Right" },
       { id: "shake", icon: "shake", label: "Shake" },
     ],
   };
@@ -6420,7 +6422,7 @@ describe("live screen controls", () => {
     ]);
   });
 
-  it("holds a chosen orientation whatever the phone does", async () => {
+  it("turns the device by hand, then follows the phone again", async () => {
     await open();
     const presses = () =>
       sent()
@@ -6428,14 +6430,33 @@ describe("live screen controls", () => {
         .flatMap((m) => m.events)
         .filter((e: any) => e.kind === "press")
         .map((e: any) => e.button);
+    const press = (testID: string) => {
+      if (!control("liveScreen.panel")) openPanel();
+      act(() => control(testID)!.click());
+    };
     expect(presses()).toEqual(["orientation-portrait"]);
-    choose("orientationLandscape");
-    expect(presses()).toEqual([
-      "orientation-portrait",
-      "orientation-landscape",
-    ]);
+
+    press("liveScreen.rotate-right");
+    expect(presses().at(-1)).toBe("rotate-right");
     expect(sent()).toContainEqual(
-      expect.objectContaining({ type: "displayGeometry", restore: true }),
+      expect.objectContaining({
+        type: "displayGeometry",
+        width: 1080,
+        height: 1920,
+        restore: true,
+      }),
     );
+    openPanel();
+    expect(fixture.views["liveScreen.follow"].accessibilityState.checked).toBe(
+      false,
+    );
+
+    // Turned by hand, the device stays put while the phone turns.
+    fixture.size = { width: 844, height: 390 };
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(presses()).toEqual(["orientation-portrait", "rotate-right"]);
+
+    press("liveScreen.follow");
+    expect(presses().at(-1)).toBe("orientation-landscape");
   });
 });

@@ -119,8 +119,6 @@
   "deviceMenu": "Menú del dispositivo",
   "orientation": "Orientación",
   "orientationFollow": "Seguir al teléfono",
-  "orientationPortrait": "Vertical",
-  "orientationLandscape": "Horizontal",
   "picture": "Imagen",
   "pictureFit": "Ajustar",
   "pictureFill": "Rellenar",

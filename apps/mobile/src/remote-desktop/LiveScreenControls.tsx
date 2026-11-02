@@ -16,8 +16,6 @@ import {
   SlidersHorizontal,
   Smartphone,
   Tablet,
-  Volume1,
-  Volume2,
   type LucideIcon,
 } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -52,7 +50,6 @@ export interface LiveScreenAction {
   onPress(): void;
 }
 
-export type LiveScreenOrientation = "follow" | "portrait" | "landscape";
 export type LiveScreenPicture = "fit" | "fill" | "zoom";
 
 export interface LiveScreenControlsProps {
@@ -63,10 +60,15 @@ export interface LiveScreenControlsProps {
   actions: LiveScreenAction[];
   /** Volume down / up, when the device has them. */
   volume?: { down: LiveScreenAction; up: LiveScreenAction };
-  /** How the device is turned; absent when it cannot turn. */
+  /**
+   * Turning the device a quarter at a time; absent when it cannot turn.
+   * `follow` (when the device takes an absolute pose) turns it with the
+   * phone; turning it by hand stops following.
+   */
   orientation?: {
-    value: LiveScreenOrientation;
-    onChange(value: LiveScreenOrientation): void;
+    following?: boolean;
+    onFollow?(): void;
+    rotate: { left: LiveScreenAction; right: LiveScreenAction };
   };
   /**
    * How the picture is sized. While `editing` a zoom, fingers zoom and pan
@@ -88,7 +90,7 @@ export interface LiveScreenControlsProps {
   labels: {
     menu: string;
     orientation: string;
-    orientations: Record<LiveScreenOrientation, string>;
+    follow: string;
     picture: string;
     pictures: Record<LiveScreenPicture, string>;
     zoomHint: string;
@@ -107,11 +109,6 @@ const TAP_SLOP = 6;
 const TUCK_MS = 2500;
 const PANEL_WIDTH = 296;
 const ACTION = 52;
-const ORIENTATIONS: LiveScreenOrientation[] = [
-  "follow",
-  "portrait",
-  "landscape",
-];
 const PICTURES: LiveScreenPicture[] = ["fit", "fill", "zoom"];
 
 type Side = "left" | "right";
@@ -453,21 +450,46 @@ function LiveScreenPanel({
             <View style={wide ? styles.column : styles.stack}>
               {orientation && (
                 <Row label={labels.orientation}>
-                  <SegmentedControl
-                    values={ORIENTATIONS.map(
-                      (value) => labels.orientations[value],
+                  <View style={styles.volume}>
+                    {orientation.onFollow && (
+                      <Pressable
+                        accessibilityRole="switch"
+                        accessibilityLabel={labels.follow}
+                        accessibilityState={{
+                          checked: orientation.following === true,
+                          disabled: inputDisabled,
+                        }}
+                        disabled={inputDisabled}
+                        onPress={orientation.onFollow}
+                        style={({ pressed }) => [
+                          styles.follow,
+                          orientation.following && styles.followOn,
+                          pressed && styles.pressed,
+                          inputDisabled && styles.disabled,
+                        ]}
+                        testID="liveScreen.follow"
+                      >
+                        <Text
+                          numberOfLines={1}
+                          style={[
+                            styles.followLabel,
+                            orientation.following && styles.followLabelOn,
+                          ]}
+                        >
+                          {labels.follow}
+                        </Text>
+                      </Pressable>
                     )}
-                    selectedIndex={ORIENTATIONS.indexOf(orientation.value)}
-                    enabled={!inputDisabled}
-                    appearance={mode}
-                    style={styles.segments}
-                    onChange={({ nativeEvent }) => {
-                      const value =
-                        ORIENTATIONS[nativeEvent.selectedSegmentIndex];
-                      if (value) orientation.onChange(value);
-                    }}
-                    testID="liveScreen.orientation"
-                  />
+                    {[orientation.rotate.left, orientation.rotate.right].map(
+                      (action) => (
+                        <ChipButton
+                          key={action.key}
+                          action={action}
+                          disabled={inputDisabled}
+                        />
+                      ),
+                    )}
+                  </View>
                 </Row>
               )}
               <Row label={labels.picture}>
@@ -489,34 +511,13 @@ function LiveScreenPanel({
               {volume && (
                 <Row label={labels.volume}>
                   <View style={styles.volume}>
-                    {[volume.down, volume.up].map((action) => {
-                      const Icon = action.key.endsWith("up")
-                        ? Volume2
-                        : Volume1;
-                      return (
-                        <Pressable
-                          key={action.key}
-                          accessibilityRole="button"
-                          accessibilityLabel={action.label}
-                          accessibilityState={{ disabled: inputDisabled }}
-                          disabled={inputDisabled}
-                          // Volume keeps the panel open for repeated presses.
-                          onPress={action.onPress}
-                          style={({ pressed }) => [
-                            styles.volumeButton,
-                            pressed && styles.pressed,
-                            inputDisabled && styles.disabled,
-                          ]}
-                          testID={`liveScreen.${action.key}`}
-                        >
-                          <Icon
-                            size={iconSize.lg}
-                            strokeWidth={iconStroke.regular}
-                            color={colors.textPrimary}
-                          />
-                        </Pressable>
-                      );
-                    })}
+                    {[volume.down, volume.up].map((action) => (
+                      <ChipButton
+                        key={action.key}
+                        action={action}
+                        disabled={inputDisabled}
+                      />
+                    ))}
                   </View>
                 </Row>
               )}
@@ -566,6 +567,40 @@ function ActionButton({
       <Text numberOfLines={1} style={styles.actionLabel}>
         {action.label}
       </Text>
+    </Pressable>
+  );
+}
+
+/** A pill that keeps the panel open, for presses that repeat. */
+function ChipButton({
+  action,
+  disabled,
+}: {
+  action: LiveScreenAction;
+  disabled: boolean;
+}) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const Icon = action.icon;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={action.label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={action.onPress}
+      style={({ pressed }) => [
+        styles.volumeButton,
+        pressed && styles.pressed,
+        disabled && styles.disabled,
+      ]}
+      testID={`liveScreen.${action.key}`}
+    >
+      <Icon
+        size={iconSize.lg}
+        strokeWidth={iconStroke.regular}
+        color={colors.textPrimary}
+      />
     </Pressable>
   );
 }
@@ -715,6 +750,22 @@ const makeStyles = (colors: ThemeColors) =>
     rowControl: { flex: 1 },
     segments: { height: spacing.xxl },
     volume: { flexDirection: "row", gap: spacing.sm },
+    follow: {
+      flex: 2,
+      height: spacing.xxl,
+      borderRadius: radius.pill,
+      backgroundColor: colors.surfaceChip,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: spacing.sm,
+    },
+    followOn: { backgroundColor: colors.cta },
+    followLabel: {
+      ...textStyles.bodySmall,
+      fontWeight: fontWeight.medium,
+      color: colors.textPrimary,
+    },
+    followLabelOn: { color: colors.ctaText },
     volumeButton: {
       flex: 1,
       height: spacing.xxl,
