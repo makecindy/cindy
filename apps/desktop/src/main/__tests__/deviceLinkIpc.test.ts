@@ -324,6 +324,23 @@ describe('device-link IPC handlers', () => {
     expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
+  // Review (#8381): a refresh issued right after a rename / delete must not join a list
+  // request sent before it, or the removed device / old name comes back until the next poll.
+  it.each(['rename', 'delete'] as const)('listDevices:%s 成功后的刷新不复用改动前的在途请求', async (op) => {
+    let resolveFirst: ((value: { devices: unknown[] }) => void) | undefined;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ deviceId: 'dev-1', name: 'New', deleted: true, devices: [] });
+    const deps = makeDeps({ apiFetch });
+    const before = handleListDevices(deps);
+    if (op === 'rename') await handleRenameDevice(deps, 'dev-1', 'New');
+    else await handleDeleteDevice(deps, 'dev-1');
+    const after = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    resolveFirst?.({ devices: [] });
+    await Promise.all([before, after]);
+  });
+
   it('listDevices:503 → DEVICE_LINK_UNAVAILABLE,网络错(status 0)同样', async () => {
     const deps503 = makeDeps({
       apiFetch: vi.fn().mockRejectedValue(new ServerApiError('SERVICE_UNAVAILABLE', 503, 'off')),

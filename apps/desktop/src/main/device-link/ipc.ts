@@ -389,8 +389,14 @@ let latestDeviceListRequest: {
   sequence: number;
   promise: Promise<DeviceListResult>;
   startedAt: number;
-  settled: boolean;
+  /** false once settled or once a directory mutation succeeded after it was sent. */
+  joinable: boolean;
 } | null = null;
+
+/** A rename / delete changes the directory: later reads must not join a request sent before it. */
+function invalidateDeviceListCoalescing(): void {
+  if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
+}
 /**
  * 启动与重连时 3–4 个 renderer 入口(侧栏、切换栏、设置页、main 自身)在同一拍里各发一次
  * /devices。在途请求在这个窗口内的后来者直接共用它:目录快照本来就是同一时刻的,
@@ -407,7 +413,7 @@ export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
   const inFlight = latestDeviceListRequest;
-  if (inFlight && !inFlight.settled && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+  if (inFlight && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
     return inFlight.promise;
   }
   const sequence = ++deviceListRequestSequence;
@@ -445,11 +451,11 @@ export function handleListDevices(
       rethrowServerError(err);
     },
   );
-  const entry = { sequence, promise: request, startedAt: Date.now(), settled: false };
+  const entry = { sequence, promise: request, startedAt: Date.now(), joinable: true };
   latestDeviceListRequest = entry;
   void request.then(
-    () => { entry.settled = true; markStartupMilestone('device-directory-first-result'); },
-    () => { entry.settled = true; },
+    () => { entry.joinable = false; markStartupMilestone('device-directory-first-result'); },
+    () => { entry.joinable = false; },
   );
   return request;
 }
@@ -539,10 +545,12 @@ export async function handleRenameDevice(
     throwIpcError('INVALID_PARAMS', 'name is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
+    const renamed = await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'PATCH', body: { name: nextName } },
     );
+    invalidateDeviceListCoalescing();
+    return renamed;
   } catch (err) {
     rethrowServerError(err);
   }
@@ -556,10 +564,12 @@ export async function handleDeleteDevice(
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
+    const deleted = await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE' },
     );
+    invalidateDeviceListCoalescing();
+    return deleted;
   } catch (err) {
     rethrowServerError(err);
   }
