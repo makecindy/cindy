@@ -1,9 +1,9 @@
-import { resolveSystemLocale } from './locale';
+import { modernLocaleOf, resolveSystemLocale } from './locale';
 
 /** Translation targets are independent of the app's UI locale catalogue. */
 export const SCREENSHOT_TRANSLATION_LANGUAGES = [
   'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'pt', 'it',
-  'ru', 'ar', 'hi', 'th', 'vi', 'id', 'ms', 'tr', 'nl', 'pl', 'uk',
+  'pt-PT', 'pt-BR', 'ru', 'ar', 'hi', 'th', 'vi', 'id', 'ms', 'tr', 'nl', 'pl', 'uk',
   'sv', 'da', 'fi', 'nb', 'el', 'he', 'cs', 'ro', 'hu',
 ] as const;
 
@@ -19,11 +19,13 @@ export function isScreenshotTranslationPreference(value: unknown): value is Scre
 }
 
 export function resolveScreenshotTranslationLanguage(preference: unknown, uiLocale: string): ScreenshotTranslationLanguage {
-  return isScreenshotTranslationLanguage(preference) ? preference : resolveSystemLocale(uiLocale);
+  if (isScreenshotTranslationLanguage(preference)) return preference;
+  const locale = modernLocaleOf(resolveSystemLocale(uiLocale));
+  return isScreenshotTranslationLanguage(locale) ? locale : 'en';
 }
 
 export function screenshotTranslationLanguageName(language: ScreenshotTranslationLanguage, locale: string): string {
   // Script names distinguish Simplified / Traditional, rather than naming countries.
   const tag = language === 'zh-CN' ? 'zh-Hans' : language === 'zh-TW' ? 'zh-Hant' : language;
-  return new Intl.DisplayNames([locale], { type: 'language' }).of(tag) ?? tag;
+  return new Intl.DisplayNames([modernLocaleOf(resolveSystemLocale(locale))], { type: 'language' }).of(tag) ?? tag;
 }

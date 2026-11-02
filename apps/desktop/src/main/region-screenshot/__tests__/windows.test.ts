@@ -870,6 +870,31 @@ describe('screenshot window lifecycle', () => {
     expect(result).toHaveBeenCalledWith(expect.objectContaining({ action: 'translate', translationLanguage: 'fr' }));
   });
 
+  // PR #8410: changing the target on one display left the other renderer stale.
+  // Unit: the real session must deliver the committed preference to both displays;
+  // the single-display authorization test above cannot observe this missing push.
+  it('broadcasts saved translation preferences only to the active screenshot members', async () => {
+    const other = { ...display, id: display.id + 1 };
+    const overlays = [display, other].map(d => pool.ensure(d)!);
+    for (const overlay of overlays) pool.markShellReady(overlay.window.webContents, overlay.window.webContents.mainFrame);
+    const session = new RegionScreenshotSession({ pool, captures: [display, other].map(d => ({ display: d, image })),
+      helper: {} as SnapshotHelper, windows: [], lastRegions: new Map(), onClosed: vi.fn(), onResult: vi.fn() });
+    await session.open();
+    const contents = overlays[0].window.webContents;
+    for (const overlay of overlays) vi.mocked(overlay.window.webContents.send).mockClear();
+    await session.setTranslationLanguage(contents, contents.mainFrame, session.token, 'fr');
+    for (const overlay of overlays) expect(overlay.window.webContents.send).toHaveBeenCalledWith(
+      'region-screenshot:translation-language-changed', { token: session.token, preference: 'fr' });
+    let finish!: (value: 'fr') => void;
+    vi.mocked(writeScreenshotTranslationPreference).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = session.setTranslationLanguage(contents, contents.mainFrame, session.token, 'fr');
+    session.close();
+    for (const overlay of overlays) vi.mocked(overlay.window.webContents.send).mockClear();
+    finish('fr');
+    expect(await pending).toBe(false);
+    for (const overlay of overlays) expect(overlay.window.webContents.send).not.toHaveBeenCalled();
+  });
+
   it('sends pin pixel dimensions matching an exported 2x screenshot and only displays after painting', async () => {
     registerPinIpc();
     const overlay = pool.ensure(display)!;

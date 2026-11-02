@@ -20,6 +20,7 @@ const drafts = {
   },
 };
 import { applyScreenshotComposeRequest } from '../screenshotTaskHandoff';
+import { resolveScreenshotTranslationLanguage } from '../../../../shared/screenshotTranslation';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 
@@ -147,6 +148,20 @@ describe('screenshot draft restoration', () => {
     expect(text).not.toContain('{{language}}');
     expect(drafts.current?.attachments[0].url).toBe('image:language');
     expect(takeComposerSubmitRequest(NEW_MAKER_DRAFT_KEY)?.attachmentUrl).toBe('image:language');
+    await i18n.changeLanguage('en');
+  });
+  // The expanded UI catalogue includes Portuguese variants and classical editions.
+  // The actual handoff must keep a valid target; classical UI uses its modern base.
+  it.each([
+    ['pt-BR', 'pt-BR'], ['pt-PT', 'pt-PT'], ['de', 'de'],
+    ['zh-Hans-x-lzh', 'zh-CN'], ['zh-Hant-x-lzh', 'zh-TW'],
+  ] as const)('resolves the screenshot target for UI %s', async (locale, expected) => {
+    expect(resolveScreenshotTranslationLanguage('ui', locale)).toBe(expected);
+    await i18n.changeLanguage(locale);
+    i18n.resolvedLanguage = locale;
+    applyScreenshotComposeRequest(request('expanded-language'), vi.fn());
+    expect(JSON.stringify(drafts.current?.text)).not.toContain('{{language}}');
+    expect(takeComposerSubmitRequest(NEW_MAKER_DRAFT_KEY)?.attachmentUrl).toBe('image:expanded-language');
     await i18n.changeLanguage('en');
   });
 });

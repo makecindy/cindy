@@ -23,13 +23,17 @@ export default {
         await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
       }
       const languageName = (tag) => new Intl.DisplayNames([ui.locale], { type: 'language' }).of(tag);
-      const uiTag = ui.locale === 'zh-CN' ? 'zh-Hans' : ui.locale === 'zh-TW' ? 'zh-Hant' : ui.locale;
+      const uiTag = ['zh-CN', 'zh-Hans-x-lzh'].includes(ui.locale) ? 'zh-Hans' : ['zh-TW', 'zh-Hant-x-lzh'].includes(ui.locale) ? 'zh-Hant' : ui.locale;
       const action = async (tag) => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.action', { language: languageName(tag) }), exact: true });
       const openPicker = async () => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
       await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
       await (await action(uiTag)).waitFor();
       await ui.capture('translation-default');
       await openPicker();
+      const menuBounds = await page.getByRole('menu', { name: await ui.t('regionScreenshot.cindy') }).boundingBox();
+      const viewportWidth = await page.evaluate(() => window.innerWidth);
+      assert.ok(menuBounds && menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= viewportWidth,
+        'the language menu stays inside the editor after translated controls wrap');
       await ui.capture('translation-languages');
       await page.getByRole('menuitemradio', { name: languageName('fr'), exact: true }).click();
       await (await action('fr')).waitFor();
@@ -52,6 +56,14 @@ export default {
       await (await action('de')).waitFor();
       assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '');
       await ui.capture('translation-selected');
+      if (ui.case === 'translation') {
+        await page.evaluate(() => window.translationChanged({ token: 'previous', preference: 'fr' }));
+        await (await action('de')).waitFor();
+        await page.evaluate(() => window.translationChanged({ token: 'fixture', preference: 'fr' }));
+        await (await action('fr')).click();
+        assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'fr');
+        return;
+      }
       await (await action('de')).click();
       assert.equal(await page.evaluate(() => window.captureQa.exportedAction), 'translate');
       assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'de');

@@ -540,7 +540,12 @@ export class RegionScreenshotSession {
 
   async setTranslationLanguage(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, value: unknown): Promise<boolean> {
     if (!this.member(sender, frame, token) || this.exporting) return false;
-    await writeScreenshotTranslationPreference(value);
+    const preference = await writeScreenshotTranslationPreference(value);
+    if (!this.member(sender, frame, token) || this.exporting) return false;
+    for (const { overlay } of this.members.values()) {
+      if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
+        REGION_SCREENSHOT_CHANNEL.TRANSLATION_LANGUAGE_CHANGED, { token: this.token, preference });
+    }
     return true;
   }
 

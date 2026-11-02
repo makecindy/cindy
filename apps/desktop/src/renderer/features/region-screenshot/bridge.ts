@@ -12,6 +12,7 @@ import type { RegionCaptureBegin, RegionCaptureFrame, RegionCaptureMode } from '
 
 /** 框选浮层 preload (regionScreenshotPreload) 暴露的能力。 */
 export interface RegionScreenshotOverlayBridge {
+  onTranslationLanguageChanged?(callback: (payload: { token: string; preference: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): () => void;
   setTranslationLanguage(token: string, value: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean>;
   recordingControls(token: string, expanded: boolean, point?: { x: number; y: number }, dragging?: boolean): Promise<RegionRect | null>;
   previewRecording(token: string, bytes: Uint8Array, format: 'webm' | 'gif'): Promise<boolean>;

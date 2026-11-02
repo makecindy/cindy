@@ -317,6 +317,11 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
         }),
       );
     });
+    const offTranslation = bridge.onTranslationLanguageChanged?.(({ token, preference }) => {
+      if (state.current.session?.token !== token) return;
+      translationPreferenceRef.current = preference;
+      setTranslationPreference(preference);
+    });
     const offEnd = bridge.onEnd(() => {
       resetInteraction();
       setActiveDisplay(false);
@@ -354,6 +359,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       offBegin();
       offEnd();
       offClear();
+      offTranslation?.();
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('blur', onBlur);
     };

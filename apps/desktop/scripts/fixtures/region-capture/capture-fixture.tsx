@@ -57,6 +57,10 @@ mountPage({
     let begin: Parameters<RegionScreenshotOverlayBridge['onBegin']>[0] | undefined;
     let selected = { x: 100, y: 100, width: 480, height: 240 };
     const bridge: RegionScreenshotOverlayBridge = {
+      onTranslationLanguageChanged: (callback) => {
+        Object.assign(window, { translationChanged: callback });
+        return () => { Object.assign(window, { translationChanged: undefined }); };
+      },
       setTranslationLanguage: async (_token, value) => { if (qa.translationSaveFails) throw new Error("simulated save failure"); qa.translationPreference = value; return true; },
       autoScroll: async (_token, enabled) => { qa.automatic = enabled; return true; },
       shellReady() { queueMicrotask(() => begin?.({ token: 'fixture', locale: ctx.locale, viewport: { width: innerWidth, height: innerHeight }, scaleFactor: 1, frame: frame(), windows: snapping ? [{ id: 0, rect: { x: 0, y: 0, width: 700, height: 500 } }] : [], lastRegion: null, cursor: ctx.case === 'inactive' ? null : snapping ? { x: 150, y: 180 } : { x: 0, y: 0 }, safeArea: { x: 0, y: 0, width: innerWidth, height: innerHeight } })); },

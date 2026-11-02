@@ -12,6 +12,7 @@ import type { ScreenshotTranslationLanguage, ScreenshotTranslationPreference } f
 
 export const REGION_SCREENSHOT_CHANNEL = {
   SET_TRANSLATION_LANGUAGE: 'region-screenshot:set-translation-language',
+  TRANSLATION_LANGUAGE_CHANGED: 'region-screenshot:translation-language-changed',
   /** send: 浮层页面已挂载, 可以接收截图会话 (窗口隐藏预热时发一次)。 */
   SHELL_READY: 'region-screenshot:shell-ready',
   /** main → 浮层: 开始一次截图会话 ({@link RegionScreenshotBegin})。 */
