@@ -14,8 +14,22 @@ interface RollupNode {
   conclusion?: string | null;
   checkSuite?: {
     app?: { slug?: string | null } | null;
-    workflowRun?: { workflow?: { name?: string | null } | null } | null;
+    workflowRun?: { workflow?: { databaseId?: number | null } | null } | null;
   } | null;
+}
+
+/** Stable job identity; null keeps the run ungrouped (raw counts) rather than risk merging jobs. */
+function checkRunKey(node: RollupNode): string | null {
+  const slug = node.checkSuite?.app?.slug;
+  if (!slug || !node.name) return null;
+  const workflowRun = node.checkSuite?.workflowRun;
+  // Workflow display names are not unique; only the workflow id separates same-named workflows.
+  if (workflowRun || slug === 'github-actions') {
+    const workflowId = workflowRun?.workflow?.databaseId;
+    if (typeof workflowId !== 'number' || !Number.isSafeInteger(workflowId)) return null;
+    return [slug, workflowId, node.name].join('\u0000');
+  }
+  return [slug, '', node.name].join('\u0000');
 }
 interface RollupCounts {
   totalCount: number;
@@ -28,7 +42,7 @@ interface RollupCounts {
 /**
  * GitHub's rollup counts every check run on the head, including runs superseded by a newer
  * run of the same job (e.g. a concurrency-cancelled duplicate workflow run). Like required-check
- * evaluation, only the newest run per app/workflow/name counts. Without the complete node list
+ * evaluation, only the newest run per app/workflow id/name counts. Without the complete node list
  * the GitHub counts are kept as-is, so a real failure is never hidden.
  */
 function withoutSupersededRuns(counts: RollupCounts): RollupCounts {
@@ -38,14 +52,10 @@ function withoutSupersededRuns(counts: RollupCounts): RollupCounts {
   const latest = new Map<string, RollupNode & { databaseId: number }>();
   const superseded: RollupNode[] = [];
   for (const node of nodes) {
-    if (node.__typename !== 'CheckRun' || !node.name) continue;
+    if (node.__typename !== 'CheckRun') continue;
     const id = node.databaseId;
-    if (typeof id !== 'number' || !Number.isSafeInteger(id)) continue;
-    const key = [
-      node.checkSuite?.app?.slug ?? '',
-      node.checkSuite?.workflowRun?.workflow?.name ?? '',
-      node.name,
-    ].join('\u0000');
+    const key = checkRunKey(node);
+    if (key === null || typeof id !== 'number' || !Number.isSafeInteger(id)) continue;
     const kept = latest.get(key);
     if (kept && kept.databaseId > id) superseded.push(node);
     else {
@@ -116,7 +126,7 @@ const SUMMARY_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
         contexts(first: 100) {
           totalCount checkRunCountsByState { state count } statusContextCountsByState { state count }
           nodes { __typename ... on CheckRun { databaseId name status conclusion
-            checkSuite { app { slug } workflowRun { workflow { name } } } } }
+            checkSuite { app { slug } workflowRun { workflow { databaseId } } } } }
           pageInfo { hasNextPage }
         }
       } } } }

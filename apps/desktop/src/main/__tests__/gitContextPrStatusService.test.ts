@@ -33,10 +33,11 @@ describe('PR summary', () => {
 
   // Bug: #8476's head reported failed=1 because a concurrency-cancelled duplicate of a job that
   // later passed stayed in GitHub's rollup counts; AI tools and automation read it as a CI failure.
-  // Minimal input: the same workflow job cancelled, then rerun successfully (unit).
+  // Minimal input: the same workflow job cancelled, then rerun successfully (unit). Workflow display
+  // names are not unique, so a same-named job of another workflow (or one without an id) stays separate.
   it('counts only the newest run of the same workflow job, and keeps counts when nodes are incomplete', () => {
-    const run = (databaseId: number, conclusion: string) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
-      status: 'COMPLETED', conclusion, checkSuite: { app: { slug: 'github-actions' }, workflowRun: { workflow: { name: 'basis' } } } });
+    const run = (databaseId: number, conclusion: string, workflowId: number | null = 7) => ({ __typename: 'CheckRun', databaseId, name: 'check:basis',
+      status: 'COMPLETED', conclusion, checkSuite: { app: { slug: 'github-actions' }, workflowRun: { workflow: { databaseId: workflowId } } } });
     const rollup = (nodes: ReturnType<typeof run>[], hasNextPage = false) => ({
       totalCount: nodes.length + 1,
       checkRunCountsByState: ['SUCCESS', 'CANCELLED', 'FAILURE'].map(state => ({ state, count: nodes.filter(n => n.conclusion === state).length })),
@@ -49,6 +50,10 @@ describe('PR summary', () => {
     expect(summarizeChecks(rollup([run(2, 'FAILURE'), run(1, 'SUCCESS')])))
       .toEqual({ total: 2, passed: 1, failed: 1, pending: 0, skipped: 0 });
     expect(summarizeChecks(rollup([run(1, 'CANCELLED'), run(2, 'SUCCESS')], true)))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', 7), run(2, 'SUCCESS', 8)])))
+      .toMatchObject({ total: 3, failed: 1 });
+    expect(summarizeChecks(rollup([run(1, 'FAILURE', null), run(2, 'SUCCESS', null)])))
       .toMatchObject({ total: 3, failed: 1 });
   });
 
