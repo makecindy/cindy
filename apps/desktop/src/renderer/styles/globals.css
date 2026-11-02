@@ -697,6 +697,15 @@ html:lang(ko) {
   -webkit-user-drag: element;
 }
 
+/* 上面的子树恢复是为了让引用能从标签/图标起手拖拽，但删除按钮也在子树内。
+   按住 × 后移动超过原生拖拽阈值时，Chromium 会就地启动引用拖拽（mousedown
+   的 stopPropagation 只能挡冒泡，不取消默认拖拽），随后 click 被取消，表现
+   成「按住 × 稍微一拖就删不掉、反而拖走了整颗引用」。选择器要比上面的
+   `.ProseMirror :is(...) *`(0-2-0)更具体才能生效，这里是 0-3-1。 */
+.ProseMirror [data-composer-quote] button[data-quote-remove] {
+  -webkit-user-drag: none;
+}
+
 /* Slash 指令确认胶囊 — doc 里仍是普通 `/command` 文本。字号、字重和文字色
    完全继承 composer 正文;仅用 surface/border/radius 表达“已命中命令”。
    inline-flex 让 padding 进布局,避免行首悬挂绘制溢出输入卡片。 */
