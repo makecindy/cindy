@@ -105,6 +105,7 @@ import {
   registerBotWorkbenchTools,
   type BotWorkbenchCallbacks,
 } from './xdt-helper/bot_workbench.js';
+import { LIST_MACHINES_TOOL_NAME, registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
 import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
 import {
   registerBotCapabilityTools,
@@ -856,6 +857,8 @@ export interface XdtHelperMcpDeps {
   botCapabilities?: BotCapabilityCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
   teammateHome?: TeammateHomeCallbacks;
+  /** What machines this account has and their live resources. */
+  machines?: ListMachinesCallbacks;
   /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
    * feedback 类工具 submit_github_issue 会被注册; 不注入则不出现在 list_tools 里。
@@ -1176,6 +1179,35 @@ export function createXdtHelperMcpServer(
     }];
   };
 
+  // list_machines: the first step of any work across computers, so it is listed
+  // directly. Behind list_tools an agent that does not think to look never finds it.
+  const machineTools = new XdtHelperToolRegistry();
+  if (deps.machines) {
+    registerListMachinesTool(machineTools, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.machines,
+    });
+    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME)!;
+    server.registerTool(definition.name, {
+      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => {
+      const allowed = await allowedSurface();
+      if (!allowed.categories?.has('cindy')) {
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
+      }
+      return withToolCallAuthority(
+        deps.authorizeCall,
+        { sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId, server: 'cindy_helper', tool: definition.name, args },
+        () => machineTools.call(definition.name, args),
+      );
+    });
+  }
+  const machineListing = async (): Promise<Tool[]> => {
+    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME);
+    if (!definition || !(await allowedSurface()).categories?.has('cindy')) return [];
+    return [{ name: definition.name, description: definition.description, inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+  };
+
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
   // Resolve identity per request: Codex's HTTP server is shared across sessions.
@@ -1218,6 +1250,7 @@ export function createXdtHelperMcpServer(
       return { tools: [
         ...entryTools,
         ...(await askOwnerListing()),
+        ...(await machineListing()),
         ...(allowed.categories?.has('bots')
           ? withCindyGatedBotToolDescriptions(
             botTools.filter((tool) => !allowed.deniedTools?.has(tool.name)),
