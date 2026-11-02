@@ -3,7 +3,8 @@
 从[§4.23 指南](../../plugin-interactive-pages.md)进入；完整代码以本目录示例为准。
 这里列作者需要查询的参数、能力和失败处理，不要求在每个页面都实现。
 交给生成页面的 LLM（后端里的模型或 Cindy 对话中的 AI）的规则只写在
-《Cindy MCP Apps 页面生成手册》（[PAGE-GENERATION.md](PAGE-GENERATION.md)）；loader 用 `manual.items` 挂上同一份。
+《Cindy MCP Apps 页面生成手册》（[PAGE-GENERATION.md](PAGE-GENERATION.md)）；宿主用 `ghost_forge_guide({section:"pages"})`
+提供同一份，show_page 说明让 AI 写页面前先读。要兼容旧版 Cindy，可在插件里自带一份作退路。
 
 ## 清单
 
