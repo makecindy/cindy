@@ -450,7 +450,7 @@ export function FoldDesktopDeck({
             style={[
               StyleSheet.absoluteFill,
               styles.macbookTouchpad,
-              { bottom: spacing.sm },
+              { bottom: safeInsets.bottom + bottomReserve + spacing.sm },
             ]}
           >
             <FoldTouchpad send={send} enabled={enabled} bare />
