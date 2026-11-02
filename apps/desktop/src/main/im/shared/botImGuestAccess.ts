@@ -162,7 +162,8 @@ export async function resolveGuestLaneAccess(
 /** Thrown when a refused guest lane is about to start a runtime. */
 export class BotGuestAccessRefusedError extends Error {
   readonly code = 'BOT_GUEST_ACCESS_REFUSED';
-  constructor(readonly reason: 'unbound' | 'project-unavailable') {
+  /** `engine-unconfined`: the engine cannot keep this bound guest inside its project. */
+  constructor(readonly reason: 'unbound' | 'project-unavailable' | 'engine-unconfined') {
     super(`Guest access refused (${reason})`);
     this.name = 'BotGuestAccessRefusedError';
   }

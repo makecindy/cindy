@@ -6596,11 +6596,13 @@ assertRouteCurrent();
           : {}),
         // A confined guest on Windows has no shell: the native sandbox cannot
         // enforce the project-only read scope there (same reason as Review).
+        // The native image reader goes too; images go through project_view_image.
         ...(guestConfined && process.platform === 'win32' ? {
           project_doc_max_bytes: 0,
           'features.shell_tool': false,
           'features.unified_exec': false,
           'features.shell_snapshot': false,
+          'features.view_image': false,
           'features.js_repl': false,
           'features.code_mode': false,
           'features.code_mode_only': false,

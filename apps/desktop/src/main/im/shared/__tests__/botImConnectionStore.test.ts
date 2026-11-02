@@ -130,6 +130,22 @@ describe('bot im connection store', () => {
     expect(readBotImConnection('222222222222')?.groupActivation).toEqual({ '-1': 'always' });
   });
 
+  // #8359 review: two settings windows saving at once must both keep their change;
+  // a lost binding would put that guest back in the shared workspace.
+  it('keeps concurrent guest access changes instead of overwriting one', async () => {
+    await addBotImConnectionRecord({ botId: 'bot-a', channel: 'telegram' }, { id: () => '333333333333' });
+    const projectA = path.join(h.root, 'client-a');
+    const projectB = path.join(h.root, 'client-b');
+    await Promise.all([
+      setBotImConnectionGuestAccess('333333333333', { binding: { guestId: '42', projectPath: projectA } }),
+      setBotImConnectionGuestAccess('333333333333', { binding: { guestId: '43', projectPath: projectB } }),
+      setBotImConnectionGuestAccess('333333333333', { unbound: 'refuse' }),
+    ]);
+    expect(readBotImConnection('333333333333')?.guestAccess).toEqual({
+      unbound: 'refuse', bindings: { '42': { projectPath: projectA }, '43': { projectPath: projectB } },
+    });
+  });
+
   // #8359: guest bindings decide where a non-owner's turns run. A damaged entry
   // must make that guest unbound, never bound to a different directory.
   it('persists guest bindings and the unbound policy, dropping damaged entries', async () => {

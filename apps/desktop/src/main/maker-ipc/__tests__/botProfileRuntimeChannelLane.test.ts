@@ -216,6 +216,17 @@ describe('guest-DM lanes bound to a project', () => {
     expect(opts.botUserProfilePrompt ?? '').not.toContain('Takeshi');
   });
 
+  // #8359 review: a remote engine does not receive the confinement option.
+  it('refuses a bound guest whose engine runs on another computer', async () => {
+    seed('channel', 'im:telegram:777:dm:555');
+    const opts = {
+      id: 'lane', agentKind: 'claude-code', workingDir: '/work/client-a', model: 'm', agentDeviceId: 'device-2',
+    } as unknown as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(opts, { resolveGuestAccess: async () => bound }, { persistSnapshot: false }))
+      .rejects.toMatchObject({ code: 'BOT_GUEST_ACCESS_REFUSED', reason: 'engine-unconfined' });
+    expect(opts.workspaceConfinement).toBeUndefined();
+  });
+
   it('refuses a guest the owner has not let in', async () => {
     seed('channel', 'im:telegram:777:dm:556');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/x', model: 'm' } as MakerSessionCreateOpts;

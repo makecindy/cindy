@@ -53,6 +53,7 @@ async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
     .drizzle.select({
       botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey,
       agentKind: sessions.agentKind,
+      agentDeviceId: sessions.agentDeviceId,
     })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
@@ -60,9 +61,10 @@ async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
     .limit(1);
   if (!link || link.role !== 'channel') return false;
   const access = await resolveBotGuestLaneAccess(link.botId, link.routeKey);
-  // Pi cannot confine a bound guest (it refuses to start); answer with the
-  // same plain notice instead of a start failure.
-  return access.kind === 'refused' || (access.kind === 'bound' && link.agentKind === 'pi');
+  // Pi cannot confine a bound guest (it refuses to start), nor can an engine on
+  // another computer; answer with the same plain notice instead of a start failure.
+  return access.kind === 'refused'
+    || (access.kind === 'bound' && (link.agentKind === 'pi' || !!link.agentDeviceId));
 }
 
 export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {

@@ -152,6 +152,11 @@ const routineTools = async () => (await import('../../routines/service.js')).rou
 /** The messaging stack is only needed by a remote Desktop's channels page. */
 const imRuntime = () => import('../../im/shared/botImConnectionRuntime.js');
 
+/** Guest bindings (guest ids and local project paths) never leave this computer (#8359). */
+function withoutGuestAccess<T extends { connections: Array<{ guestAccess?: unknown }> }>(payload: T): T {
+  return { ...payload, connections: payload.connections.map(({ guestAccess: _local, ...connection }) => connection) };
+}
+
 /** Loaded on use: the voice stack is large and only a voice page of a remote Desktop needs it. */
 async function settingsVoice() {
   const api = (await import('../../voice-conversation/index.js')).getVoiceSettingsHostApi();
@@ -213,17 +218,19 @@ const settingsHost = createBotRemoteSettingsHost({
     channels: {
       im: {
         // Guest bindings hold local project paths; they stay on this computer.
-        list: async () => {
-          const payload = (await imRuntime()).buildBotImConnectionListPayload();
-          return { connections: payload.connections.map(({ guestAccess: _local, ...connection }) => connection) };
-        },
-        remove: async (id) => (await imRuntime()).removeBotImConnection(id),
+        // Every response that carries the connection list goes through the same filter.
+        list: async () => withoutGuestAccess((await imRuntime()).buildBotImConnectionListPayload()),
+        remove: async (id) => withoutGuestAccess(await (await imRuntime()).removeBotImConnection(id)),
         listGroups: async (id) => (await imRuntime()).listBotImConnectionGroups(id),
         setGroupActivation: async (id, chatId, mode) => (await imRuntime()).setBotImConnectionGroupMode(id, chatId, mode),
         listLanes: async (id) => (await imRuntime()).listBotImConnectionLanesForSettings(id),
         resetLane: async (id, sessionId) => (await imRuntime()).resetBotImConnectionLaneForSettings(id, sessionId),
         listAdoptable: async () => (await import('../../im/shared/botImPersonalAdoption.js')).listAdoptablePersonalBots(),
-        adopt: async (input) => (await import('../../im/shared/botImPersonalAdoption.js')).adoptPersonalBot(input),
+        adopt: async (input) => {
+          const result = await (await import('../../im/shared/botImPersonalAdoption.js')).adoptPersonalBot(input);
+          const { guestAccess: _local, ...connection } = result.connection;
+          return { ...withoutGuestAccess(result), connection };
+        },
       },
       wechat: async () => (await import('../../im/index.js')).getWechatSettingsApi(),
       x: {

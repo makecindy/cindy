@@ -545,6 +545,9 @@ export async function hydrateBotProfileRuntime(
   if (guestAccess?.kind === 'refused') throw new BotGuestAccessRefusedError(guestAccess.reason);
   const boundGuest = guestAccess?.kind === 'bound' ? guestAccess : null;
   if (boundGuest) {
+    // An engine on another computer does not receive the confinement option,
+    // so a bound guest never runs there (#8359).
+    if (opts.agentDeviceId) throw new BotGuestAccessRefusedError('engine-unconfined');
     opts.workingDir = boundGuest.projectPath;
     opts.extraDirs = [];
     opts.writableDirs = [];

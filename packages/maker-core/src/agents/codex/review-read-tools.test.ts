@@ -165,6 +165,9 @@ describe('confined guest project tools', () => {
     await fs.writeFile(path.join(project, 'infoA.txt'), 'secret A');
     await fs.mkdir(path.join(root, 'client-b'));
     await fs.writeFile(path.join(root, 'client-b', 'infoB.txt'), 'secret B');
+    // A real image outside the project: the image tool must refuse it too.
+    await fs.writeFile(path.join(root, 'client-b', 'photo.png'), Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
     grants = await buildReviewReadGrants(project, []);
   });
   afterEach(async () => {
@@ -184,6 +187,7 @@ describe('confined guest project tools', () => {
       ['project_read_file', { path: '../client-b/infoB.txt' }],
       ['project_read_file', { path: path.join(root, 'client-b', 'infoB.txt') }],
       ['project_list_directory', { path: root }],
+      ['project_view_image', { path: '../client-b/photo.png' }],
       ['review_read_file', { path: 'infoA.txt' }],
     ] as const) {
       const refused = await callGuestProjectTool(name, args, project, grants);

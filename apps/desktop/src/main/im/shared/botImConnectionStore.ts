@@ -355,25 +355,41 @@ export async function setBotImConnectionGuestAccess(
   id: string,
   change: { unbound?: BotImUnboundGuestPolicy; binding?: { guestId: string; projectPath: string | null } },
 ): Promise<BotImConnectionRecord | null> {
-  const current = readBotImConnection(id);
-  if (!current) return null;
-  const unbound = change.unbound ?? current.guestAccess?.unbound ?? 'shared';
-  const bindings = { ...(current.guestAccess?.bindings ?? {}) };
+  if (!isBotImConnectionId(id)) return null;
   if (change.binding) {
-    const { guestId, projectPath } = change.binding;
-    if (!isBotImGuestId(guestId)) throw new Error('INVALID_GUEST_ID');
-    if (projectPath === null) delete bindings[guestId];
-    else {
-      if (!isProjectPath(projectPath)) throw new Error('INVALID_PROJECT_PATH');
-      if (!Object.hasOwn(bindings, guestId) && Object.keys(bindings).length >= MAX_GUEST_BINDINGS) {
-        throw new Error('GUEST_BINDING_CAPACITY_REACHED');
-      }
-      bindings[guestId] = { projectPath };
+    if (!isBotImGuestId(change.binding.guestId)) throw new Error('INVALID_GUEST_ID');
+    if (change.binding.projectPath !== null && !isProjectPath(change.binding.projectPath)) {
+      throw new Error('INVALID_PROJECT_PATH');
     }
   }
-  return updateBotImConnectionRecord(id, {
-    guestAccess: normalizeGuestAccess({ unbound, bindings }),
-  });
+  let next: BotImConnectionRecord | null = null;
+  // Read, merge and check capacity under the file lock: two settings windows
+  // changing different guests (or policy and a binding) must not overwrite
+  // each other's saved access (#8359).
+  await file.updateAtomic(
+    (current) => {
+      const existing = current.value.connections[id];
+      if (!existing) return current.value;
+      const access = normalizeGuestAccess(existing.guestAccess);
+      const unbound = change.unbound ?? access?.unbound ?? 'shared';
+      const bindings = { ...(access?.bindings ?? {}) };
+      if (change.binding) {
+        const { guestId, projectPath } = change.binding;
+        if (projectPath === null) delete bindings[guestId];
+        else {
+          if (!Object.hasOwn(bindings, guestId) && Object.keys(bindings).length >= MAX_GUEST_BINDINGS) {
+            throw new Error('GUEST_BINDING_CAPACITY_REACHED');
+          }
+          bindings[guestId] = { projectPath };
+        }
+      }
+      const merged = { ...existing, guestAccess: normalizeGuestAccess({ unbound, bindings }) };
+      next = { id, ...merged };
+      return { connections: { ...current.value.connections, [id]: merged } };
+    },
+    { preserveDefaults: true },
+  );
+  return next;
 }
 
 export async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionRecord | null> {

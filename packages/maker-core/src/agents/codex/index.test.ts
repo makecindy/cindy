@@ -4222,7 +4222,8 @@ describe('CodexAgent confined guest workspace', () => {
     });
     const [, params] = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)!;
     const start = params as { config: Record<string, unknown>; dynamicTools?: Array<{ name: string }> };
-    expect(start.config).toMatchObject({ 'features.shell_tool': false, 'features.unified_exec': false });
+    // The native image reader would bypass the host check on project_view_image.
+    expect(start.config).toMatchObject({ 'features.shell_tool': false, 'features.unified_exec': false, 'features.view_image': false });
     const names = (start.dynamicTools ?? []).map((tool) => tool.name);
     expect(names).toEqual(expect.arrayContaining(['project_read_file', 'project_list_directory', 'project_view_image']));
     expect(names).not.toContain('review_read_file');
