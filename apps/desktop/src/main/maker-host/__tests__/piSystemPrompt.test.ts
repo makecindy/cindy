@@ -34,4 +34,13 @@ describe('composePiSystemPrompt', () => {
       '## Skill source precedence',
     );
   });
+
+  // 用户可见计划的写法是 vendor-neutral 规则，Pi 也画计划，所以从 agent 专属段
+  // 挪到了 host 段；这段断言防止它再被退回只对 Claude/Codex 生效的位置。
+  it('gives Pi the same user-facing plan guidance as Claude and Codex', () => {
+    expect(hostSystemPrompt).toContain('## User-facing plans');
+    expect(composePiSystemPrompt(hostSystemPrompt, piSystemPrompt)).toContain(
+      'Write for a general user, not as internal engineering notes.',
+    );
+  });
 });
