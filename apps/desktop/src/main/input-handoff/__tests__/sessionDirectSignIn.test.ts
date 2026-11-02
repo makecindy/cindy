@@ -35,6 +35,11 @@ const screens = {
     node('1', 'AXWebArea', { frame }),
     node('1.0', 'AXTextField', { title: 'Password', secure: true }),
   ],
+  noAddressEmail: [
+    node('0', 'AXTextField', { desc: '地址和搜索栏', hasValue: true }),
+    node('1', 'AXWebArea', { frame }),
+    node('1.0', 'AXTextField', { title: 'Email' }),
+  ],
   address: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Street' })]),
 };
 
@@ -260,6 +265,17 @@ describe('a sign-in step', () => {
         snapshot.controls.some((c) => c.kind === 'text' && c.label === 'Reply'),
       ),
     ).toBe(false);
+  });
+
+  it('does not call the sign-in done while the page address is missing', async () => {
+    const { driver, state } = desktop();
+    const run = start(driver);
+    await run.session.start();
+    state.screen = 'noAddressEmail';
+    await settle();
+    expect(run.latest().phase).toBe('ready');
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
   });
 
   it('does not hand back on a page that only clears its form for a moment', async () => {

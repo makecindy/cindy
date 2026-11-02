@@ -283,6 +283,18 @@ describe('a target window that is minimized', () => {
     expect(asked).toEqual([true]);
   });
 
+  it('takes it back from the previous process when the flow moves to another', async () => {
+    const { driver, asked } = closedBrowser(true);
+    const { session } = start(driver, { app: 'Google Chrome', windowTitle: 'App Store Connect' });
+    await session.start();
+    await driver.exposePage!(20, false);
+    asked.length = 0;
+    const internals = session as unknown as { read(): Promise<unknown>; target: { pid: number } };
+    internals.target.pid = 21;
+    await internals.read();
+    expect(asked).toEqual([true, false]);
+  });
+
   it('leaves it on when something else had already turned it on', async () => {
     const { driver, asked } = closedBrowser(false);
     const { session } = start(driver, { app: 'Google Chrome', windowTitle: 'App Store Connect' });

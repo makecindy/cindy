@@ -15,6 +15,7 @@ import {
 import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
 import { qrContent } from './qrCode.js';
+import { isBrowserBundle } from './originPolicy.js';
 import { extractStep, type ExtractedStep } from './stepExtractor.js';
 import type {
   ControlBinding,
@@ -678,7 +679,7 @@ export class InputHandoffSession {
     this.fieldsGoneReads = 0;
     if (read.signIn) this.signInMode = true;
     // Past a sign-in, a page's own fields (a reply box) are not its next step.
-    const signInOver = this.signInMode && !read.signIn && !read.pageMissing && !read.deviceCode && !hasSecretField(read);
+    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
     const step = signInOver ? { ...read, shown: [] } : read;
     this.step = step;
     this.guardSignInPage(step);
@@ -1093,6 +1094,8 @@ export class InputHandoffSession {
       return;
     }
     if (!this.step) return;
+    // Which page this is cannot be told: it is no evidence the sign-in is over.
+    if (this.signInMode && this.pageUnknown(step) && !hasSecretField(step)) return;
     if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
       this.fieldsGoneReads = 0;
       // Whatever page the owner is on is covered, whoever is typing where.
@@ -1229,11 +1232,20 @@ export class InputHandoffSession {
     // Asked on every miss: another request on the same browser may have ended and taken it back.
     if (step.pageMissing && !this.ended) {
       const pid = this.target.pid;
-      if (await this.options.driver.exposePage?.(pid, true).catch(() => false)) this.pageExposedOn = pid;
+      if (await this.options.driver.exposePage?.(pid, true).catch(() => false)) {
+        // The flow moved to another process: the previous one no longer needs it.
+        if (this.pageExposedOn !== pid) this.releasePage();
+        this.pageExposedOn = pid;
+      }
       // The request may have ended while asking, with nothing left to take it back.
       if (this.ended) this.releasePage();
     }
     return step;
+  }
+
+  /** A browser showing no page, or a page whose address went missing for now. */
+  private pageUnknown(step: ExtractedStep): boolean {
+    return !!step.pageMissing || (!step.url && isBrowserBundle(this.target?.bundleId ?? ''));
   }
 
   /** Keeping a page built costs the browser: only for as long as this request needs it. */
