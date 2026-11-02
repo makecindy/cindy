@@ -8,6 +8,7 @@
 import { loadExperts, watchExperts, type ExpertEntry, type ExpertWatcher } from '@cindy/maker-core/experts';
 
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
+import type { ExpertDraftConfirm } from './expertDraftConfirm.js';
 import { isValidExpertSlug, type ExpertSessionStore } from './expertSessions.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -22,6 +23,8 @@ export interface ExpertsHandlerDeps {
   watch?: typeof watchExperts;
   /** ROADMAP 3.2a: pending pick + session bindings. Omit to register the list only. */
   sessions?: ExpertSessionStore;
+  /** ROADMAP 3.8: owner approval of expert drafts. Omit to register without it. */
+  drafts?: ExpertDraftConfirm;
 }
 
 export interface ExpertsHandlerHandle {
@@ -56,8 +59,21 @@ export function registerExpertsHandlers(
       return sessions.describeBinding(sessionId);
     });
   }
+  const drafts = deps.drafts;
+  const offDraftEvents = drafts?.onChange((event) => deps.broadcast(MAKER_PUSH.EXPERTS_DRAFT_EVENT, event));
+  if (drafts) {
+    registry.handle(MAKER_INVOKE.EXPERTS_DRAFT_LIST, (event, sessionId: unknown) => {
+      deps.assertTrusted(event);
+      return drafts.list(typeof sessionId === 'string' && sessionId ? sessionId : undefined);
+    });
+    registry.handle(MAKER_INVOKE.EXPERTS_DRAFT_DECIDE, (event, requestId: unknown, decision: unknown) => {
+      deps.assertTrusted(event);
+      return drafts.decide(requestId, decision);
+    });
+  }
   return {
     dispose() {
+      offDraftEvents?.();
       offSessionEvents?.();
       watcher?.close();
       watcher = undefined;

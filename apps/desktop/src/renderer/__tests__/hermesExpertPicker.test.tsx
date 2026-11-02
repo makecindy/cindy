@@ -73,3 +73,32 @@ describe('Hermes expert picker (ROADMAP 3.2a)', () => {
     expect(renderToStaticMarkup(<HermesExpertLabelView binding={null} />)).toBe('');
   });
 });
+
+describe('Hermes expert draft card (ROADMAP 3.8)', () => {
+  it('shows the exact expert.md, where it goes, and Approve / Reject', async () => {
+    const { HermesExpertDraftCardView } = await import('@/features/cc-agent/HermesExpertDraftCard');
+    const html = renderToStaticMarkup(
+      <HermesExpertDraftCardView
+        request={{
+          requestId: 'r1',
+          sessionId: 's1',
+          draft: { slug: 'uk-cold-email', name: 'UK Cold Email Writer', description: 'Writes cold emails.', tags: ['sales'], memory: false, prompt: 'p' },
+          targetDir: '/home/o/.cindy-harness/experts/uk-cold-email',
+          markdown: '---\nname: UK Cold Email Writer\n---\nYou write <b>cold</b> emails.\n',
+          createdAt: 0,
+          expiresAt: 1,
+        }}
+        busy={false}
+        note=""
+        onNoteChange={() => undefined}
+        onDecide={() => undefined}
+      />,
+    );
+    expect(html).toContain('New expert draft: UK Cold Email Writer');
+    expect(html).toContain('/home/o/.cindy-harness/experts/uk-cold-email/expert.md');
+    expect(html).toContain('You write &lt;b&gt;cold&lt;/b&gt; emails.');
+    expect(html).toContain('session model (no route set)');
+    expect(html).toContain('data-testid="hermes-expert-draft-approve"');
+    expect(html).toContain('data-testid="hermes-expert-draft-reject"');
+  });
+});

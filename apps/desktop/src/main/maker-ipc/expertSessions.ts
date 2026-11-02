@@ -146,6 +146,23 @@ export class ExpertSessionStore {
   }
 
   /**
+   * True when the session's expert is a loadable Hermes expert whose `tools:` lists `tool`
+   * (ROADMAP 3.8). `includePending` also accepts the pending pick, for the tool list built when
+   * a fresh session starts (before its first send binds it); tool calls check the binding only.
+   */
+  expertAllowsTool(sessionId: string, tool: string, opts: { includePending?: boolean } = {}): boolean {
+    const slug = this.getBoundSlug(sessionId) ?? (opts.includePending ? this.getPending() : null);
+    if (!slug) return false;
+    const expert = loadExpert(path.join(this.opts.rootDir, slug)).expert;
+    return expert?.agent === 'hermes' && expert.tools.includes(tool);
+  }
+
+  /** Experts root (~/.cindy-harness/experts in production). */
+  get rootDir(): string {
+    return this.opts.rootDir;
+  }
+
+  /**
    * The first-turn preamble for a fresh Hermes session, or null when the session has no expert.
    * Binds a pending pick to this session first. Throws (fails closed) when a bound expert cannot
    * be applied as written.

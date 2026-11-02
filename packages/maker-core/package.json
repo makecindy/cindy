@@ -26,6 +26,7 @@
     "./vault-notes": "./src/notes/vault-notes.ts",
     "./scheduled-sessions": "./src/schedules/scheduled-sessions.ts",
     "./expert-handoff": "./src/experts/expert-handoff.ts",
+    "./expert-draft": "./src/experts/expert-draft.ts",
     "./routing-file": "./src/providers/routing-file.ts",
     "./routed-auxiliary": "./src/providers/routed-auxiliary.ts",
     "./model-route-resolver": "./src/providers/model-route-resolver.ts",

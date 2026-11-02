@@ -8,6 +8,7 @@ import type { Logger, McpProvider } from '@cindy/maker-core';
 import { withMcpRouteIdentity } from '../codexHttpBridge.js';
 import {
   HERMES_BRIDGE_COLLAB_SERVERS,
+  HERMES_BRIDGE_EXPERT_SERVERS,
   HERMES_BRIDGE_GATED_SERVERS,
   HERMES_BRIDGE_SAFE_SERVERS,
   buildHermesShimServerConfig,
@@ -20,7 +21,12 @@ import {
 } from '../hermesBridgeHost.js';
 import { readHermesBridgeRuntimeFile } from '../hermesBridgeRuntimeFile.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
-import { resetPiEnvironmentForTest, shutdownPiEnvironment } from '../piEnvironment.js';
+import {
+  getPiExtraSpawnConfig,
+  resetPiEnvironmentForTest,
+  setHermesOnlyBridgeProviders,
+  shutdownPiEnvironment,
+} from '../piEnvironment.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -67,6 +73,13 @@ describe('hermes bridge exposure policy', () => {
     // The worker-side bridge is not exposed to Hermes in 3.7a.
     expect(selectHermesBridgeServers([...all, 'orca_worker_bridge'], new Set(), true)).not.toContain('orca_worker_bridge');
     expect(selectHermesBridgeServers(['cindy_docs'], new Set(), true)).toEqual(['cindy_docs']);
+  });
+
+  it('adds the expert creator server only for an expert-creator session (3.8)', () => {
+    const all = [...HERMES_BRIDGE_SAFE_SERVERS, ...HERMES_BRIDGE_COLLAB_SERVERS, ...HERMES_BRIDGE_EXPERT_SERVERS];
+    expect(selectHermesBridgeServers(all, new Set(), true)).toEqual(['cindy_docs', 'cindy_orca']);
+    expect(selectHermesBridgeServers(all, new Set(), false, true)).toEqual(['cindy_docs', 'cindy_experts']);
+    expect(selectHermesBridgeServers(['cindy_docs'], new Set(), false, true)).toEqual(['cindy_docs']);
   });
 
   it('mirrors the Pi collab gate: global switch or active team member, never when the project disabled it', () => {
@@ -309,6 +322,52 @@ describe('createHermesBridgePreparer (real bridge, stub providers)', () => {
     const lead = await run('sess-R', { orcaRole: 'lead', orcaLeadSessionId: 'sess-R' });
     expect(lead.written).toEqual(['cindy_docs', 'cindy_orca']);
     expect(lead.orca).toContain('orca-ok');
+  });
+
+  it('serves cindy_experts on the shared bridge to an expert-creator Hermes session only, never to Pi (3.8)', async () => {
+    setHermesOnlyBridgeProviders([stubProvider('cindy_experts', 'experts-ok')]);
+    const run = async (sessionId: string, creator: boolean) => {
+      const written: string[] = [];
+      const removed: string[] = [];
+      const prepare = createHermesBridgePreparer({
+        providers: () => [stubProvider('cindy_docs', 'docs-ok')],
+        logger: noopLogger(),
+        runtimeFile,
+        resolveShimPath: () => SHIM,
+        globalCollabEnabled: () => false,
+        expertCreator: (id) => creator && id === sessionId,
+        registration: {
+          listServers: async () => ({ cindy_experts: buildHermesShimServerConfig(SHIM, 'cindy_experts') }),
+          setServer: async (name) => {
+            written.push(name);
+          },
+          removeServer: async (name) => {
+            removed.push(name);
+          },
+        },
+      });
+      const session = await prepare({ sessionId, workingDir: dir, permissionMode: 'bypassPermissions' });
+      const experts = await callTool('cindy_experts', sessionId);
+      session!.dispose();
+      return { written, removed, experts: experts.body };
+    };
+    const creator = await run('sess-C', true);
+    expect(creator.written).toEqual(['cindy_docs']);
+    expect(creator.removed).toEqual([]);
+    expect(creator.experts).toContain('experts-ok');
+    const plain = await run('sess-N', false);
+    expect(plain.removed).toEqual(['cindy_experts']);
+    expect(plain.experts).not.toContain('experts-ok');
+
+    // Pi shares the bridge but never mounts the Hermes-only server.
+    const pi = await getPiExtraSpawnConfig([stubProvider('cindy_docs', 'docs-ok')], noopLogger(), {
+      sessionId: 'pi-1',
+      workingDir: dir,
+    } as Parameters<typeof getPiExtraSpawnConfig>[2]);
+    const piServers = pi?.mcpBridge?.servers.map((server) => server.name) ?? [];
+    expect(piServers).toContain('cindy_docs');
+    expect(piServers).not.toContain('cindy_experts');
+    pi?.disposeSessionCtx?.();
   });
 
   it('returns null and touches nothing unless the session is full access (1.5b-5d)', async () => {
