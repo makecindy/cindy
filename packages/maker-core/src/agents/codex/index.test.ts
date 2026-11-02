@@ -8334,6 +8334,61 @@ describe('CodexAgent MCP thread context hooks', () => {
     },
   );
 
+  it('dispatches a pinned Skill when the host prepends a UI-language note', async () => {
+    const pinnedPath = '/cindy/system-skills/v10/learn/SKILL.md';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-pinned-learn-ui-note' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-ui-note',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.send(
+      {
+        type: 'user',
+        content: '[UI language] System note appended each turn. This is not a user message.\n\n/learn release flow',
+      },
+      {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath },
+        [AUTO_REVIEW_SOURCE_CONTENT]: '/learn release flow',
+      },
+    );
+
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown[] };
+    expect(turnStart.input).toEqual([
+      { type: 'skill', name: 'learn', path: pinnedPath },
+      { type: 'text', text: 'release flow' },
+    ]);
+
+    await handle.close();
+  });
+
+  it('does not resolve a pinned Skill from an embedded command in host-owned text', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-embedded-command',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await expect(handle.send(
+      { type: 'user', content: 'Please read this note: /learn release flow' },
+      {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: '/cindy/system-skills/v10/learn/SKILL.md' },
+        [AUTO_REVIEW_SOURCE_CONTENT]: 'Please read this note: /learn release flow',
+      },
+    )).rejects.toThrow('The pinned Skill does not match the dispatched command');
+
+    await handle.close();
+  });
+
   it.each(['system', 'admin'] as const)(
     'keeps a palette-hidden %s Skill directly invocable',
     async (scope) => {
