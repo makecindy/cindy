@@ -225,7 +225,7 @@ export interface RemoteAgentHostDeps {
    *    null / 缺省时在已开放的供应商里按本机默认规则挑一个。返回 null = 没有开放的供应商可用。
    *  - isAllowed：进行中的任务每次发消息前复核(用户可能刚把它关掉)。
    * 两者都带上控制端：供应商分享的受邀者只能用分享给它的那个供应商。
-   * groupRouting 仅由宿主在组分配前设定，不来自 wire；本机启动入口不带它重新 resolve。
+   * groupRouting 由宿主在分配或向已确认的组员转发时设定，不来自 wire；本机执行不带它重新 resolve。
    */
   providerAccess?: {
     resolve(kind: RemoteAgentKind, model: string, providerId: string | null | undefined, controller: string,
@@ -2274,7 +2274,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 来源钉在分享的供应商上(本机按分享的那个供应商核对模型)，转给那台时换成那台上的这个供应商。
         const opts = args[1] && typeof args[1] === 'object' && !Array.isArray(args[1]) ? args[1] as Record<string, unknown> : {};
         if (access) {
-          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '', run.providerId ?? null, run.controller, run.sessionId);
+          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '',
+            run.providerId ?? null, run.controller, run.sessionId, { groupRouting: true });
           if (!resolved) failProviderNotAllowed();
         }
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
@@ -2941,8 +2942,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (guest && !(await guestOwnsSession(controller, request.relay, request.sourceSdkSessionId))) {
           fail('REMOTE_AGENT_INVALID', 'this conversation cannot be forked on this computer');
         }
+        // Only a recorded executor makes this a coordinator operation; local forks keep their login check.
+        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const providerId = await deps.providerAccess?.resolve(
           request.agentKind, request.model, request.providerId, controller, request.sourceSessionId,
+          { groupRouting: member !== null },
         );
         if (deps.providerAccess && !providerId) failProviderNotAllowed();
         const assertProvider = () => {
@@ -2950,7 +2954,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (providerId && !deps.providerAccess?.isAllowed(providerId, controller, request.model, request.sourceSessionId)) failProviderNotAllowed();
         };
         assertProvider();
-        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const hostSessionId = hostSessionIdFor(scope, request.sourceSessionId);
         const forkWorkspaceIds = [...new Set([...(await forkWorkspacesFor(scope, request.sourceSdkSessionId)), hostSessionId])];
         let result: RemoteAgentForkResult;

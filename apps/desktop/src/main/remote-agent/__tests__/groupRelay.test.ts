@@ -47,6 +47,7 @@ let root: string;
 interface Started {
   input: HostedStartInput;
   sends: unknown[];
+  modelChanges: unknown[][];
   /** 让这台上的 Agent 发出一个事件。 */
   emit(event: AgentEvent): void;
   /** 这台上是否正在运行一轮(写进状态)。 */
@@ -92,6 +93,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       const record: Started = {
         input,
         sends: [],
+        modelChanges: [],
         running: false,
         emit(event) {
           queue.push(event);
@@ -115,6 +117,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
           await options.onSend?.(record);
         },
         async steer() {},
+        async setModel(...args: unknown[]) { record.modelChanges.push(args); },
         async abort() {},
         isTurnRunning: () => record.running,
         async close() {},
@@ -362,7 +365,9 @@ describe('provider group relay for shared users', () => {
   const signedOutProvider: ProviderView = {
     id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
     connected: false, agents: ['claude-code'],
-    models: { 'claude-code': [{ id: 'claude-opus', name: 'Opus', contextWindow: 200_000, efforts: [], defaultEffort: null }] },
+    models: { 'claude-code': ['claude-opus', 'claude-sonnet'].map(id => ({
+      id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null,
+    })) },
     routing: { 'claude-code': { upstream: 'https://example.invalid', authStrategy: 'none' } },
   };
   const signedOutResolver = (allowed = true): NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'] =>
@@ -386,6 +391,58 @@ describe('provider group relay for shared users', () => {
         await host.abortAll();
         await host.dispose();
       }
+    }
+  });
+
+  // PR #8475 follow-up: coordinator authorization also applies to ongoing model changes and forks.
+  // The startup regression alone never called these separate production paths with connected:false.
+  it.each(['model', 'fork'] as const)('performs %s on the executor through a signed-out coordinator', async operation => {
+    const env = setup({ owner: { resolveProvider: signedOutResolver() } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      if (operation === 'model') {
+        await expect(client.call('setModel', ['not-shared', {}])).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+        expect(env.memberStarted.mini[0].modelChanges).toHaveLength(0);
+        await client.call('setModel', ['claude-sonnet', {}]);
+        expect(env.memberStarted.mini[0].modelChanges).toEqual([['claude-sonnet', { providerId: 'anthropic-2' }]]);
+      } else {
+        const fork = await env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+          newSessionId: 'signed-out-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+          model: 'claude-opus', providerId: 'shared-provider' }) as { newSdkSessionId: string };
+        expect(fork.newSdkSessionId).toBe(`${started.id}-fork`);
+        const child = await openAsGuest(env, GUEST_A, openPayload('signed-out-fork', {
+          options: { resumeSessionId: fork.newSdkSessionId },
+        }));
+        expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(fork.newSdkSessionId);
+        await child.client.close('close', 'navigation');
+      }
+      await client.call('send', [{ content: 'after change', attachments: [] }, {}]);
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.ownerStarted).toHaveLength(0);
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
+    }
+  });
+
+  it('keeps a local fork on the raw login check after the coordinator signs out', async () => {
+    let connected = true;
+    const env = setup({ plans: [{ kind: 'local' }], owner: {
+      resolveProvider: async (kind, model, providerId, _controller, _sessionId, context) => resolveGuestProviderId(
+        [{ ...signedOutProvider, connected }], 'shared-provider', () => true, kind, model, providerId, context,
+      ),
+    } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      connected = false;
+      await expect(client.call('setModel', ['claude-sonnet', {}])).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(env.ownerStarted[0].modelChanges).toHaveLength(0);
+      await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+        newSessionId: 'local-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+        model: 'claude-opus', providerId: 'shared-provider' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
     }
   });
 
