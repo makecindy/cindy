@@ -297,7 +297,7 @@ it.each<{
   url: string | null;
 }>([
   { vendorKey: 'cc', providerId: 'anthropic', label: '打开 Claude 用量页面', url: 'https://claude.ai/settings/usage' },
-  { vendorKey: 'codex', providerId: 'openai', label: '打开 Codex 用量页面', url: 'https://chatgpt.com/codex/settings/usage' },
+  { vendorKey: 'codex', providerId: 'openai', label: '打开 Codex 用量页面', url: 'https://chatgpt.com/settings/usage' },
   { vendorKey: 'pi', providerId: 'xai', label: '打开 Grok 用量页面', url: 'https://grok.com' },
   { vendorKey: 'pi', providerId: 'deepseek', upstream: 'https://api.deepseek.com', label: 'providerAccountUsage.openDashboard', url: 'https://platform.deepseek.com/usage' },
   { vendorKey: 'pi', providerId: 'glm', upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', label: 'providerAccountUsage.zhipuCodingPlan.usage', url: 'https://www.bigmodel.cn/coding-plan/personal/usage' },
