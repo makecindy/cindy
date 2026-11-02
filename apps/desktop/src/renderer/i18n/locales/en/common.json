@@ -3629,6 +3629,8 @@
         "simpleSubtitle": "Multiple models, billed through one account."
       },
       "custom": {
+        "nameSearchUnavailable": "This provider is no longer available. Continue with a custom endpoint or search again.",
+        "nameSearchHint": "You can keep this name and continue with a custom endpoint.",
         "tag": "Custom",
         "editAria": "Edit connection settings",
         "deleteAria": "Delete",

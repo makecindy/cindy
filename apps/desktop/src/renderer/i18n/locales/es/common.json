@@ -3675,6 +3675,8 @@
         "simpleSubtitle": "Múltiples modelos, facturados a través de una sola cuenta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este proveedor ya no está disponible. Continúa con un endpoint personalizado o vuelve a buscar.",
+        "nameSearchHint": "Puedes conservar este nombre y continuar con un endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar configuración de conexión",
         "deleteAria": "Eliminar",
