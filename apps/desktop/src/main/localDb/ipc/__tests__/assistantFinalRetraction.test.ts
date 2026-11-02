@@ -570,3 +570,34 @@ it.each(['user', 'assistant'] as const)('reconciles PRs after an ordinary %s rew
     expect((await prRefsStore.listPrRefs('s1')).map(r => r.prNumber)).toEqual([82]);
   } finally { release(); hook.mockRestore(); }
 });
+
+// A pending manual GitHub check must not hold the PR lock needed by the global
+// broadcaster FIFO. Observe another task's committed row before releasing it.
+it.each(['correction', 'retraction'] as const)('persists another task during PR verification and final %s', async mode => {
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const verifying = new Promise<void>(resolve => { entered = resolve; });
+  onAssistantTextEvent('s1', { text: 'Original draft', agentMessageId: 'pending-check' }, null);
+  flushAssistantBlock('s1'); await drainPersistQueue();
+  h.sqlite!.prepare("INSERT INTO sessions (id) VALUES ('s2')").run();
+  const attaching = prRefsStore.managePrRefs('s1',
+    { action: 'add', url: 'https://github.com/o/r/pull/99' }, async () => { entered(); await gate; });
+  await verifying;
+  let drained: Promise<void> | undefined;
+  try {
+    onAssistantTextEvent('s1', { text: mode === 'retraction' ? '' : 'Corrected draft',
+      agentMessageId: 'pending-check', isFinal: true, isFullText: true }, null);
+    onAssistantTextEvent('s2', { text: 'Other task reply', agentMessageId: 'other-task-check',
+      isFinal: true, isFullText: true }, null);
+    drained = drainPersistQueue();
+    const completion = await Promise.race([
+      drained.then(() => 'settled'),
+      new Promise<string>(resolve => setImmediate(() => resolve('blocked'))),
+    ]);
+    expect(completion).toBe('settled');
+    expect(h.sqlite!.prepare("SELECT content FROM messages WHERE session_id='s2'").get())
+      .toEqual({ content: 'Other task reply' });
+  } finally {
+    release(); await attaching; await drained; clearSessionPersistState('s2');
+  }
+});

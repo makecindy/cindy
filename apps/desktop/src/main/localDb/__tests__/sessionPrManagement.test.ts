@@ -235,6 +235,33 @@ describe('manual PR management', () => {
     expect(await listPrRefs('s')).toEqual([]);
   });
 
+  // Verification releases the task write lock; commit must re-read removals
+  // and reject a replaced account rather than publishing its earlier snapshot.
+  it.each(['removed', 'account-changed'] as const)('revalidates a pending add after %s', async change => {
+    const ref = { id: 'pending-manual', sessionId: 's', owner: 'example', repo: 'repo', prNumber: 98,
+      url: 'https://github.com/example/repo/pull/98', firstSeenAt: 1, lastSeenAt: 1,
+      associationSource: 'explicit', manuallyAdded: false, removedAt: null };
+    db.insert(sessionPrRefs).values(ref).run();
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const verifying = new Promise<void>(resolve => { entered = resolve; });
+    const adding = managePrRefs('s', { action: 'add', url: ref.url }, async () => { entered(); await gate; })
+      .then(result => ({ result, error: null }), error => ({ result: null, error }));
+    await verifying;
+    let removing: Promise<unknown> | undefined;
+    try {
+      if (change === 'removed') {
+        removing = managePrRefs('s', { action: 'remove', id: ref.id }, verify);
+        expect(await Promise.race([removing.then(() => 'settled'),
+          new Promise<string>(resolve => setImmediate(() => resolve('blocked')))])).toBe('settled');
+      } else h.client = { drizzle: db }; // same data fixture, replacement owner client
+      release();
+      const outcome = await adding;
+      expect(outcome.error).toMatchObject({ code: change === 'removed' ? 'ALREADY_EXISTS' : 'PERMISSION_DENIED' });
+      expect(db.select().from(sessionPrRefs).all()).toMatchObject([{ manuallyAdded: false }]);
+    } finally { release(); await adding; await removing; }
+  });
+
   it('enforces three pins under concurrent requests and preserves priority across rescans', async () => {
     for (const n of [1, 2, 3, 4]) await add(n);
     const refs = await listPrRefs('s');
