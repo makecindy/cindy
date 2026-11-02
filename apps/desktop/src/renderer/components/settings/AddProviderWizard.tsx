@@ -1098,6 +1098,10 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
+    // Old catalogs have no interface declarations to consult. Keep their
+    // established discovery behavior, including the split-inventory protection.
+    const hasInterfaceProfiles = modelRegistry?.schemaVersion === 6
+      && modelRegistry.interfaceProfiles?.some(profile => profile.providerId === preset.id);
     const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
       .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
       .map(([url]) => url));
@@ -1205,7 +1209,7 @@ export function AddProviderWizard({
           const existing = next.get(m.id);
           const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
             presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)),
-            route, preservePresetOwnership || (!!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
+            route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
             const mergedAgents =

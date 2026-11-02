@@ -79,8 +79,12 @@ export function presetSupplementalModels(
       ...(profile.requestPath ? { requestPath: profile.requestPath } : {}) });
   }
   const candidates = new Map<string, ProviderRuntimeModelConfig>();
+  // A global V6 registry may still leave this product on its legacy Pi adapter.
+  // Declared (including retired) profiles keep the stricter interface resolver.
+  const hasInterfaceProfiles = registry?.schemaVersion === 6
+    && registry.interfaceProfiles?.some(profile => profile.providerId === preset.id);
   for (const source of sources) {
-    const protocol = agent === 'pi' && (!registry || registry.schemaVersion < 6) ? undefined : source.wireProtocol;
+    const protocol = agent === 'pi' && !hasInterfaceProfiles ? undefined : source.wireProtocol;
     for (const model of providerModelsForRoute(source.baseUrl, protocol)) {
       if (candidates.has(model.id)) continue;
       const candidate = presetModelCandidate(preset, agent, model, registry, route, source);

@@ -95,6 +95,17 @@ describe('supplemental preset candidates', () => {
     expect(presetModelCandidate(preset, 'claude-code', model, undefined, route, route, true)).toBeUndefined();
   });
 
+  // Unit: a V6 registry without Mistral profiles is still legacy for that product.
+  // Filtering its mixed inventory by Chat hides legal Conversations candidates offline.
+  it('keeps Pi mixed-API supplements when V6 has no profiles for the product', () => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'mistral')!);
+    const model = preset.runtimes.pi!.models.find(model => model.api === 'mistral-conversations')!;
+    expect(model).toBeDefined();
+    preset.runtimes.pi!.models = [];
+    expect(presetSupplementalModels(preset, 'pi', BUNDLED_CATALOG.modelRegistry))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: model.id, execution: { pi: { api: 'mistral-conversations' } } })]));
+  });
+
   it('preserves the legacy Pi mixed-API inventory without a V6 registry', () => {
     const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'opencode-go')!);
     preset.runtimes.pi!.models = [];

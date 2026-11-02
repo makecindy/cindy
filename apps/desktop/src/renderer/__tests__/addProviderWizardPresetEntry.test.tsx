@@ -438,6 +438,29 @@ it('retained remote catalog keeps Vision Exp CC membership after merging', async
   expect(saved.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(true);
 });
 
+// Unit: legacy shared discovery must still offer and save genuinely new IDs.
+// The original regression fixtures only discover a model known to the V6 registry.
+it.each(['missing', 'v5'] as const)('keeps new shared-discovery models with %s Registry', async kind => {
+  const preset = parseCatalog({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset] }).presets![0];
+  const modelRegistry = kind === 'missing' ? undefined : { schemaVersion: 5 as const,
+    updatedAt: '2026-10-30T08:00:00.000Z', models: [] };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry });
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true,
+    models: [{ id: 'deepseek-new-upstream', name: 'New upstream model' }] });
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test-legacy' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('New upstream model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]?.models.map(model => model.id)).toContain('deepseek-new-upstream');
+  }
+});
+
 describe('AddProviderWizard — preset 直达', () => {
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {
     const onOpenCustomForm = vi.fn();
