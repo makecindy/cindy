@@ -29,6 +29,12 @@ function invitationLink(path: string): string | null {
   return parseChatInvitationShareId(path) ? path.trim() : null;
 }
 
+function sameInvitation(left: string | undefined, right: string): boolean {
+  if (left === right) return true;
+  const shareId = parseChatInvitationShareId(left ?? '');
+  return shareId !== null && shareId === parseChatInvitationShareId(right);
+}
+
 /** Automatic discovery accepts only complete links, never bare tokens or malformed clipboard text. */
 export function parseChatInviteLink(path: string): string | null {
   if (!/^(https?|cindy|cindycn|cindydev):\/\//i.test(path)) return null;
@@ -44,7 +50,7 @@ export function receiveChatInviteLink(path: string): boolean {
   // Retain only an empty canonical link for malformed input.
   const link = invitationLink(path) ?? 'cindy://chat-invite/';
   if (current) {
-    if ((current.link ?? current.manualLink) !== link && current.manualSourceLink !== link && !current.hasOtherInvitation) {
+    if (!sameInvitation(current.link ?? current.manualLink, link) && !sameInvitation(current.manualSourceLink, link) && !current.hasOtherInvitation) {
       current = { ...current, hasOtherInvitation: true };
       notify();
     }

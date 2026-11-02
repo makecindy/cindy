@@ -3145,9 +3145,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
-      chatInviteShareBase();
       const actor = managementActor(await groupSnapshot(i.groupId));
       if (!actor) throw new Error('ROLE_REQUIRED');
+      chatInviteShareBase();
       const invite = inviteResponse(z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), ...inviteFields }).refine(validInvite),
         await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, actor, false, 200),
       );

@@ -53,13 +53,17 @@ describe('mobile native deep-link redirects', () => {
     }
   });
 
+  // Unit regression: two ingress hosts for one share ID must keep one intent;
+  // the prior same-URL case did not distinguish invitation identity from its host.
   it('keeps opaque share references outside router state and deduplicates the same share', () => {
     const link = `https://share.example.test/chat-invite/${'s'.repeat(32)}`;
     expect(redirectSystemPath({ path: link, initial: true })).toBe('/');
     const target = getChatInviteIntent()!;
     expect(target.link).toBe(link);
-    expect(redirectSystemPath({ path: link, initial: false })).toBeNull();
-    expect(getChatInviteIntent()).toBe(target);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      expect(redirectSystemPath({ path, initial: false })).toBeNull();
+      expect(getChatInviteIntent()).toBe(target);
+    }
   });
 
   it('keeps a resolved manual share as the same invitation when its original link opens again', () => {
@@ -67,8 +71,10 @@ describe('mobile native deep-link redirects', () => {
     openManualChatInvite(); const id = getChatInviteIntent()!.id;
     setManualChatInviteLink(id, link);
     setManualChatInviteLink(id, `cindy://chat-invite/${invitation}`);
-    redirectSystemPath({ path: link, initial: false });
-    expect(getChatInviteIntent()?.hasOtherInvitation).toBe(false);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      redirectSystemPath({ path, initial: false });
+      expect(getChatInviteIntent()?.hasOtherInvitation).toBe(false);
+    }
     setManualChatInviteLink(id);
     const other = `https://share.example.test/chat-invite/${'t'.repeat(32)}`;
     setManualChatInviteLink(id, other); setManualChatInviteLink(id, `cindy://chat-invite/${shareInvitation}`);
