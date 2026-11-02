@@ -1,13 +1,13 @@
 /**
  * visionCapability —— 模型视觉能力三态判定（纯逻辑，零依赖）。
  *
- * cindy 的模型目录（catalog / model-registry）目前**没有结构化**的「能否看图」元数据
- * （modalities 只在 Pi 自定义 provider 手动标记，内置目录为空）。视觉桥配置需要区分
- * 「已知有视觉 / 已知无视觉 / 未知」三类模型，本模块维护一份保守名单 + 归一化判定。
+ * 模型详情在目录未声明图片能力时使用本模块兜底；视觉桥配置也用它区分
+ * 「已知有视觉 / 已知无视觉 / 未知」三类模型。显式目录资料与用户覆盖由调用方优先处理。
+ * 本模块维护一份保守名单 + 归一化判定。
  *
  * 分类语义（对齐 docs/vision-bridge-design.md 配置设计）：
  *  - vision：已知支持图片输入的多模态模型（claude / gpt / gemini / grok 等）；
- *  - no-vision：已知纯文本模型（deepseek 系列、glm-5.2 等，实测/厂商声明无视觉）；
+ *  - no-vision：已知纯文本模型（旧 DeepSeek 型号、glm-5.2 等）；
  *  - unknown：名单外 —— 不确定，按保守处理（视觉桥配置 UI 默认不勾选，允许用户手动勾）。
  *
  * 归一化：runtime 的 body.model 形态多样 —— `deepseek/deepseek-v4-flash`、裸
@@ -40,7 +40,7 @@ const VISION_ID_PREFIXES: readonly string[] = [
 
 /** 已知纯文本（无视觉）模型 id 前缀（保守名单）。 */
 const NO_VISION_ID_PREFIXES: readonly string[] = [
-  // deepseek 官方仅文本/代码模态；deepseek-v4 系列用户明确指定为无视觉。
+  // 旧 DeepSeek 型号的保守兜底；已核实的视觉型号在家族前缀之前判定。
   'deepseek/deepseek-',
   // 裸 id 形态（部分 runtime body.model 不带命名空间）。
   'deepseek-',
@@ -79,11 +79,22 @@ export function normalizeVisionModelId(model: string): string {
  */
 const EXPLICIT_VISION_MARKER = /(?:^|[-/])(?:vision|vl\d*)(?:[-.]|$)/i;
 
+// V4.1 Flash has native image input despite having no -vision/-vl marker.
+// Official API alias: https://api-docs.deepseek.com/guides/vision/
+// Match exact IDs so an unverified variant does not inherit this capability.
+const VISION_MODEL_IDS: ReadonlySet<string> = new Set([
+  'deepseek-flash',
+  'deepseek/deepseek-flash',
+  'deepseek-v4.1-flash',
+  'deepseek/deepseek-v4.1-flash',
+]);
+
 /** 判定一个模型 id 的视觉能力（三态）。 */
 export function classifyVisionCapability(model: string): VisionCapability {
   const id = normalizeVisionModelId(model);
   // 显式标记优先于家族级结论 —— 家族说「纯文本」，型号名说「我是视觉变体」时，后者更具体。
   if (EXPLICIT_VISION_MARKER.test(id)) return 'vision';
+  if (VISION_MODEL_IDS.has(id)) return 'vision';
   if (NO_VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'no-vision';
   if (VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'vision';
   return 'unknown';
