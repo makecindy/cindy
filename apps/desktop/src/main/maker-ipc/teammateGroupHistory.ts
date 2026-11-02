@@ -47,17 +47,20 @@ export function createTeammateGroupHistoryReader(deps: {
     const ordered = [...page].sort((a, b) => BigInt(a.seq) > BigInt(b.seq) ? -1 : BigInt(a.seq) < BigInt(b.seq) ? 1 : 0);
     const messages: NonNullable<TeammateGroupHistoryResult['messages']> = [];
     const query = input.query?.toLocaleLowerCase();
-    let budget = 16000;
+    let budget = 16_000;
     let scanned: string | null = null;
     for (const message of ordered) {
       const text = message.content.filter(block => block.type !== 'media').map(block => block.text ?? block.fallback ?? '').join('\n');
       if (!message.deleted && (!query || text.toLocaleLowerCase().includes(query))) {
-        // Stop before a whole record, so pagination never skips or silently truncates it.
-        if (messages.length && text.length > budget) break;
-        messages.push({ id: message.id, sequence: message.seq, author: message.author.name, authorKind: message.author.kind,
+        const record = { id: message.id, sequence: message.seq, author: message.author.name, authorKind: message.author.kind,
           createdAt: message.createdAt, threadRootId: message.threadRootId, text,
-          attachments: message.content.filter(block => block.type === 'media').map(block => block.caption ?? '') });
-        budget -= text.length;
+          attachments: message.content.filter(block => block.type === 'media').map(block => block.caption ?? '') };
+        // Budget the actual serialized record, including captions, metadata and
+        // escaping. Return an oversized first record whole so the cursor advances.
+        const size = Buffer.byteLength(JSON.stringify(record), 'utf8');
+        if (messages.length && size > budget) break;
+        messages.push(record);
+        budget -= size;
       }
       scanned = message.seq;
     }

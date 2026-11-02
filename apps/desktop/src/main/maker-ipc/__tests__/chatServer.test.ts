@@ -1,3 +1,5 @@
+import { createTeammateGroupHistoryProvider } from '../../mcp-integrations/teammateGroupHistory.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createTeammateGroupHistoryReader } from '../teammateGroupHistory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const avatarUpload = vi.hoisted(() => vi.fn());
@@ -1038,6 +1040,49 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.group.messages[0]).toMatchObject({ content: 'Result', process: ref });
   });
 
+  // #8434: production adapter + HTTP serialization (unit transport fake, no cloud
+  // account). Reader-only tests cannot detect owner-actor fallback or read writes.
+  it('routes group discovery and full history through the companion actor without downloading or acknowledging', async () => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const text = 'full history'.repeat(2000);
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/conversations?limit=20') return { body: [room(roomId)] };
+      if (route === `/conversations/${roomId}/snapshot`) return { body: { room: room(roomId), members } };
+      if (route === `/conversations/${roomId}/members`) return { body: members };
+      if (route === `/conversations/${roomId}/messages?all=true&limit=20`) return { body: [{ id: 'historical-id', seq: '42', deleted: false,
+        createdAt: '2026-11-02T00:00:00Z', threadRootId: 'topic-root', author: { name: 'Member', kind: 'human' },
+        content: [{ type: 'text', text }, { type: 'media', caption: 'notes.pdf' }] }] };
+      return response(route);
+    });
+    const from = fixture.requests.length;
+    expect((await service.teammateHistory!({ botId: 'local-bot' })).groups).toEqual([{ id: roomId, name: 'Room' }]);
+    expect((await service.teammateHistory!({ botId: 'local-bot', groupId: roomId })).messages).toEqual([{
+      id: 'historical-id', sequence: '42', author: 'Member', authorKind: 'human', createdAt: '2026-11-02T00:00:00Z',
+      threadRootId: 'topic-root', text, attachments: ['notes.pdf'],
+    }]);
+    const reads = fixture.requests.slice(from).filter(request => request.url.includes('/conversations'));
+    expect(reads).toHaveLength(4);
+    expect(reads.every(request => request.actor === botId)).toBe(true);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith('/conversations')).every(([, method]) => method === 'GET')).toBe(true);
+    expect(fixture.download).not.toHaveBeenCalled();
+  });
+  it('propagates a companion-actor membership refusal without retrying as the owner', async () => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
+      ? { status: 403, body: { error: { code: 'PERMISSION_DENIED' } } } : response(route));
+    const from = fixture.requests.length;
+    await expect(service.teammateHistory!({ botId: 'local-bot', groupId: roomId })).rejects.toMatchObject({ message: 'PERMISSION_DENIED', status: 403 });
+    expect(fixture.requests.slice(from).filter(request => request.url.includes('/conversations'))).toEqual([
+      expect.objectContaining({ actor: botId, url: expect.stringContaining('/snapshot') }),
+    ]);
+  });
+  it('refuses an unknown companion before any group content request', async () => {
+    const from = fixture.requests.length;
+    await expect(service.teammateHistory!({ botId: 'missing', groupId: roomId })).rejects.toThrow('CALLER_UNAVAILABLE');
+    expect(fixture.requests.slice(from).filter(request => request.url.includes('/conversations'))).toEqual([]);
+  });
+
   async function start() {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
@@ -1178,6 +1223,39 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.upload.mock.calls.length).toBe(uploads + (change === 'temporary' ? 1 : 0));
     expect(deliveries()).toHaveLength(change === 'temporary' ? 1 : 0);
     expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
+
+  // #8434: use the adapter's real execution authority + host history provider.
+  // Prior delivery tests did not exercise revocation between reading and returning
+  // history. Unit transport fake changes server membership/lease only after read.
+  it.each(['requester-left', 'revision', 'revoked', 'lease'])('discards history when live server authority changes during retrieval: %s', async change => {
+    let revoked = false;
+    const members = () => [
+      { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined',
+        accessRevision: revoked && change === 'revision' ? 2 : 1, guestAccess: revoked && change === 'revoked' ? 'chat' : 'tools' },
+      { id: selfId, kind: 'human', ownerActorId: selfId, state: revoked && change === 'requester-left' ? 'left' : 'joined' },
+    ];
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (route === '/executions/claim') {
+        const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'tools' };
+        claimed = true; return { body: { execution: next } };
+      }
+      if (route.endsWith('/members')) return { body: members() };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: members(), messages: [], cursor: '1' } };
+      if (revoked && change === 'lease' && body?.action === 'heartbeat') return { status: 409, body: { error: { code: 'STALE_EXECUTION' } } };
+      if (route === `/conversations/${roomId}/messages?all=true&limit=20`) {
+        revoked = true;
+        return { body: [{ id: 'private-id', seq: '1', deleted: false, createdAt: '2026-11-02T00:00:00Z', threadRootId: null,
+          author: { name: 'Member', kind: 'human' }, content: [{ type: 'text', text: 'private history' }] }] };
+      }
+      return response(route);
+    });
+    await start();
+    const db = { queryOne: async () => ({ role: 'group' }) } as unknown as Pick<DbClient, 'queryOne'>;
+    const read = createTeammateGroupHistoryProvider({ getDbClient: () => db, activeOwnerScopeKey: () => 'owner',
+      isAppSessionBoundaryPending: () => false, resolveBotHistoryScope: async () => ({ kind: 'bot', botId: 'local-bot' }),
+      authorizeGroupTool, getReader: () => service.teammateHistory });
+    expect(await read({ callerSessionId: 'lane', groupId: roomId })).toEqual({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
   });
 
   it.each(['members', 'heartbeat'].flatMap(boundary =>
@@ -5057,13 +5135,28 @@ describe('companion membership-scoped history', () => {
   it('reads whole records as the companion and paginates before an oversized next record', async () => {
     const api = vi.fn(async (route: string, actor: string) => {
       expect(actor).toBe('companion');
-      return route.endsWith('/snapshot') ? { room: { kind: 'group' }, members } : route.endsWith('/members') ? members : [message(1, 'c'.repeat(8000)), message(2, 'b'.repeat(8000)), message(3, 'a'.repeat(8000))];
+      return route.endsWith('/snapshot') ? { room: { kind: 'group' }, members } : route.endsWith('/members') ? members : [message(1, 'c'.repeat(7500)), message(2, 'b'.repeat(7500)), message(3, 'a'.repeat(7500))];
     });
     const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
     const page = await read('companion', { groupId: 'group', limit: 3 });
     expect(page.messages?.map(message => message.sequence)).toEqual(['3', '2']);
-    expect(page.messages?.[0].text).toHaveLength(8000);
+    expect(page.messages?.[0].text).toHaveLength(7500);
     expect(page).toMatchObject({ nextCursor: '2', hasMore: true });
+  });
+  // #8434: text-only accounting missed attachment captions and JSON escaping.
+  // Minimal unit input: two non-text records larger than half a page each.
+  it.each(['caption', 'escaped-text'])('budgets the complete returned record: %s', async field => {
+    const record = (seq: number) => ({ ...message(seq, field === 'escaped-text' ? '\\'.repeat(6000) : ''),
+      content: field === 'caption' ? [{ type: 'media', caption: '附件'.repeat(6000) }] : message(seq, '\\'.repeat(6000)).content });
+    const api = vi.fn(async (route: string) => route.endsWith('/snapshot') ? { room: { kind: 'group' }, members }
+      : route.endsWith('/members') ? members : route.includes('before=2') ? [record(1)] : [record(1), record(2)]);
+    const read = createTeammateGroupHistoryReader({ api: api as never, assertCurrent: () => {} });
+    const page = await read('companion', { groupId: 'group', limit: 3 });
+    expect(page.messages?.map(message => message.sequence)).toEqual(['2']);
+    expect(page).toMatchObject({ nextCursor: '2', hasMore: true });
+    const next = await read('companion', { groupId: 'group', limit: 3, before: page.nextCursor! });
+    expect(next.messages?.map(message => message.sequence)).toEqual(['1']);
+    expect(next).toMatchObject({ nextCursor: null, hasMore: false });
   });
   it.each(['left', 'missing', 'revoked-during-read'])('denies %s membership without returning content', async condition => {
     let checks = 0;

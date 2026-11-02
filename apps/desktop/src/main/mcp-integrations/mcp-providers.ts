@@ -1,3 +1,4 @@
+import { createTeammateGroupHistoryProvider } from './teammateGroupHistory.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
@@ -947,31 +948,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           };
         }
       },
-      teammateGroupHistory: async input => {
-        const db = getDbClient();
-        const scope = activeOwnerScopeKey();
-        const current = () => !isAppSessionBoundaryPending() && getDbClient() === db && activeOwnerScopeKey() === scope;
-        try {
-          const caller = await resolveBotHistoryScope(input.callerSessionId, undefined);
-          if (!current() || caller.kind !== 'bot') return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
-          const link = await db.queryOne<{ role: string }>('SELECT role FROM bot_session_links WHERE session_id = ? LIMIT 1', [input.callerSessionId]);
-          if (!current() || !link) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
-          if (!['canonical', 'thread', 'routine', 'group'].includes(link.role)) return { ok: false, errorCode: 'PERMISSION_DENIED' };
-          const authority = link.role === 'group' ? await authorizeGroupTool(input.callerSessionId, caller.botId, 'read-self') : null;
-          if (authority && authority.mode !== 'owner' && (!input.groupId || input.groupId !== authority.sourceGroup?.groupId))
-            return { ok: false, errorCode: 'PERMISSION_DENIED' };
-          const read = tryGetBotGroupHistoryReader();
-          if (!read) return { ok: false, errorCode: 'HOST_NOT_READY' };
-          const data = await read({ ...input, botId: caller.botId });
-          authority?.assertCurrent();
-          if (!current()) return { ok: false, errorCode: 'OWNER_CHANGED' };
-          return { ok: true, data: { ...data } };
-        } catch (error) {
-          const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : error instanceof Error ? error.message : '';
-          const allowed = ['PERMISSION_DENIED', 'CONVERSATION_NOT_FOUND', 'AUTH_REQUIRED', 'CALLER_UNAVAILABLE', 'OWNER_CHANGED', 'GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE'];
-          return { ok: false, errorCode: allowed.includes(code) ? code : 'GROUP_HISTORY_UNAVAILABLE' };
-        }
-      },
+      teammateGroupHistory: createTeammateGroupHistoryProvider({
+        getDbClient, activeOwnerScopeKey, isAppSessionBoundaryPending, resolveBotHistoryScope,
+        authorizeGroupTool, getReader: tryGetBotGroupHistoryReader,
+      }),
       // 共用任务与账号有效性检查；操作权限由当前 Agent 的权限档处理。
       authorizeCall: authorizeTaskToolCall,
       resolveSurface: async ({ sessionId }) => {
