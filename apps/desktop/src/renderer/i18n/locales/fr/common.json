@@ -13043,7 +13043,7 @@
       "codexUsageLimit": "Le compte Codex connecté a atteint sa limite d'utilisation. Attendez la réinitialisation de la limite ou passez à un autre compte disponible avant de réessayer.",
       "gatewayQuotaExhausted": "Votre solde Cindy AI est épuisé. Ajoutez des fonds pour continuer.",
       "viewBalance": "Voir le solde",
-      "viewBalanceTitle": "Ouvrir Consommation et facturation pour consulter votre solde et ajouter des fonds",
+      "viewBalanceTitle": "Ouvrir Facturation pour consulter votre solde et ajouter des fonds",
       "credentialSwitchBusy": "Une autre tâche Codex est toujours en cours d'exécution : le fournisseur de cette session ne peut donc pas encore être appliqué (le processus Codex partagé doit redémarrer). Réessayez une fois ces tâches terminées.",
       "accountBoundaryPending": "Cindy est encore en train de changer l'état du compte : cette tâche ne peut donc pas encore démarrer. Patientez un instant, puis cliquez sur Réessayer. Si le problème persiste, redémarrez Cindy.",
       "codexThreadStale": "Le mode d'authentification Codex a changé : cette session ne peut pas continuer. Démarrez une nouvelle session pour l'appliquer.",
