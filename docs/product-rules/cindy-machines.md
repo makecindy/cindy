@@ -29,7 +29,8 @@
 
 ## 3. list_machines（2026-11-02）
 
-- 属于 `cindy_helper` 的 `cindy` 类，所有任务可见，与「用户能在设备列表看到」同权；共享任务里拒绝（`PERMISSION_DENIED`），
+- 是 `cindy_helper` 的顶层工具，所有任务直接可见（2026-11-02 用户裁决：`list_tools` 二级入口不稳，Agent 想不到去查就等于没有，只适合放不重要的能力；
+  多机器相关的基础能力放一级）。与「用户能在设备列表看到」同权；共享任务里拒绝（`PERMISSION_DENIED`），
   访客不能经 Agent 看到账号下的机器。
 - 调用时向在线电脑问一次 `maker:machine:status`，不定时上报，不花模型额度。这是普通只读 invoke，不新增协议帧，
   中转（含自建）只转发，不需要适配。旧版本返回 `CHANNEL_NOT_ALLOWED`，显示 `update_required`。

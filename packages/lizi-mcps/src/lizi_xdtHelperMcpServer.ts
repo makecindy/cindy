@@ -104,7 +104,7 @@ import {
   registerBotWorkbenchTools,
   type BotWorkbenchCallbacks,
 } from './xdt-helper/bot_workbench.js';
-import { registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
+import { LIST_MACHINES_TOOL_NAME, registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
 import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
 import {
   registerBotCapabilityTools,
@@ -161,7 +161,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。list_machines 列出账号下所有电脑（含实时 CPU、内存、磁盘）和这台电脑配置的 SSH 主机：可跨电脑。`,
+  cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
   control: '管理任务与项目：归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
@@ -1092,12 +1092,6 @@ export function createXdtHelperMcpServer(
     });
   }
 
-  if (deps.machines) {
-    registerListMachinesTool(registry, {
-      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
-      callbacks: deps.machines,
-    });
-  }
   if (deps.teammateHome) {
     registerTeammateHomeTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -1180,6 +1174,35 @@ export function createXdtHelperMcpServer(
     }];
   };
 
+  // list_machines: the first step of any work across computers, so it is listed
+  // directly. Behind list_tools an agent that does not think to look never finds it.
+  const machineTools = new XdtHelperToolRegistry();
+  if (deps.machines) {
+    registerListMachinesTool(machineTools, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.machines,
+    });
+    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME)!;
+    server.registerTool(definition.name, {
+      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => {
+      const allowed = await allowedSurface();
+      if (!allowed.categories?.has('cindy')) {
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
+      }
+      return withToolCallAuthority(
+        deps.authorizeCall,
+        { sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId, server: 'cindy_helper', tool: definition.name, args },
+        () => machineTools.call(definition.name, args),
+      );
+    });
+  }
+  const machineListing = async (): Promise<Tool[]> => {
+    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME);
+    if (!definition || !(await allowedSurface()).categories?.has('cindy')) return [];
+    return [{ name: definition.name, description: definition.description, inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+  };
+
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
   // Resolve identity per request: Codex's HTTP server is shared across sessions.
@@ -1222,6 +1245,7 @@ export function createXdtHelperMcpServer(
       return { tools: [
         ...entryTools,
         ...(await askOwnerListing()),
+        ...(await machineListing()),
         ...(allowed.categories?.has('bots')
           ? withCindyGatedBotToolDescriptions(
             botTools.filter((tool) => !allowed.deniedTools?.has(tool.name)),
