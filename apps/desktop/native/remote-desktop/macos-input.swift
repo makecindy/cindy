@@ -389,8 +389,21 @@ func handoffFingerprint(_ element: AXUIElement) -> String {
 }
 func handoffPrepare(_ app: AXUIElement) {
   AXUIElementSetMessagingTimeout(app, 0.5)
-  // Chromium/Electron only build their web accessibility tree for assistive clients.
+  // Electron only builds its web accessibility tree for assistive clients. Browsers do not know this one: see handoffExposePage.
   AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+}
+/** Asks a browser to build its page for accessibility, or to stop. Costs the browser, so it is not left on: the caller takes it back. */
+func handoffExposePage(_ request: [String: Any]) -> [String: Any] {
+  guard let pid = handoffPid(request), NSRunningApplication(processIdentifier: pid) != nil else { return ["error": "target_gone"] }
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 0.5)
+  let on = request["on"] as? Bool ?? false
+  let attribute = "AXEnhancedUserInterface"
+  // Already as asked (another assistive tool, say): not this request's to change, or to take back later.
+  if (handoffBool(app, attribute) ?? false) == on { return ["changed": false] }
+  AXUIElementSetAttributeValue(app, attribute as CFString, on ? kCFBooleanTrue : kCFBooleanFalse)
+  // Chrome takes the value yet answers with an error code: only reading it back tells.
+  return ["changed": (handoffBool(app, attribute) ?? false) == on]
 }
 func handoffWindows(_ app: AXUIElement) -> [AXUIElement] {
   guard let raw = handoffAttr(app, kAXWindowsAttribute), let windows = raw as? [AXUIElement] else { return [] }
@@ -954,6 +967,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   case "windowid": handoffRespond(handoffWindowIDFor(request))
   case "focused": handoffRespond(handoffFocusedField(request))
   case "pointer": handoffRespond(handoffPointer(request))
+  case "exposePage": handoffRespond(handoffExposePage(request))
   default: handoffRespond(["error": "invalid"])
   }
 }

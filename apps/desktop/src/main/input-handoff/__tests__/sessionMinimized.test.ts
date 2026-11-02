@@ -214,6 +214,45 @@ describe('a target window that is minimized', () => {
     // No picture on this fake either, so the request reports it could not read rather than asking for the toolbar.
     expect(finished[0]).toMatchObject({ status: 'failed', failure: 'unreadable' });
   });
+
+  /** A browser that has built no page for accessibility until it is asked to. */
+  function closedBrowser(changes: boolean) {
+    const { driver } = browser({ loadReads: Number.MAX_SAFE_INTEGER });
+    const read = driver.snapshot.bind(driver);
+    const asked: boolean[] = [];
+    let exposed = false;
+    driver.exposePage = async (_pid, on) => {
+      asked.push(on);
+      exposed = on;
+      return changes;
+    };
+    driver.snapshot = async (pid, window) => {
+      const shot = await read(pid, window);
+      return exposed && 'nodes' in shot ? { ...shot, nodes: signInPage } : shot;
+    };
+    return { driver, asked };
+  }
+
+  it('asks a browser for its page once, and takes that back when the request ends', async () => {
+    const { driver, asked } = closedBrowser(true);
+    const { session, latest } = start(driver, {
+      app: 'Google Chrome',
+      windowTitle: 'App Store Connect',
+    });
+    await session.start();
+    expect(fields(latest())).toEqual(['Email']);
+    expect(asked).toEqual([true]);
+    session.cancel();
+    expect(asked).toEqual([true, false]);
+  });
+
+  it('leaves it on when something else had already turned it on', async () => {
+    const { driver, asked } = closedBrowser(false);
+    const { session } = start(driver, { app: 'Google Chrome', windowTitle: 'App Store Connect' });
+    await session.start();
+    session.cancel();
+    expect(asked).toEqual([true]);
+  });
 });
 
 describe('resolveHandoffTarget with minimized windows', () => {

@@ -28,6 +28,11 @@ export interface HandoffDriver {
   windows(options?: { background?: boolean }): Promise<NativeWindowList>;
   snapshot(pid: number, window?: NativeWindowRef): Promise<NativeAxSnapshot | { error: string }>;
   act(request: NativeActRequest): Promise<NativeActResult>;
+  /**
+   * Ask a browser to build its page for accessibility, or to stop. True when
+   * this call changed it, so a browser that already had it on is left alone.
+   */
+  exposePage?(pid: number, on: boolean): Promise<boolean>;
   /** Command line of a process, for agent-controlled target detection only. */
   commandLine(pid: number): Promise<string>;
   /** Screenshot steps. Absent where the platform cannot photograph a single window. */
@@ -231,6 +236,10 @@ export function createMacHandoffDriver(): HandoffDriver {
     },
     async act(request) {
       return (await runHelper({ op: 'act', ...request }, 15_000)) as NativeActResult;
+    },
+    async exposePage(pid, on) {
+      const result = (await runHelper({ op: 'exposePage', pid, on }, 3000)) as { changed?: unknown };
+      return result.changed === true;
     },
     async capture(target) {
       const raised = await raiseWindow(target);

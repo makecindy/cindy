@@ -282,6 +282,9 @@ export class InputHandoffSession {
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
+  private pageExposureAsked = false;
+  /** The process this request switched page accessibility on for, to switch it back off. */
+  private pageExposedOn: number | undefined;
   private watchTimer: ReturnType<typeof setTimeout> | undefined;
   private watchList: NativeWindowList | null = null;
   private fieldsGoneReads = 0;
@@ -1142,6 +1145,7 @@ export class InputHandoffSession {
     if (this.ended) return;
     this.ended = true;
     if (this.watchTimer) clearTimeout(this.watchTimer);
+    this.releasePage();
     this.clearFinishing();
     this.stopQr();
     this.dropPicture();
@@ -1220,7 +1224,24 @@ export class InputHandoffSession {
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return null;
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
-    return extractStep(raw as NativeAxSnapshot);
+    const step = extractStep(raw as NativeAxSnapshot);
+    // A browser builds its page for accessibility only when asked: ask once, and the next read sees it.
+    if (step.pageMissing && !this.pageExposureAsked && !this.ended) {
+      this.pageExposureAsked = true;
+      const pid = this.target.pid;
+      if (await this.options.driver.exposePage?.(pid, true).catch(() => false)) this.pageExposedOn = pid;
+      // The request may have ended while asking, with nothing left to take it back.
+      if (this.ended) this.releasePage();
+    }
+    return step;
+  }
+
+  /** Keeping a page built costs the browser: only for as long as this request needs it. */
+  private releasePage(): void {
+    if (this.pageExposedOn === undefined) return;
+    const pid = this.pageExposedOn;
+    this.pageExposedOn = undefined;
+    void this.options.driver.exposePage?.(pid, false).catch(() => false);
   }
 
   private async act(binding: ControlBinding, kind: NativeActKind, value?: string): Promise<boolean> {
