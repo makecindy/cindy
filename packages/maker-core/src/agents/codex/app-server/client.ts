@@ -15,7 +15,7 @@
  * 性能纪律 (plan 强制要求):
  *  - 全部异步 IO (transport 内部本来就 async)
  *  - readline 增量按行喂, 不 buffer 整个 stdout (在 transport 实现里)
- *  - JSON.parse 单行有 maxMessageSize 守卫, 超限 close session
+ *  - JSON.parse 单行有 maxLineBytes 守卫, 超限只处置这一条消息 (见 handleOversizedLine)
  *  - 主线程不被任何同步操作卡 — handler 全是 async fn
  */
 
@@ -34,12 +34,96 @@ import {
 import type { Transport } from './transport.js';
 
 /**
- * 单条 NDJSON line 的最大字节数 (UTF-16 字符近似)。
- * Codex 单 notification 正常 < 1MB; 设 16MB 给极端 reasoning text 留余量,
- * 超限直接 close session — 避免主线程在 JSON.parse 上卡几百 ms。
+ * 单条 NDJSON line 的上限, 按 JS 字符串长度 (UTF-16 code unit) 计, 不是字节。
+ * Codex 单 notification 正常 < 1MB; 设 16Mi 给极端 reasoning text 留余量。超限的行不做
+ * JSON.parse (避免主线程卡几百 ms), 只读开头的信封决定怎么处置这一条, 见 handleOversizedLine。
  */
 const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
+/** 识别超限行信封时最多读的前缀; diff / 文件内容这类大字段不会落在这里面。 */
+const OVERSIZED_ENVELOPE_PEEK_CHARS = 4_096;
 const MAX_STDERR_LOG_CHARS = 2_000;
+
+/** 响应超过单行上限被丢弃: 只有对应的这一个请求失败, 连接继续可用。 */
+export class AppServerMessageTooLargeError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly length: number,
+    public readonly limit: number,
+  ) {
+    super(`codex app-server ${method} response exceeds maxLineBytes (${length} > ${limit})`);
+    this.name = 'AppServerMessageTooLargeError';
+  }
+}
+
+/** 超限通知的信封, 正文已丢弃。threadId / turnId 只在它们排在大字段之前时可得。 */
+export interface OversizedNotification {
+  method: string;
+  threadId?: string;
+  turnId?: string;
+  /** 原始行长度 (UTF-16 code unit)。 */
+  length: number;
+}
+
+interface OversizedEnvelope {
+  id?: JsonRpcId;
+  method?: string;
+  threadId?: string;
+  turnId?: string;
+}
+
+const ENVELOPE_MEMBER_RE = /\s*"((?:[^"\\]|\\.)*)"\s*:\s*/y;
+const ENVELOPE_SCALAR_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+const ENVELOPE_SEPARATOR_RE = /\s*([,}])/y;
+
+/**
+ * 只读超限行开头的标量成员: 顶层 id / method, 以及 params 里排在前面的 threadId / turnId。
+ * 遇到第一个对象、数组或读不完的长字符串就停, 不碰大字段本身。app-server 由 serde 按结构体
+ * 声明顺序输出 (id / method 在最前, turn/diff/updated 的 threadId / turnId 在 diff 之前);
+ * 顺序不符时字段缺失, 由调用方按「认不出」保守处理。
+ */
+function peekOversizedEnvelope(line: string): OversizedEnvelope {
+  const head = line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS);
+  const envelope: OversizedEnvelope = {};
+  let pos = head.search(/\S/);
+  if (pos < 0 || head[pos] !== '{') return envelope;
+  pos += 1;
+  let inParams = false;
+  for (;;) {
+    ENVELOPE_MEMBER_RE.lastIndex = pos;
+    const member = ENVELOPE_MEMBER_RE.exec(head);
+    if (!member) return envelope;
+    pos = ENVELOPE_MEMBER_RE.lastIndex;
+    const key = member[1];
+    if (!inParams && key === 'params' && head[pos] === '{') {
+      inParams = true;
+      pos += 1;
+      continue;
+    }
+    ENVELOPE_SCALAR_RE.lastIndex = pos;
+    const scalar = ENVELOPE_SCALAR_RE.exec(head);
+    if (!scalar) return envelope;
+    // 标量后面必须紧跟分隔符, 防止把截在前缀边界上的半个数字当成完整值。
+    ENVELOPE_SEPARATOR_RE.lastIndex = ENVELOPE_SCALAR_RE.lastIndex;
+    const separator = ENVELOPE_SEPARATOR_RE.exec(head);
+    if (!separator) return envelope;
+    pos = ENVELOPE_SEPARATOR_RE.lastIndex;
+    let value: unknown;
+    try {
+      value = JSON.parse(scalar[0]);
+    } catch {
+      return envelope;
+    }
+    if (inParams) {
+      if (key === 'threadId' && typeof value === 'string') envelope.threadId = value;
+      else if (key === 'turnId' && typeof value === 'string') envelope.turnId = value;
+    } else if (key === 'id' && (typeof value === 'number' || typeof value === 'string')) {
+      envelope.id = value;
+    } else if (key === 'method' && typeof value === 'string') {
+      envelope.method = value;
+    }
+    if (separator[1] === '}') return envelope;
+  }
+}
 
 export class AppServerRequestTimeoutError extends Error {
   constructor(
@@ -193,8 +277,13 @@ export interface AppServerClientOptions {
    */
   createTransport: () => Transport;
   logger: Logger;
-  /** 单行 NDJSON 上限, 缺省 16MB。超限触发 onProtocolError 并 close。 */
+  /** 单行 NDJSON 上限 (UTF-16 code unit), 缺省 16Mi。超限的处置见 handleOversizedLine。 */
   maxLineBytes?: number;
+  /**
+   * 已注册 handler 的通知超过单行上限时调用, 正文已丢弃。返回 true 表示上层已安全降级;
+   * 返回 false 或未提供时沿用整连接退役 —— 只有上层知道丢掉哪种通知不会卡住任务。
+   */
+  onOversizedNotification?: (notification: OversizedNotification) => boolean;
   /**
    * Transport 异常退出 / IO 错误时调用; 上层 (CodexAgent) 用它 emit
    * `error` AgentEvent + end event queue。
@@ -235,6 +324,7 @@ interface PendingRequest {
 export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
+  private readonly onOversizedNotification?: AppServerClientOptions['onOversizedNotification'];
   private readonly onTransportError?: (err: Error) => void;
   private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
   private readonly captureCredentialGeneration?: () => string | null;
@@ -271,6 +361,7 @@ export class AppServerClient {
     this.createTransport = opts.createTransport;
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
+    this.onOversizedNotification = opts.onOversizedNotification;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
     this.captureCredentialGeneration = opts.captureCredentialGeneration;
@@ -484,11 +575,7 @@ export class AppServerClient {
   private handleLine(line: string): void {
     if (!line) return;
     if (line.length > this.maxLineBytes) {
-      const err = new Error(
-        `codex app-server NDJSON line exceeds maxLineBytes (${line.length} > ${this.maxLineBytes})`,
-      );
-      this.logger.error(err.message);
-      this.handleTransportFailure(err);
+      this.handleOversizedLine(line);
       return;
     }
 
@@ -526,6 +613,61 @@ export class AppServerClient {
       return;
     }
     this.logger.warn('unrecognized incoming message', { preview: line.slice(0, 200) });
+  }
+
+  /**
+   * 超限的一行只影响它自己。一个 host 由多个会话共享, 整连接退役会把挂在上面的全部在飞任务
+   * 一起打断, 所以按信封分别处置:
+   *  - 我们请求的响应: 只让对应请求失败;
+   *  - server 发来的请求: 回 JSON-RPC error, 免得 server 一直等;
+   *  - 没人订阅的通知: 本来就会被忽略, 直接丢;
+   *  - 已订阅的通知: 交给 onOversizedNotification, 它确认能安全降级才丢。
+   * 认不出信封, 或上层不能丢这条通知 (turn/completed 之类状态机消息, 丢了任务永远等不到终态)
+   * 时, 沿用整连接退役。
+   */
+  private handleOversizedLine(line: string): void {
+    const length = line.length;
+    const limit = this.maxLineBytes;
+    const { id, method, threadId, turnId } = peekOversizedEnvelope(line);
+    if (id !== undefined && method !== undefined) {
+      this.logger.warn('oversized server request rejected', { method, id, length, limit });
+      this.sendErrorResponse(id, {
+        code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
+        message: `${method} request exceeds client line limit (${length} > ${limit})`,
+      });
+      return;
+    }
+    if (id !== undefined) {
+      const pending = this.pending.get(id);
+      this.logger.warn('oversized response dropped', { id, method: pending?.method, length, limit });
+      this.writeFailureTombstones.delete(id);
+      if (!pending) return;
+      this.pending.delete(id);
+      if (pending.timeoutId) clearTimeout(pending.timeoutId);
+      pending.reject(new AppServerMessageTooLargeError(pending.method, length, limit));
+      return;
+    }
+    if (method !== undefined && this.dropOversizedNotification({ method, threadId, turnId, length })) {
+      this.logger.warn('oversized notification dropped', { method, threadId, turnId, length, limit });
+      return;
+    }
+    const err = new Error(`codex app-server NDJSON line exceeds maxLineBytes (${length} > ${limit})`);
+    this.logger.error(err.message, { method, length });
+    this.handleTransportFailure(err);
+  }
+
+  private dropOversizedNotification(notification: OversizedNotification): boolean {
+    if (!this.notificationHandlers.has(notification.method)) return true;
+    if (!this.onOversizedNotification) return false;
+    try {
+      return this.onOversizedNotification(notification) === true;
+    } catch (e) {
+      this.logger.error('onOversizedNotification handler threw', {
+        method: notification.method,
+        message: (e as Error).message,
+      });
+      return false;
+    }
   }
 
   private handleStderrLine(line: string): void {

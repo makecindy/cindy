@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient, type RequestProgressDeadline } from './client.js';
+import { AppServerClient, type OversizedNotification, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { Transport } from './transport.js';
 import {
@@ -685,6 +685,11 @@ export class AppServerHost {
         // Keep the shared startPromise while recovering this one pre-protocol
         // failure. Every other transport error retains the normal host lifecycle.
         if (!client.nativeSqliteInitializationFailed()) this.handleTransportError(err);
+      },
+      onOversizedNotification: (notification) => {
+        const handled = this.handleOversizedNotification(notification);
+        if (handled) this.writerCandidates.add(client);
+        return handled;
       },
       onAuthInvalidated: this.opts.onAuthInvalidated,
       captureCredentialGeneration: this.opts.captureCredentialGeneration,
@@ -1735,6 +1740,37 @@ export class AppServerHost {
         this.buffered.set(threadId, remaining);
       }
     }, this.bufferTtlMs).unref?.();
+  }
+
+  /**
+   * 已订阅的通知超过单行上限 (正文已由 client 丢弃) 时, 判断能否只降级这一条, 不退役整个 host:
+   *  - turn/diff/updated 是累计快照: 转成「该线程本轮 diff 未知」照常路由, 订阅方据此标记
+   *    改动过大, 而不是继续把上一份快照当成完整结果。拿不到 threadId / turnId 时无法路由, 不降级;
+   *  - item/started|updated|completed 只承载单个条目的展示数据 (例如整文件内容的 FileChange),
+   *    丢掉只少这一张卡片;
+   *  - 其余通知驱动 turn / thread 状态机, 丢了任务会卡住, 不降级。
+   */
+  private handleOversizedNotification(notification: OversizedNotification): boolean {
+    const { method, threadId, turnId } = notification;
+    switch (method) {
+      case 'turn/diff/updated': {
+        if (!threadId || !turnId) return false;
+        const params: TurnDiffUpdatedNotification['params'] = {
+          threadId,
+          turnId,
+          diff: '',
+          cindyOmitted: 'oversized',
+        };
+        this.routeNotification(method, params);
+        return true;
+      }
+      case 'item/started':
+      case 'item/updated':
+      case 'item/completed':
+        return true;
+      default:
+        return false;
+    }
   }
 
   /**

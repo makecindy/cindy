@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerClient, detectAuthInvalidationReason } from './client.js';
+import { AppServerClient, detectAuthInvalidationReason, type OversizedNotification } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
@@ -519,5 +519,126 @@ describe('AppServerClient server requests', () => {
       id: 'server-req-1',
       result: { answers: { q1: { answers: ['A'] } } },
     });
+  });
+});
+
+describe('AppServerClient oversized lines', () => {
+  const LIMIT = 256;
+  const bulk = 'x'.repeat(LIMIT * 2);
+
+  function setup(onOversizedNotification?: (notification: OversizedNotification) => boolean) {
+    const transport = new FakeTransport();
+    const onTransportError = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport,
+      logger,
+      maxLineBytes: LIMIT,
+      onTransportError,
+      onOversizedNotification,
+    });
+    return { transport, client, onTransportError };
+  }
+
+  it('fails only the request whose response is oversized and keeps the connection usable', async () => {
+    const { transport, client, onTransportError } = setup();
+    client.start();
+
+    const oversized = client.request('thread/resume');
+    const normal = client.request('model/list');
+    transport.emitLine({ id: 1, result: { history: bulk } });
+    transport.emitLine({ id: 2, result: { data: [] } });
+
+    await expect(oversized).rejects.toMatchObject({
+      name: 'AppServerMessageTooLargeError',
+      method: 'thread/resume',
+      limit: LIMIT,
+    });
+    await expect(normal).resolves.toEqual({ data: [] });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('answers an oversized server request with an error instead of invoking its handler', async () => {
+    const { transport, client, onTransportError } = setup();
+    const handler = vi.fn(async () => ({ decision: 'accept' }));
+    client.setRequestHandler('item/fileChange/requestApproval', handler);
+    client.start();
+
+    transport.emitLine({ id: 'server-req-1', method: 'item/fileChange/requestApproval', params: { bulk } });
+
+    await vi.waitFor(() => expect(transport.lines).toHaveLength(1));
+    expect(JSON.parse(transport.lines[0] ?? '')).toMatchObject({
+      id: 'server-req-1',
+      error: { code: -32600 },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('drops an oversized notification nobody subscribed to without asking the host', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => false);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.start();
+
+    transport.emitLine({ method: 'item/commandExecution/outputDelta', params: { delta: bulk } });
+
+    expect(onOversizedNotification).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('lets the host degrade a subscribed oversized notification and keeps delivering later ones', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    const turnDiffUpdated = vi.fn();
+    client.onNotification('turn/diff/updated', turnDiffUpdated);
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'turn/diff/updated',
+      params: { threadId: 'thread-1', turnId: 'turn-1', diff: bulk },
+    });
+    transport.emitLine(line);
+    transport.emitLine({ method: 'turn/diff/updated', params: { threadId: 'thread-1', turnId: 'turn-1', diff: 'small' } });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/diff/updated',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      length: line.length,
+    });
+    expect(turnDiffUpdated).toHaveBeenCalledTimes(1);
+    expect(turnDiffUpdated).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1', diff: 'small' });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('only reads routing fields that precede the bulky value', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    transport.emitLine({
+      method: 'item/completed',
+      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1' },
+    });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith(
+      expect.not.objectContaining({ threadId: expect.anything() }),
+    );
+    expect(onOversizedNotification.mock.calls[0]?.[0]).toMatchObject({ method: 'item/completed' });
+  });
+
+  it.each([
+    ['the host cannot degrade the notification', { method: 'turn/completed', params: { bulk } }, () => false],
+    ['the envelope is unrecognizable', { params: { bulk }, method: 'turn/completed' }, () => true],
+  ])('retires the connection when %s', (_case, message, onOversizedNotification) => {
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    transport.emitLine(message);
+
+    expect(onTransportError).toHaveBeenCalledTimes(1);
+    expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
   });
 });

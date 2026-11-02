@@ -827,7 +827,17 @@ export interface TurnStartedNotification {
 
 export interface TurnDiffUpdatedNotification {
   method: 'turn/diff/updated';
-  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+  params: {
+    threadId: string;
+    turnId: string;
+    diff: string;
+    /**
+     * Cindy 本地字段, app-server 不会发送: 这次累计 diff 超过单行上限, 已由 AppServerHost
+     * 丢弃正文, `diff` 为空串, 只表示「该线程本轮 diff 未知」。
+     */
+    cindyOmitted?: 'oversized';
+    [k: string]: unknown;
+  };
 }
 
 /**

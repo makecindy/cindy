@@ -33719,6 +33719,59 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('publishes an omitted turn diff while any thread snapshot was dropped as oversized', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-oversized-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+    const lastDiff = () => events.filter((event) => event.type === 'turn_diff').at(-1)?.data as
+      | { diff?: string; omitted?: string }
+      | undefined;
+    const rootDiff = 'diff --git a/root.txt b/root.txt\n--- a/root.txt\n+++ b/root.txt\n@@ -1 +1 @@\n-old\n+root\n';
+    const childDiff = 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+child\n';
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-oversized' } });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-oversized-thread', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-oversized-thread', 'turn/diff/updated', {
+      threadId: 'child-oversized-thread',
+      turnId: 'child-turn',
+      diff: '',
+      cindyOmitted: 'oversized',
+    });
+    handlers.turnDiffUpdated?.({ threadId: 'start-thread-id', turnId: 'turn-oversized', diff: rootDiff });
+
+    // 另一个线程的新快照不能把「未知」的那部分当成已完整覆盖。
+    await vi.waitFor(() => expect(lastDiff()).toMatchObject({ diff: '', omitted: 'oversized' }));
+
+    handlers.descendantNotification('child-oversized-thread', 'turn/diff/updated', {
+      threadId: 'child-oversized-thread',
+      turnId: 'child-turn',
+      diff: childDiff,
+    });
+
+    await vi.waitFor(() => {
+      const last = lastDiff();
+      expect(last?.omitted).toBeUndefined();
+      expect(last?.diff).toContain('+root');
+      expect(last?.diff).toContain('+child');
+    });
+
+    await handle.close();
+  });
+
   it.each(ROOT_TURN_START_ORDER_CASES)(
     'clears prior diffs once for $name root-turn activation',
     async ({ sessionSuffix, steps }) => {

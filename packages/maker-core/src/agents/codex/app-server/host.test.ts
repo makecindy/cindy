@@ -1882,3 +1882,91 @@ describe('AppServerHost buffered descendant notification replay', () => {
     await host.shutdown();
   });
 });
+
+describe('AppServerHost oversized notifications', () => {
+  // Host 不暴露 maxLineBytes, 用真实的默认上限 (16Mi UTF-16 code unit) 构造超限行。
+  const bulk = 'x'.repeat(16 * 1024 * 1024 + 1);
+
+  async function startWithSubscriber() {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+    const handlers = {
+      turnDiffUpdated: vi.fn(),
+      itemCompleted: vi.fn(),
+      turnCompleted: vi.fn(),
+      hostForcedRetire: vi.fn(),
+    };
+    const subscription = host.subscribeThread('root-thread', handlers);
+    return { transport, host, handlers, subscription };
+  }
+
+  it('routes an oversized cumulative diff as an omitted diff without retiring the host', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    transport.emit({
+      method: 'turn/diff/updated',
+      params: { threadId: 'root-thread', turnId: 'turn-1', diff: bulk },
+    });
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'root-thread', turn: { id: 'turn-1', status: 'completed' } },
+    });
+
+    expect(handlers.turnDiffUpdated).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turnId: 'turn-1',
+      diff: '',
+      cindyOmitted: 'oversized',
+    });
+    expect(handlers.turnCompleted).toHaveBeenCalledTimes(1);
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+    expect(host.writerCandidate).not.toBeNull();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('drops an oversized item notification and keeps serving the thread', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    transport.emit({
+      method: 'item/completed',
+      params: {
+        item: { type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] },
+        threadId: 'root-thread',
+        turnId: 'turn-1',
+      },
+    });
+    transport.emit({
+      method: 'item/completed',
+      params: { item: { type: 'agentMessage', id: 'msg-1', text: 'done' }, threadId: 'root-thread', turnId: 'turn-1' },
+    });
+
+    expect(handlers.itemCompleted).toHaveBeenCalledTimes(1);
+    expect(handlers.itemCompleted.mock.calls[0]?.[0]).toMatchObject({ item: { id: 'msg-1' } });
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('still retires the host when an oversized notification drives the turn state machine', async () => {
+    const { transport, handlers } = await startWithSubscriber();
+
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'root-thread', turn: { id: 'turn-1', status: 'completed', bulk } },
+    });
+
+    expect(handlers.turnCompleted).not.toHaveBeenCalled();
+    expect(handlers.hostForcedRetire).toHaveBeenCalledTimes(1);
+    expect(handlers.hostForcedRetire.mock.calls[0]?.[0]).toMatchObject({
+      reason: expect.stringContaining('exceeds maxLineBytes'),
+    });
+  });
+});
