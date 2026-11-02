@@ -831,4 +831,34 @@ describe('quotes, complete edges and block headers', () => {
       expect(output).toContain('E --> F');
     }
   });
+
+  it('gives a dash run in front of a dotted target id back to the id', () => {
+    // `S--o-.>go -> stop]` links the circle head to the id `-.`, so only a run that
+    // is all dashes continues the edge (`A--o-->B`). Counting the dot as part of the
+    // run rejected the head, and the bare-edge scan then rewrote the visible label.
+    const source = ['flowchart TD', '  S--o-.>go → stop]', '  E → F'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('S--o-.>go → stop]');
+    expect(output).toContain('E --> F');
+  });
+
+  it('consumes a dotted token without a tip before scanning for a bare edge text', () => {
+    // Mobile Mermaid reads `A-.--B` as the dotted token `-.-` plus the target id
+    // `-B`, so `-.-` has to be consumed here. Otherwise the scan starts at `--B` and
+    // runs over the label of the next node on the line.
+    const source = ['flowchart TD', '  A-.--B; C[/go → stop/] --> D', '  E → F'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('C[/go → stop/]');
+    expect(output).toContain('E --> F');
+  });
+
+  it('opens an asymmetric label on a punctuation target id after a plain arrow', () => {
+    // `S -->.>go -> stop]` links to the id `.`, so the punctuation run has to start
+    // again behind the completed arrow. Otherwise the second `>` is excluded from
+    // being an opener and the label text is rewritten.
+    const source = ['flowchart TD', '  S -->.>go → stop]', '  E → F'].join('\n');
+    const output = repairMermaidSource(source);
+    expect(output).toContain('S -->.>go → stop]');
+    expect(output).toContain('E --> F');
+  });
 });
