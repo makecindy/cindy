@@ -248,6 +248,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
@@ -12115,6 +12116,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
   };
+  let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
+    throw new Error('session model recovery is not ready');
+  };
   pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride) => {
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
@@ -12147,6 +12151,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           bootstrapAfterSwitch: true,
           signal,
         });
+      }
+      if (!deferPendingApply && !selection && !scheduledModelOverride && !signal?.aborted) {
+        stage = 'direct-send:recoverRenamedSessionModel';
+        await recoverRenamedSessionModelOnSend(sessionId);
       }
       // 预算对账的重放：回合中登记的预算重建意图可能被「重选当前模型」清掉，而预算
       // 变更通知只来一次 —— 不在这里补一次，活实例会一直按旧窗口跑（Greptile P1）。
@@ -18784,6 +18792,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。
       await replayPendingSessionContextWindowBudgetUnderLock(sessionId);
@@ -24768,6 +24777,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     return internalOptions.sessionLockHeld ? applyLocked() : withSendToSessionLock(sessionId, applyLocked);
+  };
+  recoverRenamedSessionModelOnSend = async (sessionId) => {
+    if (agentSwitchPending.get(sessionId)) return;
+    const [row] = await getDbClient().drizzle.select({
+      status: sessions.status,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
+      effort: sessions.effort,
+      fastMode: sessions.fastMode,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!row || row.status !== 'active' || !row.providerId ||
+        row.remoteHostId || row.agentDeviceId) return;
+    const providers = await getDesktopProviderService().listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    });
+    await recoverRenamedSessionModelBeforeSend({
+      route: { ...row, agentKind: dbToMakerAgentKind(row.agentKind) },
+      hasPendingSelection: !!agentSwitchPending.get(sessionId),
+      providers,
+      apply: (model, providerId) => handleSetModel(
+        sessionId, model, providerId, undefined,
+        { effort: row.effort as SessionRuntimeProfile['effort'], fastMode: row.fastMode },
+        {
+          source: 'agent', sessionLockHeld: true, applyingUserSelectionOnSend: true,
+          expectedGeneration: getSessionRuntimeControlSnapshot(sessionId).generation,
+        },
+      ),
+    });
   };
   applyPiModelSettingsRefresh = async (sessionId, model, providerId) => {
     const generation = getSessionRuntimeControlSnapshot(sessionId).generation;
