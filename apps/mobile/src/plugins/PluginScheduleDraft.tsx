@@ -54,11 +54,8 @@ export function PluginScheduleDraft({
   const link = useDeviceLink(),
     maker = useMobileMakerTransport(deviceId),
     providers = useDeviceProviders(deviceId);
-  const remoteSupported = providers.providers.some(
-    (provider) =>
-      typeof (provider as { remoteInvocationEnabled?: unknown })
-        .remoteInvocationEnabled === "boolean",
-  );
+  // 旧版电脑会静默丢掉运行位置，只有它声明支持定时任务的位置选择才列出远程模型。
+  const [remoteSupported, setRemoteSupported] = useState(false);
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
     sent = useRef(false),
@@ -96,6 +93,24 @@ export function PluginScheduleDraft({
   const [picker, setPicker] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    maker
+      .getCapabilities("claude-code")
+      .then((value) => {
+        if (!cancelled)
+          setRemoteSupported(
+            normalizeMobileAgentCapabilities(value)
+              ?.supportsScheduleAgentDeviceSelection === true,
+          );
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [maker]);
   const remoteCatalogs = useRemoteAgentCatalogs({
     enabled: (picker || !!draft.modelAgentDeviceId) && remoteSupported,
     controlledDeviceId: deviceId,

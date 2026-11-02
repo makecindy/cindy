@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   catalogs: [] as any[],
   invoke: vi.fn(async () => ({ id: "schedule-1" })),
   picker: null as any,
+  capabilities: { supportsScheduleAgentDeviceSelection: true } as any,
 }));
 vi.mock("react-native", () => ({
   ActivityIndicator: () => null,
@@ -41,12 +42,16 @@ vi.mock("@/device-link/DeviceLinkContext", () => ({
 vi.mock("@/device-link/useDeviceProviders", () => ({
   useDeviceProviders: () => ({ providers: h.providers, ready: true }),
 }));
+const maker = { getCapabilities: async () => h.capabilities };
 vi.mock("@/device-link/useMobileMakerTransport", () => ({
-  useMobileMakerTransport: () => ({}),
+  useMobileMakerTransport: () => maker,
 }));
 vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => ({ accountKey: "owner" }),
   isMobileAuthOwnerCurrent: () => true,
+}));
+vi.mock("@/session/agentCapabilities", () => ({
+  normalizeMobileAgentCapabilities: (value: any) => value,
 }));
 vi.mock("@/session/useRemoteAgentCatalogs", () => ({
   useRemoteAgentCatalogs: () => h.catalogs,
@@ -98,7 +103,8 @@ const clickButton = async (label: string) => {
 
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-  h.providers = [{ id: "local", remoteInvocationEnabled: false, models: {} }];
+  h.providers = [{ id: "local", models: {} }];
+  h.capabilities = { supportsScheduleAgentDeviceSelection: true };
   h.catalogs = [
     {
       deviceId: "studio",
@@ -157,8 +163,14 @@ it("clears the location when a local row is selected afterwards", async () => {
   expect(h.picker.unified.remote.selectedDeviceId).toBeNull();
 });
 
-it("does not list remote rows for a computer that cannot run them", async () => {
-  h.providers = [{ id: "local", models: {} }];
+it("does not list remote rows for a computer without schedule location support", async () => {
+  h.capabilities = { supportsScheduleAgentDeviceSelection: false };
   await renderDraft();
   expect(h.picker.unified.remote).toBeUndefined();
+});
+
+it("lists remote rows when the computer only has remote or shared providers", async () => {
+  h.providers = [];
+  await renderDraft();
+  expect(h.picker.unified.remote.catalogs).toBe(h.catalogs);
 });
