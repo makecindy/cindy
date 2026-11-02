@@ -22,6 +22,26 @@ export default {
         await page.mouse.move(100, 100); await page.mouse.down();
         await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
       }
+      // Review regression: closing Cindy must let the current text annotation
+      // continue receiving actual keystrokes in both capture and editor.
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const canvasBounds = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(ui.case === 'translation' ? 200 : canvasBounds.x + 30,
+        ui.case === 'translation' ? 200 : canvasBounds.y + 30);
+      const text = page.locator('textarea');
+      await text.fill('Before');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await text.evaluate(el => document.activeElement === el), 'closing Cindy restores the text annotation focus');
+      await page.keyboard.type(' after');
+      assert.equal(await text.inputValue(), 'Before after');
+      const trigger = page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') });
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await trigger.evaluate(el => document.activeElement === el), 'keyboard dismissal returns to Cindy');
       const languageName = (tag) => new Intl.DisplayNames([ui.locale], { type: 'language' }).of(tag);
       const uiTag = ['zh-CN', 'zh-Hans-x-lzh'].includes(ui.locale) ? 'zh-Hans' : ['zh-TW', 'zh-Hant-x-lzh'].includes(ui.locale) ? 'zh-Hant' : ui.locale;
       const action = async (tag) => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.action', { language: languageName(tag) }), exact: true });
@@ -116,6 +136,15 @@ export default {
       await (await button('regionScreenshot.live.scroll')).click();
       assert.equal(await (await button('regionScreenshot.live.startScroll')).count(), 0, 'dragging the toolbar does not create a capture selection');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0);
+      // The live capture mode bar retains all modes at the left edge.
+      await (await button('regionScreenshot.live.image')).click();
+      await page.mouse.move(100, 100); await page.mouse.down();
+      await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      await (await button('regionScreenshot.cindy')).click();
+      await page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      const menu = await page.getByRole('menu').boundingBox();
+      assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= ui.viewport.width,
+        `language menu stays on screen at the left toolbar limit: ${JSON.stringify(menu)}`);
       await ui.capture('dragged');
       return;
     }

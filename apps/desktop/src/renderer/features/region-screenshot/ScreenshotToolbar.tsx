@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Check,
@@ -208,8 +208,23 @@ export function ScreenshotAiMenu(props: ScreenshotAiMenuProps) {
   const [savingLanguage, setSavingLanguage] = useState(false);
   const [languageSaveFailed, setLanguageSaveFailed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const locale = i18n.resolvedLanguage || i18n.language;
   const targetLanguage = resolveScreenshotTranslationLanguage(props.translationPreference, locale);
+  useLayoutEffect(() => {
+    if (!props.aiMenuOpen) return;
+    const previous = document.activeElement;
+    const menu = menuRef.current;
+    return () => {
+      // Dismissal returns to annotation input or the keyboard trigger, but never
+      // steals focus from a different control selected while closing the menu.
+      const active = document.activeElement;
+      if (active !== document.body && active !== triggerRef.current && !menu?.contains(active)) return;
+      const target = previous instanceof HTMLElement && previous !== document.body && previous.isConnected
+        ? previous : triggerRef.current;
+      target?.focus({ preventScroll: true });
+    };
+  }, [props.aiMenuOpen]);
   useEffect(() => {
     if (!props.aiMenuOpen) { setLanguagePickerOpen(false); setLanguageSaveFailed(false); }
   }, [props.aiMenuOpen]);
@@ -236,8 +251,9 @@ export function ScreenshotAiMenu(props: ScreenshotAiMenuProps) {
       event.stopPropagation();
       if (event.key === 'Escape') props.onToggleAiMenu();
     }}>
-    <Button size="xs" variant="secondary" tone={props.aiMenuOpen ? 'default' : 'quiet'} disabled={!props.canAsk}
+    <Button ref={triggerRef} size="xs" variant="secondary" tone={props.aiMenuOpen ? 'default' : 'quiet'} disabled={!props.canAsk}
       aria-label={t('regionScreenshot.cindy')} aria-expanded={props.aiMenuOpen}
+      onMouseDown={(event) => event.preventDefault()}
       onClick={props.onToggleAiMenu}><Sparkles size={14} className="text-[var(--warning-fg)]" />Cindy</Button>
     {props.aiMenuOpen && <div ref={menuRef} role="menu" aria-label={t('regionScreenshot.cindy')}
       className="absolute right-0 top-full z-20 mt-2 flex w-64 max-w-[calc(100vw-16px)] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
