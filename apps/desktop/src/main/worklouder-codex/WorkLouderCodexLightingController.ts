@@ -28,11 +28,12 @@ import {
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettings,
   type WorkLouderCodexState,
+  type WorkLouderCodexTaskOption,
 } from '../../shared/workLouderCodex.js';
 import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
-  createWorkLouderCodexLightingFrameFromSlots,
+  createWorkLouderCodexLightingFrame,
   createWorkLouderCodexWindowRevealFrame,
   muteWorkLouderCodexKeyZone,
   isWorkLouderCodexLightingFrameOff,
@@ -41,11 +42,7 @@ import {
   type WorkLouderCodexLightingFrame,
   type WorkLouderCodexSessionActivity,
 } from './protocol.js';
-import {
-  workLouderCodexTaskIdentityKey,
-  type WorkLouderCodexTaskCatalog,
-  type WorkLouderCodexTaskCatalogOption,
-} from './taskSlots.js';
+import type { WorkLouderCodexTaskCatalog } from './taskSlots.js';
 import {
   WORKLOUDER_JOYSTICK_ACTIVATION_DISTANCE,
   normalizeJoystickIntensity,
@@ -98,21 +95,15 @@ export interface WorkLouderCodexLightingSink {
 
 type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly string[]>;
 
-interface WorkLouderCodexAgentSelection {
-  action: WorkLouderCodexAction | null;
-  task: WorkLouderCodexTaskCatalogOption | null;
-}
-
 /** Keeps task LEDs, physical controls, and the settings projection on one state machine. */
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
-  /** Slot order uses task identity (device + session), not just session id. */
-  private slotSessionKeys: string[] = [];
+  private slotSessionIds: string[] = [];
   /**
-   * Local Agent Island activity only. Remote phases stay in the task catalog's
-   * hardware-only field and are combined just before projecting LEDs.
+   * Agent Island activity. Orca Workers never appear here; a Lead whose team is
+   * still working stays `running` because Agent Island defers its completion.
    */
-  private latestActivityBySessionId = new Map<string, WorkLouderCodexSessionActivity>();
+  private latestActivity: readonly WorkLouderCodexSessionActivity[] = [];
   private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
@@ -180,9 +171,7 @@ export class WorkLouderCodexLightingController {
   }
 
   updateSessionActivity(activity: readonly WorkLouderCodexSessionActivity[]): void {
-    this.latestActivityBySessionId = new Map(
-      activity.map((item) => [item.sessionId, item] as const),
-    );
+    this.latestActivity = activity;
     if (this.settings.agentSource === 'priority') this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.scheduleTaskSlotRefresh();
@@ -199,7 +188,7 @@ export class WorkLouderCodexLightingController {
         ...slot,
         action: cloneAction(slot.action),
       })),
-      taskOptions: this.taskCatalog.options.map(({ id, title, pinned }) => ({ id, title, pinned })),
+      taskOptions: this.taskCatalog.options.map((task) => ({ ...task })),
       agentSlotCount: this.agentSlots.length,
     };
   }
@@ -323,7 +312,7 @@ export class WorkLouderCodexLightingController {
     this.slotRefreshQueued = false;
     this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
-    this.slotSessionKeys = [];
+    this.slotSessionIds = [];
     this.pendingAgentKeyTap = null;
     this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
@@ -694,71 +683,48 @@ export class WorkLouderCodexLightingController {
   }
 
   private publishAgentSlots(): void {
-    const selections = this.agentSelectionsForCurrentSource();
-    const titleBySessionId = new Map(
+    const actions = this.agentActionsForCurrentSource();
+    const titleById = new Map(
       this.taskCatalog.options.map((task) => [task.id, task.title] as const),
     );
     const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
     this.agentSlots = Array.from({ length: slotCount }, (_, slot) => {
-      const selection = selections[slot] ?? { action: null, task: null };
-      const action = selection.action;
+      const action = actions[slot] ?? null;
       const sessionId = action?.type === 'task' ? action.sessionId : null;
       return {
         slot,
         sessionId,
-        title: sessionId
-          ? (selection.task?.title ?? titleBySessionId.get(sessionId) ?? sessionId)
-          : actionTitle(action),
+        title: sessionId ? (titleById.get(sessionId) ?? sessionId) : actionTitle(action),
         action: cloneAction(action),
       };
     });
-    const taskKeysBySlot = selections.map((selection) => {
-      if (selection.task) return workLouderCodexTaskIdentityKey(selection.task);
-      const action = selection.action;
-      // A custom task binding may point at a session outside the current
-      // catalog. When no device-scoped row claims that id, keep the old local
-      // activity fallback instead of dropping its lamp.
-      return action?.type === 'task' &&
-        !this.taskCatalog.options.some((task) => task.id === action.sessionId)
-        ? action.sessionId
-        : '';
-    });
+    const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
     const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
     if (this.device.deviceType === 'codex-micro') {
-      this.slotSessionKeys = WORKLOUDER_HID_AG_CODES.slice(
-        0,
-        WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
-      ).map(
+      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
         (physical) => {
           if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
           const slot = taskKeys.indexOf(physical);
-          return slot >= 0 ? (taskKeysBySlot[slot] ?? '') : '';
+          return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
         },
       );
       return;
     }
-    this.slotSessionKeys = Array.from(
+    this.slotSessionIds = Array.from(
       { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
-      (_, slot) => taskKeysBySlot[slot] ?? '',
+      (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
     );
   }
 
-  private agentSelectionsForCurrentSource(): WorkLouderCodexAgentSelection[] {
+  private agentActionsForCurrentSource(): Array<WorkLouderCodexAction | null> {
     const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
       return Array.from({ length: slotCount }, (_, slot) => {
         if (slot < this.settings.customAgentKeys.length) {
-          const action = cloneAction(this.settings.customAgentKeys[slot] ?? null);
-          return {
-            action,
-            task: action?.type === 'task' ? this.taskForCustomAction(action.sessionId) : null,
-          };
+          return cloneAction(this.settings.customAgentKeys[slot] ?? null);
         }
-        const task = this.taskCatalog.options[slot] ?? null;
-        return {
-          action: task ? { type: 'task', sessionId: task.id } : null,
-          task,
-        };
+        const task = this.taskCatalog.options[slot];
+        return task ? { type: 'task', sessionId: task.id } : null;
       });
     }
     const primary =
@@ -767,87 +733,33 @@ export class WorkLouderCodexLightingController {
         : this.settings.agentSource === 'priority'
           ? this.priorityTasks()
           : this.taskCatalog.sidebar;
-    const used = new Set(primary.map(workLouderCodexTaskIdentityKey));
-    const filler = this.taskCatalog.options.filter(
-      (task) => !used.has(workLouderCodexTaskIdentityKey(task)),
-    );
+    const used = new Set(primary.map((task) => task.id));
+    const filler = this.taskCatalog.options.filter((task) => !used.has(task.id));
     const tasks = [...primary, ...filler];
     return Array.from({ length: slotCount }, (_, slot) => {
-      const task = tasks[slot] ?? null;
-      return {
-        action: task ? { type: 'task', sessionId: task.id } : null,
-        task,
-      };
+      const task = tasks[slot];
+      return task ? { type: 'task', sessionId: task.id } : null;
     });
   }
 
-  private taskForCustomAction(sessionId: string): WorkLouderCodexTaskCatalogOption | null {
-    const matches = new Map<string, WorkLouderCodexTaskCatalogOption>();
-    for (const task of [...this.taskCatalog.options, ...this.taskCatalog.sidebar]) {
-      if (task.id === sessionId) matches.set(workLouderCodexTaskIdentityKey(task), task);
-    }
-    // A custom binding carries only a session id. If two devices expose the
-    // same id, showing either device's activity would be a guess.
-    return matches.size === 1 ? [...matches.values()][0]! : null;
-  }
-
-  private priorityTasks(): WorkLouderCodexTaskCatalogOption[] {
+  private priorityTasks(): WorkLouderCodexTaskOption[] {
+    const optionById = new Map(this.taskCatalog.options.map((task) => [task.id, task] as const));
     const recentRank = new Map(
-      this.taskCatalog.options.map(
-        (task, index) => [workLouderCodexTaskIdentityKey(task), index] as const,
-      ),
+      this.taskCatalog.options.map((task, index) => [task.id, index] as const),
     );
-    const prioritized = this.taskCatalog.options
-      .flatMap((task) => {
-        const activity = this.hardwareActivityForTask(task);
-        return activity ? [{ task, activity }] : [];
-      })
+    const prioritized = this.latestActivity
+      .filter((activity) => optionById.has(activity.sessionId))
       .toSorted((left, right) => {
-        const scoreDiff = activityPriority(right.activity) - activityPriority(left.activity);
+        const scoreDiff = activityPriority(right) - activityPriority(left);
         return (
           scoreDiff ||
-          (recentRank.get(workLouderCodexTaskIdentityKey(left.task)) ?? 999) -
-            (recentRank.get(workLouderCodexTaskIdentityKey(right.task)) ?? 999)
+          (recentRank.get(left.sessionId) ?? 999) - (recentRank.get(right.sessionId) ?? 999)
         );
       })
-      .map((entry) => entry.task);
-    const included = new Set(prioritized.map(workLouderCodexTaskIdentityKey));
-    return [
-      ...prioritized,
-      ...this.taskCatalog.sidebar.filter(
-        (task) => !included.has(workLouderCodexTaskIdentityKey(task)),
-      ),
-    ];
-  }
-
-  private hardwareActivityForTask(
-    task: WorkLouderCodexTaskCatalogOption,
-  ): WorkLouderCodexSessionActivity | undefined {
-    if (task.deviceLinkDeviceId) {
-      if (!task.remoteActivity) return undefined;
-      return {
-        sessionId: task.id,
-        phase: task.remoteActivity.phase,
-        attention: task.remoteActivity.attention,
-        compactDetail: '',
-      };
-    }
-    return this.latestActivityBySessionId.get(task.id);
-  }
-
-  private hardwareActivityForKey(key: string): WorkLouderCodexSessionActivity | undefined {
-    if (!key) return undefined;
-    const task =
-      this.taskCatalog.options.find(
-        (candidate) => workLouderCodexTaskIdentityKey(candidate) === key,
-      ) ??
-      this.taskCatalog.sidebar.find(
-        (candidate) => workLouderCodexTaskIdentityKey(candidate) === key,
-      );
-    if (task) return this.hardwareActivityForTask(task);
-    // Custom task actions carry only a session id; never fall through to a
-    // device-scoped key, which must resolve through its published task.
-    return key.includes('\u0000') ? undefined : this.latestActivityBySessionId.get(key);
+      .map((activity) => optionById.get(activity.sessionId)!)
+      .filter((task, index, rows) => rows.findIndex((row) => row.id === task.id) === index);
+    const included = new Set(prioritized.map((task) => task.id));
+    return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
   private lightingThreadCount(): number {
@@ -856,8 +768,9 @@ export class WorkLouderCodexLightingController {
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
     const threadCount = this.lightingThreadCount();
-    const projected = createWorkLouderCodexLightingFrameFromSlots(
-      this.slotSessionKeys.map((key) => this.hardwareActivityForKey(key)),
+    const projected = createWorkLouderCodexLightingFrame(
+      this.latestActivity,
+      this.slotSessionIds,
       threadCount,
     );
     const baseFrame = workLouderShouldMuteKeyZone(this.settings.layout.taskKeys)

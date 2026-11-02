@@ -4,7 +4,6 @@ import type { DbClient } from '../localDb/client/DbClient.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
-import type { InputDeviceRemoteTaskActivity } from '../../shared/inputDevices.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -20,28 +19,15 @@ export interface WorkLouderCodexTaskSlotRow {
   id: string;
 }
 
-export interface WorkLouderCodexTaskCatalogOption extends WorkLouderCodexTaskOption {
-  deviceLinkDeviceId?: string;
-  remoteActivity?: InputDeviceRemoteTaskActivity;
-}
-
-interface WorkLouderCodexTaskCatalogRow extends WorkLouderCodexTaskCatalogOption {
+interface WorkLouderCodexTaskCatalogRow extends WorkLouderCodexTaskOption {
   pinnedAt: number | null;
   userSendAt: number | null;
 }
 
 export interface WorkLouderCodexTaskCatalog {
-  sidebar: WorkLouderCodexTaskCatalogOption[];
-  lastSent: WorkLouderCodexTaskCatalogOption[];
-  options: WorkLouderCodexTaskCatalogOption[];
-}
-
-/** Activity identity includes the owning device so equal session ids cannot collide. */
-export function workLouderCodexTaskIdentityKey(task: {
-  id: string;
-  deviceLinkDeviceId?: string | null;
-}): string {
-  return task.deviceLinkDeviceId ? `${task.deviceLinkDeviceId}\u0000${task.id}` : task.id;
+  sidebar: WorkLouderCodexTaskOption[];
+  lastSent: WorkLouderCodexTaskOption[];
+  options: WorkLouderCodexTaskOption[];
 }
 
 /** Keeps database recency order unchanged and caps the keyboard projection at the board size. */
@@ -88,8 +74,6 @@ export interface WorkLouderCodexTaskCatalogInput {
   title: string | null;
   pinnedAt: number | null;
   userSendAt: number | null;
-  deviceLinkDeviceId?: string;
-  remoteActivity?: InputDeviceRemoteTaskActivity;
   sidebarOrder?: number;
   catalogEligible?: boolean;
 }
@@ -113,13 +97,9 @@ export function buildWorkLouderCodexTaskCatalog(
     pinned: row.pinnedAt !== null,
     pinnedAt: row.pinnedAt,
     userSendAt: row.userSendAt,
-    ...(row.deviceLinkDeviceId ? { deviceLinkDeviceId: row.deviceLinkDeviceId } : {}),
-    ...(row.remoteActivity ? { remoteActivity: { ...row.remoteActivity } } : {}),
   }));
   const catalogRows = publishedRows.filter((_, index) => rows[index]?.catalogEligible !== false);
-  const byPublishedKey = new Map(
-    publishedRows.map((row) => [workLouderCodexTaskIdentityKey(row), row] as const),
-  );
+  const byPublishedId = new Map(publishedRows.map((row) => [row.id, row] as const));
   const visibleOrder = rows
     .filter((row) => row.sidebarOrder !== undefined)
     .toSorted((left, right) => (left.sidebarOrder ?? 0) - (right.sidebarOrder ?? 0));
@@ -127,7 +107,7 @@ export function buildWorkLouderCodexTaskCatalog(
   // even an empty visible list must stay empty, otherwise a machine filter
   // or sidebar search would light keys for tasks the user cannot see.
   const publishedVisibleRows = visibleOrder.flatMap((item) => {
-    const row = byPublishedKey.get(workLouderCodexTaskIdentityKey(item));
+    const row = byPublishedId.get(item.id);
     return row ? [row] : [];
   });
   const sidebarSource =
@@ -156,17 +136,10 @@ function sortLastSentRows(rows: WorkLouderCodexTaskCatalogRow[]): WorkLouderCode
     const leftSent = left.userSendAt ?? 0;
     const rightSent = right.userSendAt ?? 0;
     if (rightSent !== leftSent) return rightSent - leftSent;
-    const idOrder = right.id.localeCompare(left.id);
-    return idOrder || workLouderCodexTaskIdentityKey(left).localeCompare(workLouderCodexTaskIdentityKey(right));
+    return right.id.localeCompare(left.id);
   });
 }
 
-function toTaskOption(row: WorkLouderCodexTaskCatalogRow): WorkLouderCodexTaskCatalogOption {
-  return {
-    id: row.id,
-    title: row.title,
-    pinned: row.pinned,
-    ...(row.deviceLinkDeviceId ? { deviceLinkDeviceId: row.deviceLinkDeviceId } : {}),
-    ...(row.remoteActivity ? { remoteActivity: { ...row.remoteActivity } } : {}),
-  };
+function toTaskOption(row: WorkLouderCodexTaskCatalogRow): WorkLouderCodexTaskOption {
+  return { id: row.id, title: row.title, pinned: row.pinned };
 }

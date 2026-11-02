@@ -27,45 +27,6 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     expect(catalog.options).toHaveLength(2);
   });
 
-  it('keeps equal session ids on different devices distinct and preserves phase', () => {
-    const catalog = buildWorkLouderCodexTaskCatalog([
-      {
-        id: 'same-session',
-        title: 'Device A',
-        pinnedAt: null,
-        userSendAt: 2_000,
-        deviceLinkDeviceId: 'device-a',
-        remoteActivity: { phase: 'running', attention: false },
-      },
-      {
-        id: 'same-session',
-        title: 'Device B',
-        pinnedAt: null,
-        userSendAt: 1_000,
-        deviceLinkDeviceId: 'device-b',
-        remoteActivity: { phase: 'error', attention: true },
-      },
-    ]);
-
-    expect(catalog.options).toHaveLength(2);
-    expect(catalog.options).toEqual([
-      {
-        id: 'same-session',
-        title: 'Device A',
-        pinned: false,
-        deviceLinkDeviceId: 'device-a',
-        remoteActivity: { phase: 'running', attention: false },
-      },
-      {
-        id: 'same-session',
-        title: 'Device B',
-        pinned: false,
-        deviceLinkDeviceId: 'device-b',
-        remoteActivity: { phase: 'error', attention: true },
-      },
-    ]);
-  });
-
   it('caps the keys at the board size while keeping the full option list', () => {
     const rows = Array.from({ length: 16 }, (_, index) => ({
       id: `task-${index}`,

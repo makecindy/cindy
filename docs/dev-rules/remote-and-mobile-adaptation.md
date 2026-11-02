@@ -853,19 +853,6 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 （包括失败后的其它成员）才释放刷新位置。账号切换或远程断连后的新代次独立刷新，
 不等待旧请求超时；已经取消的补读不重新打开连接。该合并不引入结果缓存或定时重试。
 
-## Work Louder 键盘的远程任务状态（2026-11-02）
-
-Codex Micro 的 `worklouder-codex:publish-tasks` 仍由渲染端上报侧栏任务。远程任务可额外携带
-`deviceLinkDeviceId` 和硬件专用的 `remoteActivity { phase, attention }`；主进程按
-`deviceId + sessionId` 复合身份投影到任务灯与 priority 排序。该 phase 不进入
-`buildAllSessionActivitySnapshots` 或本机 Agent Island 活动快照，也不改变 device-link wire。
-渲染端订阅 `remoteSessionActivityStore` 的变化后重发；设备断连、任务筛选／删除或 phase 收尾时，
-新列表不再携带旧活动，主进程随列表更新清除灯态。回归见
-`apps/desktop/src/main/worklouder-codex/__tests__/WorkLouderCodexLightingController.test.ts`、
-`apps/desktop/src/main/worklouder-codex/__tests__/protocol.test.ts`、
-`apps/desktop/src/main/worklouder-codex/__tests__/settingsIpc.test.ts` 与
-`apps/desktop/src/renderer/features/cc-agent/lib/__tests__/workLouderCodexTaskPublish.test.ts`。
-
 ## PR 门禁
 
 功能类 PR 的 Description 必须写明上述每一项的结论，三选一：

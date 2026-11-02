@@ -1749,6 +1749,17 @@ export function buildAllSessionActivitySnapshots(
   return snapshots;
 }
 
+/** Input devices are process-local, so their activity may include remote mirrors. */
+export function buildInputDeviceSessionActivitySnapshots(
+  state: AgentIslandState,
+): AgentIslandSessionSnapshot[] {
+  const snapshots = buildAllSessionActivitySnapshots(state);
+  for (const session of state.sessions.values()) {
+    if (session.sourceDeviceId !== null && !session.groupChat) snapshots.push(toSnapshot(session));
+  }
+  return snapshots;
+}
+
 export function getNextAgentIslandTimerAt(state: AgentIslandState, now: number): number | null {
   let next: number | null = null;
   for (const value of [

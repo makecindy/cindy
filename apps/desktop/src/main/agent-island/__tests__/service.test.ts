@@ -16,6 +16,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -7250,6 +7251,79 @@ describe('Agent Island device sessions', () => {
       detail: '',
     };
   }
+
+  // Unit regression: device sessions already reach the island, but the hardware
+  // callback used the local-only relay payload. Exercise the public service
+  // while the island UI is off; relay, renderer and subscriptions stay local.
+  it('sends remote activity only to the process-local hardware consumer', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const onSessionActivityChange = vi.fn();
+    const transitions = vi.fn();
+    const send = vi.fn();
+    const mainWindow = {
+      isDestroyed: () => false,
+      isFocused: () => false,
+      webContents: { isDestroyed: () => false, send },
+    } as unknown as BrowserWindow;
+    markAppContentWindow(mainWindow);
+    mocks.browserWindowGetAllWindows.mockReturnValue([mainWindow]);
+    const service = new AgentIslandService({
+      getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, headless: true, publish: () => true },
+      onSessionActivityChange,
+    });
+    const unsubscribe = service.subscribeSessionActivity(transitions);
+    try {
+      service.setEnabled(false);
+      service.handleUserPrompt({ sessionId: 'local-keyboard', agentKind: 'codex' }, 'run tests');
+
+      for (const phase of ['running', 'needs-interaction', 'completed', 'error'] as const) {
+        service.setDeviceSessions([deviceSession(phase)]);
+        expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+          expect.objectContaining({ sessionId: 'local-keyboard', phase: 'running' }),
+          expect.objectContaining({
+            sessionId: 'remote-1',
+            phase,
+            attention: phase !== 'running',
+          }),
+        ]);
+      }
+
+      expect(service.getSessionActivitySnapshots().map((item) => item.sessionId)).toEqual([
+        'local-keyboard',
+      ]);
+      const relayCalls = mocks.tapWindowBroadcast.mock.calls.filter(
+        ([channel]) => channel === SESSION_ACTIVITY_CHANNEL,
+      );
+      expect(relayCalls.length).toBeGreaterThan(0);
+      for (const [, payload] of relayCalls) {
+        expect(payload).toMatchObject({ sessionId: 'local-keyboard' });
+      }
+      expect(transitions).toHaveBeenCalled();
+      for (const [transition] of transitions.mock.calls) {
+        expect(transition.sessionId).toBe('local-keyboard');
+      }
+      const rendererCalls = send.mock.calls.filter(
+        ([channel]) => channel === AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
+      );
+      expect(rendererCalls.length).toBeGreaterThan(0);
+      for (const [, payload] of rendererCalls) {
+        expect(payload).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ sessionId: 'remote-1' })]),
+        );
+      }
+
+      service.setDeviceSessions([]);
+      expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+        expect.objectContaining({ sessionId: 'local-keyboard', phase: 'running' }),
+      ]);
+      service.resetRuntimeState();
+      expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    } finally {
+      unsubscribe();
+      service.resetRuntimeState();
+    }
+  });
 
   it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
     const { AgentIslandService } = await import('../service.js');

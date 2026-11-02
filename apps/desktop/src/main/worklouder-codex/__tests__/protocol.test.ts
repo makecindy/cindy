@@ -4,7 +4,6 @@ import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
-  createWorkLouderCodexLightingFrameFromSlots,
   createWorkLouderCodexWindowRevealFrame,
   muteWorkLouderCodexKeyZone,
   isWorkLouderCodexHostMessage,
@@ -86,32 +85,6 @@ describe('createWorkLouderCodexLightingFrame', () => {
 
     expect(unread.ambient.color).toBe(0x35c759);
     expect(isWorkLouderCodexLightingFrameOff(acknowledged)).toBe(true);
-  });
-
-  it.each([
-    ['running', false, true],
-    ['needs-interaction', false, true],
-    ['completed', true, true],
-    ['completed', false, false],
-    ['error', true, true],
-    ['error', false, false],
-  ] as const)('keeps resolved slot visibility for %s attention=%s', (phase, attention, lit) => {
-    const frame = createWorkLouderCodexLightingFrameFromSlots([
-      activity('slot', phase, attention),
-    ]);
-
-    expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(!lit);
-  });
-
-  it('keeps a hidden read terminal in place instead of shifting later slots', () => {
-    const frame = createWorkLouderCodexLightingFrameFromSlots([
-      activity('read', 'completed', false),
-      activity('running', 'running'),
-    ]);
-
-    expect(frame.threads[0]?.brightness).toBe(0);
-    expect(frame.threads[1]?.brightness).toBeGreaterThan(0);
-    expect(frame.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
   });
 
   it('always sends six thread slots so stale device LEDs are cleared', () => {

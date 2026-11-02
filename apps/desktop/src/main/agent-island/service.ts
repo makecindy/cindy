@@ -110,6 +110,7 @@ import {
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  buildInputDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   completedReplySummary,
@@ -228,7 +229,7 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
-  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  /** Process-local input-device consumer; includes in-scope remote task mirrors. */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
@@ -1921,8 +1922,10 @@ export class AgentIslandService {
    * 灵动岛展示面 displayState.sessions。过了岛面 TTL 的完成/出错未读仍从账本带
    * attention=true 投给远程侧栏,直到真正已读。
    */
-  private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
-    return buildAllSessionActivitySnapshots(this.state).map((s) => ({
+  private buildSessionActivityPayload(
+    snapshots = buildAllSessionActivitySnapshots(this.state),
+  ): AgentIslandSessionActivity[] {
+    return snapshots.map((s) => ({
       ...(s.completionToken ? { completionToken: s.completionToken } : {}),
       ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
       ...projectSessionActivity({
@@ -2061,7 +2064,11 @@ export class AgentIslandService {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
     this.emitSessionActivityTransitions(payload, Date.now());
-    this.notifySessionActivityConsumer(payload);
+    // Remote mirrors belong only in the in-process hardware feed, never in relay
+    // or renderer broadcasts, which would advertise them as local tasks again.
+    this.notifySessionActivityConsumer(
+      this.buildSessionActivityPayload(buildInputDeviceSessionActivitySnapshots(this.state)),
+    );
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
     const windows = BrowserWindow.getAllWindows().filter(isAppContentWindow);
