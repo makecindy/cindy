@@ -51,6 +51,10 @@ export interface BotSettingsAutosaveController {
   retry: () => Promise<void>;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
+  /** 最近一次提交是否失败(同步读 ref,flush 之后即可信)。 */
+  failed: () => boolean;
+  /** 放弃无法保存的草稿:取消待发保存,卸载冲刷与脱离判定都按上次成功保存的基线处理。 */
+  discard: () => void;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
   composition: {
     onCompositionStart: () => void;
@@ -81,12 +85,16 @@ export function useBotSettingsAutosave(
   commitRef.current = commit;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  // Set when the user discards an unsaveable draft; the next edit resumes saving.
+  const discardedRef = useRef(false);
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const failedRef = useRef(false);
 
   const handleStatus = useCallback((next: BotAutosaveStatus) => {
+    failedRef.current = next === 'error';
     if (!mountedRef.current) return;
     if (savedTimerRef.current !== null) {
       clearTimeout(savedTimerRef.current);
@@ -105,7 +113,7 @@ export function useBotSettingsAutosave(
     autosaveRef.current = createBotSettingsAutosave({
       textDelayMs,
       instantDelayMs,
-      readPayload: () => committablePayloadRef.current,
+      readPayload: () => (discardedRef.current ? baselineRef.current : committablePayloadRef.current),
       readBaseline: () => baselineRef.current,
       commit: async (next) => {
         if (!enabledRef.current) return;
@@ -132,6 +140,7 @@ export function useBotSettingsAutosave(
   const onEdit = useCallback(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
+      discardedRef.current = false;
       if (trigger === 'text' && composingRef.current) return;
       autosave.schedule(trigger);
     },
@@ -163,5 +172,14 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty, composition };
+  /** The user gave up an unsaveable draft: stop pending saves until the page shows the baseline again. */
+  const discard = useCallback(() => {
+    autosave.cancel();
+    discardedRef.current = true;
+    handleStatus('idle');
+  }, [autosave, handleStatus]);
+
+  const failed = useCallback(() => failedRef.current, []);
+
+  return { status, onEdit, flush, retry, isDirty, failed, discard, composition };
 }

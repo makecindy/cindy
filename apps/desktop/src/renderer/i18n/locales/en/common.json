@@ -10111,7 +10111,11 @@
     "autosave": {
       "saving": "Saving…",
       "saved": "Saved",
-      "retry": "Save Again"
+      "retry": "Save Again",
+      "unsavedTitle": "Teammate Settings Not Saved",
+      "unsavedDescription": "These changes could not be saved, possibly because a selected model is unavailable. Leaving will discard them.",
+      "discard": "Discard Changes",
+      "continueEditing": "Keep Editing"
     },
     "retry": "Retry",
     "backToBot": "Back to teammate",
