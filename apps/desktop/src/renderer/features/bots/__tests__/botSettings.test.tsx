@@ -771,6 +771,29 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('button', { name: 'bots.autosave.discard' })).toBeNull();
   });
 
+  // Review (P1): a failure belongs to the draft that was sent. Save A is still in flight
+  // when draft B is typed; A failing afterwards must not mark B as failed, or leaving
+  // would skip B's save and offer to discard a draft that was never submitted.
+  it('saves a draft typed while an older save was in flight when that save fails', async () => {
+    let rejectFirst!: (error: unknown) => void;
+    mocks.updateBotProfile.mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+    fireEvent.change(name, { target: { value: 'First draft' } });
+    fireEvent.blur(name);
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1));
+    fireEvent.change(name, { target: { value: 'Second draft' } });
+    await act(async () => { rejectFirst(new Error('offline')); });
+    let leaving!: Promise<boolean>;
+    act(() => { leaving = beforeCloseRef.current!(); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2));
+    await act(async () => { expect(await leaving).toBe(true); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', expect.objectContaining({ name: 'Second draft' }));
+    expect(screen.queryByRole('button', { name: 'bots.autosave.discard' })).toBeNull();
+  });
+
   it('does not duplicate the chat action inside the settings panel', () => {
     renderSettings();
     expect(screen.queryByRole('button', { name: 'bots.actions.message' })).toBeNull();
