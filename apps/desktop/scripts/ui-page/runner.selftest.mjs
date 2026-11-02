@@ -17,9 +17,9 @@ const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
 let dir;
 
-function run(args, { interruptWhenRunning } = {}) {
+function run(args, { interruptWhenRunning, env: extraEnv } = {}) {
   return new Promise((resolve) => {
-    const env = { ...process.env, NODE_DEBUG: '', CINDY_UI_PROGRESS: '1' };
+    const env = { ...process.env, NODE_DEBUG: '', CINDY_UI_PROGRESS: '1', ...extraEnv };
     const child = spawn(process.execPath, [cli, ...args], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -281,4 +281,49 @@ test('clipping audit ignores accessible-only text but retains visible clipping w
   const warnings = report.variants.flatMap(variant => variant.warnings);
   assert.ok(warnings.some(warning => warning.includes('Visible quota warning clipped')));
   assert.ok(!warnings.some(warning => warning.includes('Accessible quota warning')));
+});
+
+// Windows/small-screen regression: the window manager clamps windows to the work area and DPI
+// rounding shifts them by a pixel, so a request the screen cannot grant must not fail the matrix.
+// (Previously #6996 saw all 299 variants fail on 801x601 vs 800x600.)
+test('classifies clamped and off-by-one viewports without failing the run', async () => {
+  const { classifyViewport } = await import('./run.mjs');
+  assert.equal(classifyViewport({ width: 800, height: 600 }, { width: 800, height: 600 }), 'match');
+  // DPI rounding: within 1px counts as a match.
+  assert.equal(classifyViewport({ width: 800, height: 600 }, { width: 801, height: 601 }), 'match');
+  assert.equal(classifyViewport({ width: 800, height: 600 }, { width: 799, height: 600 }), 'match');
+  // Clamped: neither axis larger than requested.
+  assert.equal(classifyViewport({ width: 1280, height: 900 }, { width: 900, height: 400 }), 'clamped');
+  assert.equal(classifyViewport({ width: 1280, height: 900 }, { width: 1280, height: 700 }), 'clamped');
+  // Larger than requested: the size really is misconfigured, keep failing.
+  assert.equal(classifyViewport({ width: 800, height: 600 }, { width: 900, height: 600 }), 'mismatch');
+});
+
+test('a viewport the window manager will not grant becomes a warning, not a failure', async () => {
+  const file = await entry('clamped', 'mountPage({ render: () => <div>Clamped</div> });');
+
+  // 1) When the window can honour the request, strict equality is still required.
+  const exact = JSON.parse(
+    (await run(['--entry', file, '--engine', 'electron', '--viewport', '1280x900', '--json'])).stdout,
+  );
+  assert.equal(exact.variants[0].status, 'passed');
+  assert.equal(exact.variants[0].viewportClamped, undefined);
+
+  // 2) Simulated clamp: the runner measures 900x400. Exit stays 0, the variant records
+  //    viewportClamped, and it is only a warning. (The hook fakes the measurement only;
+  //    hidden Electron windows can take oversized requests, so a real clamp is not reproducible.)
+  const clampedRun = await run(
+    ['--entry', file, '--engine', 'electron', '--viewport', '1280x900', '--json'],
+    { env: { CINDY_UI_SIMULATE_VIEWPORT_CLAMP: '900x400' } },
+  );
+  const summary = JSON.parse(clampedRun.stdout);
+  assert.equal(clampedRun.code, 0, JSON.stringify(summary.variants.map((v) => v.errors)));
+  const variant = summary.variants[0];
+  assert.equal(variant.status, 'passed');
+  assert.deepEqual(variant.viewportClamped, {
+    expected: { width: 1280, height: 900 },
+    actual: { width: 900, height: 400 },
+  });
+  assert.ok(variant.warnings.some((line) => line.includes('viewport clamped')));
+  assert.ok(variant.screenshots.length);
 });
