@@ -8665,9 +8665,9 @@
     "localModeEntry": "Omitir inicio de sesión",
     "localModeOpening": "Omitiendo inicio de sesión…",
     "localModeDescription": "No necesitas una cuenta de Cindy. Los datos permanecen en este dispositivo; los modelos en la nube, el acceso entre dispositivos y los servicios del marketplace no están disponibles.",
-    "consentStatement": "He leído y acepto los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy>",
+    "consentStatement": "Acepto los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy>",
     "consentDialog": {
-      "title": "Términos y privacidad",
+      "title": "Términos y Política de privacidad",
       "body": "Para continuar, lee y acepta los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy.",
       "agree": "Aceptar",
       "disagree": "Ahora no"

@@ -8598,9 +8598,9 @@
     "localModeEntry": "Anmeldung überspringen",
     "localModeOpening": "Anmeldung wird übersprungen…",
     "localModeDescription": "Kein Cindy-Konto erforderlich. Die Daten bleiben auf diesem Gerät; Cloud-Modelle, geräteübergreifender Zugriff und Marketplace-Dienste sind nicht verfügbar.",
-    "consentStatement": "Ich habe die <terms>Nutzungsbedingungen</terms> und die <privacy>Datenschutzerklärung</privacy> gelesen und stimme ihnen zu",
+    "consentStatement": "Ich akzeptiere <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy>",
     "consentDialog": {
-      "title": "Nutzungsbedingungen & Datenschutz",
+      "title": "Bedingungen & Datenschutzerklärung",
       "body": "Lies Cindys <terms>Nutzungsbedingungen</terms> und <privacy>Datenschutzerklärung</privacy> und stimme ihnen zu, um fortzufahren.",
       "agree": "Zustimmen",
       "disagree": "Nicht jetzt"
