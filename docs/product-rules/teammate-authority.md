@@ -24,7 +24,7 @@
 | 授予常驻指令 | `routine_save` 新建启用的自定义规则或改写启用规则的指令；禁用草稿和不改指令的编辑沿原权限 |
 | 删除自动化 | `routine_delete`、`schedule_delete` |
 | 代用户回答权限请求 | `message_session_task` 携带 `decision` |
-| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`，以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则 |
+| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`，以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
 
 其余操作不命中风险表就继续现有权限流程。新增普通工具不需要另开“自主解锁”例外。
 主人输入、已核实的主人转达和受托指令沿正常权限审核，不再加第二张行动确认卡。

@@ -67,7 +67,7 @@ describe('消息流的头像挂载', () => {
 describe('伙伴输入框只保留对话动作', () => {
   it('语音对话入口接入输入框，并传递可用与通话状态', () => {
     expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
-    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked}');
+    expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked || voiceCall.open}');
     expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
     const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
     expect(voiceGate).toContain('pendingInputHandoff');

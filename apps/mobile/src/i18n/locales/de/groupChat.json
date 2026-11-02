@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Stoppen"
+  },
+  "work": {
+    "queued": "In Warteschlange {{count}}",
+    "active": "In Bearbeitung {{count}}",
+    "expand": "Aktivität der Teammitglieder ausklappen",
+    "collapse": "Aktivität der Teammitglieder einklappen"
+  },
   "title": "Gruppenchats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} Mitglied",
@@ -186,6 +195,7 @@
     "allDone": "Alles erledigt"
   },
   "speaking": {
+    "queued": "In der Warteschlange",
     "stopping": "Wird gestoppt…",
     "planning": "Arbeit wird aufgeteilt…",
     "step": "In Arbeit…"
@@ -258,7 +268,18 @@
       "unavailable": "Die Gruppeneinstellungen konnten nicht geladen werden. Versuch es erneut."
     },
     "allowMentionAllBots": "@Alle Teammitglieder erlauben",
-    "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle könnten antworten: Vorsicht in großen Gruppen. KI-Antworten in deinem Namen sind unabhängig."
+    "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle könnten antworten: Vorsicht in großen Gruppen. KI-Antworten in deinem Namen sind unabhängig.",
+    "notifications": {
+      "title": "Nachrichtenbenachrichtigungen",
+      "all": "Alle Nachrichten",
+      "mentions": "Nur Erwähnungen",
+      "none": "Aus",
+      "allHint": "Erhalte Benachrichtigungen über Gruppennachrichten und neue Antworten in abonnierten Themen.",
+      "mentionsHint": "Erhalte Benachrichtigungen, wenn du erwähnt wirst, auch bei @alle. Aktualisierungen zur Arbeitsteilung werden weiterhin gemeldet.",
+      "noneHint": "Deaktiviere alle Systembenachrichtigungen für diese Gruppe. Ungelesene Nachrichten bleiben erhalten.",
+      "saving": "Wird gespeichert…",
+      "saveFailed": "Benachrichtigungen konnten nicht gespeichert werden. Versuche es erneut."
+    }
   },
   "errors": {
     "memberLimit": "Ein Gruppenchat braucht 2–6 Teammitglieder",

@@ -24,7 +24,7 @@ export default {
     'src/renderer/components/new-chat/NewGoalDialog': `export const NewGoalDialog = () => null;`,
     'src/renderer/components/new-chat/AtMentionPanel': `export const AtMentionPanel = () => null;`,
     'src/renderer/components/new-chat/SlashCommandPalette': `export const SlashCommandPalette = () => null;`,
-    'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
+    'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', speakerFiltered: state === 'listening' && window.__uiPage.ctx.case === 'voice-speaker-filtered', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
     'late-attachment': {
@@ -42,6 +42,9 @@ export default {
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
+    },
+    'voice-speaker-filtered': {
+      about: 'Recording explains above the composer that the voiceprint filter ignored someone else',
     },
     default: {
       about:
@@ -107,6 +110,19 @@ export default {
       await send.click();
       await call.waitFor();
       assert.equal(await page.getByTestId('sent').textContent(), ui.data.recommendation);
+      return;
+    }
+    if (ui.case === 'voice-speaker-filtered') {
+      const notice = page.getByRole('status').filter({ hasText: await ui.t('voiceInputOverlay.speakerFiltered') });
+      const cardBox = await page.locator('[data-split-group-composer-drop-target]').boundingBox();
+      await page.mouse.move(cardBox.x + 4, cardBox.y + 4);
+      await page.mouse.down();
+      await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
+      await notice.waitFor();
+      await ui.capture('filtered');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent === 'Dictated message');
+      assert.equal(await notice.count(), 0);
       return;
     }
     if (ui.case === 'voice-hold') {

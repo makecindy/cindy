@@ -160,6 +160,7 @@ import {
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
+  relocationDescriptionKey,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
@@ -655,6 +656,8 @@ interface ChatInputProps {
   /** Optional local companion call action, separate from one-shot dictation. */
   onStartVoiceConversation?: () => void;
   voiceConversationDisabled?: boolean;
+  /** Why the voice button is unavailable, when the reason is a call elsewhere. */
+  voiceConversationDisabledReason?: string;
   voiceConversationActive?: boolean;
   /**
    * F-QUEUE-DEFER: un-dispatched messages (rendered above the input by
@@ -1291,6 +1294,7 @@ export function ChatInput({
   onBeforeVoiceInputStart,
   onStartVoiceConversation,
   voiceConversationDisabled = false,
+  voiceConversationDisabledReason,
   voiceConversationActive = false,
   pendingQueue,
   queueExpanded = false,
@@ -3425,6 +3429,8 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // Only the composer that owns the run explains why someone else's words are missing.
+  const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
@@ -7735,12 +7741,13 @@ export function ChatInput({
   ]);
 
   // ── 远程 Agent · 已建任务:选另一台电脑(或本机)目录里的模型 = 把 Agent 挪过去 ──────────
-  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地,交接摘要接续)。换电脑
-  // 同样续接不了原生会话,复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
+  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地)。同引擎优先复制原生记录,
+  // 跨引擎或分享来源走交接摘要;复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
   // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。被控电脑上的任务改回被控电脑时,
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
+  const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice) =>
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
       confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
@@ -7754,13 +7761,18 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t('newChat.chatInput.agentRelocation.description'),
+          description: t(relocationDescriptionKey({
+            fromAgent: relocationSourceAgent,
+            toAgent: targetAgent,
+            fromAgentDeviceId: agentDeviceId,
+            toAgentDeviceId: target?.deviceId,
+          })),
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, confirmDialog, t],
+    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
@@ -7787,7 +7799,7 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
         return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
@@ -9315,16 +9327,20 @@ export function ChatInput({
           />
         </div>
       )}
-      {/* Voice-input error + attachment rejections (oversize / blocked /
+      {/* Voice-input error (or the voiceprint filter notice) + attachment rejections (oversize / blocked /
           read-failed) share ONE floating slot above the input card — so they
           don't shrink the typing area and are clearly visible. They MUST live
           in a single flex-col container: two separate same-position absolute
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
-          {voiceInput.lastError && <VoiceInputStatusNotice message={voiceInput.lastError} />}
+          {voiceInput.lastError ? (
+            <VoiceInputStatusNotice message={voiceInput.lastError} />
+          ) : showSpeakerFilteredNotice ? (
+            <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
+          ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
           )}
@@ -10197,7 +10213,7 @@ export function ChatInput({
                       <Tip
                         text={
                           mainSlotIsVoice
-                            ? t('bots.voiceMode.startConversation')
+                            ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
                             : queueEditActive
                             ? t('newChat.pendingQueue.editSaveAria')
                             : voiceReleaseToSendActive

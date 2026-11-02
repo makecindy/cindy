@@ -2110,7 +2110,7 @@ describe('connect_account transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it('exposes a Host connection without requiring an installed plugin', async () => {
+  it('exposes Host connections (Grok, teammate messaging platforms) without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
     const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
@@ -2123,9 +2123,13 @@ describe('connect_account transport', () => {
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
-      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
-      expect(rejected.isError).toBe(true);
-      expect(connectAccount).toHaveBeenCalledTimes(1);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      for (const id of ['invented', 'im-unknown']) {
+        const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
+        expect(rejected.isError).toBe(true);
+      }
+      expect(connectAccount).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
 

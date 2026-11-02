@@ -13,6 +13,9 @@ export interface SessionPrRef {
   priority?: number;
   manuallyAdded?: boolean;
   removedAt?: number | null;
+  /** Absent on older hosts. Legacy references require explicit confirmation. */
+  associationSource?: string;
+  associationOrigin?: string | null;
 }
 
 /** Counts for the current PR head, across check runs and commit statuses. */
@@ -55,6 +58,11 @@ export type PrStatusResult =
       mergeState?: string | null;
       /** GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). Missing on older hosts. */
       reviewDecision?: string | null;
+      headSha?: string;
+      baseBranch?: string;
+      observedAt?: number;
+      revision?: string;
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;

@@ -139,6 +139,47 @@ function group(owned = false): BotGroupSummary {
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
+// Component: a human member edits a personal preference, independently of the
+// manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const label = key('notifications.title');
+  fireEvent.click(screen.getByRole('combobox', { name: label }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
+});
+it('keeps the confirmed notification value during saving and after rejection', async () => {
+  let finish!: (value: { ok: false; errorCode: string }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsNotificationSettings: true, notificationMode: 'all' }} /></MemoryRouter>);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') }) as HTMLButtonElement;
+  fireEvent.click(control);
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.none') }));
+  expect(control.disabled).toBe(true);
+  expect(control.textContent).toContain(key('notifications.all'));
+  await act(async () => finish({ ok: false, errorCode: 'REQUEST_FAILED' }));
+  expect(control.disabled).toBe(false);
+  expect(control.textContent).toContain(key('notifications.all'));
+  expect(screen.getByRole('alert').textContent).toBe(key('notifications.saveFailed'));
+});
+it('hides the notification control on older servers', async () => {
+  await act(async () => { render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>); });
+  expect(screen.queryByRole('combobox', { name: key('notifications.title') })).toBeNull();
+});
+it('clears an uncertain save error when server readback confirms the choice', async () => {
+  mocks.manage.mockRejectedValueOnce(new Error('Lost acknowledgement'));
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('combobox', { name: key('notifications.title') }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 beforeEach(() => {
   const nativeAbortController = transferableAbortController();
   vi.stubGlobal('AbortController', nativeAbortController.constructor);
