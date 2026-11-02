@@ -62,6 +62,7 @@
     "send": "遣"
   },
   "timeline": {
+    "endTalk": "終",
     "newMessages_one": "新訊 {{count}} 則",
     "newMessages_other": "新訊 {{count}} 則",
     "emptyTitle": "群議寂寂，尚待君開言",
@@ -158,6 +159,12 @@
     "runtimeFailureSetupHint": "如須調模型或設定，請於同僚所屬之機上為之。"
   },
   "plan": {
+    "talkTurn": "陳其所見",
+    "stepSpeaking": "方言",
+    "stepSpoken": "言畢",
+    "allTurns_one": "凡 {{count}} 位",
+    "allTurns_other": "凡 {{count}} 位",
+    "foldTurns": "收",
     "intro_one": "此事分 {{count}} 步，吾如是分職：",
     "intro_other": "此事分 {{count}} 步，吾如是分職：",
     "missing": "此安排已不可讀",

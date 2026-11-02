@@ -675,6 +675,44 @@ describe('group timeline', () => {
     expect(h.chat.act).not.toHaveBeenCalled();
   });
 
+  // #5759 / bot-group-chat §7.0, unit: existing work-plan fixtures miss server talk queues.
+  // The real timeline must render empty-task turns without organizer attribution or work controls.
+  it('renders discussion turns independently and ends the discussion through the existing action', async () => {
+    const data = group();
+    data.messages = [data.messages[5]!];
+    data.plans[0] = { ...data.plans[0]!, kind: 'talk', status: 'waiting', currentStep: 0,
+      steps: data.plans[0]!.steps.map((step, index) => ({ ...step, task: '', status: index === 0 ? 'done' : 'pending' })) };
+    data.openPlan = { ...data.openPlan!, status: 'waiting', currentStep: 0 };
+    await render(data);
+    expect(byId('botGroup.organizerTag')).toBeNull();
+    expect(byId('botGroup.plan')?.textContent).not.toContain('groupChat.plan.intro');
+    expect(byId('botGroup.plan')?.textContent).not.toContain('groupChat.plan.eyebrow');
+    expect(byId('botGroup.plan')?.textContent).toContain('groupChat.plan.talkTurn');
+    expect(byId('botGroup.plan')?.textContent).toContain('groupChat.plan.stepSpoken');
+    expect(byId('botGroup.plan.stepMenu.1')).toBeNull();
+    expect(byId('botGroup.followUp.end')?.textContent).toBe('groupChat.timeline.endTalk');
+    expect(byId('botGroup.followUpRow.continue')?.textContent).toContain('groupChat.plan.talkTurn');
+    expect(byId('botGroup.followUpRow.continue')?.textContent).not.toContain('groupChat.followUp.next');
+    await click('botGroup.followUp.end');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
+  });
+
+  it('folds a long discussion around its current speaker and lets readers expand it', async () => {
+    const data = group();
+    data.messages = [data.messages[5]!];
+    data.plans[0] = { ...data.plans[0]!, kind: 'talk', status: 'running', currentStep: 2,
+      steps: Array.from({ length: 6 }, (_, position) => ({ ...data.plans[0]!.steps[0]!, position, task: '',
+        status: position < 2 ? 'done' : position === 2 ? 'running' : 'pending' })) };
+    await render(data);
+    expect(all('botGroup.plan.step')).toHaveLength(3);
+    expect(byId('botGroup.plan')?.textContent).toContain('groupChat.plan.stepSpeaking');
+    expect(byId('botGroup.plan.start')).toBeNull();
+    await click('botGroup.plan.toggleTurns');
+    expect(all('botGroup.plan.step')).toHaveLength(6);
+    await click('botGroup.plan.toggleTurns');
+    expect(all('botGroup.plan.step')).toHaveLength(3);
+  });
+
   // The computer's 自动交接 survives the phone's parse, so the card does not promise a 继续 that never comes.
   it.each([[true, 'groupChat.plan.autoNote'], [undefined, 'groupChat.plan.pauseNote']] as const)('says how steps hand on (autoContinue=%s)', async (autoContinue, note) => {
     const data = group();

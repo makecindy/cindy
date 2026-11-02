@@ -62,6 +62,7 @@
     "send": "보내기"
   },
   "timeline": {
+    "endTalk": "끝내기",
     "newMessages_one": "새 메시지 {{count}}개",
     "newMessages_other": "새 메시지 {{count}}개",
     "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
@@ -158,6 +159,12 @@
     "runtimeFailureSetupHint": "모델이나 설정을 변경하려면 이 동료가 실행되는 컴퓨터에서 변경하세요."
   },
   "plan": {
+    "talkTurn": "의견 말하기",
+    "stepSpeaking": "말하는 중",
+    "stepSpoken": "완료",
+    "allTurns_one": "전체 {{count}}명",
+    "allTurns_other": "전체 {{count}}명",
+    "foldTurns": "접기",
     "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
     "intro_other": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
     "missing": "이 계획을 더 이상 불러올 수 없습니다",

@@ -62,6 +62,7 @@
     "send": "Senden"
   },
   "timeline": {
+    "endTalk": "Beenden",
     "newMessages_one": "{{count}} neue Nachricht",
     "newMessages_other": "{{count}} neue Nachrichten",
     "emptyTitle": "Noch keine Nachrichten in dieser Gruppe",
@@ -158,6 +159,12 @@
     "runtimeFailureSetupHint": "Ändere das Modell oder die Einstellungen auf dem Computer, auf dem dieses Teammitglied läuft."
   },
   "plan": {
+    "talkTurn": "Ansicht teilen",
+    "stepSpeaking": "Spricht",
+    "stepSpoken": "Fertig",
+    "allTurns_one": "Alle {{count}} Teammitglied",
+    "allTurns_other": "Alle {{count}} Teammitglieder",
+    "foldTurns": "Weniger anzeigen",
     "intro_one": "Dafür ist {{count}} Schritt nötig. Das übernimmt:",
     "intro_other": "Dafür sind {{count}} Schritte nötig. Wer was übernimmt:",
     "missing": "Dieser Plan ist nicht mehr verfügbar",

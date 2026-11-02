@@ -918,7 +918,7 @@ export function BotGroupTimeline({
       </View>;
     })}
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
-      <BotGroupPlanFollowUpRow followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
+      <BotGroupPlanFollowUpRow followUp={followUp} talk={openPlan.kind === 'talk'} identityFor={identityFor} deviceId={deviceId} online={online}
         stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
         pending={followUpPending(pendingFor(openPlan.id))}
         onContinue={() => onPlanAction('continue', openPlan.id)}
@@ -1019,7 +1019,12 @@ function BotGroupTimelineItem({
       {message.maskAttribution ? <GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /> : null}
     </View>;
   }
-  // Server plans retain the human creator as author, but the card belongs to its organizer.
+  if (message.kind === 'plan' && plan?.kind === 'talk') return <View style={styles.indented} testID="botGroup.message.plan">
+    <BotGroupPlanCard plan={plan} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
+      actionable={false} reassignable={false} pending={planPending}
+      onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
+  </View>;
+  // Server work plans retain the human creator as author, but the card belongs to its organizer.
   const isPlanCard = message.kind === 'plan';
   const organizer = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : undefined;
   const author = isPlanCard

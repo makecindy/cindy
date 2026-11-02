@@ -63,6 +63,7 @@
     "send": "Enviar"
   },
   "timeline": {
+    "endTalk": "Encerrar",
     "newMessages_one": "{{count}} nova mensagem",
     "newMessages_other": "{{count}} novas mensagens",
     "emptyTitle": "Nenhuma mensagem neste grupo ainda",
@@ -161,6 +162,13 @@
     "runtimeFailureSetupHint": "Para mudar o modelo ou as configurações, use o computador em que este colega é executado."
   },
   "plan": {
+    "talkTurn": "Compartilhar uma visualização",
+    "stepSpeaking": "Falando",
+    "stepSpoken": "Concluído",
+    "allTurns_one": "Todos os {{count}} colega",
+    "allTurns_many": "Todos os {{count}} colegas",
+    "allTurns_other": "Todos os {{count}} colegas",
+    "foldTurns": "Mostrar menos",
     "intro_one": "Isso leva {{count}} etapa. Veja quem vai executá-la:",
     "intro_other": "Isso leva {{count}} etapas. Veja quem faz o quê:",
     "missing": "Este plano não está mais disponível",

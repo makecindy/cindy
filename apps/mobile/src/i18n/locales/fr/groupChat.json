@@ -63,6 +63,7 @@
     "send": "Envoyer"
   },
   "timeline": {
+    "endTalk": "Terminer",
     "newMessages_one": "{{count}} nouveau message",
     "newMessages_other": "{{count}} nouveaux messages",
     "emptyTitle": "Aucun message dans ce groupe",
@@ -161,6 +162,13 @@
     "runtimeFailureSetupHint": "Pour changer le modèle ou les paramètres, utilisez l'ordinateur sur lequel ce coéquipier s'exécute."
   },
   "plan": {
+    "talkTurn": "Donner son avis",
+    "stepSpeaking": "Prend la parole",
+    "stepSpoken": "Terminé",
+    "allTurns_one": "{{count}} coéquipier",
+    "allTurns_many": "Les {{count}} coéquipiers",
+    "allTurns_other": "Les {{count}} coéquipiers",
+    "foldTurns": "Afficher moins",
     "intro_one": "Cela prend {{count}} étape. Voici qui s'en charge :",
     "intro_other": "Cela prend {{count}} étapes. Voici qui fait quoi :",
     "missing": "Ce plan n'est plus disponible",

@@ -63,6 +63,7 @@
     "send": "Enviar"
   },
   "timeline": {
+    "endTalk": "Terminar",
     "newMessages_one": "{{count}} nova mensagem",
     "newMessages_other": "{{count}} novas mensagens",
     "emptyTitle": "Ainda não há mensagens neste grupo",
@@ -161,6 +162,13 @@
     "runtimeFailureSetupHint": "Para alterar o modelo ou as definições, utilize o computador onde este colega é executado."
   },
   "plan": {
+    "talkTurn": "Partilhar uma vista",
+    "stepSpeaking": "A falar",
+    "stepSpoken": "Concluído",
+    "allTurns_one": "O {{count}} colega",
+    "allTurns_many": "Os {{count}} colegas",
+    "allTurns_other": "Os {{count}} colegas",
+    "foldTurns": "Mostrar menos",
     "intro_one": "É necessário {{count}} passo. Eis quem o executa:",
     "intro_other": "São necessários {{count}} passos. Eis quem faz o quê:",
     "missing": "Este plano já não está disponível",

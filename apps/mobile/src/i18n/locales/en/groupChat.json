@@ -62,6 +62,7 @@
     "send": "Send"
   },
   "timeline": {
+    "endTalk": "End",
     "newMessages_one": "{{count}} new message",
     "newMessages_other": "{{count}} new messages",
     "emptyTitle": "No messages in this group yet",
@@ -158,6 +159,12 @@
     "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },
   "plan": {
+    "talkTurn": "Share a view",
+    "stepSpeaking": "Speaking",
+    "stepSpoken": "Done",
+    "allTurns_one": "All {{count}} teammate",
+    "allTurns_other": "All {{count}} teammates",
+    "foldTurns": "Show fewer",
     "intro_one": "This takes {{count}} step. Here’s who does it:",
     "intro_other": "This takes {{count}} steps. Here’s who does what:",
     "missing": "This plan is no longer available",
