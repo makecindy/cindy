@@ -1810,7 +1810,33 @@ export class DeviceLinkClient {
       return;
     }
     const allowClosedLegacyResponse = peer?.unlinkedLegacyResponseIds.has(requestId) === true;
-    this.sendPeerEnvelope(env, allowClosedLegacyResponse);
+    try {
+      this.sendPeerEnvelope(env, allowClosedLegacyResponse);
+    } catch (err) {
+      // 同上一条绕行的另一半(#6753):link **看着是 ready**、但对端已经停止 ACK,
+      // 窗口里塞满的是不可驱逐的旧帧(先前的 live invoke / 已无人在等的 invoke-result),
+      // 入队腾不出位置,于是回包一路 BACKPRESSURE 到控制端请求超时——线上就是
+      // 「电脑看起来醒着,手机却显示未响应」。回包是这条链路上唯一还有活等待者的帧,
+      // 且控制端按 requestId 配对、不依赖可靠层的顺序语义,所以与 link 未就绪时同一条
+      // 逃生路径:降级 legacy 裸帧立即直发。
+      // 只认「窗口满 + 队头卡死且有重发证据」这一种形状(见 isReliableSendWindowStalled),
+      // 普通满窗仍抛 BACKPRESSURE 交给 outbox 重试;也不扩容、不驱逐仍在等回复的 live 帧。
+      // 裸帧放不下的大结果同样抛回原 BACKPRESSURE,由 dispatch 的 compact 兜底。
+      const windowFull = err instanceof DeviceLinkError && err.code === 'BACKPRESSURE';
+      if (!windowFull || !peer || !peer.reliable || this.status !== 'online'
+        || !this.isReliableSendWindowStalled(dst)) throw err;
+      try {
+        this.sendBestEffortRoutedEnvelope(env);
+      } catch (directError) {
+        if (directError instanceof DeviceLinkError && directError.code === 'PAYLOAD_TOO_LARGE') throw err;
+        throw directError;
+      }
+      peer.unlinkedLegacyResponseIds.delete(requestId);
+      this.log.debug(
+        `reliable window full; sent result ${requestId.slice(0, 8)} as legacy frame to ${dst.slice(0, 8)}`,
+      );
+      return;
+    }
     if (allowClosedLegacyResponse) peer?.unlinkedLegacyResponseIds.delete(requestId);
   }
 
@@ -5712,6 +5738,33 @@ export class DeviceLinkClient {
       stalledOthers += 1;
     }
     return stalledOthers > 0;
+  }
+
+  /**
+   * 「可靠窗口不是满,而是卡死」的判据(#6753),只服务 `sendInvokeResult` 的逃生路径。
+   *
+   * 单纯的窗口满仍维持原背压语义(见 #2167 与「单 FIFO 固有极限」用例):控制端还会
+   * 回 ACK,dispatch 的 outbox 会重试,抛 BACKPRESSURE 是正确的。要绕行的只有另一种
+   * 形状——队头是不可驱逐的 live 帧(先前的 live invoke / 已经没人等的 invoke-result),
+   * 而且已经历过至少一轮重发仍未确认。此时窗口里的帧不是「在途」而是「送不到」,
+   * 回包会一路 BACKPRESSURE 到控制端请求超时,线上表现就是「电脑明明醒着,手机却显示
+   * 未响应」。
+   *
+   * 证据必须只取自**这个 peer 自己的 ACK 进展**,不能借用连接级的入站静默
+   * (`lastPeerInboundAt`):手机回到前台第一件事就是发探针,那也是入站帧,一借用就正好
+   * 在需要绕行的那一刻失效。
+   * `attempts >= 2` 本身就是 per-peer 证据:队头被写出过、又至少重发过一轮,而累计
+   * ACK 仍未越过它——ACK 一旦覆盖它,队头就已经出队了。首发刚写完、ACK 尚在路上的
+   * 正常状态永远是 `attempts === 1`,不会命中。
+   */
+  private isReliableSendWindowStalled(dst: string): boolean {
+    const peer = this.peerTransport.get(dst);
+    if (!peer?.reliable) return false;
+    const head = peer.pending.values().next().value as PendingReliableMessage | undefined;
+    if (!head || !head.sent || head.firstSentAt === undefined) return false;
+    // 固定要求至少重发过一轮:即使 transportMaxRetryAttempts 配成 1,也不能把「只发过一次、
+    // ACK 可能还在路上」当成卡死。重试上限为 1 的配置因此不会走这条逃生路径。
+    return head.attempts >= 2;
   }
 
   /**

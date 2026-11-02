@@ -7416,6 +7416,233 @@ describe('DeviceLinkClient', () => {
       }
     });
 
+    /**
+     * 测试价值
+     * - 生产入口与可观察结果：`DeviceLinkClient.sendInvokeResult`（被控端回包）。
+     *   控制端在可靠窗口满时仍能在 socket 上立刻收到这条回包（裸帧、按 requestId 配对），
+     *   而不是等请求超时；未 ACK 的旧回包不被驱逐、也不突破原有容量上限。
+     * - Bug／规则依据：#6753（手机端明明电脑醒着却显示「未响应」；日志序列
+     *   `ACK timeout → abandoning … → recovery replay pending=48 → reliable transport
+     *   buffer is full`）。
+     * - 现有覆盖缺口：既有 B 用例覆盖「link 未 ready」的裸帧绕行，A 用例覆盖
+     *   link-down 后的整队放弃；两者都要求 link 不可发。link **ready** 但对端持续
+     *   不 ACK、队头是不可驱逐的旧回包这一分支无人覆盖——正是 #6753 的死锁形状。
+     * - 最小失败输入：发送方向 ready 的可靠 link + 对端不回 ACK，先塞满
+     *   MAX_TRANSPORT_PENDING_MESSAGES 条 invoke-result（队头首发后已重发过一轮，即
+     *   生产里 retry timer 记出的同一状态），再回一条前台探针的 result。
+     * - tier：unit（进程内 FakeWs，无真实计时）。
+     */
+    it('C:ready link 的可靠窗口被未 ACK 的旧回包占满时,新回包降级 legacy 裸帧直发', async () => {
+      const h = makeHarness({ timing: {
+        reconnectBaseMs: 5, reconnectMaxMs: 10,
+        pingIntervalMs: 60_000, stalledLinkPendingMaxAgeMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+      } });
+      h.client.start();
+      try {
+        await tick();
+        h.current().ack();
+        await tick();
+        // 控制端接受 link(发送方向 ready)但全程不回 ACK:旧回包只能滞留在队列里。
+        await establishInboundReliableLink(h, 'stream-6753', 1, 'ctrl-1');
+        expect(h.client.getReliableSendQueueDepth('ctrl-1')).toBe(0);
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendInvokeResult('ctrl-1', `stale-${i}`, { ok: true, result: i });
+        }
+        expect(h.client.getReliableSendQueueDepth('ctrl-1')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+
+        // 走到生产里的「窗口卡死」状态:队头首发之后又重发过一轮,对端仍没有任何入站帧。
+        // 这里直接置 attempts 而不是等 retry timer(60s 间隔),把时序换成状态。
+        const peer = (h.client as unknown as {
+          peerTransport: Map<string, { pending: Map<number, { attempts: number }> }>;
+        }).peerTransport.get('ctrl-1')!;
+        for (const entry of peer.pending.values()) entry.attempts = 2;
+
+        // 手机回到前台第一件事就是发探针:这条入站帧会刷新连接级的「对端有过入站」证据,
+        // 但它证明不了**这个 peer 的可靠窗口在推进**(收到请求 ≠ 在 ACK 之前的帧)。
+        // 判据必须只看该 peer 自己的累计 ACK 进展,否则修复正好在需要它的那一刻失效。
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'invoke',
+          id: 'foreground-probe-request',
+          src: 'ctrl-1',
+          payload: { channel: 'maker:list-active', args: [] },
+        });
+        await tick();
+        expect(h.client.getReliableSendQueueDepth('ctrl-1')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+
+        // 前台探针的回包:队头是不可驱逐的旧回包,腾不出位置也必须送达。
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'foreground-probe', { ok: true, result: 'fresh' }))
+          .not.toThrow();
+        const direct = h.current().sent.find((env) => env.id === 'foreground-probe');
+        expect(direct?.kind).toBe('invoke-result');
+        // 裸帧:payload 就是业务 payload,没有 transport wrapper。
+        expect(direct?.payload).toEqual({ ok: true, result: 'fresh' });
+        // 旧回包既没被驱逐,也没突破原有容量上限。
+        expect(h.client.getReliableSendQueueDepth('ctrl-1')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+      } finally {
+        h.client.stop();
+      }
+    });
+
+    /**
+     * 测试价值
+     * - 生产入口与可观察结果：`DeviceLinkClient.invoke`（控制端）在可靠 link 已建立时，
+     *   收到一条 **legacy 裸帧** invoke-result 仍按 requestId 配对并 resolve。
+     * - Bug／规则依据：#6753。C 用例的逃生路径把回包从 transport wrapper 降级成裸帧，
+     *   只证明发送侧写出去不够——必须证明接收侧在可靠链路上也确实认这条裸帧。
+     * - 现有覆盖缺口：既有用例只覆盖「link 未就绪时降级裸帧直发」（发送侧）与 close 后的
+     *   legacy 回程放行；没有一条覆盖「可靠 link 双向 ready + 裸帧 result」这一接收形状。
+     * - 最小失败输入：link-accept 声明 reliable 后 invoke（请求带 transport wrapper），
+     *   紧接着推一条不带 wrapper 的 invoke-result，requestId 相同。
+     * - tier：unit（进程内 FakeWs，无真实计时）。
+     */
+    it('D:可靠 link 已建立时,控制端仍接受并配对 legacy 裸帧 invoke-result', async () => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+      h.client.start();
+      try {
+        await tick();
+        h.current().ack();
+        await tick();
+        // 控制端主动建链:accept 声明 reliable → 收发两个方向都就绪。
+        const open = h.client.openLink('dev-b', {
+          controllerName: 'Test', protocolVersion: 1, appVersion: '1',
+        });
+        const sentOpen = h.current().sent.find((e) => e.kind === 'link-open')!;
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'link-accept',
+          id: sentOpen.id,
+          src: 'dev-b',
+          payload: {
+            appVersion: '1',
+            allowlistHash: 'hash',
+            capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+            transportStreamId: 'remote-stream',
+          },
+        });
+        await open;
+        expect(h.client.isLinkReady('dev-b')).toBe(true);
+
+        const pending = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+        await tick();
+        const request = h.current().sent.find((e) => e.kind === 'invoke')!;
+        // 请求确实走了可靠层(带 transport wrapper),不是 legacy 逃生路径。
+        expect(parseTransportPayload(request.payload)).not.toBeNull();
+
+        // 被控端按 C 的逃生路径回包:legacy 裸帧,没有 transport wrapper。
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'invoke-result',
+          id: request.id,
+          src: 'dev-b',
+          payload: { ok: true, result: ['ok'] },
+        });
+        await expect(pending).resolves.toMatchObject({ ok: true, result: ['ok'] });
+      } finally {
+        h.client.stop();
+      }
+    });
+
+    /**
+     * 测试价值
+     * - 生产入口与可观察结果：`sendInvokeResult`。另一个对端正常 ACK、且持续有入站流量时,
+     *   ctrl-1 卡死窗口上的回包**仍然**走裸帧逃生路径(判据是 per-peer 的)。
+     * - Bug／规则依据：#6753(早期判据借用连接级 `lastPeerInboundAt`,
+     *   任何对端的入站帧都会把修复关掉)。
+     * - 现有覆盖缺口：C 覆盖「同一对端的入站探针」;没有覆盖「别的对端健康 ACK 的流量」
+     *   这一路连接级污染源。
+     * - 最小失败输入：ctrl-1 队头 attempts=2 且窗口满;ctrl-2 推送被 ACK 掉(健康),
+     *   随后回 ctrl-1 的探针 result。
+     * - tier：unit(进程内 FakeWs,无真实计时)。
+     */
+    it('E:另一对端正常 ACK 时,ctrl-1 卡死窗口的回包仍有逃生路径', async () => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000 } });
+      h.client.start();
+      try {
+        await tick();
+        h.current().ack();
+        await tick();
+        await establishInboundReliableLink(h, 'stream-e1', 1, 'ctrl-1');
+        await establishInboundReliableLink(h, 'stream-e2', 1, 'ctrl-2');
+
+        // ctrl-1:窗口被未 ACK 的旧回包占满,队头已经重发过一轮。
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendInvokeResult('ctrl-1', `stale-${i}`, { ok: true, result: i });
+        }
+        const stalled = (h.client as unknown as {
+          peerTransport: Map<string, { pending: Map<number, { attempts: number }> }>;
+        }).peerTransport.get('ctrl-1')!;
+        for (const entry of stalled.pending.values()) entry.attempts = 2;
+
+        // ctrl-2:链路健康——推得出去,也被 ACK 掉(队列清空)。
+        const before = h.current().sent.length;
+        h.client.sendPush('ctrl-2', 'maker:event', { text: 'ctrl-2 healthy' });
+        const healthyFrame = h.current().sent.slice(before)
+          .find((e) => parseTransportPayload(e.payload) !== null)!;
+        const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
+        h.current().push({
+          v: PROTOCOL_VERSION,
+          kind: 'push',
+          src: 'ctrl-2',
+          payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+            payload: { streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq },
+          },
+        });
+        await tick();
+        expect(h.client.getReliableSendQueueDepth('ctrl-2')).toBe(0);
+
+        // ctrl-1 的回包仍必须立刻送达——别处的健康流量不能把这条逃生路径关掉。
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'ctrl-1-probe', { ok: true, result: 'fresh' }))
+          .not.toThrow();
+        const direct = h.current().sent.find((e) => e.id === 'ctrl-1-probe');
+        expect(direct?.kind).toBe('invoke-result');
+        expect(direct?.payload).toEqual({ ok: true, result: 'fresh' });
+      } finally {
+        h.client.stop();
+      }
+    });
+
+    /**
+     * 测试价值
+     * - 生产入口与可观察结果：`sendInvokeResult`。窗口满但队头只发过一次(ACK 可能还在路上)
+     *   时仍抛 BACKPRESSURE,不写裸帧——逃生路径的边界。
+     * - Bug／规则依据：#6753 修复的边界条件;对应既有「单 FIFO 固有极限」用例的 backpressure
+     *   语义,防止后人把门槛放宽成「窗口满就绕行」。
+     * - 现有覆盖缺口：既有 backpressure 用例的队头是 live invoke;没有覆盖「队头是回包但
+     *   尚未重发」这一档。
+     * - 最小失败输入：ctrl-1 塞满 64 条回包(attempts 保持 1)后再回一条探针 result;
+     *   重试上限配成 1 时同样不得绕行。
+     * - tier：unit(进程内 FakeWs,无真实计时)。
+     */
+    it.each([
+      { maxAttempts: undefined },
+      { maxAttempts: 1 },
+    ])('F:队头只发过一次时,窗口满仍按原语义抛 BACKPRESSURE(transportMaxRetryAttempts=$maxAttempts)', async ({ maxAttempts }) => {
+      const h = makeHarness({ timing: {
+        pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000,
+        ...(maxAttempts === undefined ? {} : { transportMaxRetryAttempts: maxAttempts }),
+      } });
+      h.client.start();
+      try {
+        await tick();
+        h.current().ack();
+        await tick();
+        await establishInboundReliableLink(h, 'stream-f1', 1, 'ctrl-1');
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendInvokeResult('ctrl-1', `fresh-${i}`, { ok: true, result: i });
+        }
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'too-early', { ok: true, result: 'x' })).toThrow(
+          expect.objectContaining({ code: 'BACKPRESSURE' }),
+        );
+        expect(h.current().sent.some((e) => e.id === 'too-early')).toBe(false);
+        expect(h.client.getReliableSendQueueDepth('ctrl-1')).toBe(MAX_TRANSPORT_PENDING_MESSAGES);
+      } finally {
+        h.client.stop();
+      }
+    });
+
     it.each([
       { megabytes: 3, code: 'BACKPRESSURE' },
       { megabytes: 5, code: 'PAYLOAD_TOO_LARGE' },
