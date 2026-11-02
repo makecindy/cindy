@@ -119,6 +119,16 @@ describe("RemoteKeyInput", () => {
     expect(input.resync()).toEqual([down("ShiftLeft")]);
   });
 
+  it("does not type a still-held letter again after a shortcut", () => {
+    const input = new RemoteKeyInput();
+    input.press("shift", "ShiftLeft");
+    input.press(1, "KeyA");
+    expect(input.suspend()).toEqual([up("KeyA"), up("ShiftLeft")]);
+    expect(input.resync()).toEqual([down("ShiftLeft")]);
+    // Lifting the finger later must not send a stray key-up for a key the host already let go of.
+    expect(input.release(1)).toEqual([]);
+  });
+
   it("does not latch a modifier whose touch was cancelled", () => {
     const input = new RemoteKeyInput();
     input.press(1, "AltLeft");

@@ -123,11 +123,14 @@ export class RemoteKeyInput {
   }
 
   /**
-   * Presses again whatever this input still holds. A shortcut sent around it
+   * Presses again the modifiers this input still holds. A shortcut sent around it
    * (the strip's undo, search) lets go of the modifiers it used, which may be
    * ones the user is still holding.
    */
   resync(): RemoteKeyEvent[] {
+    // Only modifiers come back: a typing key's down is the keystroke itself, so
+    // replaying a held one would type it again. Its touch release stays harmless.
+    this.remote = this.remote.filter((code) => REMOTE_MODIFIERS.includes(code));
     return this.remote.map((code) => ({ kind: "key", code, down: true }));
   }
 
