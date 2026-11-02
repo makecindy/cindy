@@ -107,36 +107,17 @@ describe('pi session tree adapter', () => {
   // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
   // before resending; missing it resends the same image history and the task stops at
   // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
-  // The two spellings are asserted separately so dropping either alternative fails here;
-  // the combined production payload is covered end-to-end by the gateway-400 mode in
-  // pi-provider-routing.test.ts.
-  it('classifies the BadRequest.TooLarge error type as too large', () => {
-    const rejected = {
-      type: 'message', message: {
-        role: 'assistant', stopReason: 'error', content: [],
-        errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}',
-      },
-    };
-    expect(piRetryBranch(retryTree([rejected]), '0')).toEqual({ parentId: null, requestTooLarge: true });
-  });
-
-  it('classifies the max-bytes message wording as too large', () => {
-    const rejected = {
-      type: 'message', message: {
-        role: 'assistant', stopReason: 'error', content: [],
-        errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}',
-      },
-    };
-    expect(piRetryBranch(retryTree([rejected]), '0')).toEqual({ parentId: null, requestTooLarge: true });
-  });
-
-  it('does not classify an unrelated transport failure as too large', () => {
-    const flaky = {
-      type: 'message', message: {
-        role: 'assistant', stopReason: 'error', content: [], errorMessage: 'upstream returned 502 Bad Gateway',
-      },
-    };
-    expect(piRetryBranch(retryTree([flaky]), '0')).toEqual({ parentId: null, requestTooLarge: false });
+  // Each spelling is a separate row so dropping either alternative fails that row alone;
+  // the transport-failure row keeps the boundary from widening. The combined production
+  // payload is covered end-to-end by the gateway-400 mode in pi-provider-routing.test.ts.
+  it.each([
+    { spelling: 'the BadRequest.TooLarge error type', errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}', requestTooLarge: true },
+    { spelling: 'the max-bytes request-body wording', errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}', requestTooLarge: true },
+    { spelling: 'an unrelated transport failure', errorMessage: 'upstream returned 502 Bad Gateway', requestTooLarge: false },
+  ])('scores $spelling as requestTooLarge=$requestTooLarge', ({ errorMessage, requestTooLarge }) => {
+    expect(piRetryBranch(retryTree([{
+      type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+    }]), '0')).toEqual({ parentId: null, requestTooLarge });
   });
 
   it('still protects a context edit that replaces message content', () => {
