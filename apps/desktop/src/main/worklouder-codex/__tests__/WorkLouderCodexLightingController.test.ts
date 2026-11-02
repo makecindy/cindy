@@ -6,9 +6,24 @@ import {
 } from '../../../shared/workLouderCodex.js';
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
 import { isWorkLouderCodexLightingFrameOff, WorkLouderLightingEffect } from '../protocol.js';
+import type { WorkLouderCodexTaskCatalogOption } from '../taskSlots.js';
 
 function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSettings {
   return { ...createWorkLouderCodexDefaultSettings(), ...patch };
+}
+
+function makeSink() {
+  return {
+    update: vi.fn(),
+    setAgentKeyPressHandler: vi.fn(),
+    setDeviceActivityHandler: vi.fn(),
+    setConnectionStatusHandler: vi.fn(),
+    dispose: vi.fn(async () => undefined),
+  };
+}
+
+function lastFrame(sink: ReturnType<typeof makeSink>) {
+  return sink.update.mock.lastCall?.[0];
 }
 
 describe('WorkLouderCodexLightingController', () => {
@@ -72,6 +87,208 @@ describe('WorkLouderCodexLightingController', () => {
       sessionId: 'lead-outside',
     });
     expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBeGreaterThan(0);
+  });
+
+  it('projects remote task phases into lamps and priority without local activity', async () => {
+    const sink = makeSink();
+    const options = [
+      { id: 'remote-running', title: 'Running', pinned: false, deviceLinkDeviceId: 'device-a', remoteActivity: { phase: 'running' as const, attention: false } },
+      { id: 'remote-waiting', title: 'Waiting', pinned: false, deviceLinkDeviceId: 'device-b', remoteActivity: { phase: 'needs-interaction' as const, attention: true } },
+      { id: 'remote-error', title: 'Error', pinned: false, deviceLinkDeviceId: 'device-c', remoteActivity: { phase: 'error' as const, attention: true } },
+      { id: 'remote-done', title: 'Done', pinned: false, deviceLinkDeviceId: 'device-d', remoteActivity: { phase: 'completed' as const, attention: true } },
+    ];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'priority' }));
+    await controller.resumeTaskSlots();
+
+    expect(controller.getState().agentSlots.slice(0, 4).map((slot) => slot.title)).toEqual([
+      'Waiting',
+      'Error',
+      'Done',
+      'Running',
+    ]);
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads.slice(0, 4).every((thread: { brightness: number }) => thread.brightness > 0)).toBe(true);
+    expect(frame?.ambient.brightness).toBeGreaterThan(0);
+  });
+
+  it('keeps equal session ids on different devices isolated from local activity', async () => {
+    const sink = makeSink();
+    const options = [
+      { id: 'same-session', title: 'Local', pinned: false },
+      { id: 'same-session', title: 'Device A', pinned: false, deviceLinkDeviceId: 'device-a', remoteActivity: { phase: 'error' as const, attention: true } },
+      { id: 'same-session', title: 'Device B', pinned: false, deviceLinkDeviceId: 'device-b', remoteActivity: { phase: 'needs-interaction' as const, attention: true } },
+    ];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'priority' }));
+    await controller.resumeTaskSlots();
+    controller.updateSessionActivity([
+      {
+        sessionId: 'same-session',
+        phase: 'running',
+        compactDetail: '',
+        attention: false,
+      },
+    ]);
+
+    expect(controller.getState().agentSlots.slice(0, 3).map((slot) => slot.title)).toEqual([
+      'Device B',
+      'Device A',
+      'Local',
+    ]);
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(frame?.threads[0]?.color).toBe(0xffa000);
+    expect(frame?.threads[1]?.color).toBe(0xff453a);
+    expect(frame?.threads[2]?.color).toBe(0x4c6fff);
+  });
+
+  it('lights a remote archived row that exists only in the sidebar projection', async () => {
+    const sink = makeSink();
+    const archived: WorkLouderCodexTaskCatalogOption = {
+      id: 'archived-remote',
+      title: 'Archived remote',
+      pinned: false,
+      deviceLinkDeviceId: 'device-a',
+      remoteActivity: { phase: 'completed', attention: true },
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: [archived],
+      lastSent: [],
+      options: [],
+    }));
+    controller.applySettings(settings({ agentSource: 'sidebar' }));
+    await controller.resumeTaskSlots();
+
+    expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['local', 'completed'],
+    ['local', 'error'],
+    ['remote', 'completed'],
+    ['remote', 'error'],
+  ] as const)('turns off read %s %s terminal lamps', async (source, phase) => {
+    const sink = makeSink();
+    const localTask: WorkLouderCodexTaskCatalogOption = {
+      id: 'task-1',
+      title: 'Task',
+      pinned: false,
+    };
+    const remoteTask = (attention: boolean): WorkLouderCodexTaskCatalogOption => ({
+      ...localTask,
+      deviceLinkDeviceId: 'device-a',
+      remoteActivity: { phase, attention },
+    });
+    let options = [source === 'local' ? localTask : remoteTask(true)];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'sidebar' }));
+    await controller.resumeTaskSlots();
+    if (source === 'local') {
+      controller.updateSessionActivity([
+        { sessionId: 'task-1', phase, compactDetail: '', attention: true },
+      ]);
+    }
+    expect(isWorkLouderCodexLightingFrameOff(lastFrame(sink))).toBe(false);
+
+    if (source === 'local') {
+      controller.updateSessionActivity([
+        { sessionId: 'task-1', phase, compactDetail: '', attention: false },
+      ]);
+    } else {
+      options = [remoteTask(false)];
+      await controller.refreshTaskSlots();
+    }
+
+    expect(isWorkLouderCodexLightingFrameOff(lastFrame(sink))).toBe(true);
+  });
+
+  it.each([
+    ['local', 'running'],
+    ['local', 'needs-interaction'],
+    ['remote', 'running'],
+    ['remote', 'needs-interaction'],
+  ] as const)('keeps %s %s lamps lit with attention=false', async (source, phase) => {
+    const sink = makeSink();
+    const localTask: WorkLouderCodexTaskCatalogOption = {
+      id: 'task-1',
+      title: 'Task',
+      pinned: false,
+    };
+    const remoteTask: WorkLouderCodexTaskCatalogOption = {
+      ...localTask,
+      deviceLinkDeviceId: 'device-a',
+      remoteActivity: { phase, attention: false },
+    };
+    const options = [source === 'local' ? localTask : remoteTask];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'sidebar' }));
+    await controller.resumeTaskSlots();
+    if (source === 'local') {
+      controller.updateSessionActivity([
+        { sessionId: 'task-1', phase, compactDetail: '', attention: false },
+      ]);
+    }
+
+    expect(isWorkLouderCodexLightingFrameOff(lastFrame(sink))).toBe(false);
+  });
+
+  it('clears remote lighting when the published task list loses its phase', async () => {
+    const sink = makeSink();
+    let options: WorkLouderCodexTaskCatalogOption[] = [
+      { id: 'remote-running', title: 'Running', pinned: false, deviceLinkDeviceId: 'device-a', remoteActivity: { phase: 'running' as const, attention: false } },
+    ];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'priority' }));
+    await controller.resumeTaskSlots();
+    expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBeGreaterThan(0);
+
+    options = [
+      { id: 'remote-running', title: 'Running', pinned: false, deviceLinkDeviceId: 'device-a' },
+    ];
+    await controller.refreshTaskSlots();
+
+    expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBe(0);
+    expect(isWorkLouderCodexLightingFrameOff(sink.update.mock.lastCall?.[0])).toBe(true);
+  });
+
+  it('clears remote lighting when the task leaves the published list', async () => {
+    const sink = makeSink();
+    let options: WorkLouderCodexTaskCatalogOption[] = [
+      { id: 'remote-running', title: 'Running', pinned: false, deviceLinkDeviceId: 'device-a', remoteActivity: { phase: 'running' as const, attention: false } },
+    ];
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ({
+      sidebar: options,
+      lastSent: options,
+      options,
+    }));
+    controller.applySettings(settings({ agentSource: 'priority' }));
+    await controller.resumeTaskSlots();
+    expect(sink.update.mock.lastCall?.[0]?.threads[0]?.brightness).toBeGreaterThan(0);
+
+    options = [];
+    await controller.refreshTaskSlots();
+
+    expect(isWorkLouderCodexLightingFrameOff(sink.update.mock.lastCall?.[0])).toBe(true);
   });
 
   it('activates the task assigned to the pressed Agent key', async () => {

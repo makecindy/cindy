@@ -221,6 +221,7 @@ import {
 } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
+  subscribeRemoteSessionActivity,
   useRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
@@ -238,6 +239,7 @@ import {
 } from '@/components/sidebar/SidebarIconButton';
 import { RailNav } from './sidebar/RailNav';
 import { aggregateSessionLamps, remoteLampOf } from './lib/sessionLampAggregation';
+import { buildWorkLouderCodexPublishedTasks } from './lib/workLouderCodexTaskPublish';
 import {
   panelHasBlockingOverlay,
   panelHasEditingFocus,
@@ -658,7 +660,7 @@ export function CCAgentSidebarUpper() {
    * visibleSessionsWithRemote 那份扁平的「按最近更新排序」列表 —— 后者不含置顶区
    * 与项目分组,和用户眼里看到的顺序对不上,AG00 会指向列表里根本不在第一行的任务。
    * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
-   * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
+   * 都覆盖。只送键盘需要的字段与远程活动镜像,不整份 session 过 IPC。 */
   const publishedTaskKeyRef = useRef<string>('');
   const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
@@ -674,21 +676,10 @@ export function CCAgentSidebarUpper() {
       .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
-      (session) => {
-        const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
-        const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
-        const order = sidebarOrder.get(session.id);
-        const isActiveCatalog = session.status === 'active';
-        return {
-          id: session.id,
-          title: session.title ?? null,
-          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
-          ...(order === undefined ? {} : { sidebarOrder: order }),
-          ...(isActiveCatalog ? {} : { catalogEligible: false }),
-        };
-      },
+    const tasks = buildWorkLouderCodexPublishedTasks(
+      [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)],
+      sidebarOrder,
+      (sessionId, deviceId) => getRemoteSessionActivity(sessionId, deviceId),
     );
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);
@@ -701,12 +692,21 @@ export function CCAgentSidebarUpper() {
   }, [sessionsWithRemote, visibleSessionsWithRemote]);
   useEffect(() => {
     publishSidebarTasks();
+    // Activity updates mutate the remote store imperatively; subscribe here so
+    // the keyboard sees the new phase even when the task list itself is unchanged.
+    const unsubscribeActivity = subscribeRemoteSessionActivity(() => publishSidebarTasks());
     // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
     // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
-    if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
+    if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') {
+      return unsubscribeActivity;
+    }
     const sidebarRoot = sidebarRootRef.current;
-    if (!sidebarRoot) return;
-    return observeSidebarTaskChanges(sidebarRoot, publishSidebarTasks);
+    if (!sidebarRoot) return unsubscribeActivity;
+    const disconnectObserver = observeSidebarTaskChanges(sidebarRoot, publishSidebarTasks);
+    return () => {
+      unsubscribeActivity();
+      disconnectObserver();
+    };
   }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的

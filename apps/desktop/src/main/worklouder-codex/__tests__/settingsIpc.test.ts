@@ -217,6 +217,48 @@ describe('Work Louder Codex settings IPC business body', () => {
     ]);
   });
 
+  it('keeps device-scoped remote phase in the hardware task list', () => {
+    const { ipc, publishTasks } = makeIpc();
+
+    ipc.publishTasks(EVENT, [
+      {
+        id: 'same-session',
+        title: 'On device A',
+        pinnedAt: null,
+        userSendAt: null,
+        deviceLinkDeviceId: 'device-a',
+        remoteActivity: { phase: 'running', attention: false },
+      },
+      {
+        id: 'same-session',
+        title: 'On device B',
+        pinnedAt: null,
+        userSendAt: null,
+        deviceLinkDeviceId: 'device-b',
+        remoteActivity: { phase: 'needs-interaction', attention: true },
+      },
+    ]);
+
+    expect(publishTasks).toHaveBeenCalledWith([
+      {
+        id: 'same-session',
+        title: 'On device A',
+        pinnedAt: null,
+        userSendAt: null,
+        deviceLinkDeviceId: 'device-a',
+        remoteActivity: { phase: 'running', attention: false },
+      },
+      {
+        id: 'same-session',
+        title: 'On device B',
+        pinnedAt: null,
+        userSendAt: null,
+        deviceLinkDeviceId: 'device-b',
+        remoteActivity: { phase: 'needs-interaction', attention: true },
+      },
+    ]);
+  });
+
   it('rejects a malformed task list rather than projecting garbage onto the keys', () => {
     const { ipc, publishTasks } = makeIpc();
 
@@ -237,6 +279,41 @@ describe('Work Louder Codex settings IPC business body', () => {
         })),
       ),
     ).toThrow('too long');
+    expect(() =>
+      ipc.publishTasks(EVENT, [
+        {
+          id: 'a',
+          title: 'x',
+          pinnedAt: null,
+          userSendAt: null,
+          remoteActivity: { phase: 'running', attention: false },
+        },
+      ]),
+    ).toThrow('requires a device id');
+    expect(() =>
+      ipc.publishTasks(EVENT, [
+        {
+          id: 'a',
+          title: 'x',
+          pinnedAt: null,
+          userSendAt: null,
+          deviceLinkDeviceId: 'device-a',
+          remoteActivity: { phase: 'unknown', attention: false },
+        },
+      ]),
+    ).toThrow('phase is invalid');
+    expect(() =>
+      ipc.publishTasks(EVENT, [
+        {
+          id: 'a',
+          title: 'x',
+          pinnedAt: null,
+          userSendAt: null,
+          deviceLinkDeviceId: 'device-a',
+          remoteActivity: { phase: 'running', attention: 'yes' },
+        },
+      ]),
+    ).toThrow('attention is invalid');
     expect(publishTasks).not.toHaveBeenCalled();
   });
 

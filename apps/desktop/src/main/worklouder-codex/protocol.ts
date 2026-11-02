@@ -204,17 +204,32 @@ export function createWorkLouderCodexLightingFrame(
   threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds, threadCount);
-  const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>((current, item) => {
-    if (!item) return current;
-    return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
-      ? item.phase
-      : current;
-  }, null);
+  return createWorkLouderCodexLightingFrameFromSlots(slots, threadCount);
+}
+
+/** Projects an already-resolved slot assignment, allowing device-scoped activity. */
+export function createWorkLouderCodexLightingFrameFromSlots(
+  slots: ReadonlyArray<WorkLouderCodexSessionActivity | undefined>,
+  threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+): WorkLouderCodexLightingFrame {
+  const visibleSlots = Array.from({ length: threadCount }, (_, id) => {
+    const item = slots[id];
+    return item && isLightingVisibleActivity(item) ? item : undefined;
+  });
+  const aggregate = visibleSlots.reduce<WorkLouderCodexSessionActivity['phase'] | null>(
+    (current, item) => {
+      if (!item) return current;
+      return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
+        ? item.phase
+        : current;
+    },
+    null,
+  );
 
   return {
     ambient: aggregate ? ambientForPhase(aggregate) : { ...OFF_SIDE },
     keys: aggregate ? keysForPhase(aggregate) : { ...OFF_SIDE },
-    threads: Array.from({ length: threadCount }, (_, id) => threadForActivity(id, slots[id])),
+    threads: visibleSlots.map((item, id) => threadForActivity(id, item)),
   };
 }
 

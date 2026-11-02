@@ -373,6 +373,43 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
         ) {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task sidebarOrder is invalid');
         }
+        const deviceLinkDeviceId =
+          row.deviceLinkDeviceId === undefined
+            ? undefined
+            : requireBoundedString(
+                row.deviceLinkDeviceId,
+                256,
+                'Work Louder Codex task deviceLinkDeviceId',
+              );
+        let remoteActivity: WorkLouderCodexPublishedTask['remoteActivity'];
+        if (row.remoteActivity !== undefined) {
+          // Remote phases are hardware-only input. Requiring the owning device
+          // keeps them from being mistaken for the local Agent Island source.
+          if (!deviceLinkDeviceId) {
+            throwIpcError(
+              'INVALID_PARAMS',
+              'Work Louder Codex remote task activity requires a device id',
+            );
+          }
+          const activity = requireRecord(
+            row.remoteActivity,
+            'Work Louder Codex remote task activity must be an object',
+          );
+          const phase = activity.phase;
+          if (
+            phase !== 'running' &&
+            phase !== 'needs-interaction' &&
+            phase !== 'completed' &&
+            phase !== 'error'
+          ) {
+            throwIpcError('INVALID_PARAMS', 'Work Louder Codex remote task phase is invalid');
+          }
+          const attention = activity.attention;
+          if (typeof attention !== 'boolean') {
+            throwIpcError('INVALID_PARAMS', 'Work Louder Codex remote task attention is invalid');
+          }
+          remoteActivity = { phase, attention };
+        }
         return {
           id: row.id,
           title: typeof row.title === 'string' ? row.title : null,
@@ -380,6 +417,8 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
           userSendAt: typeof row.userSendAt === 'number' ? row.userSendAt : null,
           ...(typeof row.sidebarOrder === 'number' ? { sidebarOrder: row.sidebarOrder } : {}),
           ...(row.catalogEligible === false ? { catalogEligible: false } : {}),
+          ...(deviceLinkDeviceId ? { deviceLinkDeviceId } : {}),
+          ...(remoteActivity ? { remoteActivity } : {}),
         };
       });
       deps.publishTasks(tasks);

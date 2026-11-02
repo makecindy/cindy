@@ -76,6 +76,13 @@ export interface InputDevicePublishedTask {
   pinnedAt: number | null;
   /** Last time the user sent a message, in unix ms. Null if they never have. */
   userSendAt: number | null;
+  /** device-link machine that owns this task. Absent for local tasks. */
+  deviceLinkDeviceId?: string;
+  /**
+   * Hardware-only mirror of a remote task's live phase. Never use this as the
+   * local Agent Island activity source.
+   */
+  remoteActivity?: InputDeviceRemoteTaskActivity;
   /** 0-based order among currently visible sidebar rows. Absent when hidden. */
   sidebarOrder?: number;
   /**
@@ -84,6 +91,11 @@ export interface InputDevicePublishedTask {
    * priority / custom catalogs.
    */
   catalogEligible?: boolean;
+}
+
+export interface InputDeviceRemoteTaskActivity {
+  phase: 'running' | 'needs-interaction' | 'completed' | 'error';
+  attention: boolean;
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {
