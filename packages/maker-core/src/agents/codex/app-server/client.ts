@@ -58,7 +58,8 @@ export class AppServerMessageTooLargeError extends Error {
 /**
  * 超限通知的信封, 正文已丢弃。字段从行首或行尾读取, 读不到时为空: turn/diff/updated 的
  * threadId / turnId 排在 diff 之前, item/* 的排在 item 之后; itemId / itemType 是 item 里
- * 排在大字段之前的标量。
+ * 排在大字段之前的标量。turn/completed 的 turnId 取 turn.id, turn 是 turn 在大字段 (items)
+ * 之后的成员 (status / error / 时间戳)。
  */
 export interface OversizedNotification {
   method: string;
@@ -66,32 +67,21 @@ export interface OversizedNotification {
   turnId?: string;
   itemId?: string;
   itemType?: string;
+  turn?: Record<string, unknown>;
   /** 原始行长度 (UTF-16 code unit)。 */
   length: number;
 }
 
-interface OversizedEnvelope {
+interface OversizedEnvelope extends Partial<Omit<OversizedNotification, 'length'>> {
   id?: JsonRpcId;
-  method?: string;
-  threadId?: string;
-  turnId?: string;
-  itemId?: string;
-  itemType?: string;
 }
 
-/** 信封读取只进入 message → params → params.item 这一条路径。 */
-type EnvelopeScope = 'message' | 'params' | 'item';
+/** 信封读取只进入 message → params → params.item / params.turn 这几层。 */
+type EnvelopeScope = 'message' | 'params' | 'item' | 'turn';
 
-const JSON_STRING_SOURCE = String.raw`"(?:[^"\\]|\\.)*"`;
-const JSON_SCALAR_SOURCE = String.raw`(?:${JSON_STRING_SOURCE}|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)`;
-const JSON_SCALAR_MEMBER_SOURCE = String.raw`\s*${JSON_STRING_SOURCE}\s*:\s*${JSON_SCALAR_SOURCE}\s*`;
 const ENVELOPE_MEMBER_RE = /\s*"((?:[^"\\]|\\.)*)"\s*:\s*/y;
-const ENVELOPE_SCALAR_RE = new RegExp(JSON_SCALAR_SOURCE, 'y');
+const ENVELOPE_SCALAR_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
 const ENVELOPE_SEPARATOR_RE = /\s*([,}])/y;
-/** params 收尾处连续的标量成员, 其后只剩 params 与整条消息的两个右括号。 */
-const TRAILING_PARAMS_RE = new RegExp(
-  String.raw`,(${JSON_SCALAR_MEMBER_SOURCE}(?:,${JSON_SCALAR_MEMBER_SOURCE})*)\}\s*\}\s*$`,
-);
 
 function recordEnvelopeMember(
   envelope: OversizedEnvelope,
@@ -114,6 +104,8 @@ function recordEnvelopeMember(
   if (scope === 'params') {
     if (key === 'threadId') envelope.threadId ??= value;
     else if (key === 'turnId') envelope.turnId ??= value;
+  } else if (scope === 'turn') {
+    if (key === 'id') envelope.turnId ??= value;
   } else if (key === 'id') {
     envelope.itemId = value;
   } else if (key === 'type') {
@@ -124,11 +116,11 @@ function recordEnvelopeMember(
 /**
  * 从 `{` 起顺序读标量成员; 遇到路径之外的对象、数组, 或读不完的长字符串 (大字段) 就停。
  */
-function readEnvelopeMembers(text: string, scope: EnvelopeScope, envelope: OversizedEnvelope): void {
+function readEnvelopeMembers(text: string, envelope: OversizedEnvelope): void {
   let pos = text.search(/\S/);
   if (pos < 0 || text[pos] !== '{') return;
   pos += 1;
-  const scopes: EnvelopeScope[] = [scope];
+  const scopes: EnvelopeScope[] = ['message'];
   for (;;) {
     const current = scopes[scopes.length - 1]!;
     ENVELOPE_MEMBER_RE.lastIndex = pos;
@@ -138,11 +130,12 @@ function readEnvelopeMembers(text: string, scope: EnvelopeScope, envelope: Overs
     const key = member[1]!;
     const nested = current === 'message' && key === 'params'
       ? 'params'
-      : current === 'params' && key === 'item'
-        ? 'item'
+      : current === 'params' && (key === 'item' || key === 'turn')
+        ? key
         : null;
     if (nested && text[pos] === '{') {
       scopes.push(nested);
+      if (nested === 'turn') envelope.turn ??= {};
       pos += 1;
       continue;
     }
@@ -168,17 +161,43 @@ function readEnvelopeMembers(text: string, scope: EnvelopeScope, envelope: Overs
 }
 
 /**
- * 只读超限行两端的标量成员, 不碰中间的大字段。app-server 由 serde 按结构体声明顺序输出:
- * id / method 在最前; turn/diff/updated 的 threadId / turnId 在 diff 之前, 从行首读到;
- * item/* 的 threadId / turnId 在 item 之后, 从行尾读到, item 自身的 type / id 在大字段之前。
+ * 从行尾读出某一层对象收尾处的成员 (可以含 turn.error 这样的嵌套对象), 不碰前面的大字段。
+ * `closers` 是这一层连同外层要关闭的右括号总数: params 为 2, params.turn 为 3。取能解析成
+ * JSON 的最长成员序列: 起点落在大字段内部或更深的嵌套里时, 剩余部分括号不配平, 解析不了。
+ */
+function readTrailingMembers(line: string, closers: number): Record<string, unknown> | null {
+  const tail = line.slice(-OVERSIZED_ENVELOPE_PEEK_CHARS);
+  const closing = new RegExp(String.raw`(?:\s*\}){${closers}}\s*$`).exec(tail);
+  if (!closing) return null;
+  const body = tail.slice(0, closing.index);
+  for (let pos = body.indexOf(',"'); pos !== -1; pos = body.indexOf(',"', pos + 1)) {
+    try {
+      const members: unknown = JSON.parse(`{${body.slice(pos + 1)}}`);
+      if (members && typeof members === 'object') return members as Record<string, unknown>;
+    } catch {
+      // 起点不在这一层的成员边界上, 换下一个。
+    }
+  }
+  return null;
+}
+
+/**
+ * 只读超限行两端, 不碰中间的大字段。app-server 由 serde 按结构体声明顺序输出:
+ *  - id / method 在最前;
+ *  - turn/diff/updated 的 threadId / turnId 在 diff 之前, 从行首读到;
+ *  - item/* 的 threadId / turnId 在 item 之后, 从行尾读到, item 自身的 type / id 在大字段之前;
+ *  - turn/completed 的 turn.id 在 items 之前, status / error 等在 items 之后, 分别从两端读到。
  * 两端都读不到的字段留空, 由调用方按「认不出」保守处理。
  */
 function peekOversizedEnvelope(line: string): OversizedEnvelope {
   const envelope: OversizedEnvelope = {};
-  readEnvelopeMembers(line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS), 'message', envelope);
-  if (envelope.threadId === undefined || envelope.turnId === undefined) {
-    const trailing = TRAILING_PARAMS_RE.exec(line.slice(-OVERSIZED_ENVELOPE_PEEK_CHARS));
-    if (trailing) readEnvelopeMembers(`{${trailing[1]}}`, 'params', envelope);
+  readEnvelopeMembers(line.slice(0, OVERSIZED_ENVELOPE_PEEK_CHARS), envelope);
+  if (envelope.turn) {
+    Object.assign(envelope.turn, readTrailingMembers(line, 3));
+  } else if (envelope.threadId === undefined || envelope.turnId === undefined) {
+    const params = readTrailingMembers(line, 2);
+    if (typeof params?.threadId === 'string') envelope.threadId ??= params.threadId;
+    if (typeof params?.turnId === 'string') envelope.turnId ??= params.turnId;
   }
   return envelope;
 }
@@ -706,7 +725,9 @@ export class AppServerClient {
       return;
     }
     if (method !== undefined && this.dropOversizedNotification({ method, ...scope, length })) {
-      this.logger.warn('oversized notification dropped', { method, ...scope, length, limit });
+      // 只记路由字段; turn 里的 error 文案等内容不进日志。
+      const { threadId, turnId, itemId, itemType } = scope;
+      this.logger.warn('oversized notification dropped', { method, threadId, turnId, itemId, itemType, length, limit });
       return;
     }
     const err = new Error(`codex app-server NDJSON line exceeds maxLineBytes (${length} > ${limit})`);

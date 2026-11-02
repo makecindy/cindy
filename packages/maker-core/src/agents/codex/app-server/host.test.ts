@@ -1975,9 +1975,50 @@ describe('AppServerHost oversized notifications', () => {
     expect(handlers.hostForcedRetire).toHaveBeenCalledTimes(1);
   });
 
-  it('still retires the host when an oversized notification drives the turn state machine', async () => {
+  it('delivers an oversized terminal turn without its items instead of retiring the host', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    // 与 Codex 0.159.2 的 Turn 字段顺序一致: 大条目在 items 里, status 等在 items 之后。
+    transport.emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'root-thread',
+        turn: {
+          id: 'turn-1',
+          items: [{ type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] }],
+          itemsView: 'full',
+          status: 'completed',
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+
+    expect(handlers.turnCompleted).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turn: {
+        id: 'turn-1',
+        items: [],
+        itemsView: 'notLoaded',
+        status: 'completed',
+        error: null,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+    });
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('still retires the host when an oversized terminal turn has no readable status', async () => {
     const { transport, handlers } = await startWithSubscriber();
 
+    // status 被大字段挡住, 两端都读不到: 不能凭猜测给任务收口。
     transport.emit({
       method: 'turn/completed',
       params: { threadId: 'root-thread', turn: { id: 'turn-1', status: 'completed', bulk } },

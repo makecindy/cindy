@@ -644,21 +644,64 @@ describe('AppServerClient oversized lines', () => {
     });
   });
 
-  it('leaves routing empty when it is neither before nor right after the bulky value', () => {
+  it('leaves routing empty when the trailing members are not at the params level', () => {
     const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
     const { transport, client } = setup(onOversizedNotification);
     client.onNotification('item/completed', vi.fn());
     client.start();
 
+    // params 后面还有顶层成员: 行尾的层级对不上, 宁可读不到也不猜。
     transport.emitLine({
       method: 'item/completed',
-      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1', extra: { a: 1 } },
+      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1' },
+      extra: 1,
     });
 
     expect(onOversizedNotification).toHaveBeenCalledWith(
       expect.not.objectContaining({ threadId: expect.anything() }),
     );
     expect(onOversizedNotification.mock.calls[0]?.[0]).toMatchObject({ method: 'item/completed' });
+  });
+
+  it('recovers a terminal turn from both ends, including a nested error after the items', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    // 与 Codex 0.159.2 的 Turn 字段顺序一致: id, items, itemsView, status, error, ...
+    const line = JSON.stringify({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-1',
+          items: [{ type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] }],
+          itemsView: 'full',
+          status: 'failed',
+          error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      turn: {
+        itemsView: 'full',
+        status: 'failed',
+        error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+      length: line.length,
+    });
   });
 
   it.each([

@@ -61,6 +61,7 @@ import {
   type TurnCompletedNotification,
   type TurnDiffUpdatedNotification,
   type TurnStartedNotification,
+  type TurnStatus,
   type ReasoningSummaryTextDeltaNotification,
   type ReasoningSummaryPartAddedNotification,
   type ReasoningTextDeltaNotification,
@@ -121,6 +122,8 @@ const NOTIFICATIONS_TO_OPT_OUT = [
 ];
 
 const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
+
+const TURN_STATUSES: ReadonlySet<string> = new Set<TurnStatus>(['completed', 'interrupted', 'failed', 'inProgress']);
 
 /**
  * Cindy 本地合成的通知, app-server 不会发送: 一条 item/* 通知超过单行上限, 正文已丢弃。
@@ -1767,11 +1770,24 @@ export class AppServerHost {
    *  - item/started|updated|completed 的条目本身 (例如整文件内容的 FileChange) 不再展示, 但它
    *    代表这一轮真实发生过的工作: 改投 ITEM_OMITTED_METHOD, 订阅方据此记产出 (拦住容量 /
    *    429 后的整轮重放) 并收口工具生命周期。拿不到 threadId / turnId 时无法路由, 不降级;
+   *  - turn/completed 是终态, 可能因 turn.items 里的同一个大条目再次超限。实时处理不读 items
+   *    (那是持久化历史的副本), 读到 id 与合法 status 时按原样合成一条 items 为空的终态照常
+   *    路由; 读不到就不降级, 不能凭猜测给任务收口;
    *  - 其余通知驱动 turn / thread 状态机, 丢了任务会卡住, 不降级。
    */
   private handleOversizedNotification(notification: OversizedNotification): boolean {
-    const { method, threadId, turnId, itemId, itemType } = notification;
+    const { method, threadId, turnId, itemId, itemType, turn } = notification;
     switch (method) {
+      case 'turn/completed': {
+        const status = turn?.status;
+        if (!threadId || !turnId || typeof status !== 'string' || !TURN_STATUSES.has(status)) return false;
+        const params: TurnCompletedNotification['params'] = {
+          threadId,
+          turn: { ...turn, id: turnId, status: status as TurnStatus, items: [], itemsView: 'notLoaded' },
+        };
+        this.routeNotification(method, params);
+        return true;
+      }
       case 'turn/diff/updated': {
         if (!threadId || !turnId) return false;
         const params: TurnDiffUpdatedNotification['params'] = {

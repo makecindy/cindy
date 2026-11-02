@@ -201,6 +201,7 @@ import {
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
+  translateOmittedItem,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
@@ -12676,6 +12677,8 @@ assertRouteCurrent();
           noteRecoveryModelWork(params.turnId, params.item);
         }
         if (params.phase !== 'updated') noteToolItemLifecycle(params.item, params.phase);
+        // started 已经出过 tool_use 的工具要补一个不含正文的收尾, 否则会话一直认为它在跑。
+        translateOmittedItem(params.phase, params, eventQueue, { rt: translatorRt, log });
       },
       agentMessageDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.agentMessageDelta?.(params), {

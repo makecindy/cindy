@@ -33818,6 +33818,55 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('closes a started tool whose completion was dropped at the line limit without inventing cards', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-omitted-tool',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.itemOmitted) throw new Error('expected item handlers');
+    const closes = (id: string) => events.some((event) =>
+      event.type === 'tool_result'
+      && ((event.data as { toolUseIds?: string[] }).toolUseIds ?? []).includes(id));
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-omitted-tool' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      item: { id: 'cmd-1', type: 'commandExecution', command: 'cat big.log', cwd: '/repo', status: 'inProgress' },
+    } as never);
+    await vi.waitFor(() => expect(events.some((event) =>
+      event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'cmd-1')).toBe(true));
+
+    // 命令开始时消息很小, 结束时输出超限, 只剩省略标记: 会话里这条命令必须收尾,
+    // 否则 activeToolIds 一直留着它, 优雅停止停在 waiting-for-safe-point。
+    handlers.itemOmitted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      phase: 'completed',
+      item: { id: 'cmd-1', type: 'commandExecution' },
+    });
+    // completion-only 的文件变更从没出过 tool_use, 不凭空补一张卡。
+    handlers.itemOmitted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      phase: 'completed',
+      item: { id: 'patch-1', type: 'fileChange' },
+    });
+
+    await vi.waitFor(() => expect(closes('cmd-1')).toBe(true));
+    expect(events.filter((event) => JSON.stringify(event.data ?? null).includes('"patch-1"'))).toEqual([]);
+
+    await handle.close();
+  });
+
   it.each(ROOT_TURN_START_ORDER_CASES)(
     'clears prior diffs once for $name root-turn activation',
     async ({ sessionSuffix, steps }) => {
