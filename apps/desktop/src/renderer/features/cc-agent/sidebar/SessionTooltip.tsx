@@ -53,6 +53,8 @@ export interface SessionTooltipProps {
    * 未提供时保持各变体原有的 Radix 非受控行为。
    */
   controlledOpen?: boolean;
+  /** 受控开关的关闭请求(点别处 / Esc / 窗口失活),调用方据此复位。 */
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }
 
@@ -62,25 +64,39 @@ export function SessionTooltip({
   sourceLabel,
   isAutomationSession,
   controlledOpen,
+  onOpenChange,
   children,
 }: SessionTooltipProps) {
   if (prRefs.length > 0) {
     return (
-      <PrTooltip sessionId={sessionId} prRefs={prRefs} controlledOpen={controlledOpen}>
+      <PrTooltip
+        sessionId={sessionId}
+        prRefs={prRefs}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </PrTooltip>
     );
   }
   if (isAutomationSession) {
     return (
-      <AutomationTooltip sessionId={sessionId} controlledOpen={controlledOpen}>
+      <AutomationTooltip
+        sessionId={sessionId}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </AutomationTooltip>
     );
   }
   if (sourceLabel) {
     return (
-      <SourceTooltip sourceLabel={sourceLabel} controlledOpen={controlledOpen}>
+      <SourceTooltip
+        sourceLabel={sourceLabel}
+        controlledOpen={controlledOpen}
+        onOpenChange={onOpenChange}
+      >
         {children}
       </SourceTooltip>
     );
@@ -92,11 +108,13 @@ function PrTooltip({
   sessionId,
   prRefs,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   prRefs: readonly SessionPrRef[];
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { statuses, fetchStatusesForSession } = usePrStatuses(sessionId);
@@ -113,6 +131,9 @@ function PrTooltip({
         open={controlledOpen}
         onOpenChange={(open) => {
           if (open && controlledOpen === undefined) fetchStatusesForSession(sessionId);
+          // 只回灌关闭请求:行的 onPointerOver / onFocusCapture 谓词独占打开逻辑,
+          // 把 Radix 的打开请求写回行状态会绕过行内动作按钮的排除判断。
+          if (!open) onOpenChange?.(false);
         }}
       >
         <Tooltip.Trigger
@@ -155,10 +176,12 @@ function PrTooltip({
 function AutomationTooltip({
   sessionId,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sessionId: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -174,7 +197,7 @@ function AutomationTooltip({
 
   return (
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={onOpenChange}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
@@ -194,16 +217,18 @@ function AutomationTooltip({
 function SourceTooltip({
   sourceLabel,
   controlledOpen,
+  onOpenChange,
   children,
 }: {
   sourceLabel: string;
   controlledOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
     // 独立 Provider + delayDuration=0:与 PrTooltip 同规,hover 立即弹出。
     <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>
-      <Tooltip.Root open={controlledOpen}>
+      <Tooltip.Root open={controlledOpen} onOpenChange={onOpenChange}>
         <Tooltip.Trigger asChild onFocus={(event) => event.preventDefault()}>
           {children}
         </Tooltip.Trigger>
