@@ -349,6 +349,21 @@ describe('deployRelayToServer', () => {
     await expect(nativeImport(pathToFileURL(invokedPath).href)).resolves.toBeDefined();
   });
 
+  // 竞态规则（2026-11-02 实机 Ubuntu 26.04，开机已超 1 分钟）：commit 先 `enable --now` 续期计时器，
+  // OnBootSec 早已过去，renew 立刻抢走 /etc/cindy-relay/nginx/operation.lock，commit 报
+  // "Nginx deployment is already running" 后整轮回滚。脚本需 root 写 systemd 目录，unit 内无法执行；
+  // 改为断言经生产入口发出的 commit 命令里，计时器最早的启动点在 commit 之后。最小输入：Nginx 部署成功路径。
+  it('starts the Nginx renewal timer only after commit so renew cannot take the deployment lock', async () => {
+    mocks.responses['relay-deploy-inspect'] = () => ok('BUSY 80 nginx\n');
+    mocks.responses['relay-deploy-nginx-prepare'] = () =>
+      ok('{"event":"nginx","port":47822,"challengePort":47823,"existingCertificate":false}\n');
+    expect((await run()).error).toBeNull();
+    const commit = mocks.commands.find((c) => c.label === 'relay-deploy-nginx-commit')!.command;
+    const committedAt = commit.indexOf('nginx --action commit');
+    expect(committedAt).toBeGreaterThan(-1);
+    expect(commit.search(/systemctl (?:start|enable --now) cindy-relay-nginx\.timer/)).toBeGreaterThan(committedAt);
+  });
+
   it('uses the existing trusted HTTPS certificate without waiting for a new certificate', async () => {
     mocks.responses['relay-deploy-inspect'] = () => ok('BUSY 80 nginx\nBUSY 443 nginx\n');
     mocks.responses['relay-deploy-nginx-prepare'] = () =>

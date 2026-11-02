@@ -397,8 +397,11 @@ OnUnitActiveSec=5min
 WantedBy=timers.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now cindy-relay-nginx.timer >/dev/null 2>&1
+  # 开机超过 1 分钟时 OnBootSec 已过，timer 一启动就触发 renew 抢 operation.lock；
+  # 先 commit 释放事务再启动，commit 前仍先 enable，失败时不留下已提交的半成品。
+  systemctl enable cindy-relay-nginx.timer >/dev/null 2>&1
   "$NODE" "$BUNDLE" nginx --action commit
+  systemctl start cindy-relay-nginx.timer >/dev/null 2>&1
 fi
 `;
 
