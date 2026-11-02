@@ -16,6 +16,7 @@ import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../localDb/schema';
 import { messageToCamel } from '../localDb/mapper';
+import { isSyntheticTriggerText } from '../../shared/interruptedTurn';
 import { createLogger } from '../logger.js';
 import { extractPrRefs, messageContentToText, type PrRef } from './prRefExtractor.js';
 import type { SessionPrRefAction } from '@cindy/maker-shared';
@@ -306,7 +307,16 @@ async function reconcilePrRefsForSession(
     const keep = new Set<string>();
     for (const row of rows) {
       if (scope && !scope.isCurrent()) return;
-      const refs = extractPrRefs(messageContentToText(messageToCamel(row).content));
+      const message = messageToCamel(row);
+      // Recovery checkpoint summaries are hidden user instructions, not visible
+      // mentions. Match the renderer for plain text and { text } envelopes.
+      if (message.role === 'user') {
+        const text = typeof message.content === 'string' ? message.content
+          : (message.content as { text?: unknown } | null)?.text;
+        if (message.agentMeta?.autoResume === true ||
+            (typeof text === 'string' && isSyntheticTriggerText(text))) continue;
+      }
+      const refs = extractPrRefs(messageContentToText(message.content));
       if (refs.length === 0) continue;
       for (const ref of refs) keep.add(`${ref.owner}/${ref.repo}#${ref.prNumber}`);
       await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, {

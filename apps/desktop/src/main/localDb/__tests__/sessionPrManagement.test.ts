@@ -9,6 +9,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { eq } from 'drizzle-orm';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn';
 import { manageSessionPrs } from '../../git-context/manageSessionPrs';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../schema';
 import {
@@ -182,6 +183,29 @@ describe('manual PR management', () => {
     db.insert(messages).values({ ...msg, clientId: msg.id, content: JSON.stringify(msg.content), rewindAt: 30 }).run();
     await recordPrRefsForMessage(msg);
     await recordPrRefsForImportedMessages('s');
+    expect(await listPrRefs('s')).toEqual([]);
+  });
+
+  // Hidden recovery summaries copy PRs from assistant/thinking. All production
+  // extraction entrances must ignore them, including after the visible row disappears.
+  it.each([
+    { kind: 'plain synthetic', content: `${UI_ACTION_TRIGGER_PREFIX} continue https://github.com/example/repo/pull/96 https://github.com/example/repo/pull/97`, agentMeta: null },
+    { kind: 'enveloped synthetic', content: { text: `${UI_ACTION_TRIGGER_PREFIX} continue https://github.com/example/repo/pull/96 https://github.com/example/repo/pull/97`, images: [], files: [] }, agentMeta: null },
+    { kind: 'autoResume', content: { text: 'continue https://github.com/example/repo/pull/96 https://github.com/example/repo/pull/97' }, agentMeta: { autoResume: true } },
+  ])('does not retain PRs from a hidden $kind recovery row', async ({ content, agentMeta }) => {
+    const msg = { id: 'hidden-recovery', sessionId: 's', role: 'user' as const, content, createdAt: 30 };
+    db.insert(messages).values([
+      { id: 'visible', clientId: 'visible', sessionId: 's', role: 'assistant', content: JSON.stringify('https://github.com/example/repo/pull/96'), createdAt: 20 },
+      { ...msg, clientId: msg.id, content: JSON.stringify(content), agentMeta: agentMeta ? JSON.stringify(agentMeta) : null },
+    ]).run();
+    await recordPrRefsForMessage(msg);
+    expect(await listPrRefs('s')).toEqual([]);
+    await recordPrRefsForImportedMessages('s');
+    expect((await listPrRefs('s')).map(r => r.prNumber)).toEqual([96]);
+    await ensurePrRefsBackfill();
+    expect((await listPrRefs('s')).map(r => r.prNumber)).toEqual([96]);
+    db.delete(messages).where(eq(messages.id, 'visible')).run();
+    await recomputePrRefsForSession('s');
     expect(await listPrRefs('s')).toEqual([]);
   });
 
