@@ -64,7 +64,8 @@ describe('manual PR management', () => {
   it('keeps removed links out of active reads until explicit restore', async () => {
     const [ref] = await add(1);
     await managePrRefs('s', { action: 'remove', id: ref.id }, verify);
-    await recordPrRefsForMessage({ sessionId: 's', role: 'assistant', content: ref.url, createdAt: 10 });
+    db.insert(messages).values({ id: 'removed', clientId: 'removed', sessionId: 's', role: 'assistant', content: JSON.stringify(ref.url), createdAt: 10 }).run();
+    await recordPrRefsForMessage({ id: 'removed', sessionId: 's', role: 'assistant', content: ref.url, createdAt: 10 });
     await expect(add(1)).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(await listPrRefs('s')).toEqual([]);
     const removed = await managePrRefs('s', { action: 'list' }, verify);
@@ -113,14 +114,75 @@ describe('manual PR management', () => {
 
   it('imports mentions and preserves an explicitly adopted automatic link through clear', async () => {
     const url = 'https://github.com/example/repo/pull/7';
-    await recordPrRefsForImportedMessages('s', [
-      { role: 'assistant', content: url, createdAt: 20 },
-      { role: 'tool_result', content: 'https://github.com/example/repo/pull/8', createdAt: 30 },
-    ]);
+    db.insert(messages).values([
+      { id: 'import-7', clientId: 'import-7', sessionId: 's', role: 'assistant', content: JSON.stringify(url), createdAt: 20 },
+      { id: 'import-8', clientId: 'import-8', sessionId: 's', role: 'tool_result', content: JSON.stringify('https://github.com/example/repo/pull/8'), createdAt: 30 },
+    ]).run();
+    await recordPrRefsForImportedMessages('s');
     expect(await listPrRefs('s')).toMatchObject([{ prNumber: 7, manuallyAdded: false }]);
     await add(7);
+    db.delete(messages).run();
     await recomputePrRefsForSession('s'); // no surviving messages: only explicit adoption survives
     expect(await listPrRefs('s')).toMatchObject([{ prNumber: 7, manuallyAdded: true, associationOrigin: 'ui' }]);
+  });
+
+  // Review regressions: real persisted rows, private App projection and stale scan races.
+  it('extracts only public MCP App text during backfill and recompute', async () => {
+    const url = (n: number) => `https://github.com/example/repo/pull/${n}`;
+    db.insert(messages).values({ id: 'app', clientId: 'app', sessionId: 's', role: 'assistant',
+      createdAt: 20, agentMeta: JSON.stringify({ mcpApp: true }),
+      content: JSON.stringify({ mcpApp: { version: 1, serverId: 'fixture', serverRevision: '1',
+        resourceUri: 'ui://fixture/app', tool: { name: 'save', inputSchema: { type: 'object' } },
+        arguments: { privateUrl: url(91) }, result: { content: [{ type: 'text', text: url(90) }],
+          structuredContent: { privateUrl: url(92) }, _meta: { privateUrl: url(93) } } } }) }).run();
+    await ensurePrRefsBackfill();
+    expect((await listPrRefs('s')).map(r => r.prNumber)).toEqual([90]);
+    await recomputePrRefsForSession('s');
+    expect((await listPrRefs('s')).map(r => r.prNumber)).toEqual([90]);
+  });
+
+  it('does not republish a backfill candidate hidden after discovery', async () => {
+    db.insert(messages).values({ id: 'late', clientId: 'late', sessionId: 's', role: 'assistant',
+      content: JSON.stringify('https://github.com/example/repo/pull/94'), createdAt: 20 }).run();
+    const select = db.select.bind(db);
+    let captured!: () => void, release!: () => void;
+    const snapshot = new Promise<void>(resolve => { captured = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    let paused = false;
+    const spy = vi.spyOn(db, 'select').mockImplementation((fields) => {
+      const query = select(fields);
+      const from = query.from.bind(query);
+      vi.spyOn(query, 'from').mockImplementation((table) => {
+        const builder = from(table);
+        if (table === messages && !paused) {
+          const orderBy = builder.orderBy.bind(builder);
+          vi.spyOn(builder, 'orderBy').mockImplementationOnce((...columns) => {
+            paused = true; const rows = orderBy(...columns).all(); captured();
+            return resume.then(() => rows) as unknown as ReturnType<typeof orderBy>;
+          });
+        }
+        return builder;
+      });
+      return query;
+    });
+    const scan = ensurePrRefsBackfill();
+    try {
+      await snapshot;
+      db.update(messages).set({ rewindAt: 30 }).where(eq(messages.id, 'late')).run();
+      await recomputePrRefsForSession('s');
+      release(); await scan;
+      expect(await listPrRefs('s')).toEqual([]);
+    } finally { release(); spy.mockRestore(); await scan; }
+  });
+
+  it('ignores stale live and import candidates not visible in persisted history', async () => {
+    const msg = { id: 'gone', sessionId: 's', role: 'assistant',
+      content: 'https://github.com/example/repo/pull/95', createdAt: 20 };
+    await recordPrRefsForMessage(msg);
+    db.insert(messages).values({ ...msg, clientId: msg.id, content: JSON.stringify(msg.content), rewindAt: 30 }).run();
+    await recordPrRefsForMessage(msg);
+    await recordPrRefsForImportedMessages('s');
+    expect(await listPrRefs('s')).toEqual([]);
   });
 
   it('public selectors validate pagination before mutation and preserve repeated detach', async () => {

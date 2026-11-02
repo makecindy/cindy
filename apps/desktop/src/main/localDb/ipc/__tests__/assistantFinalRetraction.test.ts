@@ -167,15 +167,19 @@ it('keeps a row changed while the exact-row rollback was being queued', async ()
 
 
 it('removes the withdrawn draft PR reference but retains a surviving message reference', async () => {
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
-  flushAssistantBlock('s1');
-  onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
-  flushAssistantBlock('s1');
-  await drainPersistQueue();
-  expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort()).toEqual([1, 2]);
-  onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
-  await drainPersistQueue();
-  expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber)).toEqual([1]);
+  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage');
+  try {
+    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/1', agentMessageId: 'keep' }, null);
+    flushAssistantBlock('s1');
+    onAssistantTextEvent('s1', { text: 'https://github.com/o/r/pull/2', agentMessageId: 'withdraw' }, null);
+    flushAssistantBlock('s1');
+    await drainPersistQueue();
+    await Promise.all(hook.mock.results.map(result => result.value));
+    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber).sort()).toEqual([1, 2]);
+    onAssistantTextEvent('s1', { text: '', agentMessageId: 'withdraw', isFinal: true, isFullText: true }, null);
+    await drainPersistQueue();
+    expect((await prRefsStore.listPrRefs('s1')).map((ref) => ref.prNumber)).toEqual([1]);
+  } finally { hook.mockRestore(); }
 });
 
 it('orders retraction cleanup after the original asynchronous PR publication hook', async () => {
@@ -500,7 +504,7 @@ it.each(['correction', 'retraction'])('preserves concurrent new-message PR refs 
   let paused = false;
   const spy = vi.spyOn(db, 'select').mockImplementation((fields) => {
     const query = select(fields);
-    if (!fields || Object.keys(fields).sort().join(',') !== 'content,createdAt') return query;
+    if (fields) return query;
     const from = query.from.bind(query);
     vi.spyOn(query, 'from').mockImplementation((table) => {
       const builder = from(table);
@@ -521,8 +525,9 @@ it.each(['correction', 'retraction'])('preserves concurrent new-message PR refs 
     await createMessage('s1', { clientId: 'new-user', role: 'user', content: 'https://github.com/o/r/pull/2' });
     const newMessagePrWrite = hook.mock.results.at(-1)!.value;
     // A blocked recompute in s1 must not block another task's publication.
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's2', role: 'user',
-      content: 'https://github.com/o/r/pull/3', createdAt: Date.now() });
+    h.sqlite!.prepare("INSERT INTO sessions (id) VALUES ('s2')").run();
+    const otherMessage = await createMessage('s2', { clientId: 'other-task', role: 'user', content: 'https://github.com/o/r/pull/3' });
+    await prRefsStore.recordPrRefsForMessage(otherMessage);
     expect((await prRefsStore.listPrRefs('s2')).map(ref => ref.prNumber)).toEqual([3]);
     // Let a non-serialized publication finish; a correctly queued hook waits
     // for the recompute. Do not await that hook while holding its predecessor.
@@ -540,10 +545,28 @@ it('releases the PR write queue after a failed publication', async () => {
     throw new Error('simulated PR write failure');
   });
   try {
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's1', role: 'user',
-      content: 'https://github.com/o/r/pull/1', createdAt: Date.now() });
-    await prRefsStore.recordPrRefsForMessage({ sessionId: 's1', role: 'user',
-      content: 'https://github.com/o/r/pull/2', createdAt: Date.now() });
+    for (const n of [1, 2]) {
+      h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(`queue-${n}`, `queue-${n}`, 's1', 'user', JSON.stringify(`https://github.com/o/r/pull/${n}`), n);
+      await prRefsStore.recordPrRefsForMessage({ id: `queue-${n}`, sessionId: 's1', role: 'user',
+        content: `https://github.com/o/r/pull/${n}`, createdAt: n });
+    }
     expect((await prRefsStore.listPrRefs('s1')).map(ref => ref.prNumber)).toEqual([2]);
   } finally { insert.mockRestore(); }
+});
+
+// Ordinary plugin/IPC edits must update associations, including a delayed create hook.
+it.each(['user', 'assistant'] as const)('reconciles PRs after an ordinary %s rewrite with pending creation', async (role) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const original = prRefsStore.recordPrRefsForMessage;
+  const hook = vi.spyOn(prRefsStore, 'recordPrRefsForMessage').mockImplementationOnce(async msg => {
+    await pending; await original(msg);
+  });
+  try {
+    await createMessage('s1', { clientId: 'ordinary-edit', role, content: 'https://github.com/o/r/pull/81' });
+    const update = updateMessageContent('s1', 'ordinary-edit', 'https://github.com/o/r/pull/82');
+    release(); await update; await hook.mock.results[0].value;
+    expect((await prRefsStore.listPrRefs('s1')).map(r => r.prNumber)).toEqual([82]);
+  } finally { release(); hook.mockRestore(); }
 });

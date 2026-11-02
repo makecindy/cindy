@@ -1658,6 +1658,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 

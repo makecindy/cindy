@@ -15,6 +15,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../localDb/schema';
+import { messageToCamel } from '../localDb/mapper';
 import { createLogger } from '../logger.js';
 import { extractPrRefs, messageContentToText, type PrRef } from './prRefExtractor.js';
 import type { SessionPrRefAction } from '@cindy/maker-shared';
@@ -46,90 +47,35 @@ export function setPrRefsChangedListener(cb: (sessionId: string) => void): void 
   onRefsChanged = cb;
 }
 
-/**
- * 消息落库后的提取钩子。永不抛错(调用方 fire-and-forget);无 PR 引用时零写入。
- */
+/** Publish only the current persisted public message, under the task's PR write queue. */
 export async function recordPrRefsForMessage(msg: {
+  id: string;
   sessionId: string;
   role: string;
   content: unknown;
-  /** mapper 出口是 ISO 字符串;clearedAt 竞态守卫用。 */
   createdAt: string | number;
 }): Promise<void> {
-  if (!SCANNED_ROLES.has(msg.role)) return;
-  const text = messageContentToText(msg.content);
-  // 快筛用 '/pull/' 路径片段:绝大多数消息直接短路,不跑正则。host 校验完全由
-  // extractPrRefs 的锚定正则负责——这里刻意不用 'github.com' 子串(那种写法会被
-  // CodeQL 判为"不完整的 URL 子串校验",路径片段则不带 host 语义)。
-  if (!text.includes('/pull/')) return;
-  const refs = extractPrRefs(text);
-  if (refs.length === 0) return;
+  if (!SCANNED_ROLES.has(msg.role) || !messageContentToText(msg.content).includes('/pull/')) return;
   try {
-    // /clear 竞态守卫:main 侧补写的旧行(createdAt 已落在 clearedAt 边界之前,
-    // createMessage 经 shouldBroadcast 抑制广播的那类)对用户不可见,
-    // 不该把被 clear 掉的对话里的 PR 复活到徽标上(Codex review P2)。
-    const createdAtMs =
-      typeof msg.createdAt === 'number' ? msg.createdAt : Date.parse(msg.createdAt);
     const dbClient = getDbClient();
-    const scope = { dbClient, isCurrent: () => getDbClient() === dbClient };
-    const db = dbClient.drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, msg.sessionId))
-      .limit(1);
-    const clearedAt = sessionRow?.clearedAt ?? null;
-    if (clearedAt !== null && Number.isFinite(createdAtMs) && createdAtMs <= clearedAt) return;
-
-    await upsertPrRefs(msg.sessionId, refs, undefined, { scope });
-    if (scope.isCurrent()) onRefsChanged?.(msg.sessionId);
+    await reconcilePrRefsForSession(msg.sessionId,
+      { dbClient, isCurrent: () => getDbClient() === dbClient }, false, msg.id);
   } catch (err) {
     log.warn('record pr refs failed', {
-      sessionId: msg.sessionId,
-      err: err instanceof Error ? err.message : String(err),
+      sessionId: msg.sessionId, err: err instanceof Error ? err.message : String(err),
     });
   }
 }
 
-/**
- * 任务导入的批量提取钩子(session-import 在导入消息
- * 落库后 fire-and-forget 调用)。导入消息不经 createMessage(它们走专用 tx
- * 批量 upsert),没有这个钩子的话导入会话的 PR 永远不会被绑定,且全局回填
- * 可能在懒导入发生前就已写完成标记(review 反馈)。永不抛错。
- */
-export async function recordPrRefsForImportedMessages(
-  sessionId: string,
-  rows: Array<{ role: string; content: unknown; createdAt: number }>,
-): Promise<void> {
+/** Import transactions may skip tombstones/rewound rows; never publish adapter candidates. */
+export async function recordPrRefsForImportedMessages(sessionId: string): Promise<void> {
   try {
-    // clearedAt 可见性守卫:导入会话被 /clear 后,外部 transcript 增量导入会
-    // 重放全量行——边界之前的行对用户不可见,不得复活 pre-clear 的 PR
-    // (与 recordPrRefsForMessage / recompute / 回填同一套语义;Codex review P2)。
     const dbClient = getDbClient();
-    const scope = { dbClient, isCurrent: () => getDbClient() === dbClient };
-    const db = dbClient.drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    const clearedAt = sessionRow?.clearedAt ?? null;
-
-    let touched = false;
-    for (const row of rows) {
-      if (!SCANNED_ROLES.has(row.role)) continue;
-      if (clearedAt !== null && row.createdAt <= clearedAt) continue;
-      const refs = extractPrRefs(messageContentToText(row.content));
-      if (refs.length === 0) continue;
-      // 时间戳用导入消息的原始 createdAt,保持"最近提到的排前面"语义。
-      await upsertPrRefs(sessionId, refs, row.createdAt, { scope });
-      touched = true;
-    }
-    if (touched && scope.isCurrent()) onRefsChanged?.(sessionId);
+    await reconcilePrRefsForSession(sessionId,
+      { dbClient, isCurrent: () => getDbClient() === dbClient }, false);
   } catch (err) {
     log.warn('record imported pr refs failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+      sessionId, err: err instanceof Error ? err.message : String(err),
     });
   }
 }
@@ -171,21 +117,6 @@ async function acquirePrWrite(dbClient: DbClient, sessionId: string): Promise<()
   });
   await previous;
   return release;
-}
-
-async function upsertPrRefs(
-  sessionId: string,
-  refs: PrRef[],
-  atMs?: number,
-  opts?: { authoritative?: boolean; scope?: PrRefsRecomputeScope },
-): Promise<void> {
-  const dbClient = opts?.scope?.dbClient ?? getDbClient();
-  const release = await acquirePrWrite(dbClient, sessionId);
-  try {
-    await upsertPrRefsWithinWrite(dbClient, sessionId, refs, atMs, opts);
-  } finally {
-    release();
-  }
 }
 
 /** Caller holds the session's PR write queue, including during recomputation. */
@@ -274,8 +205,6 @@ export async function ensurePrRefsBackfill(): Promise<void> {
     const rows = await db
       .select({
         sessionId: messages.sessionId,
-        content: messages.content,
-        createdAt: messages.createdAt,
       })
       .from(messages)
       .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -289,14 +218,12 @@ export async function ensurePrRefsBackfill(): Promise<void> {
       )
       .orderBy(asc(messages.createdAt));
 
-    const touched = new Set<string>();
-    for (const row of rows) {
-      // content 列本身就是 JSON.stringify 后的 TEXT,直接扫原文即可。
-      const refs = extractPrRefs(row.content);
-      if (refs.length === 0) continue;
+    const touched = new Set(rows.map(row => row.sessionId));
+    for (const sessionId of touched) {
       if (!scope.isCurrent()) { backfilledClients.delete(dbClient); return; }
-      await upsertPrRefs(row.sessionId, refs, row.createdAt, { scope });
-      touched.add(row.sessionId);
+      // Discovery is only a task hint. Re-read persisted visibility and public
+      // content after acquiring its queue, rather than publishing an old snapshot.
+      await reconcilePrRefsForSession(sessionId, scope, false);
     }
 
     if (!scope.isCurrent()) { backfilledClients.delete(dbClient); return; }
@@ -305,7 +232,6 @@ export async function ensurePrRefsBackfill(): Promise<void> {
       .values({ key: BACKFILL_META_KEY, value: 'done' })
       .onConflictDoUpdate({ target: migrationMeta.key, set: { value: 'done' } });
 
-    if (scope.isCurrent()) for (const sid of touched) onRefsChanged?.(sid);
     log.info('pr refs backfill complete', { candidates: rows.length, sessions: touched.size });
   } catch (err) {
     backfilledClients.delete(dbClient); // 失败复位,下次触发时重试
@@ -326,6 +252,21 @@ export async function recomputePrRefsForSession(
   sessionId: string,
   scope?: PrRefsRecomputeScope,
 ): Promise<void> {
+  try {
+    await reconcilePrRefsForSession(sessionId, scope, true);
+  } catch (err) {
+    log.warn('recompute pr refs failed', {
+      sessionId, err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function reconcilePrRefsForSession(
+  sessionId: string,
+  scope: PrRefsRecomputeScope | undefined,
+  prune: boolean,
+  messageId?: string,
+): Promise<void> {
   let release: (() => void) | undefined;
   try {
     if (scope && !scope.isCurrent()) return;
@@ -339,7 +280,8 @@ export async function recomputePrRefsForSession(
       .where(eq(sessions.id, sessionId))
       .limit(1);
     if (scope && !scope.isCurrent()) return;
-    const clearedAt = sessionRow?.clearedAt ?? null;
+    if (!sessionRow) return;
+    const clearedAt = sessionRow.clearedAt;
 
     const conds = [
       eq(messages.sessionId, sessionId),
@@ -348,9 +290,10 @@ export async function recomputePrRefsForSession(
       like(messages.content, '%/pull/%'),
     ];
     if (clearedAt !== null) conds.push(gt(messages.createdAt, clearedAt));
+    if (messageId !== undefined) conds.push(eq(messages.id, messageId));
 
     const rows = await db
-      .select({ content: messages.content, createdAt: messages.createdAt })
+      .select()
       .from(messages)
       .where(and(...conds))
       .orderBy(asc(messages.createdAt));
@@ -363,16 +306,20 @@ export async function recomputePrRefsForSession(
     const keep = new Set<string>();
     for (const row of rows) {
       if (scope && !scope.isCurrent()) return;
-      const refs = extractPrRefs(row.content);
+      const refs = extractPrRefs(messageContentToText(messageToCamel(row).content));
       if (refs.length === 0) continue;
       for (const ref of refs) keep.add(`${ref.owner}/${ref.repo}#${ref.prNumber}`);
       await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, {
-        authoritative: true,
+        authoritative: prune,
         scope,
       });
     }
 
     if (scope && !scope.isCurrent()) return;
+    if (!prune) {
+      if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
+      return;
+    }
     const existing = await db
       .select({
         id: sessionPrRefs.id,
@@ -397,11 +344,6 @@ export async function recomputePrRefsForSession(
       await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
     }
     if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
-  } catch (err) {
-    log.warn('recompute pr refs failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
-    });
   } finally {
     release?.();
   }
