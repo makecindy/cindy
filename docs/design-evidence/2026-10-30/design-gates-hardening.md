@@ -40,7 +40,7 @@
 
 ## 3. Mobile 字色测试
 
-`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **13 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（12 次，11 条）与 `KNOWN_PLACEHOLDER_DEBT`（1 次）里，按「文件 样式名 token」加次数登记：
+`textColorDiscipline.test.ts`（guard 层）的两条全仓扫描，在含 main 最新代码的树上，存量共 **14 次**，全部登记在测试内的 `KNOWN_TEXT_COLOR_DEBT`（12 次，11 条）与 `KNOWN_PLACEHOLDER_DEBT`（2 次，2 条）里，按「文件 样式名 token」加次数登记：
 
 | 文件 | token | 次数 | 说明 |
 | --- | --- | --- | --- |
@@ -49,10 +49,13 @@
 | `RemoteDesktopSecuritySettings.tsx` | `inputCaret` | 1 | 空闲超时可用态 |
 | `SharedTaskScreen.tsx` | `sharedTaskConfirmBackground` | 1 | 危险文字借用确认钮红 |
 | `SessionUsageSummary.tsx` | `quotaBarWarn` / `quotaBarCrit` | 1 + 1 | 额度条专用色，规范写明不用于百分比文字 |
-| `BotGroupChatScreen.tsx` | `threadUnreadDivider` | 1 | 规范写明「新回复」分隔线文字保持 text-primary |
+| `CompanionListRow.tsx` 未读计数 | `botUnread` | 1 | 规范只登记 `botUnread` 用于未读点，计数文字未登记 |
 | `SessionImportSheet.tsx` | `warningFg` | 1 | 警告文字，规范只登记了图标与皇冠 |
 | `InteractionPanel.tsx` | `statusReady` | 1 | 就绪阶段文字用品牌 teal |
 | `ContextSheetGoalView.tsx` | `statusRecording`（`textColor` prop） | 1 | 该 token 定义只供状态指示 |
 | `ContextSheet.tsx`（占位字） | `textTertiary` | 1 | 应为 `textPlaceholder` |
+| `SessionPrLinks.tsx`（占位字） | `textSecondary` | 1 | main 新合入，应为 `textPlaceholder` |
 
-扫描覆盖（最终版）：命名样式块（按是否实际用在 `<Text>` / `textStyle` 上判断，不靠样式名）、内联 `style` / `textStyle` 的对象 / 数组 / 条件分支与 `{ color }` 简写、`const`/`let` 局部别名（按词法作用域和使用位置解析，最多两层）、`textColor` / `labelColor` 等文字颜色 prop、占位字的条件与别名写法、`elementColors={{ textColor, disabledTextColor }}` 这类对象型文字颜色键；SwiftUI `foregroundStyle` 统计所有非形状 / 图标的所有者（`Text`、`Button`、`TextField` 等，以及没有 JSX 标签的可复用修饰器），参数同样走别名解析；`colors.login.*` 只在登录画布文件放行。存量次数增加会报错，修掉后实际次数低于登记值会提示收紧。扫描器本身有单测，并做过反向验证（把 `nativeGlassButtonStyle.ios.ts` 的 `ctaText` 临时改成 `colors.border`，测试会报出该文件）。
+另有一条**已登记例外**（不计入存量）：`BotGroupChatScreen.tsx` 的话题内「New」分界标签使用 `threadUnreadDivider`——手机设计指南 §3 与 DESIGN.md 的 Mobile thread new-reply divider 条款都明确登记了该标签与 0.5pt 横线同色，测试里按「文件 样式名 token」精确放行，不是全局白名单。（本文早先版本曾把它误记为存量，已更正。）`botUnread` 也已从全局白名单移出，仅未读点使用。
+
+扫描覆盖（最终版）：命名样式块（按是否实际用在 `<Text>` / `textStyle` 上判断，不靠样式名）、内联 `style` / `textStyle` 的对象 / 数组 / 条件分支与 `{ color }` 简写、`const`/`let` 局部别名（按词法作用域和使用位置解析，最多两层）、`textColor` / `labelColor` 等文字颜色 prop、占位字的条件与别名写法、`elementColors={{ textColor, disabledTextColor }}` 这类对象型文字颜色键、语义键调色板（`textPrimary` / `textSecondary` …）、`theme={{ placeholder, text }}` 与 `placeholderColor`；SwiftUI `foregroundStyle` 统计所有非形状 / 图标的所有者（`Text`、`Button`、`TextField` 等，以及没有 JSX 标签的可复用修饰器），参数同样走别名解析；`colors.login.*` 只在登录画布文件放行。存量次数增加会报错，修掉后实际次数低于登记值会提示收紧。扫描器本身有单测，并做过反向验证（把 `nativeGlassButtonStyle.ios.ts` 的 `ctaText` 临时改成 `colors.border`，测试会报出该文件）。

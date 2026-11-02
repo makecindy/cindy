@@ -46,9 +46,14 @@ const files = collectFiles();
 const NEUTRAL_TEXT_COLORS = ['textPrimary', 'textSecondary', 'textTertiary', 'textPlaceholder', 'ctaText'];
 const SEMANTIC_TEXT_COLORS = [
   'errorText', 'destructive', 'statusError', 'statusDone', 'statusAccent', 'swipeActionText',
-  'chatInlineCodeText', 'botUnread', 'betaChannelBadgeForeground', 'sharedTaskConfirmForeground',
+  'chatInlineCodeText', 'betaChannelBadgeForeground', 'sharedTaskConfirmForeground',
   'taskTagWhite', 'taskTagWhiteCheck', // 任务标签底色上的勾与字
 ];
+// 规范逐项登记的精确用法(文件 + 样式名 + token),不属于存量。新增例外先改规范,再加到这里。
+const REGISTERED_TEXT_COLOR_USES = new Set([
+  // mobile-design-guide.md §3 登记例外 / DESIGN.md Mobile thread new-reply divider:话题内「New」分界标签与横线同色。
+  'src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider',
+]);
 const isAllowedTextColor = (rel: string, token: string) =>
   NEUTRAL_TEXT_COLORS.includes(token) || SEMANTIC_TEXT_COLORS.includes(token)
   || (token.startsWith('login.') && LOGIN_CANVAS_FILES.some((re) => re.test(rel)))
@@ -65,13 +70,14 @@ const KNOWN_TEXT_COLOR_DEBT = new Map<string, number>([
   // 2026-10-31 盘点:main 上刚合入的有色文字,规范未登记这些文字用途,待设计裁决或有意可见 PR。
   ['src/session/SessionUsageSummary.tsx quotaWarn quotaBarWarn', 1], // 额度条专用色,规范写明不用于百分比文字
   ['src/session/SessionUsageSummary.tsx quotaCrit quotaBarCrit', 1], // 同上
-  ['src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider', 1], // 规范写明「新回复」分隔线文字保持 text-primary
+  ['src/session/CompanionListRow.tsx unreadCount botUnread', 1], // 规范只登记 botUnread 用于未读点,计数文字未登记
   ['src/session/ContextSheetGoalView.tsx textColor prop statusRecording', 1], // 目标视图操作按钮文字用录制状态色,该 token 定义只供状态指示
   ['src/session/InteractionPanel.tsx inline statusReady', 1], // 就绪阶段文字用品牌 teal,规范只登记了状态点
   ['src/session/SessionImportSheet.tsx warn warningFg', 1], // 警告文字用金色前景,规范只登记了图标与皇冠 // 借用确认钮底色,待设计裁决
 ]);
 const KNOWN_PLACEHOLDER_DEBT = new Map<string, number>([
   ['src/session/ContextSheet.tsx textTertiary', 1], // 占位字用了三级色,待有意可见 PR 改为 textPlaceholder
+  ['src/session/SessionPrLinks.tsx textSecondary', 1], // main 上新合入:占位字用了次级色
 ]);
 
 const THEME_TOKEN = /\b(?:colors|c)\.([A-Za-z_][\w.]*)/g;
@@ -171,6 +177,17 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   for (const key of source.matchAll(/\b(?!placeholder)(\w*[Tt]ext|label|title|subtitle|value|foreground)Color\s*:\s*([^,}]+)/g)) {
     for (const token of resolve(key[2], key.index!)) found.push({ where: `${key[1]}Color key`, token });
   }
+  // 文字调色板对象的语义键:{ textPrimary: …, textSecondary: …, textTertiary: …, textPlaceholder: …, ctaText: … }
+  // (分享图、WebView 等把五档字色按语义键传下去,值同样必须是合规 token)。
+  for (const key of source.matchAll(/(?<![\w.])(textPrimary|textSecondary|textTertiary|textPlaceholder|ctaText)\s*:\s*([^,}]+)/g)) {
+    for (const token of resolve(key[2], key.index!)) found.push({ where: `${key[1]} key`, token });
+  }
+  // theme={{ text: colors.x }}:原生输入框的正文色键。
+  for (const { body, at } of themeObjectSpans(source)) {
+    for (const key of body.matchAll(/(?<![\w.])text\s*:\s*([^,}]+)/g)) {
+      for (const token of resolve(key[1], at + key.index!)) found.push({ where: 'theme.text key', token });
+    }
+  }
   // SwiftUI 的 foregroundStyle 也给形状、渐变、图标上色,这些所有者排除;文字控件与可复用修饰器都统计。
   for (const call of source.matchAll(/foregroundStyle\(([^)]*)\)/g)) {
     const owner = enclosingTag(source, call.index!);
@@ -179,9 +196,20 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   }
   return found;
 }
+/** `theme={{ … }}` 对象的内容与起始位置(原生输入框把主题色按语义键传下去)。 */
+const themeObjectSpans = (source: string): Array<{ body: string; at: number }> =>
+  [...source.matchAll(/\btheme=\{\{/g)].map((m) => ({ body: balancedFrom(source, m.index! + m[0].length), at: m.index! + m[0].length }));
 const scanPlaceholderColors = (source: string): string[] => {
   const resolve = makeColorResolver(source);
-  return [...source.matchAll(/placeholderTextColor=\{([^}]*)\}/g)].flatMap((m) => resolve(m[1], m.index!));
+  return [
+    // placeholderTextColor={…}(RN)与 placeholderColor={…}(原生输入框)
+    ...[...source.matchAll(/placeholder(?:Text)?Color=\{([^}]*)\}/g)].flatMap((m) => resolve(m[1], m.index!)),
+    // 对象里的 placeholderColor / placeholderTextColor 键
+    ...[...source.matchAll(/(?<![\w.])placeholder(?:Text)?Color\s*:\s*([^,}]+)/g)].flatMap((m) => resolve(m[1], m.index!)),
+    // 传给原生输入框的主题对象 theme={{ placeholder: colors.x, text: …, textSecondary: … }}:placeholder 键是占位字。
+    ...themeObjectSpans(source).flatMap(({ body, at }) =>
+      [...body.matchAll(/(?<![\w.])placeholder\s*:\s*([^,}]+)/g)].flatMap((m) => resolve(m[1], at + m.index!))),
+  ];
 };
 
 /** 计数并对照存量名单;返回违规与「可收紧」提示。 */
@@ -210,6 +238,14 @@ describe('text color discipline', () => {
     expect(tokens('const c2 = colors.border;\nconst o = { labelColor: c2 };')).toEqual(['border']);
     expect(scanPlaceholderColors('<TextInput placeholderTextColor={colors.textPlaceholder} />')).toEqual(['textPlaceholder']);
     expect(tokens('const o = { placeholderTextColor: colors.border };')).toEqual([]);
+    // 语义键调色板与原生输入框的 placeholderColor 链路。
+    expect(tokens('const palette = { textPrimary: colors.border, textSecondary: colors.textSecondary };')).toEqual(['border', 'textSecondary']);
+    expect(tokens('const theme = { text: colors.textPrimary, textTertiary: on ? colors.border : colors.textTertiary };')).toEqual(['border', 'textTertiary']);
+    expect(scanPlaceholderColors('<ComposerNativeInput placeholderColor={colors.textTertiary} />')).toEqual(['textTertiary']);
+    expect(scanPlaceholderColors('<Input theme={{ placeholder: colors.textTertiary, chip: colors.surfaceChip }} />')).toEqual(['textTertiary']);
+    expect(scanPlaceholderColors('const img = { placeholder: colors.surfaceChip };')).toEqual([]);
+    expect(tokens('<Input theme={{ background: colors.chatCodeSurface, text: colors.border, textSecondary: colors.textSecondary }} />').sort()).toEqual(['border', 'textSecondary']);
+    expect(scanPlaceholderColors('const t = { placeholderColor: colors.textPlaceholder };')).toEqual(['textPlaceholder']);
     expect(tokens('<Row textColor={colors.border} />')).toEqual(['border']);
     expect(tokens('<Row textColor={on ? colors.textPrimary : colors.border} labelColor={colors.textSecondary} />')).toEqual(['textPrimary', 'border', 'textSecondary']);
     expect(tokens('const fg = on ? colors.ctaText : colors.border;\n<Text modifiers={[foregroundStyle(fg)]} />')).toEqual(['ctaText', 'border']);
@@ -248,6 +284,7 @@ describe('text color discipline', () => {
       for (const { where, token } of scanTextColors(source)) {
         if (isAllowedTextColor(rel, token)) continue;
         const id = `${rel} ${where} ${token}`;
+        if (REGISTERED_TEXT_COLOR_USES.has(id)) continue;
         found.set(id, (found.get(id) ?? 0) + 1);
       }
     }

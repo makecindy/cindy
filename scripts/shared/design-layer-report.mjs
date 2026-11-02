@@ -112,7 +112,7 @@ export function offScaleRadius(raw) {
       // Tailwind turns `_` into a space, so rounded-[8px_10px] / [6px_12px/4px] is a shorthand:
       // check every item; var() / calc() / % items stay report-only.
       for (const part of arbitrary[1].split(/[_/\s]+/).filter(Boolean)) {
-        const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(part);
+        const literal = /^\+?(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(part);
         if (!literal) continue;
         const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
         if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
@@ -126,7 +126,7 @@ export function offScaleRadius(raw) {
     if (!css) return null;
     const values = css[1].replace(/!\s*important/i, '').split(/[\s/]+/).filter(Boolean);
     for (const value of values) {
-      const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(value.replace(/^['"`]+|['"`]+$/g, ''));
+      const literal = /^\+?(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(value.replace(/^['"`]+|['"`]+$/g, ''));
       if (!literal) continue; // var() / calc() / % / keywords stay report-only
       const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
       if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
@@ -302,7 +302,7 @@ export function reportDesignLayers(file, source, changed, locate, spacingVariabl
       suggestion: 'Use the matching semantic theme role on a production surface; preserve sanctioned content and legacy overrides. This report does not add blocking scope.',
     });
   }
-  const patterns = /\brounded(?:-(?:[trblse]|tl|tr|bl|br|ss|se|es|ee)(?=-))?(?:-(?:\[[^\]\n]+\]|[\w-]+))?|\b(?:border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius|border(?:(?:Top|Bottom)(?:Left|Right)|(?:Start|End)(?:Start|End))?Radius)['"]?\s*\]?\s*(?::|=(?!=))\s*[^;,}]+|\bsetProperty\(\s*['\"]border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius['\"]\s*,\s*[^;)]+|\b(?:[pm][xytrblse]?|gap(?:-[xy])?|space-[xy])-\[[^\]\n]+\]/g;
+  const patterns = /\brounded(?:-(?:[trblse]|tl|tr|bl|br|ss|se|es|ee)(?=-))?(?:-(?:\[[^\]\n]+\]|[\w-]+))?|\b(?:border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius|border(?:(?:Top|Bottom)(?:Left|Right)|(?:Start|End)(?:Start|End))?Radius)['"]?\s*\]?\s*(?::|=(?!=))\s*[^;,}\]]+|\bsetProperty\(\s*['\"]border(?:-(?:top|bottom)-(?:left|right)|-(?:start|end)-(?:start|end))?-radius['\"]\s*,\s*[^;)]+|\b(?:[pm][xytrblse]?|gap(?:-[xy])?|space-[xy])-\[[^\]\n]+\]/g;
   for (const match of source.matchAll(patterns)) {
     const start = locate(match.index);
     // A multi-line declaration counts as changed when ANY line it spans was added/edited.
@@ -344,7 +344,7 @@ export function reportDesignLayers(file, source, changed, locate, spacingVariabl
       : /^(?:border[A-Z]|setProperty)/.test(raw)
         // A quoted static key ('borderRadius': / ['borderRadius'] =) is code: judge the position of its opening quote.
         ? !insideStringLiteral(source, /^border[\w-]*?[Rr]adius['"]\s*\]?\s*[:=]/.test(raw) && /['"]/.test(source[match.index - 1]) ? match.index - 1 : match.index)
-        : /\.(?:css|scss|less|html)$/.test(file);
+        : /\.(?:css|scss|less|html)$/.test(file) || inSpan(classSpans) || inSpan(helperSpans) || insideClassListLiteral(source, match.index);
     if (offScale !== null && !styleContext) {
       findings.push({ file, ...pos, rule: 'off-scale-radius', value: match[0], disposition: 'report',
         classification: 'off-scale-radius-unconfirmed-context',

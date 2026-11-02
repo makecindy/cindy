@@ -596,3 +596,19 @@ test('scientific-notation radii and multi-line class-list templates are handled'
   // Prose that spans lines is still prose.
   assert.deepEqual(run('const h = `Use the\n rounded-md class`;'), ['report']);
 });
+
+test('plus-signed radii and Tailwind arbitrary properties are checked', () => {
+  const file = `${renderer}components/Example.tsx`;
+  const css = `${renderer}styles/x.css`;
+  const run = (source, at = file) => inspect(at, source).filter(f => f.rule === 'off-scale-radius').map(f => f.disposition);
+  assert.deepEqual(run('.x { border-radius: +6px }', css), ['block']);
+  assert.deepEqual(run('.x { border-radius: +.375rem }', css), ['block']);
+  assert.deepEqual(run('<i className="rounded-[+6px]" />'), ['block']);
+  assert.deepEqual(run('.x { border-radius: +8px }', css), []);
+  assert.deepEqual(run('<div className="[border-radius:6px]" />'), ['block']);
+  assert.deepEqual(run('<div className={cn("flex", "[border-top-left-radius:10px]")} />'), ['block']);
+  assert.deepEqual(run('const A = "flex [border-radius:6px]";'), ['block']);
+  assert.deepEqual(run('<div className="[border-radius:8px]" />'), []);
+  // The hyphenated form inside prose / embedded CSS strings stays a report.
+  assert.deepEqual(run('const h = "CSS example: border-radius: 6px";'), ['report']);
+});
