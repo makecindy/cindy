@@ -215,6 +215,7 @@ export function startCompanionCloud(input: {
   const uploader = createCompanionUploader({ api: input.api, state, log: input.log,
     readValues: async (botId, actorId) => resolveCompanionSkillFiles(await input.host.readValues(botId), {
       known: sha256 => state.bot(botId)?.skillFileMedia?.[sha256],
+      gaps: state.bot(botId)?.skillFileGaps ?? {},
       ...(input.media ? { upload: async file => {
         const roomId = await mirror.ensureRoom(botId, actorId, roomName(botId));
         // As the owner: a room file with no message is readable only by whoever uploaded it.
@@ -223,9 +224,10 @@ export function startCompanionCloud(input: {
         if (!block?.mediaId) throw new Error('ATTACHMENT_UNAVAILABLE');
         return block.mediaId;
       } } : {}),
-      retain: media => {
-        if (canonicalJson(media) === canonicalJson(state.bot(botId)?.skillFileMedia ?? {})) return;
-        state.update(botId, actorId, entry => { entry.skillFileMedia = media; });
+      retain: (media, gaps) => {
+        const known = state.bot(botId);
+        if (canonicalJson([media, gaps]) === canonicalJson([known?.skillFileMedia ?? {}, known?.skillFileGaps ?? {}])) return;
+        state.update(botId, actorId, entry => { entry.skillFileMedia = media; entry.skillFileGaps = gaps; });
       },
       ...(input.log ? { log: input.log } : {}),
     }),

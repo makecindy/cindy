@@ -101,15 +101,16 @@ async function removeEmptyFolders(dir: string, root: string): Promise<void> {
 }
 
 /**
- * Makes the folder hold `files`. A file `fetch` cannot provide (null: gone for good) keeps any
- * copy already here. Without `removeOthers` nothing else is touched, because the list is incomplete.
+ * Makes the folder hold `files`. A file `fetch` cannot provide (null: gone for good) keeps any copy
+ * already here; so does anything in `keep`. Without `removeOthers` nothing else is touched either,
+ * because the list is incomplete.
  */
 export async function applySkillFolderFiles(skillDir: string, files: BotSkillFile[],
-  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean }): Promise<void> {
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }): Promise<void> {
   const wanted = files.filter(file => isSkillFilePath(file.path));
   const current = new Map((await listSkillFolderFiles(skillDir)).map(file => [file.path, file]));
   if (options.removeOthers) {
-    const keep = new Set(wanted.map(file => file.path));
+    const keep = new Set([...wanted.map(file => file.path), ...(options.keep ?? [])]);
     for (const [relative, file] of current) {
       if (keep.has(relative)) continue;
       await fs.rm(file.absolutePath, { force: true });
@@ -119,16 +120,18 @@ export async function applySkillFolderFiles(skillDir: string, files: BotSkillFil
   for (const file of wanted) {
     const target = path.join(skillDir, ...file.path.split('/'));
     if (current.get(file.path)?.sha256 !== file.sha256) {
-      const source = await fetch(file);
-      if (source === null) continue;
+      // An empty file is never uploaded, so there is nothing to fetch.
+      const source = file.size === 0 ? null : await fetch(file);
+      if (source === null && file.size !== 0) continue;
       const hash = createHash('sha256');
-      for await (const chunk of createReadStream(source)) hash.update(chunk as Buffer);
+      if (source !== null) for await (const chunk of createReadStream(source)) hash.update(chunk as Buffer);
       if (hash.digest('hex') !== file.sha256) continue;
       await assertRealParents(skillDir, target);
       await fs.mkdir(path.dirname(target), { recursive: true });
       const temporary = `${target}.${process.pid}.tmp`;
       try {
-        await fs.copyFile(source, temporary);
+        if (source === null) await fs.writeFile(temporary, '');
+        else await fs.copyFile(source, temporary);
         await fs.rename(temporary, target);
       } catch (error) {
         await fs.rm(temporary, { force: true }).catch(() => {});

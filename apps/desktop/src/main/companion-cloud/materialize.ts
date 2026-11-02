@@ -66,7 +66,7 @@ export interface CompanionMaterializeHost {
   readSkillFiles?: (botId: string, slug: string) => Promise<BotSkillFile[]>;
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
-    options: { removeOthers: boolean }, fence: CompanionWriteFence) => Promise<void>;
+    options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<void>;
   /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
   applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
@@ -235,13 +235,15 @@ export async function materializeCompanion(input: {
     for (const [key, row] of prefs) {
       if (!key.startsWith(COMPANION_SKILL_FILES_PREFIX)) continue;
       const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
-      const list = row.value === null ? { files: [], omitted: 0 } : parseCompanionSkillFiles(row.value);
+      const list = row.value === null ? { files: [], omitted: [], truncated: false } : parseCompanionSkillFiles(row.value);
       if (!list) continue;
       await apply('skill-files', async () => {
         const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
-        await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: list.omitted === 0 }, fence));
+        await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
         state.update(botId, actor.id, entry => {
-          entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.map(file => [file.sha256, file.mediaId])) };
+          entry.skillFileMedia = { ...entry.skillFileMedia, ...Object.fromEntries(list.files.filter(file => file.mediaId).map(file => [file.sha256, file.mediaId])) };
+          const { [slug]: _previous, ...gaps } = entry.skillFileGaps ?? {};
+          entry.skillFileGaps = list.omitted.length || list.truncated ? { ...gaps, [slug]: { omitted: list.omitted, ...(list.truncated ? { truncated: true } : {}) } } : gaps;
         });
         applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
       });

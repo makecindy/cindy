@@ -611,7 +611,7 @@ export async function readBotSkillFiles(userDataDir: string, botId: string, slug
 
 /** Restore a skill's files from the cloud, in the skill's write queue. A skill that is gone stays gone. */
 export async function applyBotSkillFiles(userDataDir: string, botId: string, slug: string, files: BotSkillFile[],
-  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean }): Promise<void> {
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }): Promise<void> {
   const key = botSkillRootDir(userDataDir, botId);
   const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
     const previous = await readBotSkill(userDataDir, botId, slug);

@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyBotSkillFiles,
@@ -510,6 +510,17 @@ describe('skill files for cloud companions', () => {
     expect(await fs.readFile(path.join(skillDir(), 'a.md'), 'utf8')).toBe('local a');
     expect(await fs.readFile(path.join(skillDir(), 'b.md'), 'utf8')).toBe('local b');
     expect(await fs.readFile(path.join(skillDir(), 'c.md'), 'utf8')).toBe('local c');
+  });
+
+  it('creates an empty file without fetching it, and keeps what the list says exists elsewhere', async () => {
+    await write('big.bin', 'never reached the cloud');
+    await write('stale.md', 'removed at the home');
+    const fetch = vi.fn(async () => null);
+    await applyBotSkillFiles(userDataDir, 'bot_a', 'brew', [entry('pkg/__init__.py', '')], fetch, { removeOthers: true, keep: ['big.bin'] });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(skillDir(), 'pkg/__init__.py'), 'utf8')).toBe('');
+    expect(await fs.readFile(path.join(skillDir(), 'big.bin'), 'utf8')).toBe('never reached the cloud');
+    await expect(fs.access(path.join(skillDir(), 'stale.md'))).rejects.toThrow();
   });
 
   it('never writes outside the skill folder', async () => {

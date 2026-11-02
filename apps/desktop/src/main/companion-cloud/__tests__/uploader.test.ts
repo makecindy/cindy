@@ -197,7 +197,7 @@ describe('skill files', () => {
       { path: 'scripts/old.py', size: 3, sha256: 'sha-old.py', mediaId: 'media-old' },
       { path: 'scripts/new.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' },
       { path: 'scripts/copy.py', size: 3, sha256: 'sha-new.py', mediaId: 'media-new.py' }] });
-    expect(retain).toHaveBeenCalledWith({ 'sha-old.py': 'media-old', 'sha-new.py': 'media-new.py' });
+    expect(retain).toHaveBeenCalledWith({ 'sha-old.py': 'media-old', 'sha-new.py': 'media-new.py' }, {});
   });
 
   it('holds the skill back while a failure may pass, so the upload cycle leaves its cloud list alone', async () => {
@@ -212,22 +212,47 @@ describe('skill files', () => {
       return `media-${file.name}`;
     });
     const { list } = await run([local('big.bin'), local('a.py')], upload);
-    expect(list.value).toEqual({ slug: 'brew', omitted: 1, files: [{ path: 'scripts/a.py', size: 3, sha256: 'sha-a.py', mediaId: 'media-a.py' }] });
+    expect(list.value).toEqual({ slug: 'brew', omitted: ['scripts/big.bin'], files: [{ path: 'scripts/a.py', size: 3, sha256: 'sha-a.py', mediaId: 'media-a.py' }] });
   });
 
   it('stops asking a server without file storage', async () => {
     const upload = vi.fn(async () => { throw rejection(503, 'MEDIA_STORAGE_UNAVAILABLE'); });
     const { list } = await run([local('a.py'), local('b.py')], upload);
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(list.value).toEqual({ slug: 'brew', omitted: 2, files: [] });
+    expect(list.value).toEqual({ slug: 'brew', omitted: ['scripts/a.py', 'scripts/b.py'], files: [] });
+  });
+
+  it('lists an empty file without uploading it', async () => {
+    const upload = vi.fn(async () => 'media');
+    const { list } = await run([{ ...local('empty.py'), size: 0 }], upload);
+    expect(upload).not.toHaveBeenCalled();
+    expect(list.value).toEqual({ slug: 'brew', files: [{ path: 'scripts/empty.py', size: 0, sha256: 'sha-empty.py', mediaId: '' }] });
+  });
+
+  it('passes on what the cloud never had, until this computer has the file', async () => {
+    const retain = vi.fn();
+    const pass = (values: CompanionPreferenceValue[], gaps: Record<string, { omitted: string[] }>) =>
+      resolveCompanionSkillFiles(values, { known: () => 'media', upload: async () => 'media', gaps, retain });
+    const skill = { key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 'steps' } };
+    const gaps = { brew: { omitted: ['data/big.bin'] } };
+    // The new home has only what arrived, or nothing at all: both still say the big file exists.
+    const some = await pass([skill, { key, value: null, localFiles: [local('a.py')] }], gaps);
+    expect(some[1]?.value).toMatchObject({ omitted: ['data/big.bin'] });
+    expect(retain).toHaveBeenLastCalledWith({ 'sha-a.py': 'media' }, gaps);
+    expect((await pass([skill], gaps)).find(value => value.key === key)?.value).toEqual({ slug: 'brew', files: [], omitted: ['data/big.bin'] });
+    // Back where the file is, it is an ordinary file again; a skill that is gone takes its gap with it.
+    const back = await pass([skill, { key, value: null, localFiles: [{ ...local('x'), path: 'data/big.bin' }] }], gaps);
+    expect(back[1]?.value).not.toHaveProperty('omitted');
+    expect(retain).toHaveBeenLastCalledWith(expect.anything(), {});
+    expect(await pass([memory('a.md', 'a')], gaps)).toHaveLength(1);
   });
 
   it('keeps the list inside one value', async () => {
     const many = Array.from({ length: 800 }, (_, index) => local(`${'n'.repeat(60)}${index}.py`));
     const { list } = await run(many, async file => `media-${file.name}`);
-    const value = list.value as { files: unknown[]; omitted: number };
+    const value = list.value as { files: unknown[]; omitted: string[]; truncated?: boolean };
     expect(Buffer.byteLength(canonicalJson(value))).toBeLessThanOrEqual(COMPANION_VALUE_MAX_BYTES);
-    expect(value.files.length + value.omitted).toBe(800);
-    expect(value.omitted).toBeGreaterThan(0);
+    expect(value.omitted.length).toBeGreaterThan(0);
+    expect(value.files.length + value.omitted.length === 800 || value.truncated === true).toBe(true);
   });
 });

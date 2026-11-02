@@ -469,7 +469,7 @@ describe('skill files on take-over', () => {
     const { run, state, applySkillFiles, order, fetched, download } = await take([list, skill]);
     await run;
     expect(order).toEqual(['skill', 'files']);
-    expect(applySkillFiles).toHaveBeenCalledWith('bot_mia', 'brew', [file], expect.any(Function), { removeOthers: true }, expect.anything());
+    expect(applySkillFiles).toHaveBeenCalledWith('bot_mia', 'brew', [file], expect.any(Function), { removeOthers: true, keep: [] }, expect.anything());
     expect(download).toHaveBeenCalledWith(ROOM, 'media-1');
     expect(fetched).toEqual(['/downloads/run.sh']);
     expect(state.bot('bot_mia')?.skillFileMedia).toEqual({ abc: 'media-1' });
@@ -477,13 +477,17 @@ describe('skill files on take-over', () => {
   });
 
   it('removes nothing on an incomplete list, and empties the folder on a tombstone', async () => {
-    const partial = await take([skill, { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file], omitted: 1 } }]);
+    const partial = await take([skill, { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file], omitted: ['big.bin'] } }]);
     await partial.run;
-    expect(partial.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: false });
+    expect(partial.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: true, keep: ['big.bin'] });
+    expect(partial.state.bot('bot_mia')?.skillFileGaps).toEqual({ brew: { omitted: ['big.bin'] } });
+    const cut = await take([skill, { key: 'companion.skill-files.v1:brew', value: { slug: 'brew', files: [file], truncated: true } }]);
+    await cut.run;
+    expect(cut.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: false, keep: [] });
     const removed = await take([skill, { key: 'companion.skill-files.v1:brew', value: null }]);
     await removed.run;
     expect(removed.applySkillFiles.mock.calls[0]?.slice(2, 3)).toEqual([[]]);
-    expect(removed.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: true });
+    expect(removed.applySkillFiles.mock.calls[0]?.[4]).toEqual({ removeOthers: true, keep: [] });
   });
 
   it('leaves a skill alone when an older home sent no list', async () => {
