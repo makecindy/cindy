@@ -32,6 +32,23 @@ describe('shared session usage summaries', () => {
     });
   });
 
+  it('carries a rounded token count into the next unit instead of printing 1000k', () => {
+    const detail = (totalTokenUsage: number) => summarizeSessionSpend({ totalTokenUsage }).detail;
+    expect(detail(999_949)).toBe('999.9k tokens');
+    expect(detail(999_950)).toBe('1M tokens');
+    expect(detail(999_999)).toBe('1M tokens');
+    expect(detail(1_000_000)).toBe('1M tokens');
+    expect(detail(1_500_000)).toBe('1.5M tokens');
+    expect(detail(999_999_999)).toBe('1B tokens');
+    expect(detail(1_500_000_000)).toBe('1.5B tokens');
+  });
+
+  it('applies the same carry rule to the context window pair', () => {
+    expect(summarizeSessionSpend({ contextTokens: 999_950, contextWindow: 999_999 }).detail).toBe(
+      '上下文 1M / 1M · 100%',
+    );
+  });
+
   it('summarizes context usage payloads with graceful fallbacks', () => {
     expect(summarizeContextUsage(null)).toEqual({
       title: 'Context usage',

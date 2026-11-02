@@ -16,7 +16,22 @@
     "bcc": "Bcc",
     "subject": "件名",
     "choosePlugin": "このメールを開くプラグインを選んでください。",
-    "personalPlugin": "個人用プラグイン"
+    "personalPlugin": "個人用プラグイン",
+    "reply": "返信",
+    "replyAll": "全員に返信",
+    "forward": "転送",
+    "quote": {
+      "reply": "このメールに返信",
+      "replyAll": "このメールに全員返信",
+      "forward": "このメールを転送"
+    },
+    "messageCount_one": "{{count}} 件のメール",
+    "messageCount_other": "{{count}} 件のメール",
+    "showMessages_one": "{{count}} 件のメールを表示",
+    "showMessages_other": "{{count}} 件のメールを表示",
+    "conversationFailed": "前後のメールを読み込めませんでした。",
+    "expandMessage": "{{from}} からのメールを展開",
+    "collapseMessage": "{{from}} からのメールを折りたたむ"
   },
   "title": "プラグイン",
   "all": "すべて",
@@ -148,8 +163,6 @@
   "demo": {
     "hint": "デモデータ · 実際の設定は変更されません"
   },
-  "mailPreview": "メールプレビュー",
-  "mailEnlarge": "拡大表示",
   "mailInsertImage": "本文に挿入",
   "mailAttach": "添付ファイルを追加",
   "mailUpdated": "更新済みの下書き（読み取り専用）",
@@ -277,13 +290,22 @@
       "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
       "skill": "AI アシスタントにスキル「{{name}}」を追加します",
       "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
-      "routineEvents": "ルーティンイベント"
+      "routineEvents": "ルーティンイベント",
+      "mcpUi": "会話にインタラクティブページを表示できる",
+      "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
+      "uiPageAccess": "ページ：{{pages}}\nページが接続できるドメイン：{{domains}}\nページが呼び出せるツール：{{tools}}"
     },
     "releaseChanged": "利用可能なバージョンが変更されました。更新後のバージョンを確認してからインストールしてください。",
     "settingsUnavailable": "プラグイン設定を読み込めませんでした。設定を再読み込みしてお試しください。",
     "settingsResultUnknown": "操作結果を確認できません。再送信する前にコンピューターの設定を再読み込みしてください。",
     "settingsOperationFailed": "設定の操作を完了できませんでした。接続を確認して再試行してください。",
-    "settingsReload": "再試行"
+    "settingsReload": "再試行",
+    "trust": {
+      "cindy-official": "公式",
+      "reviewed": "審査済み",
+      "verified-publisher": "発行者確認済み",
+      "unverified": "未確認"
+    }
   },
   "notice": {
     "title": {
@@ -311,5 +333,13 @@
       "agent": "Agent のリクエスト"
     },
     "taskCapability": "現在のタスク用"
+  },
+  "uiApproval": {
+    "title": "プラグイン「{{name}}」にインタラクティブページが追加されました。使用するには権限の確認が必要です。",
+    "enable": "確認して有効にする",
+    "later": "後で",
+    "purpose": "インタラクティブページの権限を確認",
+    "updateHost": "実行元のパソコンで Cindy を更新してから、ここで確認してください。テキストのツールは引き続き使えます。",
+    "failed": "インタラクティブページを有効にできませんでした。接続とプラグインのバージョンを確認し、再試行してください。"
   }
 }

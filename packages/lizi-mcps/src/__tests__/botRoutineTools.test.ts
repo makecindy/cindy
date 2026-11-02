@@ -19,16 +19,29 @@ it('creates and reads back a persistent routine through the essential companion 
   const resolveBotId = vi.fn(async () => 'my-bot');
   const service: BotRoutineCallbacks['service'] = {
     list: async (id) => engine.list(id), sources: async () => engine.listSources(),
+    deliveryTargets: async () => [{ id: 'known-destination', channel: 'telegram', name: 'My bot', recipient: 'Owner' }],
     save: (botId, input, id) => engine.put(botId, input, id),
     remove: (botId, id) => engine.remove(botId, id),
     history: async (_botId, id) => engine.history(id),
     runNow: (botId, id) => engine.runNow(botId, id),
   };
   const registry = new XdtHelperToolRegistry();
-  registerBotRoutineTools(registry, { service, resolveBotId }, () => 'canonical-session');
+  const model = { id: 'economy', label: 'Economy', providers: [{ id: 'connected', name: 'Connected',
+    modelDetails: { efforts: ['low', 'medium'], defaultEffort: 'medium', cost: { input: 0.1, output: 0.5 }, currency: 'USD' },
+  }] };
+  registerBotRoutineTools(registry, { service, resolveBotId,
+    scheduler: { getScheduler: () => ({}) as never, listModels: async () => ({ ok: true, pi: [model] }) },
+  }, () => 'canonical-session');
   expect(registry.list('bots').map((tool) => tool.name)).toContain('routine_save');
+  // Regression: essential teammate tools could save a model but could not discover one.
+  const models = await registry.call('schedule_list_models', { agent: 'pi' });
+  expect(JSON.parse((models.content[0] as { text: string }).text).data.pi).toEqual([model]);
+  const destinations = await registry.call('routine_delivery_targets', {});
+  expect(JSON.parse((destinations.content[0] as { text: string }).text).result[0].id).toBe('known-destination');
   const args = {
     name: '休息提醒', prompt: '提醒我休息一下', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 3000 },
+    modelOverride: { agentKind: 'pi', model: model.id, providerId: model.providers[0].id, effort: 'low', fastMode: false, agentDeviceId: null },
+    sessionMode: 'fresh', delivery: { kind: 'im', targetId: 'known-destination' },
     triggers: [{ id: 'minute', kind: 'interval', intervalMs: 60000 }],
   };
   const denied = await registry.call('routine_save', { ...args, botId: 'someone-else' });
@@ -38,7 +51,8 @@ it('creates and reads back a persistent routine through the essential companion 
   const read = await registry.call('routine_list', {});
   expect(JSON.parse((read.content[0] as { text: string }).text).result).toHaveLength(1);
   expect(snapshot!.routines[0].botId).toBe('my-bot');
-  expect(snapshot!.routines[0]).toMatchObject({ silentWhenIdle: false, preRunHook: args.preRunHook });
+  expect(snapshot!.routines[0]).toMatchObject({ silentWhenIdle: false, preRunHook: args.preRunHook,
+    modelOverride: args.modelOverride, sessionMode: 'fresh', delivery: args.delivery });
   expect(snapshot!.routines[0].triggers).toEqual(args.triggers);
   expect(resolveBotId).toHaveBeenCalledWith('canonical-session');
   now += 60000;

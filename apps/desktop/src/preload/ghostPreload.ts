@@ -73,11 +73,18 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'device-sync-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'library-request' }),
-  targets: Object.fromEntries(['list', 'resolve', 'send', 'cancel'].map(kind => [kind,
+  targets: Object.fromEntries(['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].map(kind => [kind,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'targets-request', kind });
       if (result?.ok === true) return result.data;
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
+    },
+  ])),
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+    async (req: Record<string, unknown> = {}): Promise<unknown> => {
+      const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'observe-request', kind });
+      if (result?.ok === true) return result.data;
+      throw Object.assign(new Error(result?.error?.message ?? 'Observe request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
   tasks: Object.fromEntries(

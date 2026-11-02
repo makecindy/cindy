@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react';
 import { ModelSelector, ModelSelectorContent, type ModelMemoryAccessors } from './ModelSelector';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 
 interface ModelRouteContext {
   /** The task host; omitted for this computer. */
@@ -24,11 +25,12 @@ function useModelRouteOptions(
     devices: locations.devices,
     selectedDeviceId: locations.leadAgentDeviceId,
     homeDeviceId: deviceId,
+    catalogHostDeviceId: locations.catalogHostDeviceId,
     deviceModelMemory: agentDeviceModelMemoryAccessors,
   } : undefined;
   return {
     // Read the selected, readable execution location while retaining the home catalog.
-    deviceId: locations.devices ? locations.leadAgentDeviceId ?? deviceId : deviceId,
+    deviceId: modelCatalogKey(locations.devices ? locations.leadAgentDeviceId ?? deviceId : deviceId, locations.catalogHostDeviceId),
     remoteAgent,
     // Keep remote preferences separate from the task host's model memory.
     modelMemory: modelMemory ?? (remoteAgent?.selectedDeviceId

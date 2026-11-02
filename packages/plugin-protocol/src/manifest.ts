@@ -1,5 +1,10 @@
+import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
+import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+export { GHOST_LOCALES, type GhostLocale } from './locales.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
@@ -14,8 +19,6 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
 
 /** Cindy host locales supported by Plugin manifest resources. */
-export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
-export type GhostLocale = (typeof GHOST_LOCALES)[number];
 export type GhostManifestLocales = {
   en: string;
 } & Partial<Record<Exclude<GhostLocale, 'en'>, string>>;
@@ -233,9 +236,13 @@ export interface GhostAgentNeeds {
   tasks?: boolean;
   /** 查询项目、任务、伙伴并投递消息;必须同时声明 tasks,需独立批准。 */
   targets?: boolean;
+  /** Independently approved, scoped Auto delegation to an existing companion. */
+  delegation?: boolean;
   /** 后台隐藏任务;必须与 `tasks: true` 同时声明。 */
   hiddenTasks?: boolean;
   schedule?: boolean;
+  /** 只读查看项目任务的列表与状态并打开任务;不含任务内容,需独立批准。 */
+  observe?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -884,6 +891,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Optional MCP Apps resources and links to existing tools. */
+  mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
   mail?: true;
   /** Provider-owned read capability; Cindy owns mail presentation. */
@@ -982,6 +991,8 @@ export interface GhostManifest {
   subscribe?: GhostSubscribeNeeds;
   /** Autonomous publishing of declared events into user-configured routines. */
   routineEvents?: GhostRoutineEvents;
+  /** Models this plugin may add to the model picker; the list is published at runtime. */
+  models?: GhostModelsNeeds;
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -1079,20 +1090,11 @@ export function ghostIconMimeType(p: string): string | null {
  * 无 `.`/`..` 段、无 Windows 设备保留名、字符集收敛,天然杜绝路径穿越
  * 与跨平台歧义。
  */
-const GHOST_PATH_SEGMENT_RE = /^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,63}$/;
-export function isSafeGhostRelativePath(p: unknown): p is string {
-  if (typeof p !== 'string' || p.length === 0 || p.length > 256) return false;
-  if (p.includes('\\')) return false;
-  const segments = p.split('/');
-  return segments.every(
-    (seg) =>
-      GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..' && !isWindowsReservedName(seg),
-  );
-}
+export { isSafeGhostRelativePath } from './internal/ghostPath.js';
 
 /** `validateGhostManifest` 的无异常校验结果。 */
 export type ManifestValidation =
-  { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
+  { ok: true; manifest: GhostManifest & { mcpApps?: GhostMcpApps } } | { ok: false; reason: string };
 
 interface ParsedCindyVersion {
   core: readonly [string, string, string];
@@ -1192,7 +1194,9 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'mcpApps',
   'routineEvents',
+  'models',
   'schemaVersion',
   'id',
   'name',
@@ -1379,6 +1383,12 @@ function dropEmptyLegacyCapabilitySlots(
  * 校验一份 JSON.parse 后的未知 `ghost.json` 值。已知字段严格检查；v2 未知
  * 字段忽略，v3 未知顶层字段原样保留但不解释、不授权。
  */
+/** Historical persisted data only; new packages must use validateGhostManifest. */
+export function validateStoredGhostManifest(value: unknown):
+  { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
+  return validateWithStoredMcpApps(value, validateGhostManifest);
+}
+
 export function validateGhostManifest(value: unknown): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
@@ -2012,6 +2022,8 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   }
   const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
+  const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
+  if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -2063,6 +2075,10 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           '声明了 subscribe.hooks(拦截钩子)必须同时声明 launch: "resident"——拦截要求常驻在场,否则每条消息都要等冷启动',
       };
     }
+  }
+
+  if (models?.types.includes('route') && !(subscribe?.hooks as readonly string[] | undefined)?.includes('will-start-task')) {
+    return { ok: false, reason: 'A route model needs subscribe.hooks to include will-start-task' };
   }
 
   // network 槽详单:与 slots 含 'network' 成对(有详单必有槽;有槽
@@ -3077,24 +3093,35 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         return { ok: false, reason: 'agent.targets: true 需要同时声明 agent.tasks: true' };
       }
     }
+    if (agentRaw.delegation !== undefined) {
+      if (typeof agentRaw.delegation !== 'boolean') return { ok: false, reason: 'agent.delegation must be boolean' };
+      if (agentRaw.delegation === true && (agentRaw.tasks !== true || agentRaw.targets !== true)) {
+        return { ok: false, reason: 'agent.delegation requires agent.tasks and agent.targets' };
+      }
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets'])).length === 0) {
+    if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
+      return { ok: false, reason: 'agent.observe must be boolean' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.targets === true ? { targets: true } : {}),
+      ...(agentRaw.tasks === true && agentRaw.targets === true && agentRaw.delegation === true ? { delegation: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.observe === true ? { observe: true } : {}),
     };
   }
 
@@ -3851,10 +3878,15 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     }
   }
 
+  if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
+  const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafeGhostRelativePath);
+  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  const mcpApps = parsedMcpApps;
   return {
     ok: true,
     manifest: {
       ...prepared.unknownV3Fields,
+      ...(mcpApps !== undefined ? { mcpApps } : {}),
       schemaVersion: prepared.schemaVersion,
       id: raw.id,
       name: raw.name,
@@ -3893,6 +3925,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
+      ...(models !== undefined ? { models } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

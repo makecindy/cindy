@@ -88,3 +88,20 @@ it('subscribes focused history and the human account scope together, forwarding 
   await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '11', changes });
   expect(changed).toHaveBeenCalledWith(changes);
 });
+
+// Chat Server work.available (cindy-server#1151) only wakes computer companions. Each
+// changed() reloads the list and re-downloads every visible room snapshot on the phone.
+it('acknowledges owner work hints without reloading, but still reloads mixed batches', async () => {
+  const changed = vi.fn();
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true,
+    socket, ready: async () => ({ scope: `actor:${actorId}`, cursor: '0' }), changed, unavailable: vi.fn() });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  const hint = { type: 'work.available', entityId: actorId, data: { work: [{ botId: actorId, conversationId: actorId }] } };
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '1', changes: [hint] });
+  expect(changed).not.toHaveBeenCalled();
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: `actor:${actorId}`, cursor: '1' }));
+  const mixed = [hint, { type: 'notice.created', entityId: actorId, data: {} }];
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '2', changes: mixed });
+  expect(changed).toHaveBeenCalledWith(mixed);
+});

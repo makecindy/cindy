@@ -1,3 +1,5 @@
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -20,6 +22,7 @@ import {
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import {
+  buildKimiUsageCard,
   buildClaudeUsageCard,
   buildCodexUsageCard,
   buildXaiUsageCard,
@@ -139,5 +142,14 @@ export function useDeviceProviderSubscriptionCard(
 ): UsageCardAccount | null {
   const local = useProviderSubscriptionCard(deviceId === null ? provider : undefined);
   const remote = useRemoteProviderSubscriptionCard(deviceId === null ? undefined : provider, deviceId);
+  const { t } = useTranslation();
+  const kimi = useProviderAccountUsage(deviceId && isKimiCodingProviderView(provider) ? provider : undefined, undefined, deviceId);
+  if (deviceId && kimi.supported) {
+    const snapshot = kimi.result?.status === 'ready' ? kimi.result.snapshot : null;
+    const card = buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t);
+    if (kimi.result?.status === 'unavailable') card.emptyText = t(`providerAccountUsage.kimi.error.${kimi.result.error}`);
+    if (kimi.result?.status === 'ready' && kimi.result.stale) card.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+    return card;
+  }
   return deviceId === null ? local : remote;
 }

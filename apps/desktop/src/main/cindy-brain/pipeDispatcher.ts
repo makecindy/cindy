@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   GhostPipeToolCall,
+  GhostPipeToolProgress,
   GhostToolCallResult,
   GhostToolDecl,
   InstalledGhost,
@@ -68,7 +69,11 @@ interface PendingBindingClaim {
   consumed: boolean;
 }
 
+export type GhostToolProgress = Pick<GhostPipeToolProgress, 'progress' | 'total' | 'message'> & { progress: number };
+
 interface PendingCall {
+  onProgress?: (progress: GhostToolProgress) => void;
+  progressHighWater?: number;
   usage?: GhostCallUsageObserver | null;
   usageAccepted?: boolean;
   usageOutcome?: PluginUsageOutcome;
@@ -201,6 +206,7 @@ export class GhostPipeDispatcher {
     sessionId?: string;
     /** Host debug actions are explicitly excluded. Never exposed in plugin payloads. */
     recordUsage?: false;
+    onProgress?: (progress: GhostToolProgress) => void;
     /** Native reader's explicit opening intent. Never sourced from tool args. */
     mailReaderOpened?: true;
   }): Promise<GhostToolCallResult> {
@@ -271,6 +277,7 @@ export class GhostPipeDispatcher {
         holds: 0,
         lifetime: new AbortController(),
         sourceSignal: request.signal,
+        onProgress: request.onProgress,
       };
       if (request.recordUsage !== false) {
         this.observeUsage(() => { entry.usage = this.deps.prepareUsage?.(ghost, callId, tool, request.sessionId); });
@@ -300,10 +307,10 @@ export class GhostPipeDispatcher {
   }
 
   private cancelBoundCall(callId: string): void {
-    this.settle(callId, { ok: false, errorCode: 'INTERNAL', message: 'Plugin tool call cancelled' }, 'cancelled');
+    this.settle(callId, { ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' }, 'cancelled');
   }
 
-  /** Called only for an explicit cancelWithCall Node request. Legacy tools keep their lifetime. */
+  /** Explicit call-bound capabilities (Node cancelWithCall / pick). Legacy tools keep their lifetime. */
   getPendingCallSignal(ghostId: string, callId: string): AbortSignal | null {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
@@ -485,7 +492,7 @@ export class GhostPipeDispatcher {
    * 重新续满一个基础档;天花板由 extendDeadline 统一钳制。
    */
   handleToolProgress(senderGhostId: string, payload: unknown): { accepted: boolean; reason?: string } {
-    const p = payload as { callId?: unknown };
+    const p = payload as { callId?: unknown; progress?: unknown; total?: unknown; message?: unknown };
     if (typeof p?.callId !== 'string') {
       return { accepted: false, reason: 'tool-progress 载荷形状不合法' };
     }
@@ -500,10 +507,38 @@ export class GhostPipeDispatcher {
       this.settle(p.callId, this.ownerBoundaryResult());
       return { accepted: false, reason: '账号边界已变化' };
     }
+    if (p.progress !== undefined) {
+      if (typeof p.progress !== 'number' || !Number.isFinite(p.progress) || p.progress < 0 ||
+          (p.total !== undefined && (typeof p.total !== 'number' || !Number.isFinite(p.total) || p.total < p.progress)) ||
+          (p.message !== undefined && (typeof p.message !== 'string' || p.message.length > 4096))) {
+        return { accepted: false, reason: 'tool-progress 进度值不合法' };
+      }
+      entry.progressHighWater = Math.max(entry.progressHighWater ?? 0, p.progress);
+      // The observer is Host-owned. It cannot change the legacy call's outcome.
+      try { entry.onProgress?.({ progress: p.progress, ...(typeof p.total === 'number' ? { total: p.total } : {}),
+        ...(typeof p.message === 'string' ? { message: p.message } : {}) }); } catch { /* detached View */ }
+    }
     if (entry.timeoutExtensionsAllowed) {
       this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
     }
     return { accepted: true };
+  }
+
+  /** Host transfers use cumulative work units across phases; byte counts stay in the phase message. */
+  createHostProgress(ghostId: string, callId: string | undefined) {
+    const entry = callId ? this.pending.get(callId) : undefined;
+    let previousBytes = 0;
+    return (bytes: number | undefined, total: number | undefined, message: string): void => {
+      if (!entry || !callId || this.pending.get(callId) !== entry || entry.ghostId !== ghostId) return;
+      const delta = bytes === undefined ? 1 : Math.max(0, bytes - previousBytes);
+      if (bytes !== undefined) previousBytes = bytes;
+      if (delta === 0) return;
+      const progress = (entry.progressHighWater ?? 0) + delta;
+      this.handleToolProgress(ghostId, { callId, progress,
+        ...(total !== undefined && bytes !== undefined ? { total: progress + Math.max(0, total - bytes) } : {}),
+        message: bytes === undefined ? message : `${message} (${bytes}${total === undefined ? '' : ` / ${total}`} bytes)`,
+      });
+    };
   }
 
   /**

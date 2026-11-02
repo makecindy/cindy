@@ -22,6 +22,11 @@ export function pageAudit() {
       continue;
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.opacity === '0') continue;
+    // Standard screen-reader-only text is intentionally clipped, not visually truncated.
+    // Keep auditing ordinary clipped labels, including elements with an sr-only class
+    // that is not actually hidden by CSS.
+    if (style.position === 'absolute' && parseFloat(style.width) <= 1
+      && parseFloat(style.height) <= 1 && style.clip === 'rect(0px, 0px, 0px, 0px)') continue;
     const overflowX = el.scrollWidth > el.clientWidth + 1 && /hidden|clip/.test(style.overflowX);
     const clamped = style.webkitLineClamp && style.webkitLineClamp !== 'none';
     const overflowY =
@@ -39,7 +44,11 @@ export function pageAudit() {
   while (walker.nextNode() && rawKeys.length < 20) {
     const value = walker.currentNode.textContent.trim();
     if (!/^[a-z][a-zA-Z0-9_-]*(\.[a-zA-Z0-9_-]+)+$/.test(value)) continue;
-    if (/(\.[^.]+){2,}/.test(value) || runtime.isTranslationKey?.(value)) rawKeys.push(value);
+    const knownKey = runtime.isTranslationKey?.(value);
+    // Version badges are data, not unresolved translation keys. A known key
+    // still wins, so this exception cannot hide an actual requested translation.
+    if (!knownKey && /^v\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(value)) continue;
+    if (/(\.[^.]+){2,}/.test(value) || knownKey) rawKeys.push(value);
   }
   return {
     horizontalOverflow: document.documentElement.scrollWidth > innerWidth,

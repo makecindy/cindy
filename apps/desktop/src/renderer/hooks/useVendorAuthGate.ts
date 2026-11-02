@@ -1,4 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 /**
  * useVendorAuthGate —— vendor 未就绪时弹通用 confirmDialog,确认后跳 settings。
  *
@@ -288,10 +290,10 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const [statusRes, providersRes] = await Promise.allSettled([
           cachedSourceReady && vendor === 'cc'
             ? Promise.resolve(null)
-            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
+            : invokeModelCatalog(window.electronAPI.deviceLink, deviceId, 'maker:agent:status', [providerAgent]),
           cachedSourceReady
             ? Promise.resolve(cachedProviders)
-            : window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
+            : invokeModelCatalog(window.electronAPI.deviceLink, deviceId, 'maker:provider:list', []),
         ]);
         const status =
           statusRes.status === 'fulfilled'
@@ -330,7 +332,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         // 直接说清哪台设备缺什么、去那台设备的哪个设置页处理:
         //   codex 二进制缺失 → 组件未就绪;来源未就绪 → 该 agent 暂无已连接的模型来源
         //   (去「设置 → 模型供应商」;codex / cc 文案对称)。
-        const device = deviceDisplayName(deviceId, remoteProjectsStore.getDeviceName(deviceId));
+        const sourceDeviceId = parseModelCatalogKey(deviceId)?.agentDeviceId ?? deviceId;
+        const device = deviceDisplayName(sourceDeviceId, remoteProjectsStore.getDeviceName(sourceDeviceId));
         let title: string;
         let description: string;
         if (remoteReadiness === 'binary-missing') {

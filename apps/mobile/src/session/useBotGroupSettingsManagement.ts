@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { randomUUID } from 'expo-crypto';
 import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
 import { chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
 import { canManageBotGroup } from './botGroupRemote';
 
-export type GroupSettingsActionId = BotGroupRemoteActionId | 'set-member-role';
+/**
+ * `archive` also restores an archived group; `nickname`, `avatar`, `bot-access` and adding your
+ * own teammate are written as yourself, every other write as the owner or admin you control.
+ */
+export type GroupSettingsActionId = BotGroupRemoteActionId | 'set-member-role' | 'archive' | 'transfer' | 'nickname' | 'avatar' | 'bot-access';
+const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member']);
 type Settings = { group: BotGroupRemoteChatData; managerId?: string };
 
 /** Cloud settings use the account's chat service, never device discovery or a host link. */
@@ -19,7 +25,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const verified = useRef<{ binding: typeof binding; settings: Settings } | null>(null);
   const writing = useRef<symbol | null>(null);
   const [state, setState] = useState<{ binding: typeof binding; settings?: Settings; loading: boolean; failed: boolean }>();
-  const pending = useRef<{ binding: typeof binding; key: string; operationId: string; managerId: string; action: ChatGroupSettingsAction } | null>(null);
+  const pending = useRef<{ binding: typeof binding; key: string; operationId: string; managerId: string | undefined; action: ChatGroupSettingsAction } | null>(null);
   const valid = useCallback(() => enabled && api.enabled && api.current() && active.current === binding, [api, enabled, binding]);
   const refresh = useCallback(async () => {
     if (!valid()) return;
@@ -43,16 +49,36 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
 
   const act = useCallback(async (actionId: GroupSettingsActionId, input: Record<string, unknown> = {}) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
-    if (!valid() || !current?.managerId || !canManageBotGroup(current.group) || current.group.dissolvedAt || writing.current) throw new Error('PERMISSION_DENIED');
+    const asSelf = SELF_ACTIONS.has(actionId);
+    // An archived group only takes 取消归档 from its managers.
+    const allowed = asSelf ? !current?.group.archived : actionId === 'archive'
+      ? !!current?.managerId && chatGroupMembership(current.group).manager : !!current?.managerId && canManageBotGroup(current.group);
+    if (!valid() || !current || !allowed || current.group.dissolvedAt || writing.current) throw new Error('PERMISSION_DENIED');
+    const revision = (value: unknown) => {
+      const expected = value ?? current.group.revision;
+      if (!Number.isSafeInteger(expected) || Number(expected) < 1) throw new Error('REVISION_CONFLICT');
+      return Number(expected);
+    };
+    const actor = () => { const id = String(input.actorId ?? ''); if (!id) throw new Error('INVALID_PARAMS'); return id; };
     let action: ChatGroupSettingsAction;
-    if (actionId === 'update' || actionId === 'delete') {
-      const expectedRevision = input.expectedRevision ?? current.group.revision;
-      if (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1) throw new Error('REVISION_CONFLICT');
-      action = { type: 'update', expectedRevision: Number(expectedRevision) };
-      if (actionId === 'delete') action.archived = true;
+    if (actionId === 'nickname') {
+      action = { type: 'nickname', actorId: actor(), nickname: typeof input.nickname === 'string' && input.nickname.trim() ? input.nickname.trim() : null };
+    } else if (actionId === 'avatar') {
+      if (!current.group.supportsMemberAvatar) throw new Error('CHAT_UNAVAILABLE');
+      action = { type: 'avatar', actorId: actor(), avatar: typeof input.avatar === 'string' ? input.avatar : null };
+    } else if (actionId === 'transfer') {
+      action = { type: 'transfer', actorId: actor() };
+    } else if (actionId === 'bot-access') {
+      if (input.access !== 'none' && input.access !== 'chat' && input.access !== 'tools') throw new Error('INVALID_PARAMS');
+      action = { type: 'botAccess', actorId: actor(), access: input.access, expectedRevision: revision(input.expectedRevision) };
+    } else if (actionId === 'update' || actionId === 'delete' || actionId === 'archive') {
+      action = { type: 'update', expectedRevision: revision(input.expectedRevision) };
+      if (actionId !== 'update') action.archived = actionId === 'delete' || input.archived !== false;
       else {
         if (typeof input.name === 'string') action.name = input.name;
+        if (typeof input.topic === 'string') action.topic = input.topic;
         if (typeof input.description === 'string') action.description = input.description;
+        if (typeof input.allowMentionAllBots === 'boolean') action.allowMentionAllBots = input.allowMentionAllBots;
         if (input.replyMode === 'all' || input.replyMode === 'mentioned') action.responseMode = input.replyMode;
         if (input.speakingMode === 'auto' || input.speakingMode === 'sequential') action.speakingMode = input.speakingMode;
         if (typeof input.organizerBotId === 'string' || input.organizerBotId === null) action.organizerId = input.organizerBotId;
@@ -70,7 +96,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     const key = JSON.stringify(action.type === 'update' ? { ...action, expectedRevision: undefined } : action);
     const prior = pending.current;
     const operation = prior?.binding === binding && prior.key === key ? prior
-      : { binding, key, operationId: randomUUID(), managerId: current.managerId, action };
+      : { binding, key, operationId: randomUUID(), managerId: asSelf ? undefined : current.managerId, action };
     pending.current = operation;
     const write = Symbol(); writing.current = write;
     // Fence reads started before this mutation, including the parent subscription refresh.
@@ -90,11 +116,26 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
       if (valid()) await refresh();
     }
   }, [api, binding, groupId, refresh, valid]);
+  /** A join link from the owner or admin you control; revoking takes the same link back. */
+  const invite = useCallback(async (revoke?: string) => {
+    const current = verified.current?.binding === binding ? verified.current.settings : undefined;
+    if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
+    const operationId = randomUUID();
+    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, operationId); return null; }
+    const link = await api.client.createInvite(groupId, current.managerId, operationId);
+    if (!valid()) throw new Error('OWNER_CHANGED');
+    return link;
+  }, [api, binding, groupId, valid]);
   const own = state?.binding === binding;
   const settings = own ? state.settings : undefined;
   const loading = enabled && (!own || state.loading);
   const editable = !loading && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
-  return { group: settings?.group, act, refresh, loading, editable,
+  // Settings reads skip `/actors`; the chat page already knows which computer runs each of your teammates.
+  const homes = new Map(source.members.flatMap(member => member.homeDeviceId && member.actorId ? [[member.actorId, member.homeDeviceId] as const] : []));
+  const group = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
+    member.homeDeviceId === null && member.actorId && homes.has(member.actorId) ? { ...member, homeDeviceId: homes.get(member.actorId) } : member) }
+    : settings?.group;
+  return { group, act, invite, refresh, loading, editable, ready: !loading && !!settings,
     reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
 }
 
@@ -111,5 +152,5 @@ export function useCloudGroupCandidates(enabled: boolean) {
     }).catch(() => { if (!cancelled && api.current()) setState({ owner: api.owner, rows: [], loading: false, failed: true }); });
     return () => { cancelled = true; };
   }, [api, enabled]);
-  return state?.owner === api.owner && enabled ? state : { rows: [], loading: enabled, failed: false };
+  return state?.owner === api.owner && enabled && api.enabled ? state : { rows: [], loading: enabled && api.enabled, failed: false };
 }

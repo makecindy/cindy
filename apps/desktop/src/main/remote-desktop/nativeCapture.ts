@@ -24,6 +24,29 @@ const exec = promisify(execFile);
 const name = 'cindy-macos-desktop-capture';
 // A running helper answers within this; a fresh one may still be starting capture.
 const FRAME_MS = 3000;
+// The macOS helper has a five-second bound for completing SCStream shutdown.
+// Leave it time to finish an in-flight start and stop before forcing termination.
+const CAPTURE_SHUTDOWN_MS = 6000;
+function stopCaptureProcess(child: ChildProcessWithoutNullStreams): void {
+  if (process.platform !== 'darwin') {
+    child.stdin.destroy();
+    child.kill();
+    return;
+  }
+  if (child.exitCode != null || child.signalCode != null) return;
+  const timer = setTimeout(() => child.kill('SIGKILL'), CAPTURE_SHUTDOWN_MS);
+  timer.unref();
+  const closed = () => {
+    clearTimeout(timer);
+    child.off('exit', closed);
+    child.off('close', closed);
+  };
+  child.once('exit', closed);
+  child.once('close', closed);
+  // Discard any late frame while the helper processes EOF and stops its stream.
+  child.stdout.resume();
+  child.stdin.end();
+}
 let building: Promise<string> | null = null;
 async function binary(): Promise<string> {
   if (process.platform === 'linux') return resolveLinuxCaptureBinary();
@@ -115,7 +138,7 @@ export async function photographMacWindow(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      child.kill();
+      stopCaptureProcess(child);
       resolve(jpeg);
     };
     const timer = setTimeout(() => finish(null), 5000);
@@ -379,8 +402,7 @@ export class NativeDesktopCapture {
     this.display = '';
     this.busy = false;
     if (child) {
-      child.stdin.destroy();
-      child.kill();
+      stopCaptureProcess(child);
     }
   }
 }

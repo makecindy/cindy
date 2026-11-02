@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn(async () => 'fixture') },
   link: { status: 'offline', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(),
@@ -10,12 +10,13 @@ const h = vi.hoisted(() => ({
   targets: [] as { deviceId: string; deviceName: string }[],
   disk: new Map<string, string>(),
   history: new Map<string, string>(),
+  historyWriteFails: false,
   foreground: new Set<(state: string) => void>(),
   put: vi.fn(async (..._args: unknown[]) => {}),
 }));
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
   read: async (key: string) => h.history.get(key) ?? null,
-  write: async (key: string, value: string) => { h.history.set(key, value); },
+  write: async (key: string, value: string) => { if (h.historyWriteFails) throw new Error('disk full'); h.history.set(key, value); },
   remove: async (key: string) => { h.history.delete(key); },
   files: async () => [...h.history.keys()],
 }) }));
@@ -28,7 +29,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
 vi.mock('@/session/mobileAttachmentUpload', () => ({ putMobileAttachmentUploadFromFile: (...args: unknown[]) => h.put(...args) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => true, useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
@@ -48,7 +49,7 @@ import { createChatServerClient } from '@/chat/chatServerClient';
 import { forgetChatMessages } from '@/chat/chatMessageCache';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
-import { peekChatMessages } from '@/chat/chatMessageCache';
+import { peekChatMessages, readChatMessages } from '@/chat/chatMessageCache';
 import { isRemoteResourceUnread, clearRemoteResourceCache, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
@@ -59,7 +60,8 @@ let root: Root | undefined;
 let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : ''); return null; }
+let threadRootId: string | undefined;
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
@@ -70,11 +72,12 @@ async function send(input: Record<string, unknown>) {
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
+  h.historyWriteFails = false;
   setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
-  vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
+  vi.clearAllMocks(); h.foreground.clear(); showChat = false; threadRootId = undefined; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
   h.put.mockImplementation(async () => {});
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
@@ -124,6 +127,89 @@ it('does not show one account\'s saved group to another account', async () => {
   expect(chat.state.kind).toBe('loading');
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// #7847 review: real hook/client pagination must survive a concurrent summary read.
+// Existing root-loss tests never completed hydration between starting and finishing an older page (unit).
+it('keeps an older page when thread summary hydration finishes while it is loading', async () => {
+  const initial = Array.from({ length: 100 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(300 - index).padStart(12, '0')}`, seq: String(300 - index),
+    authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: `Message ${index}` }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: null, ...(index === 0 ? { replyCount: 2 } : {}),
+  }));
+  const older = { ...initial[0], id: '00000000-0000-4000-8000-000000000200', seq: '200', content: [{ type: 'text', text: 'Older page arrived' }] };
+  let finishPreview!: (rows: unknown[]) => void;
+  let finishOlder!: (rows: unknown[]) => void;
+  const preview = new Promise<unknown[]>(resolve => { finishPreview = resolve; });
+  const previousPage = new Promise<unknown[]>(resolve => { finishOlder = resolve; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation((path, options) => {
+    if (path.endsWith('/snapshot')) return Promise.resolve({ room, members: [], messages: initial, cursor: '300' });
+    if (path.startsWith('/v1/changes?')) return Promise.resolve({ head: '300', cursor: '300', changes: [], hasMore: false });
+    if (path.includes('/messages?') && path.includes('threadRootId=')) return preview;
+    if (path.includes('/messages?') && path.includes('before=')) return previousPage;
+    if (path.includes('/messages?')) return Promise.resolve(initial);
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  let loading!: Promise<void>;
+  await act(async () => { loading = chat.loadOlder!(); });
+  expect(chat.loadingOlder).toBe(true);
+  await act(async () => { finishPreview([{ ...initial[0], id: '00000000-0000-4000-8000-000000000301', seq: '301', threadRootId: initial[0].id }]); });
+  await act(async () => { finishOlder([older]); await loading; });
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { hasMoreBefore: false } });
+  if (chat.state.kind !== 'ready') throw new Error('Expected paged group');
+  expect(chat.state.group.messages.some(message => message.content === 'Older page arrived')).toBe(true);
+  expect(chat.state.group.messages.find(message => message.id === initial[0].id)?.threadPreview?.replies)
+    .toEqual(expect.arrayContaining([expect.objectContaining({ id: '00000000-0000-4000-8000-000000000301' })]));
+  expect(chat.loadingOlder).toBe(false);
+});
+
+// #7847: the real hook must retain an older thread page when following changes during the request.
+// Unit: the hydration regression above does not exercise the follow acknowledgement and reload.
+it.each([false, true])('settles following without losing a concurrent older page (pagination fails=%s)', async paginationFails => {
+  const initial = Array.from({ length: 100 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(300 - index).padStart(12, '0')}`, seq: String(300 - index),
+    authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: `Reply ${index}` }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: id,
+  }));
+  const older = { ...initial[0], id: '00000000-0000-4000-8000-000000000200', seq: '200', content: [{ type: 'text', text: 'Older reply arrived' }] };
+  const threadRoot = { ...initial[0], id, seq: '1', threadRootId: null };
+  let finishOlder!: (rows: unknown[]) => void;
+  let failOlder!: (error: Error) => void;
+  const previousPage = new Promise<unknown[]>((resolve, reject) => { finishOlder = resolve; failOlder = reject; });
+  let following = true;
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation((path, options) => {
+    if (path.endsWith('/snapshot')) return Promise.resolve({ room, members: [], messages: [], cursor: '300',
+      reads: [{ thread_key: id, read_seq: '0', following }] });
+    if (path.endsWith('/read')) { following = options.body.following; return Promise.resolve({ following }); }
+    if (path.startsWith('/v1/changes?')) return Promise.resolve({ head: '300', cursor: '300', changes: [], hasMore: false });
+    if (path.endsWith(`/messages/${id}`)) return Promise.resolve(threadRoot);
+    if (path.includes('/messages?') && path.includes('before=')) return previousPage;
+    if (path.includes('/messages?')) return Promise.resolve(initial);
+    return original(path, options);
+  });
+  showChat = true; threadRootId = id; await render();
+  let loading!: Promise<void>;
+  let unfollowing!: Promise<boolean>;
+  let loadResult!: Promise<unknown>;
+  await act(async () => { loading = chat.loadOlder!(); loadResult = loading.catch(error => error); });
+  await act(async () => { unfollowing = chat.followThread!(false); });
+  expect(following).toBe(false);
+  await act(async () => {
+    if (paginationFails) failOlder(new Error('network unavailable'));
+    else finishOlder([older]);
+    await loadResult; await unfollowing;
+  });
+  expect(await loadResult).toEqual(paginationFails ? new Error('network unavailable') : undefined);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { hasMoreBefore: paginationFails } });
+  if (chat.state.kind !== 'ready') throw new Error('Expected paged thread');
+  expect(chat.state.group.messages.some(message => message.content === 'Older reply arrived')).toBe(!paginationFails);
+  expect(chat.threadMeta?.following).toBe(false);
+  expect(chat.loadingOlder).toBe(false);
+});
+
 it('shows safe execution failures through the direct phone entry and removes them after retry', async () => {
   const original = h.auth.apiFetch.getMockImplementation()!;
   let status = 'failed';
@@ -311,7 +397,7 @@ it('resolves everyone using authorized members at send time instead of the displ
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/members')) {
       const [member] = await original(path, options);
-      return [member, { ...member, id: joined, kind: 'bot', name: 'New teammate' },
+      return [member, { ...member, id: joined, kind: 'human', name: 'New person' },
         { ...member, id: invited, state: 'invited' }, { ...member, id: left, state: 'left' }];
     }
     return original(path, options);
@@ -741,7 +827,7 @@ it.each([false, true])('persists the exact uncertain send across restart and nev
   let memberReads = 0;
   const client = createChatServerClient(async <T,>(path: string, method?: string, body?: unknown): Promise<T> => {
     if (path === '/me') return { actor: { id: self, kind: 'human' } } as T;
-    if (path.endsWith('/members')) { memberReads++; return [{ id: self, state: 'joined' }, { id, state: 'joined' }] as T; }
+    if (path.endsWith('/members')) { memberReads++; return [{ id: self, kind: 'human', state: 'joined' }, { id, kind: 'human', state: 'joined' }] as T; }
     if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
     throw new Error('Unexpected request');
   });
@@ -804,4 +890,256 @@ it('keeps an uncertain send frozen and uncancellable when a later attempt is rej
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
   expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
   await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
+});
+
+
+// D2 root-404 regression: real mobile entry -> HTTP client -> memory/disk cache.
+// Existing membership tests only reject the whole room, not an authorized reply
+// page followed by a missing root. This integration-tier fixture distinguishes
+// the exact thread lookup exception from room-wide access loss.
+it('keeps main history in memory and on disk when only the thread root is missing', async () => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const replyId = '00000000-0000-4000-8000-000000000003';
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith(`/messages/${self}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [{
+      id: replyId, seq: '9007199254740994', authorId: self, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'Still authorized reply' }], createdAt: '2026-10-09', deleted: false, threadRootId: self,
+    }];
+    return original(path, options);
+  });
+  threadRootId = self; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ id: replyId, content: 'Still authorized reply' }] } });
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  expect(peekChatMessages(id, self)?.page.messages.map(message => message.id)).toEqual([replyId]);
+  await act(async () => { root!.unmount(); root = undefined; });
+  // Discard JS memory without deleting this account's persisted conversations.
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect((await readChatMessages(id))?.page.messages[0]?.id).toBe(self);
+});
+
+it.each([
+  { thread: true, status: 403, code: 'MESSAGE_NOT_FOUND' },
+  { thread: true, status: 404, code: 'CONVERSATION_NOT_FOUND' },
+  { thread: true, status: 404, code: 'OTHER_NOT_FOUND' },
+  { thread: false, status: 404, code: 'MESSAGE_NOT_FOUND' },
+])('still clears room history for $status/$code outside an exact missing thread root (thread=$thread)', async ({ thread, status, code }) => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)).not.toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (thread ? path.endsWith(`/messages/${self}`) : path.startsWith('/v1/changes?')) throw { status, code };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [];
+    return original(path, options);
+  });
+  threadRootId = thread ? self : undefined; await render();
+  expect(chat.state.kind).toBe('missing');
+  expect(peekChatMessages(id)).toBeNull();
+  expect(peekChatMessages(id, self)).toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect(await readChatMessages(id)).toBeNull();
+});
+
+// PC parity delivery, integration: the real durable ledger and account runner.
+// A confirmed reply plus a failed second POST must survive page settlement and
+// restart without ever re-sending the reply; prior media tests lack this second stage.
+it('restores a failed share after restart, keeps its body, and does not block later replies', async () => {
+  const { settleChatOutbox } = await import('@/chat/chatOutbox');
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  const replyId = '00000000-0000-4000-8000-000000000020';
+  const shareId = '00000000-0000-4000-8000-000000000021';
+  const bodies: unknown[] = [];
+  let fail = true;
+  const client = { personalList: { hidden: () => false }, syncListState: async () => {},
+    members: async () => [], me: async () => self, actors: async () => [],
+    send: vi.fn(async (_room, input, durable) => { await durable.save({ operationId: input.clientId, content: [], mentions: [] }); return { id: replyId }; }),
+    shareToMain: vi.fn(async (_room, source, root, durable) => {
+      expect(source).toBe(replyId); expect(root).toBe(self);
+      const body = durable.body ?? { operationId: `thread-share:${source}`, content: [], mentions: [self] };
+      if (!durable.body) await durable.save(body);
+      bodies.push(body); if (fail) throw new Error('offline'); return { messageId: shareId, alreadyShared: false };
+    }),
+    load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+  } as any;
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  await enqueueChatMessage(store, account, id, { clientId: 'topic-and-main', text: 'reply', threadRootId: self,
+    mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+  await runner().run();
+  expect(client.shareToMain).not.toHaveBeenCalled();
+  await runner().run();
+  await settleChatOutbox(store, id, new Set([replyId]));
+  expect(store.getSnapshot()[0].chat).toMatchObject({ messageId: replyId, shareToMain: { state: 'failed' } });
+  await enqueueChatMessage(store, account, id, { clientId: 'later-reply', text: 'later', threadRootId: self, mentions: { all: false, botIds: [] } }, 1);
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  store = createDurableOutbox(storage); await store.activate(account);
+  const row = store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')!;
+  await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!, state: 'pending' } } });
+  fail = false;
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')?.chat?.shareToMain)
+    .toMatchObject({ state: 'sent', messageId: shareId });
+});
+
+// #7847 review, integration: a saved share receipt survives restart beyond the
+// snapshot window. Retire it only after its canonical message reaches disk.
+// r4420823552: unlike the known-ID case, a cross-device duplicate acknowledges the
+// share with no ID. Keep its posted marker without repeatedly polling or sending.
+it.each([false, true])('recovers an off-window share after restart without resending (already shared=%s)', async alreadyShared => {
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  const replyId = '00000000-0000-4000-8000-000000000041', shareId = '00000000-0000-4000-8000-000000000042';
+  const reply = { id: replyId, seq: '41', authorId: self, author: { kind: 'human', name: 'Me' },
+    content: [{ type: 'text', text: alreadyShared ? 'Edited after desktop share' : 'Reply' }], createdAt: '2026-10-29', deleted: false, threadRootId: self };
+  const shared = { ...reply, id: shareId, seq: '42', threadRootId: null, content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: replyId, threadRootId: self }, fallback: '' }] };
+  await enqueueChatMessage(store, account, id, { clientId: 'confirmed-share', text: 'Reply', threadRootId: self,
+    mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+  const row = store.getSnapshot()[0];
+  await store.update(row, { state: 'confirming', enqueueStarted: true,
+    chat: { ...row.chat!, messageId: replyId, shareToMain: alreadyShared ? { state: 'pending' } : { state: 'sent', messageId: shareId } } });
+  store = createDurableOutbox(storage); await store.activate(account);
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') {
+      if (alreadyShared) throw Object.assign(new Error('OPERATION_CONFLICT'), { code: 'OPERATION_CONFLICT', status: 409 });
+      throw new Error('Must not resend');
+    }
+    if (path === '/me') return { actor: { id: self, kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '200' };
+    if (path.includes('/messages?')) return [reply];
+    if (path.endsWith(`/messages/${self}`)) return { ...reply, id: self, seq: '1', threadRootId: null };
+    if (path.endsWith(`/messages/${replyId}`)) return reply;
+    if (path.endsWith(`/messages/${shareId}`)) return shared;
+    return [];
+  });
+  const client = createChatServerClient(request as any);
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  h.historyWriteFails = !alreadyShared;
+  await runner().run();
+  expect(store.getSnapshot()).toHaveLength(1);
+  expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'sent', messageId: alreadyShared ? null : shareId });
+  const acknowledgedRequests = request.mock.calls.length;
+  store = createDurableOutbox(storage); await store.activate(account);
+  h.historyWriteFails = false;
+  await runner().run();
+  if (alreadyShared) {
+    expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'sent', messageId: null });
+    expect(request).toHaveBeenCalledTimes(acknowledgedRequests);
+  } else expect(store.getSnapshot()).toEqual([]);
+  const requests = request.mock.calls.length;
+  await runner().run(); expect(request).toHaveBeenCalledTimes(requests);
+  expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(alreadyShared ? 1 : 0);
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  const saved = (await readChatMessages(id, self))!.page;
+  expect(alreadyShared ? saved.messages : saved.snapshot.messages).toContainEqual(alreadyShared ? reply : shared);
+});
+
+// The existing runner is the authority across account switches and crash windows.
+// These are ordering/persistence regressions, not a parallel UI failure queue.
+describe('two-stage topic delivery boundaries', () => {
+  const reply = '00000000-0000-4000-8000-000000000031';
+  const shared = '00000000-0000-4000-8000-000000000032';
+  async function setup() {
+    const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+      setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+    const account = getMobileAuthOwner().accountKey;
+    const store = createDurableOutbox(storage); await store.activate(account);
+    const client = { personalList: { hidden: () => false }, syncListState: async () => {}, members: async () => [], me: async () => self, actors: async () => [],
+      send: vi.fn(async (_room, input, durable) => { await durable.save(durable.body ?? { operationId: input.clientId, content: [], mentions: [] }); return { id: reply }; }),
+      shareToMain: vi.fn(async (_room, _reply, _root, durable) => {
+        await durable.save(durable.body ?? { operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+        return { messageId: shared, alreadyShared: false };
+      }), load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+    } as any;
+    const accessLost = vi.fn(async () => {});
+    const runner = createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost });
+    await enqueueChatMessage(store, account, id, { clientId: 'both', text: 'reply', threadRootId: self,
+      mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+    return { storage, account, store, client, runner, accessLost };
+  }
+  it('never starts the share from an unknown reply outcome and coalesces duplicate wakeups', async () => {
+    const { store, client, runner } = await setup();
+    const send = client.send.getMockImplementation();
+    client.send.mockImplementationOnce(async (...args: unknown[]) => { await send(...args); throw new Error('lost response'); });
+    await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain).not.toHaveBeenCalled();
+    expect(store.getSnapshot()[0].chat?.messageId).toBeUndefined();
+    await runner.run(); await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    expect(client.send.mock.calls[1][2].body).toEqual(client.send.mock.calls[0][2].body ?? { operationId: 'both', content: [], mentions: [] });
+  });
+  it('recovers the persisted post body after a process stops before its receipt, and settles only once represented', async () => {
+    const { storage, account, store, client, runner } = await setup();
+    await runner.run();
+    const row = store.getSnapshot()[0];
+    const body = { operationId: `thread-share:${reply}`, content: [], mentions: [self] };
+    await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } });
+    const restored = createDurableOutbox(storage); await restored.activate(account);
+    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+    await resumed.run();
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain.mock.calls[0][3].body).toEqual(body);
+    const { settleChatOutbox } = await import('@/chat/chatOutbox');
+    await settleChatOutbox(restored, id, new Set([reply])); expect(restored.getSnapshot()).toHaveLength(1);
+    await settleChatOutbox(restored, id, new Set([reply]), new Set([reply])); expect(restored.getSnapshot()).toHaveLength(0);
+  });
+  it('does not adopt a late share receipt into another account', async () => {
+    const { store, client, runner } = await setup(); await runner.run();
+    client.shareToMain.mockImplementationOnce(async (_room: string, _reply: string, _root: string, durable: any) => {
+      await durable.save({ operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+      await store.activate('global:other'); return { messageId: shared, alreadyShared: false };
+    });
+    await runner.run(); expect(store.getSnapshot()).toEqual([]);
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+  });
+  // #7847 review, integration: a deleted off-window share must not revoke the room
+  // or stop the next draft; an actual room rejection must still suspend both.
+  it.each(['MESSAGE_NOT_FOUND', 'CONVERSATION_NOT_FOUND'])('scopes a share receipt lookup rejection: %s', async code => {
+    const { store, client, runner, accessLost } = await setup();
+    await runner.run();
+    const row = store.getSnapshot()[0];
+    await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'sent', messageId: shared } } });
+    client.message = vi.fn(async () => { throw Object.assign(new Error(code), { status: 404, code }); });
+    await enqueueChatMessage(store, store.getAccountId(), id, { clientId: 'next-draft', text: 'Next',
+      mentions: { all: false, botIds: [] } }, 0);
+    await runner.run();
+    if (code === 'MESSAGE_NOT_FOUND') {
+      expect(accessLost).not.toHaveBeenCalled();
+      expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'unavailable', messageId: shared });
+      expect(store.getSnapshot().some(record => record.suspended)).toBe(false);
+      expect(client.send).toHaveBeenCalledTimes(2);
+      expect(peekChatMessages(id)).not.toBeNull();
+      await runner.run();
+      expect(client.message).toHaveBeenCalledTimes(1);
+      expect(client.shareToMain).not.toHaveBeenCalled();
+    } else {
+      expect(accessLost).toHaveBeenCalledWith(id);
+      expect(store.getSnapshot().every(record => record.suspended)).toBe(true);
+      expect(client.send).toHaveBeenCalledTimes(1);
+    }
+  });
+  it.each([false, true])('keeps source unavailability local but permanently stops room revocation (room=%s)', async roomLost => {
+    const { store, client, runner, accessLost } = await setup(); await runner.run();
+    client.shareToMain.mockRejectedValue(roomLost ? Object.assign(new Error('CONVERSATION_NOT_FOUND'), { status: 403 }) : new Error('SHARE_UNAVAILABLE'));
+    await runner.run(); const row = store.getSnapshot()[0];
+    if (roomLost) { expect(row.suspended).toBe(true); expect(accessLost).toHaveBeenCalledWith(id); }
+    else { expect(row.chat?.shareToMain?.state).toBe('unavailable'); expect(accessLost).not.toHaveBeenCalled(); }
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    if (roomLost) {
+      await enqueueChatMessage(store, store.getAccountId(), id, { clientId: 'after-rejoin', text: 'Explicit new reply', threadRootId: self,
+        mentions: { all: false, botIds: [] } }, 0);
+      await runner.run(); expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    }
+  });
 });

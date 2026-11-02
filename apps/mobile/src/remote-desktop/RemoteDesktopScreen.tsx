@@ -578,7 +578,7 @@ export function RemoteDesktopSession({
     keyboard,
   );
   const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
-  const foldSkinAvailable = Platform.OS === "ios" && Boolean(foldLayout);
+  const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
     foldSkin !== "modern" &&
@@ -3545,7 +3545,9 @@ export function RemoteDesktopSession({
                   t(
                     error === "connectionBusy" && caps?.connectionTakeover
                       ? "remoteDesktop.takeoverConnection"
-                      : "remoteDesktop.connect",
+                      : error === "disabled"
+                        ? "remoteDesktop.reconnectAfterPermissions"
+                        : "remoteDesktop.connect",
                   ),
                   retry,
                 )}
@@ -4271,8 +4273,8 @@ const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.surface },
     caption: {
-      color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,

@@ -26,7 +26,15 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import { readStoredLocale, writeStoredLocale, effectiveOf, getEffectiveLocale } from '@/lib/localePreference';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  readStoredClassicalStyle,
+  readStoredLocale,
+  writeStoredClassicalStyle,
+  writeStoredLocale,
+  effectiveOf,
+  getEffectiveLocale,
+} from '@/lib/localePreference';
 
 interface LocaleContextValue {
   /** 用户的偏好选择 (含 'system')。 */
@@ -35,6 +43,9 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
   setLocale: (next: LocalePreference) => void;
+  /** 古典界面（文言）下 AI 作答的输出风格。 */
+  classicalStyle: ClassicalReplyStyleId;
+  setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
@@ -43,6 +54,13 @@ function syncApplicationMenuLocale(loc: SupportedLocale): void {
   if (typeof window === 'undefined') return;
   void window.electronAPI?.setApplicationMenuLocale?.(loc).catch(() => {
     /* Native app menu is macOS-only; renderer locale still updates normally. */
+  });
+}
+
+function syncClassicalStyle(style: ClassicalReplyStyleId): void {
+  if (typeof window === 'undefined') return;
+  void window.electronAPI?.setClassicalReplyStyle?.(style).catch(() => {
+    /* Older hosts ignore it; replies then keep the default classical style. */
   });
 }
 
@@ -71,6 +89,17 @@ export function bootstrapInitialLocale(): SupportedLocale {
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
+  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(readStoredClassicalStyle);
+
+  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
+    setClassicalStyleState(next);
+    writeStoredClassicalStyle(next);
+  }, []);
+
+  // Main builds each turn's reply note, so it keeps the current style too.
+  useEffect(() => {
+    syncClassicalStyle(classicalStyle);
+  }, [classicalStyle]);
 
   const setLocale = useCallback((next: LocalePreference) => {
     setLocaleState(next);
@@ -88,8 +117,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, [effectiveLocale]);
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale }),
-    [locale, effectiveLocale, setLocale],
+    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 
   return createElement(LocaleContext.Provider, { value }, children);

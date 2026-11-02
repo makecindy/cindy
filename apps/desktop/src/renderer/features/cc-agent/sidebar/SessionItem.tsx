@@ -839,7 +839,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const moveToProjectSubmenu = canMoveToProject ? (
     <SessionProjectMoveSubmenu
       projectOptions={projectOptions}
-      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+      currentSession={session}
       isDialogue={session.workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}

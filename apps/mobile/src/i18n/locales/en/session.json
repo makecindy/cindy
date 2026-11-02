@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "Manage PR Links",
+    "hint": "Up to 3 in the header; pinned PRs appear first",
+    "empty": "Paste a GitHub PR link to add it",
+    "removed": "Removed: {{count}}",
+    "legacy": "Unconfirmed references: {{count}}",
+    "addLabel": "Add PR Link",
+    "add": "Add PR",
+    "loading": "Loading…",
+    "restore": "Restore PR",
+    "pin": "Pin to Header",
+    "unpin": "Unpin PR",
+    "pinLimit": "Pin up to 3 PRs",
+    "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
+    "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+    "remove": "Remove PR",
+    "errors": {
+      "duplicate": "This PR is already linked; restore removed links from the list",
+      "notFound": "PR not found or access denied",
+      "invalidUrl": "Enter a valid GitHub PR link",
+      "reorderFailed": "The order was not saved. Please try again.",
+      "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+      "unsupported": "This computer’s version does not support managing PR links",
+      "failed": "Could not update PR links"
+    },
+    "moveUp": "Move up"
+  },
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"
@@ -185,7 +212,7 @@
       },
       "actionCopy": {
         "pending": "Handle the pending request first; the input area will be restored afterward.",
-        "archived": "This session is archived. Restore it before sending more messages.",
+        "archived": "This session is archived. Sending a message unarchives it.",
         "deleted": "This session is deleted and can't be changed.",
         "queuePaused": "The queue is paused. Resume it from the queue panel."
       }
@@ -428,7 +455,7 @@
     "copyLinkAction": "Copy Session Link",
     "unpin": "Unpin",
     "pin": "Pin",
-    "restore": "Restore",
+    "restore": "Unarchive",
     "archive": "Archive",
     "deleteAction": "Delete Session",
     "deleteConversation": "Delete Session",
@@ -566,6 +593,7 @@
     "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
+    "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
     "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
   },
   "row": {
@@ -762,5 +790,17 @@
     "confirm": "Switch",
     "remember": "Switch, and do it automatically from now on (this task only)",
     "cancel": "Cancel"
+  },
+  "messageEdit": {
+    "editing": "Editing message",
+    "discard": "Discard message edit",
+    "stopTimeout": "Timed out waiting for the task to stop — please try again",
+    "queueNotEmpty": "This session has queued messages — send or remove them before editing",
+    "notLast": "A newer message exists in this session — this one is no longer the latest and cannot be edited",
+    "failed": "Failed to edit and resend, please try again",
+    "noPriorAssistant": "There is no AI reply before this message, and the Cindy version on the computer can't edit it yet. Update Cindy on the computer and try again.",
+    "uploadsPending": "Attachments are still uploading. Wait for them to finish before editing the message.",
+    "rollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",
+    "conversationOnlyHint": "Sending will not restore project files; previous file changes will remain"
   }
 }

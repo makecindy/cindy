@@ -531,6 +531,29 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  // Unit regression: the reported disabled-host UX had only a generic Connect
+  // action. Exercise the real screen with enabled=false, then enable the host
+  // and use the explicit check action; existing cases did not cover this path.
+  it("guides a disabled host and checks again before connecting", async () => {
+    let enabled = false;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities" ? { ...result, enabled } : result;
+    });
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    expect(host.textContent).toContain("remoteDesktop.disabled");
+    expect(button("connect")).toBeNull();
+    expect(button("reconnectAfterPermissions")).not.toBeNull();
+    expect(requests().some((request) => request.op === "start")).toBe(false);
+    enabled = true;
+    await act(async () => button("reconnectAfterPermissions").click());
+    expect(host.textContent).not.toContain("remoteDesktop.disabled");
+    expect(requests().some((request) => request.op === "start")).toBe(true);
+  });
+
   it.each([false, true])(
     "allows the Wayland consent window while keeping the overall wait bounded (native=%s)",
     async (native) => {
@@ -3411,17 +3434,19 @@ describe("remote desktop controls", () => {
       });
     },
   );
-  it.each([false, true])(
-    "waits for the saved lock policy before starting, enabled=%s",
-    async (enabled) => {
+  it.each([null, "false", "true", "unreadable"])(
+    "waits for the saved lock policy before starting, stored=%s",
+    async (stored) => {
       act(() => root.unmount());
       fixture.lockPreferenceFromStorage = true;
       let finish!: (value: string | null) => void;
+      let fail!: (error: Error) => void;
       const original = storage.getItem;
       const read = vi.spyOn(storage, "getItem").mockImplementation((key) =>
         key.includes(".lock-on-exit.")
-          ? new Promise<string | null>((resolve) => {
+          ? new Promise<string | null>((resolve, reject) => {
               finish = resolve;
+              fail = reject;
             })
           : original(key),
       );
@@ -3433,9 +3458,14 @@ describe("remote desktop controls", () => {
         );
         expect(finish).toBeTypeOf("function");
         expect(requests().filter((r) => r.op === "start")).toHaveLength(0);
-        await act(async () => finish(String(enabled)));
+        await act(async () =>
+          stored === "unreadable"
+            ? fail(new Error("STORAGE_UNAVAILABLE"))
+            : finish(stored),
+        );
+        // A failed read is not an opt-out, so it follows the default (on).
         expect(requests().filter((r) => r.op === "start")).toEqual([
-          { op: "start", displayId: "display", lockOnExit: enabled },
+          { op: "start", displayId: "display", lockOnExit: stored !== "false" },
         ]);
       } finally {
         read.mockRestore();
@@ -5566,6 +5596,45 @@ describe("remote desktop controls", () => {
       }).top,
     ).toBeGreaterThanOrEqual(82);
     expect(render(geometry)).toMatchObject({ top: 26, left: 16 });
+  });
+  // Android fold support: exercise the real screen (not a layout copy). Previous
+  // coverage used iOS only and missed its platform-gated skin selector. Folding,
+  // keyboard resize and unfolding must not replace the viewer/control lease.
+  it("offers the same tabletop keyboard on Android and retains the viewer across posture changes", async () => {
+    fixture.platform = "android";
+    fixture.size = { width: 700, height: 900 };
+    fixture.safe = { top: 24, bottom: 24, left: 0, right: 0 };
+    const geometry: WindowGeometry = {
+      ...fixture.size, insets: fixture.safe, regularWidth: true, regularHeight: true,
+      barEdge: "none", reservedRegionsSupported: true,
+      regions: [{ kind: "division", x: 0, y: 450, width: 700, height: 0 }],
+    };
+    const render = (g: WindowGeometry) => act(() => root.render(
+      <GeometryContext.Provider value={g}><RemoteDesktopScreen /></GeometryContext.Provider>,
+    ));
+    render(geometry);
+    await connect();
+    const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
+    const starts = requests().filter((r) => r.op === "start").length;
+    const stops = requests().filter((r) => r.op === "stop").length;
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
+    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
+    act(() => letter.onPressIn());
+    act(() => letter.onPressOut());
+    expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
+    // Android IME resizes the window instead of adding an iOS keyboard inset.
+    fixture.size = { width: 700, height: 550 };
+    render({ ...geometry, ...fixture.size });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    fixture.size = { width: 700, height: 900 };
+    render(geometry);
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    render({ ...geometry, regions: [] });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
   });
   it("folding and unfolding preserve the viewer and control lease", async () => {
     const geometry: WindowGeometry = {

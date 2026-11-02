@@ -1,3 +1,6 @@
+import { usePreviewFocusReturn } from './PreviewChrome';
+import { PreviewHeader } from './PreviewChrome';
+import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * ModelLightbox
@@ -18,9 +21,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *     which is how the SDK picks the loader.
  *
  * Failure semantics:
- *   - Read / parse failure → toast, lightbox stays open (poster/backdrop still
- *     visible, right-click menu still works). Without that a failure looks like a
- *     frozen 2D image.
+ *   - Read / parse failure → inline error with retry; the lightbox stays open.
  *   - The SDK is dynamically imported (≈600KB), so the first open shows a spinner.
  *
  * Interaction parity with VideoLightbox:
@@ -39,12 +40,9 @@ import { useTranslation } from 'react-i18next';
 import type { ModelViewerInstance } from 'mivo-model-viewer';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { loadModelViewerSdk } from '@/lib/model3d/modelViewerSdk';
-import {
-  Model3DTooLargeError,
-  readModel3DBlob,
-  type ModelBlob,
-} from '@/lib/model3d/readModel3DBlob';
+import { Model3DTooLargeError, readModel3DBlob, type ModelBlob } from '@/lib/model3d/readModel3DBlob';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -72,11 +70,14 @@ export type ModelLightboxSource =
 interface ModelLightboxProps {
   source: ModelLightboxSource;
   onClose: () => void;
+  filename?: string;
 }
 
-export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
+export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps) {
+  const restorePreviewFocus = usePreviewFocusReturn();
   const { t, i18n } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
+  const [retry, setRetry] = useState(0);
   const isClosingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -84,6 +85,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   // SDK 容器:viewer 在首次渲染后异步创建,挂在这个 div 里。
   const viewerHostRef = useRef<HTMLDivElement | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadError, setLoadError] = useState<unknown>(null);
   // 只用首次传入的 source 加载;弹窗生命周期内 source 不会变。
   const sourceRef = useRef(source);
   // FocusScope 挂载焦点的落点:overlay 根(tabIndex=-1 由 FocusScope 合入)。
@@ -117,7 +119,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   // recently-closed context menu doesn't also dismiss the lightbox.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented || e.key !== 'Escape' || document.fullscreenElement) return;
       if (performance.now() - lastMenuCloseAt.current < 150) return;
       handleClose();
     };
@@ -136,11 +138,10 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     };
   }, []);
 
-  // 加载:SDK(动态 import)与模型字节并行取,取到后创建 viewer 并 load。
-  // 失败只 toast,不关闭弹窗——poster 仍可看、右键"打开模型"仍可用;否则失败会
-  // 表现成"一张拖不动的静态图"的静默失败。卸载时取消在途读取并 dispose viewer。
-  const locale = i18n.language?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US';
+  // Retry starts a fresh SDK viewer and rereads the model bytes.
   useEffect(() => {
+    setLoadState('loading');
+    setLoadError(null);
     const host = viewerHostRef.current;
     if (!host) return;
     let cancelled = false;
@@ -155,11 +156,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     const fail = (error: unknown) => {
       if (cancelled) return;
       setLoadState('error');
-      toast.error(
-        error instanceof Model3DTooLargeError
-          ? t('chat.media.modelTooLarge', 'This 3D model is too large to preview')
-          : t('chat.media.modelLoadFailed', 'Failed to load 3D model'),
-      );
+      setLoadError(error);
     };
     void (async () => {
       const modelPromise = readModel3DBlob(sourceRef.current, { signal: controller.signal }).then(
@@ -178,7 +175,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
         const [sdk, loadedModel] = await Promise.all([loadModelViewerSdk(), modelPromise]);
         if (cancelled || controller.signal.aborted) return;
         viewer = sdk.createModelViewer(host, {
-          locale,
+          locale: i18n.language?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
           // 颜色全部取 lightbox 工具栏那一族 token(图片预览浮在遮罩上的控件用的同一套,
           // 明暗两种模式取值相同:面板与控件用白 10% 的浅底,叠在黑色遮罩上比纯黑底更通透,
           // 面板上的控件再叠一层形成层次;白 20% 描边、白色前景),不在这里写字面量。
@@ -225,8 +222,8 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
       viewer?.dispose();
       viewer = null;
     };
-    // 弹窗内 source / locale 不变;locale 变化不值得重建 viewer。
-  }, []);
+    // Source is fixed for this lightbox. Locale changes do not rebuild the viewer.
+  }, [retry]);
 
   async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
     if (modelPending) return;
@@ -280,6 +277,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
     // 里既有的 blur 仍保留——点进模型后 SDK 内部控件的焦点框要在淡出前先灭掉。
     <FocusScope
+      onUnmountAutoFocus={restorePreviewFocus}
       asChild
       trapped
       loop
@@ -290,11 +288,12 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     >
     <div
       ref={overlayRef}
+      data-lightbox-layer
       style={{
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
+        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -305,8 +304,9 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     >
       <button
         type="button"
-        aria-label={t('chat.lightbox.close')}
-        style={{
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{
           position: 'absolute',
           inset: 0,
           border: 0,
@@ -319,19 +319,56 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           handleClose();
         }}
       />
-      {/* The viewer takes a fixed viewport-relative box so it has a stable canvas
-          size to render into. The SDK mounts its own canvas + panels into the
-          host div; the poster (chat thumbnail) shows behind it until the first
-          model is ready. */}
+        <PreviewHeader
+          name={
+            filename ??
+            previewSourceName(
+              source.kind === 'local' ? source.absPath : source.url,
+              t('chat.media.modelPreviewAlt'),
+            )
+          }
+          onClose={handleClose}
+          onSave={() => {
+            void window.electronAPI
+              .saveMediaAs({
+                url: source.kind === 'local' ? toLocalFileUrl(source.absPath) : source.url,
+              })
+              .catch(() => toast.error(t('chat.media.saveFailed')));
+          }}
+          onMenuClose={() => {
+            lastMenuCloseAt.current = performance.now();
+          }}
+          menu={
+            <>
+              <DropdownMenuItem
+                disabled={modelPending !== null}
+                onClick={() => void handleModelAction('open')}
+              >
+                <Box className="mr-2 h-4 w-4" />
+                {t('chat.media.openModel')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={modelPending !== null}
+                onClick={() => void handleModelAction('reveal')}
+              >
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('chat.media.revealModel')}
+              </DropdownMenuItem>
+            </>
+          }
+        />
+        {/* Keep the SDK viewport below the fixed preview header. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click opens a pointer context menu for the model canvas. */}
       <div
         style={{
-          // 查看器的侧栏按容器高度自适应(库的紧凑档位),这里只需给足空间、保留点击
-          // 遮罩关闭的边缘。
           width: 'min(94vw, 1280px)',
-          height: 'min(92vh, 860px)',
+          height: 'min(calc(92vh - 128px), 860px)',
+          minHeight: 240,
+          marginTop: 64,
+          marginBottom: 64,
           position: 'relative',
           zIndex: 1,
+          background: 'var(--overlay-lightbox)',
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -371,6 +408,22 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           >
             <Spinner size={16} />
             <span>{t('chat.media.modelLoading', '正在加载 3D 模型…')}</span>
+          </div>
+        ) : null}
+        {loadState === 'error' ? (
+          <div role="alert" className="absolute inset-0 z-10 flex items-center justify-center">
+            <div className="flex max-w-[min(90%,32rem)] items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-sm text-[var(--text-primary)]">
+              <span>{loadError instanceof Model3DTooLargeError
+                ? t('chat.media.modelTooLarge', 'This 3D model is too large to preview')
+                : t('chat.media.modelLoadFailed', 'Failed to load 3D model')}</span>
+              <button
+                type="button"
+                className="shrink-0 underline underline-offset-2"
+                onClick={() => setRetry((value) => value + 1)}
+              >
+                {t('attachmentPreview.retry')}
+              </button>
+            </div>
           </div>
         ) : null}
       </div>

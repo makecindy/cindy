@@ -50,6 +50,8 @@ export async function startAskCardDictation(input: {
   onListening: () => void;
   onRunCreated?: (run: { stop: () => Promise<void>; cancel: () => Promise<void> }) => void;
   onError: (message: string) => void;
+  /** The voiceprint filter muted someone else's speech. */
+  onSpeakerFiltered?: () => void;
 }): Promise<{ stop: () => Promise<void>; cancel: () => Promise<void> }> {
   const requestedAt = Date.now();
   if (!isMobileRealtimeAudioAvailable()) {
@@ -90,7 +92,7 @@ export async function startAskCardDictation(input: {
     credential.settings?.language,
     CINDY_MANAGED_REFINER_PROVIDER,
   );
-  const audioGate = createMobileSpeakerGate().catch(() => undefined);
+  const audioGate = createMobileSpeakerGate(input.onSpeakerFiltered).catch(() => undefined);
   const initialDraft = input.getText();
   const session = createMobileVoiceControllerSession({
     credential,

@@ -26,7 +26,7 @@
  *   - 上下文窗口 / content 解析复用 mapper.ts 的 messageToCamel(走 drizzle 驼峰行)。
  */
 
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 
 import type {
   SearchChatHistoryArgs,
@@ -67,6 +67,10 @@ const VEC_OVERFETCH = 5;
 /** 融合候选池硬上限 —— offset 游标只在池内翻页; 超出则 poolCapped=true 提示用户缩范围。 */
 const FUSE_POOL_CAP = 100;
 const MAX_INTERNAL_POOL = 500;
+/** Keep the worst-case role-filter binding count below SQLite's legacy 999-variable limit. */
+const CONTEXT_BATCH_SIZE = 16;
+/** Tool pages apply their byte budget between small context materialization batches. */
+const BUDGET_CONTEXT_BATCH_SIZE = 8;
 
 interface ArmRow {
   messageId: string;
@@ -192,7 +196,11 @@ export async function searchChatHistoryHybrid(
   const pool = poolCapped ? fused.slice(0, fusePoolLimit) : fused;
   if (poolCapped) {
     log.info(
-      JSON.stringify({ event: 'chatHistorySearch.poolCapped', total: fused.length, cap: fusePoolLimit }),
+      JSON.stringify({
+        event: 'chatHistorySearch.poolCapped',
+        total: fused.length,
+        cap: fusePoolLimit,
+      }),
     );
   }
   const start = Math.max(0, Math.min(args.offset, pool.length));
@@ -207,40 +215,76 @@ export async function searchChatHistoryHybrid(
       ? await fetchAnchorContexts(pageEntries.map((entry) => entry.messageId))
       : null;
 
+  const pageAnchors = pageEntries.flatMap((entry, pageIndex) => {
+    const meta = metaById.get(entry.messageId);
+    return meta
+      ? [
+          {
+            pageIndex,
+            anchorId: entry.messageId,
+            sessionId: meta.sessionId,
+            createdAt: meta.createdAt,
+          },
+        ]
+      : [];
+  });
+  const batchedContexts =
+    args.contextRadius > 0 && !pageBudget
+      ? await fetchContextWindowsBatched(pageAnchors, args.roles, args.contextRadius)
+      : null;
+
   // 5) 按命中顺序组装上下文窗口
   const hits: SearchChatHistoryHit[] = [];
-  for (const [index, fe] of pageEntries.entries()) {
-    if (pageBudget?.full) { nextOffset = start + index; break; }
-    const meta = metaById.get(fe.messageId);
-    if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
-    const context =
-      anchorContexts?.get(fe.messageId) ??
-      (anchorContexts
-        ? []
-        : await fetchContextWindow(
-            fe.messageId,
-            meta.sessionId,
-            meta.createdAt,
-            args.roles,
-            args.contextRadius,
-          ));
-    const hit: SearchChatHistoryHit = {
-      messageId: fe.messageId,
-      sessionId: meta.sessionId,
-      role: meta.role,
-      createdAt: meta.createdAt,
-      snippet: meta.snippet,
-      score: fe.score,
-      ftsRank: fe.ftsRank,
-      vectorRank: fe.vectorRank,
-      vectorDistance: meta.distance,
-      context,
-    };
-    if (pageBudget && !pageBudget.tryAdd(hit)) {
-      nextOffset = start + index;
+  let pageIndex = 0;
+  let budgetBatchSize = 1;
+  pageLoop: while (pageIndex < pageEntries.length) {
+    if (pageBudget?.full) {
+      nextOffset = start + pageIndex;
       break;
     }
-    hits.push(hit);
+    const batchEnd = pageBudget
+      ? Math.min(pageEntries.length, pageIndex + budgetBatchSize)
+      : pageEntries.length;
+    const budgetContexts = pageBudget
+      ? await fetchContextWindowsBatched(
+          pageAnchors.filter(
+            (anchor) => anchor.pageIndex >= pageIndex && anchor.pageIndex < batchEnd,
+          ),
+          args.roles,
+          args.contextRadius,
+        )
+      : null;
+
+    for (; pageIndex < batchEnd; pageIndex += 1) {
+      if (pageBudget?.full) {
+        nextOffset = start + pageIndex;
+        break pageLoop;
+      }
+      const fe = pageEntries[pageIndex];
+      const meta = metaById.get(fe.messageId);
+      if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
+      const context =
+        anchorContexts?.get(fe.messageId) ??
+        (anchorContexts ? [] : ((budgetContexts ?? batchedContexts)?.get(pageIndex) ?? []));
+      const hit: SearchChatHistoryHit = {
+        messageId: fe.messageId,
+        sessionId: meta.sessionId,
+        role: meta.role,
+        createdAt: meta.createdAt,
+        snippet: meta.snippet,
+        score: fe.score,
+        ftsRank: fe.ftsRank,
+        vectorRank: fe.vectorRank,
+        vectorDistance: meta.distance,
+        context,
+      };
+      if (pageBudget && !pageBudget.tryAdd(hit)) {
+        nextOffset = start + pageIndex;
+        break pageLoop;
+      }
+      hits.push(hit);
+    }
+    budgetBatchSize = BUDGET_CONTEXT_BATCH_SIZE;
   }
 
   // 6) session 元数据(顶层 map, 避免逐条命中重复)
@@ -345,14 +389,15 @@ async function runVectorArm(
   // full vector table would expose hidden data through vector_used/skip_reason.
   // Local teammate/source filters also need preselection so other conversations
   // cannot fill the KNN candidate pool before the requested scope is applied.
-  const eligibleRowids = args.remoteVisibleOnly || args.teammateId || args.source
-    ? `rowid IN (
+  const eligibleRowids =
+    args.remoteVisibleOnly || args.teammateId || args.source
+      ? `rowid IN (
         SELECT j.rowid FROM embedding_jobs j
         JOIN messages m ON m.id = j.source_id
         JOIN sessions s ON s.id = m.session_id
         WHERE ${clause}
       )`
-    : '';
+      : '';
   // gate 3: 向量表里有无数据? 无 → 用户没开"聊天记录语义索引"或尚未嵌完,
   // 提前短路, 不浪费一次 query embedding 的 API 调用。
   try {
@@ -468,7 +513,9 @@ function buildFilterClause(
   if (args.remoteVisibleOnly) conds.push(remoteVisibleSessionSql('s'));
   const params: unknown[] = [];
   if (args.teammateId) {
-    conds.push('EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)');
+    conds.push(
+      'EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)',
+    );
     params.push(args.teammateId);
   }
   if (args.source) {
@@ -532,65 +579,112 @@ function buildFilterClause(
  * 按 createdAt 升序返回。(createdAt, id) 复合 keyset 处理同毫秒多消息。
  * radius=0 → 只返命中本身。
  */
-async function fetchContextWindow(
-  anchorId: string,
-  sessionId: string,
-  anchorCreatedAt: number,
+interface ContextAnchor {
+  pageIndex: number;
+  anchorId: string;
+  sessionId: string;
+  createdAt: number;
+}
+
+type ContextBatchRow = MessageRow & {
+  _anchorOrder: number;
+  _side: 0 | 1 | 2;
+};
+
+function contextBranchSql(side: 'before' | 'anchor' | 'after', roleCount: number): string {
+  const sideOrder = side === 'before' ? 0 : side === 'anchor' ? 1 : 2;
+  const projection = `? AS _anchorOrder, ${sideOrder} AS _side,
+    m.id AS id, m.client_id AS clientId, m.session_id AS sessionId, m.role AS role,
+    m.content AS content, m.tool_use_id AS toolUseId, m.agent_meta AS agentMeta,
+    m.agent_kind AS agentKind, m.created_at AS createdAt, m.rewind_at AS rewindAt`;
+  if (side === 'anchor') {
+    return `SELECT ${projection} FROM messages m WHERE m.id = ? LIMIT 1`;
+  }
+  const comparison =
+    side === 'before'
+      ? `(m.created_at < ? OR (m.created_at = ? AND m.id < ?))`
+      : `(m.created_at > ? OR (m.created_at = ? AND m.id > ?))`;
+  const order = side === 'before' ? 'DESC' : 'ASC';
+  const roleClause =
+    roleCount > 0
+      ? ` AND m.role IN (${Array.from({ length: roleCount }, () => '?').join(',')})`
+      : '';
+  return `SELECT ${projection} FROM messages m
+    WHERE m.session_id = ? AND m.rewind_at IS NULL${roleClause} AND ${comparison}
+    ORDER BY m.created_at ${order}, m.id ${order} LIMIT ?`;
+}
+
+/**
+ * Materialize exact per-hit windows with bounded UNION batches. Each branch keeps
+ * the former anchor/before/after predicates, while one worker RPC serves several
+ * hits. pageIndex is the grouping key so duplicate anchor ids remain independent.
+ */
+async function fetchContextWindowsBatched(
+  anchors: readonly ContextAnchor[],
   roles: HistoryRole[] | null,
   radius: number,
-): Promise<SearchChatHistoryContextMessage[]> {
-  const db = getDbClient().drizzle;
+): Promise<Map<number, SearchChatHistoryContextMessage[]>> {
+  const contexts = new Map<number, SearchChatHistoryContextMessage[]>();
+  if (anchors.length === 0) return contexts;
+  const uniqueRoles = roles ? [...new Set(roles)] : [];
 
-  const anchorRows = await db
-    .select()
-    .from(messagesTable)
-    .where(eq(messagesTable.id, anchorId))
-    .limit(1);
-  if (anchorRows.length === 0) return [];
-  const anchorRow = anchorRows[0];
-  if (radius <= 0) return [rowToContext(anchorRow, true)];
+  for (let start = 0; start < anchors.length; start += CONTEXT_BATCH_SIZE) {
+    const batch = anchors.slice(start, start + CONTEXT_BATCH_SIZE);
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    for (const anchor of batch) {
+      if (radius > 0) {
+        parts.push(`SELECT * FROM (${contextBranchSql('before', uniqueRoles.length)})`);
+        params.push(
+          anchor.pageIndex,
+          anchor.sessionId,
+          ...uniqueRoles,
+          anchor.createdAt,
+          anchor.createdAt,
+          anchor.anchorId,
+          radius,
+        );
+      }
+      parts.push(`SELECT * FROM (${contextBranchSql('anchor', uniqueRoles.length)})`);
+      params.push(anchor.pageIndex, anchor.anchorId);
+      if (radius > 0) {
+        parts.push(`SELECT * FROM (${contextBranchSql('after', uniqueRoles.length)})`);
+        params.push(
+          anchor.pageIndex,
+          anchor.sessionId,
+          ...uniqueRoles,
+          anchor.createdAt,
+          anchor.createdAt,
+          anchor.anchorId,
+          radius,
+        );
+      }
+    }
 
-  const roleCond =
-    roles && roles.length > 0 ? [inArray(messagesTable.role, roles)] : [];
-
-  // 命中之前(更早): created_at < anchor 或 (= anchor 且 id < anchorId), 倒序取 radius
-  const before = await db
-    .select()
-    .from(messagesTable)
-    .where(
-      and(
-        eq(messagesTable.sessionId, sessionId),
-        isNull(messagesTable.rewindAt),
-        ...roleCond,
-        or(
-          lt(messagesTable.createdAt, anchorCreatedAt),
-          and(eq(messagesTable.createdAt, anchorCreatedAt), lt(messagesTable.id, anchorId)),
-        ),
-      ),
-    )
-    .orderBy(desc(messagesTable.createdAt), desc(messagesTable.id))
-    .limit(radius);
-
-  // 命中之后(更晚): created_at > anchor 或 (= anchor 且 id > anchorId), 正序取 radius
-  const after = await db
-    .select()
-    .from(messagesTable)
-    .where(
-      and(
-        eq(messagesTable.sessionId, sessionId),
-        isNull(messagesTable.rewindAt),
-        ...roleCond,
-        or(
-          gt(messagesTable.createdAt, anchorCreatedAt),
-          and(eq(messagesTable.createdAt, anchorCreatedAt), gt(messagesTable.id, anchorId)),
-        ),
-      ),
-    )
-    .orderBy(asc(messagesTable.createdAt), asc(messagesTable.id))
-    .limit(radius);
-
-  const ordered = [...before.reverse(), anchorRow, ...after];
-  return ordered.map((r) => rowToContext(r, r.id === anchorId));
+    const rows = await getDbClient().query<ContextBatchRow>(
+      `SELECT * FROM (${parts.join(' UNION ALL ')})
+       ORDER BY _anchorOrder ASC, _side ASC, createdAt ASC, id ASC`,
+      params,
+    );
+    const grouped = new Map<number, ContextBatchRow[]>();
+    for (const row of rows) {
+      const bucket = grouped.get(row._anchorOrder) ?? [];
+      bucket.push(row);
+      grouped.set(row._anchorOrder, bucket);
+    }
+    for (const anchor of batch) {
+      const windowRows = grouped.get(anchor.pageIndex) ?? [];
+      if (!windowRows.some((row) => row._side === 1)) {
+        contexts.set(anchor.pageIndex, []);
+        continue;
+      }
+      contexts.set(
+        anchor.pageIndex,
+        windowRows.map((row) => rowToContext(row, row._side === 1)),
+      );
+    }
+  }
+  return contexts;
 }
 
 /**
@@ -633,7 +727,13 @@ async function fetchSessionsMeta(
     .where(inArray(sessionsTable.id, uniq));
   const out: Record<string, SearchChatHistorySessionMeta> = {};
   for (const r of rows) {
-    out[r.id] = { workingDir: r.workingDir, agentKind: r.agentKind, title: r.title, source: r.source, companion: parseHistoryCompanion(r.companionJson) };
+    out[r.id] = {
+      workingDir: r.workingDir,
+      agentKind: r.agentKind,
+      title: r.title,
+      source: r.source,
+      companion: parseHistoryCompanion(r.companionJson),
+    };
   }
   return out;
 }

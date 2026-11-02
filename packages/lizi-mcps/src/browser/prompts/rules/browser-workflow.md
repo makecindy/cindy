@@ -43,7 +43,7 @@
      - 悬停 / 拖拽:`{ kind: "hover", ref }` / `{ kind: "drag", startRef, endRef }`
    - 需要操作后观察时，在 `act` / `open` / `navigate` / `upload` 加 `afterSnapshot:{}`，一次调用就返回动作结果和正文默认最多 4000 字符的精简快照（`maxChars` 可调，最高 20000）。已看过页面结构、只需继续表单时可用 `afterSnapshot:{selector:"已确认的区域选择器"}`，避免每次重读整页。后置快照不保证异步页面已加载完；需要的信息还未出现时，等待具体内容再补读。
    - `ref` 必须取自**最近一次** snapshot（含返回的 `afterSnapshot`）。导航 / 弹窗 / 提交后页面变了，先观察再继续，别用旧 ref。`afterSnapshot.ok:false` 只表示后续读取失败；顶层 `ok:true` 表示动作已经成功，只补读页面，不重做提交或上传。没带后置快照、快照被截断或内容不足时，再按需单独 snapshot。
-   - 别盲等。需要等待用 `{ kind: "wait", ... }`(等 `loadState` / `textGone` / `timeoutMs`),不要靠反复重试空转。
+   - 别盲等。需要等待用 `{ kind: "wait", ... }`，优先指定页面就绪条件（`text` / `textGone` / `selector` / `url` / `loadState`）；确需固定等待时用 `timeMs`。`timeoutMs` 只是等待上限，不能单独作为等待条件。不要靠反复重试空转。
 
 5. **遇阻塞停下来报告**
    - 撞到登录墙 / 验证码 / 2FA / 需要人工授权时:**停下来如实告诉用户**当前页面状态 + 需要他做什么,不要反复尝试或假装能绕过。
@@ -89,8 +89,9 @@
 - **`data.backend === "external"` = 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。旧宿主可能省略该字段,不要把缺少模式信息当成已使用内置浏览器。
   - 此模式的 `status.data.proxy` 报告当前启动路由:`direct`、`proxied`(带脱敏 `server`)或无法确认继承进程路由时的 `unknown`。需要指定代理时必须重新调用 `start` 并检查结果,不要从已有 tab 猜测出口。代理模式下只有 `proxyAllowedHostnames` 列出的公网域名可导航,内网地址不在其中。
 - **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点;用户自己的标签页只在任务需要时操作,不要关闭、重排或切换它们。
-    - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize`、`pdf` 与配方都可用,但有这些差别:
-    - 有些动作借用 Chrome 的调试功能,需要用户允许一次:`pdf`、整页 / 元素截图、截取用户窗口里的后台标签页、读 Cookie 或抓网络请求的配方。`pdf` 与配方第一次需要时报 `DEBUGGER_NOT_ALLOWED`,扩展同时在用户的 Chrome 里打开说明页;请用户在那里点「开启」,确认后再重试,用户拒绝就不要重试。使用期间 Chrome 顶部会短暂显示调试提示。未允许时截图退回可视区域并在 `note` 里说明。`resize` 只作用于 Cindy 自己的窗口。
+    - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图(只限可视区域)、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize` 可用,但有这些差别:
+    - 这些动作要 Chrome 的调试接口,而 Chrome 不允许扩展按需申请,所以这里做不了:`pdf`、读 Cookie 或抓网络请求的配方;整页 / 元素截图退回可视区域并在 `note` 里说明,用户窗口里的后台标签页不能截图。不要让用户去找开启入口;需要时告诉用户可以改用 Cindy 专用浏览器,由用户决定。大文件上传不受影响,最大 1 GB。`resize` 只作用于 Cindy 自己的窗口。
+    - 快照已包含所有 iframe 和开放 Shadow DOM 里的内容,主内容区与对话框排在最前,ref 可直接操作,不需要 `frame` 参数(`evaluate`、`extract` 与 selector 定位的动作仍只作用于顶层页面)。`truncated:true` 表示后面还有内容:加大 `limit` / `maxChars` 或用 `selector` 限定(如 `[role=main]`),不要据此判断页面上没有或工具做不到。
     - 点击、坐标与拖拽是合成事件(非可信输入),个别要求可信输入的站点会忽略;页面 CSP 禁止脚本时 `evaluate` 报 `EVAL_BLOCKED_BY_PAGE`,改用 snapshot / extract。
     - 控制台从第一次 `console` 调用开始捕获;`requests` 来自页面资源计时(无方法与请求头);`responseBody` 以页面身份重新请求该地址;`dialog` 预先应答页面下一个 alert / confirm / prompt,已经弹出的原生弹窗需要用户自己处理。
     - 不支持:`saveResource` 与语义 `query`。`status.data.updateNote` 出现时说明扩展是旧版,只有基础读取与交互,请用户更新 Cindy 扩展。遇到不支持的操作先告诉用户,由用户决定是否改用专用浏览器,**不要自行 setBackend 切换**。
@@ -138,4 +139,4 @@
 | `screenshot` | 仅在需要视觉确认时用 |
 | `console` / `pdf` / `upload` / `dialog` | 控制台日志 / 导出 PDF / 上传文件 / 处理原生弹窗 |
 
-> **直接调用 `browser` 工具时,`wait` 不是顶层 action**:`action: "wait"` 会报 `INVALID_ARGS`。等待请用 `act` + `request.kind: "wait"`(等 `loadState` / `textGone` / `timeoutMs`)。同理,`evaluate` / `saveResource` 等原子操作也只能作为 `act` 的子操作(`request.kind`),顶层 action 枚举里没有它们。**此限制仅针对直接调用 `browser` 工具的 `action` 参数;配方 `recipeDraft.steps[].action` 里仅 `wait` / `evaluate` 是配方 DSL(由运行器转换为 `act`,不在此限制内),`saveResource` 在配方中同样不可用(`RecipeStepSchema` 不接受它)。**
+> **直接调用 `browser` 工具时,`wait` 不是顶层 action**:`action: "wait"` 会报 `INVALID_ARGS`。等待请用 `act` + `request.kind: "wait"`（优先等 `loadState` / `textGone` 等页面条件；固定时长用 `timeMs`，`timeoutMs` 仅设上限）。同理,`evaluate` / `saveResource` 等原子操作也只能作为 `act` 的子操作(`request.kind`),顶层 action 枚举里没有它们。**此限制仅针对直接调用 `browser` 工具的 `action` 参数;配方 `recipeDraft.steps[].action` 里仅 `wait` / `evaluate` 是配方 DSL(由运行器转换为 `act`,不在此限制内),`saveResource` 在配方中同样不可用(`RecipeStepSchema` 不接受它)。**

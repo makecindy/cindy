@@ -5,7 +5,7 @@
   "changedDimensions": ["cindyToolSurface"],
   "agentBackend": "claude-code",
   "agentBinaryPath": "/opt/cindy-headless/bin/claude",
-  "agentBinaryVersion": "2.1.296",
+  "agentBinaryVersion": "2.1.312",
   "supportedModelIds": ["claude-sonnet-4-6"],
   "model": { "provider": "anthropic", "requestedId": "claude-sonnet-4-6", "routeId": "configured-proxy" },
   "permissionMode": "bypassPermissions",
