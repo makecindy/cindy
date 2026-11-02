@@ -140,12 +140,20 @@ it('opens the ordinary task with no companion wrapper or new execution', async (
 // Unit regression for PR #7233 / discussion_r4384096621: render a queued execution
 // through the real i18n hook/catalog. The previous key-only mock hid missing keys;
 // this minimal queued row must show localized copy instead of a resource path.
+// PR #8088: cover all 12 catalogs so queued work never claims it has started.
 it.each([
   ['en', 'Queued'],
   ['zh-CN', '排队中'],
   ['zh-TW', '排隊中'],
   ['ja', '待機中'],
   ['ko', '대기 중'],
+  ['de', 'In der Warteschlange'],
+  ['es', 'En cola'],
+  ['fr', 'En attente'],
+  ['pt-BR', 'Na fila'],
+  ['pt-PT', 'Em fila'],
+  ['zh-Hans-x-lzh', '待次'],
+  ['zh-Hant-x-lzh', '待次'],
 ])('localizes queued work with the real %s catalog', async (locale, expected) => {
   await i18n.changeLanguage(locale);
   await render({ executionStatus: 'queued' });

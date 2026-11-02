@@ -200,7 +200,7 @@
     "eyebrow_many": "Plan · {{count}} étapes"
   },
   "speaking": {
-    "queued": "Démarrage",
+    "queued": "En attente",
     "stopping": "Arrêt en cours…",
     "planning": "Répartition du travail…",
     "step": "Travail en cours…"

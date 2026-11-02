@@ -200,7 +200,7 @@
     "eyebrow_many": "Plano · {{count}} passos"
   },
   "speaking": {
-    "queued": "A começar",
+    "queued": "Em fila",
     "stopping": "A parar…",
     "planning": "A dividir o trabalho…",
     "step": "A tratar do assunto…"
