@@ -98,6 +98,45 @@ mountPage({ render: () => <div>Worker finished</div> });`);
   assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
+// Integration/E2E regression: PdfPreview imports a package .mjs via Vite ?url.
+// The ?worker case above does not exercise raw asset emission, package resolution
+// or module MIME types. Use the real PDF worker plus one relative raw worker.
+test('serves package and relative ?url modules as assets and tracks compare changes', async () => {
+  const worker = path.join(dir, 'raw.worker.mjs');
+  const source = 'self.onmessage = () => self.postMessage(42);';
+  await writeFile(worker, source);
+  const file = await entry('url-worker', `
+import pdfUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import rawUrl from './raw.worker.mjs?url';
+const pdf = await import(pdfUrl);
+if (!pdf.WorkerMessageHandler) throw new Error('PDF worker module unavailable');
+const worker = new Worker(rawUrl, { type: 'module' });
+await new Promise<void>((resolve, reject) => {
+  worker.onerror = reject;
+  worker.onmessage = ({ data }) => { worker.terminate(); data === 42 ? resolve() : reject(new Error('Wrong raw worker result')); };
+  worker.postMessage(null);
+});
+mountPage({ render: () => <div>URL workers ready</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(worker));
+  assert.ok(scanned.inputs.some(input => input.endsWith(`${path.sep}pdf.worker.min.mjs`)));
+  const bundle = await buildPage(definition);
+  const raw = [...bundle.files.values()].find(asset => asset.body.toString() === source);
+  assert.equal(raw?.contentType, 'text/javascript');
+  const alternateSource = 'self.onmessage = () => self.postMessage(43);';
+  const alternate = await buildPage(definition, {
+    has: file => file === worker,
+    get: file => file === worker ? alternateSource : undefined,
+    resolve: () => undefined,
+  });
+  assert.ok([...alternate.files.values()].some(asset => asset.body.toString() === alternateSource));
+  assert.notEqual(bundle.fingerprints.get(worker), alternate.fingerprints.get(worker));
+  assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stderr + result.stdout);
+});
+
 test('one run reports each failure kind on its own variant', async () => {
   const file = await entry(
     'matrix',

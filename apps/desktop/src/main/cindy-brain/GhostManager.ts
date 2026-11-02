@@ -988,7 +988,7 @@ export class GhostManager {
   }
 
 
-  private instanceProjection(relId: string, ghostId: string): {
+  private instanceProjection(relId: string, ghostId: string, approval: GhostInstallReceiptReadResult): {
     instanceKey?: string;
     publishingSource?: InstalledGhost['publishingSource'];
     namespace?: string | null;
@@ -1000,7 +1000,7 @@ export class GhostManager {
     if (!record || record.ghostId !== ghostId) return {};
     return {
       instanceKey: record.instanceKey,
-      ...this.options.sourcesForInstance?.(record, this.receiptFact(relId)),
+      ...this.options.sourcesForInstance?.(record, this.receiptFact(relId, approval)),
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),
@@ -3015,7 +3015,7 @@ export class GhostManager {
         result.push({
           manifest: localizedManifest,
           dir,
-          ...this.instanceProjection(relId, identity.ghostId),
+          ...this.instanceProjection(relId, identity.ghostId, approvalResult),
           enabled: !retired && enabled,
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
@@ -3098,7 +3098,7 @@ export class GhostManager {
       result.push({
         manifest: localizedManifest,
         dir,
-        ...this.instanceProjection(relId, identity.ghostId),
+        ...this.instanceProjection(relId, identity.ghostId, approvalResult),
         enabled: false,
         approval: { state: approvalResult.state },
         ...(retired ? { retirement: { id: retired.id, eligible: false, unread: false } } : {}),

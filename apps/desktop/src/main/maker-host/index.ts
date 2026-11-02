@@ -381,7 +381,7 @@ import {
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { attachAgentsToMakerMemory, createDesktopMakerMemoryManager } from './maker-memory-host.js';
 import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
-import { prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
+import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
@@ -2264,7 +2264,7 @@ export function getMaker(): Maker {
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
       resolveCodexThreadStorage: async (threadId, options) => {
-        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
+        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageReadOnly(threadId) : undefined;
         const ownerScope = activeOwnerScopeKey();
         const storage = options?.readOnly
           ? await readCodexThreadStorageReadOnly(threadId)

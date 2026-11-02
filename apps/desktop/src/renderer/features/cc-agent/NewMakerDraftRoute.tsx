@@ -224,7 +224,7 @@ import {
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
+import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
   type AttachedFile,
@@ -5698,17 +5698,18 @@ export function NewMakerDraftRoute() {
   // 一条建议的预览与读屏描述:内容与点击填入的 pluginSuggestionComposerText 一致,
   // 只是同名限定符按输入框胶囊的规则收起。插件可用时带 $指令(或插件调用说明);需要
   // 先安装的插件点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
-  // 可用插件表按插件清单与工作目录缓存:filterGhostsForWorkdir 会同步查询目录禁用表,
-  // 不能在每次渲染 / 每条建议上重复调用。
   const installedGhosts = useInstalledGhosts(!isDeviceLinkDraft);
+  const suggestionDisabledIds = useWorkdirDisabledGhostIds(effectiveWorkingDir, installedGhosts, !isDeviceLinkDraft);
   const usableSuggestionGhosts = useMemo(
     () =>
       new Map(
-        (isDeviceLinkDraft ? [] : filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir))
+        (isDeviceLinkDraft || !suggestionDisabledIds ? [] : installedGhosts.filter(
+          (ghost) => !suggestionDisabledIds.has(installedGhostStoragePart(ghost)),
+        ))
           .filter((g) => g.enabled)
           .map((g) => [installedGhostStoragePart(g), g]),
       ),
-    [isDeviceLinkDraft, effectiveWorkingDir, installedGhosts],
+    [isDeviceLinkDraft, suggestionDisabledIds, installedGhosts],
   );
   const suggestionSourceLabels = useMemo(
     () => ({ team: t('settings.ghosts.commandPaletteSource.team') }),

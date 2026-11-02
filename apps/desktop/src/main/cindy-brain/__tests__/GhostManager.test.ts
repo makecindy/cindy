@@ -4169,11 +4169,19 @@ describe('GhostManager · list', () => {
   // and retry after a Host removal. Sync list coverage cannot exercise these
   // await windows (plugin-security-and-authoring §5; unit, one installed plugin).
   it('async scan reads fresh receipts without using the synchronous receipt reader', async () => {
+    // BWG3: production source projection consumes receipt facts. Without that
+    // callback the old test missed instanceProjection's second synchronous read.
+    const sourceFacts: unknown[] = [];
+    manager = new GhostManager({ getRootDir: () => rootDir,
+      sourcesForInstance: (_record, fact) => { sourceFacts.push(fact); return {}; },
+    });
     await manager.install(await makeCindy('async.cindy', goodManifest()));
+    sourceFacts.length = 0;
     const syncRead = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
     try {
       const first = await manager.listAsync();
       expect(first[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(sourceFacts).toContainEqual(expect.objectContaining({ ghostId: 'hello', revision: first[0].approval.state === 'approved' ? first[0].approval.revision : '' }));
       expect(syncRead).not.toHaveBeenCalled();
       const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
       await fs.promises.writeFile(receiptPath, '{invalid');

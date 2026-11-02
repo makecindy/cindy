@@ -37,6 +37,7 @@ const loaderFor = (file) =>
           : 'ts';
 const CONTENT_TYPES = {
   '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
@@ -139,6 +140,30 @@ function boundaries(stubs, replaced, overlay) {
 
 const sourcePath = (file) => path.resolve(root, file.replace(/ with \{[^}]*\}$/, ''));
 
+// Vite ?url imports export an emitted asset URL, even when the asset is JavaScript
+// (e.g. pdfjs-dist's prebuilt worker). Do not parse or rebundle those bytes.
+function urlAssets(overlay, inputs) {
+  return {
+    name: 'ui-page-url-assets',
+    setup(build) {
+      build.onResolve({ filter: /\?url$/ }, async args => {
+        const resolved = await build.resolve(args.path.slice(0, -4), {
+          importer: args.importer, resolveDir: args.resolveDir, kind: args.kind,
+        });
+        if (resolved.errors.length) return { errors: resolved.errors };
+        return { path: resolved.path, namespace: 'ui-url' };
+      });
+      build.onLoad({ filter: /.*/, namespace: 'ui-url' }, async args => {
+        inputs.add(args.path);
+        return {
+          contents: overlay?.get(args.path) ?? await readFile(args.path),
+          loader: 'file', watchFiles: [args.path],
+        };
+      });
+    },
+  };
+}
+
 // Bundle Vite's ?worker imports as real module workers, including --compare
 // sources. Keep their inputs in the page fingerprint and affected-page scan.
 function workerModules(definition, overlay, inputs, outputs) {
@@ -150,10 +175,12 @@ function workerModules(definition, overlay, inputs, outputs) {
       }));
       build.onLoad({ filter: /.*/, namespace: 'ui-worker' }, async args => {
         const result = await esbuild.build({
-          ...common(definition, [boundaries(new Map(), {}, overlay)]),
+          ...common(definition, [urlAssets(overlay, inputs), boundaries(new Map(), {}, overlay)]),
           entryPoints: [args.path], entryNames: 'worker-[hash]',
         });
-        for (const file of Object.keys(result.metafile.inputs)) inputs.add(sourcePath(file));
+        for (const file of Object.keys(result.metafile.inputs)) {
+          if (!file.startsWith('ui-url:')) inputs.add(sourcePath(file));
+        }
         outputs.push(...result.outputFiles);
         const script = result.outputFiles.find(file => file.path.endsWith('.js'));
         if (!script) throw new Error(`Worker did not emit JavaScript: ${args.path}`);
@@ -234,14 +261,14 @@ export async function scanPage(definition) {
   const workerInputs = new Set();
   const { contents } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [workerModules(definition, undefined, workerInputs, []), boundaries(stubTable(definition), replaced)]),
+    ...common(definition, [urlAssets(undefined, workerInputs), workerModules(definition, undefined, workerInputs, []), boundaries(stubTable(definition), replaced)]),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
   return {
     inputs: [
       ...Object.keys(result.metafile.inputs)
-        .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && file !== 'ui-page-entry.ts')
+        .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && !file.startsWith('ui-url:') && file !== 'ui-page-entry.ts')
         .map(sourcePath),
       ...workerInputs,
       ...(await sharedStyleInputs()),
@@ -261,12 +288,12 @@ export async function buildPage(definition, overlay) {
   const workerOutputs = [];
   const { contents, entry } = entryContents(definition);
   const result = await esbuild.build({
-    ...common(definition, [workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)]),
+    ...common(definition, [urlAssets(overlay, workerInputs), workerModules(definition, overlay, workerInputs, workerOutputs), boundaries(stubTable(definition), replaced, overlay)]),
     stdin: { contents, resolveDir: root, sourcefile: 'ui-page-entry.ts', loader: 'ts' },
     entryNames: 'page',
   });
   const inputs = [...new Set([...Object.keys(result.metafile.inputs)
-    .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && file !== 'ui-page-entry.ts')
+    .filter((file) => !file.startsWith('ui-stub:') && !file.startsWith('ui-worker:') && !file.startsWith('ui-url:') && file !== 'ui-page-entry.ts')
     .map(sourcePath), ...workerInputs])];
   // Tailwind scans exactly the imported source (and overlay text in compare mode).
   const config = loadConfig(configPath);

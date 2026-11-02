@@ -21,6 +21,7 @@ import {
   activeCindyBuiltInAgentSkills,
   BUILT_IN_SKILLS_BUNDLE_VERSION,
   builtInSkillDescriptors,
+  builtInSkillDescriptorsAsync,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
   refreshBuiltInClaudeSkillLinks,
@@ -588,6 +589,7 @@ describe('built-in Skills', () => {
       const skillPath = path.join(active, 'cindy-skill-creator');
       expect(prepared.projectionSafe).toBe(true);
       expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(3);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
       if (damage === 'modified-content') {
         fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nChanged');
       } else if (damage === 'missing-manifest') {
@@ -614,6 +616,7 @@ describe('built-in Skills', () => {
       }
       const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
       expect(descriptors).toEqual([]);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
       const [command] = markCindyBuiltInAgentSkills([{
         kind: 'agent-skill', name: 'cindy-skill-creator', source: 'skill',
         path: path.join(skillPath, 'SKILL.md'), scope: 'user', enabled: true, builtIn: true,
@@ -628,6 +631,19 @@ describe('built-in Skills', () => {
       expect(scanned.skills[0]?.builtIn).not.toBe(true);
     },
   );
+
+  // Unit: yielding identity verification must reject a publication that changes
+  // while bytes are being read; synchronous tampering coverage has no such race.
+  it('withholds official identity when the manifest changes during async verification', async () => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
+    await expect(pending).resolves.toEqual([]);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
+  });
 
   it('does not overwrite a non-link active pointer placeholder', async () => {
     const input = fixture();

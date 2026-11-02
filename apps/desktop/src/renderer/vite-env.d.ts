@@ -1410,6 +1410,7 @@ interface ElectronAPI {
     revealBackgroundTask: (id: string, taskId: string) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string) => { disabled: string[] };
+    workdirPrefs: (workdir: string) => Promise<{ disabled: string[] }>;
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
     setWorkdirDisabled: (
       workdir: string,

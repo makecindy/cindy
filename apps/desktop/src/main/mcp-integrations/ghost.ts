@@ -117,6 +117,7 @@ import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
   getGhostCardService,
   getGhostManager,
+  listInstalledGhostsAsync,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
   ghostForgeForbiddenRootDirs,
@@ -1804,10 +1805,9 @@ export function collectCindyMediaUrls(
 
 function visibleChipGhosts(
   workdir: string | null,
+  installed = getGhostManager().list(),
 ): InstalledGhost[] {
-  return getGhostManager()
-    .list()
-    .filter(
+  return installed.filter(
       (ghost) =>
         ghost.enabled &&
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
@@ -1819,6 +1819,7 @@ function visibleChipGhosts(
 
 const ghostVisibilityDeps = {
   listGhosts: () => getGhostManager().list(),
+  findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
   isAvailableForActiveSession: isGhostAvailableForActiveSession,
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
 };
@@ -2224,14 +2225,15 @@ export function getCindyGhostsMcpDeps(
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
       const context = resolveSessionContext();
       const workdir = context?.workingDir ?? null;
-      return visibleChipGhosts(workdir)
+      return visibleChipGhosts(workdir, await listInstalledGhostsAsync())
         .map(toCindyGhostInfo);
     },
     async getAwakeGhost(ghostId, namespace) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
+      const installed = await listInstalledGhostsAsync();
+      const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).some(
+      const visible = visibleChipGhosts(workdir, installed).some(
         (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
@@ -2245,7 +2247,8 @@ export function getCindyGhostsMcpDeps(
     },
     async readGhostManual({ ghostId, namespace, path: manualPath }) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
+      const installed = await listInstalledGhostsAsync();
+      const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) {
         return {
           ok: false,
@@ -2289,10 +2292,11 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const installed = await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
-        ghostVisibilityDeps,
+        { ...ghostVisibilityDeps, listGhosts: () => installed },
         namespace,
       );
       if (!initialVisibility.ok) return initialVisibility;

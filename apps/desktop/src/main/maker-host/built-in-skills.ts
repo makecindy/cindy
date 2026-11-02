@@ -124,6 +124,47 @@ export function builtInSkillDescriptors(
   userDataDir: string,
   appDataDir?: string,
 ): BuiltInSkillDescriptor[] {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    for (const descriptor of snapshot.descriptors) {
+      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
+      if (hashDirectorySync(descriptor.absolutePath) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
+    }
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+/** List discovery yields during full content verification, without caching trust. */
+export async function builtInSkillDescriptorsAsync(
+  userDataDir: string,
+  appDataDir?: string,
+): Promise<BuiltInSkillDescriptor[]> {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    for (const descriptor of snapshot.descriptors) {
+      // Pin reads to the version selected before yielding, not a moving .active link.
+      const directory = path.join(snapshot.target, descriptor.name);
+      if (!(await fsp.lstat(directory)).isDirectory()) return [];
+      if (await hashDirectory(directory) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (!(await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile()) return [];
+    }
+    const current = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!current || current.raw !== snapshot.raw || current.target !== snapshot.target
+      || current.realTarget !== snapshot.realTarget
+      || current.targetStat.dev !== snapshot.targetStat.dev
+      || current.targetStat.ino !== snapshot.targetStat.ino) return [];
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+function readBuiltInSkillSnapshot(userDataDir: string, appDataDir?: string) {
   const root = appDataDir
     ? sharedBuiltInSkillsRoot(appDataDir)
     : builtInSkillsRoot(userDataDir);
@@ -132,26 +173,24 @@ export function builtInSkillDescriptors(
   try {
     const raw = readAtomicFileSync(path.join(root, MANIFEST_FILE));
     const manifest = raw === null ? null : parseManifest(raw);
-    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return [];
+    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return null;
     const active = path.join(root, ACTIVE_BUNDLE_LINK);
     const target = activeBundleTarget(root, manifest.activeBundle);
-    if (!fs.lstatSync(active).isSymbolicLink()) return [];
-    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return [];
+    if (!fs.lstatSync(active).isSymbolicLink()) return null;
+    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return null;
     // A lexical in-root link must not escape through a substituted parent,
     // bundle, or Skill directory either.
     for (const directory of [path.dirname(target), target]) {
-      if (!fs.lstatSync(directory).isDirectory()) return [];
+      if (!fs.lstatSync(directory).isDirectory()) return null;
     }
-    if (!samePath(fs.realpathSync.native(active), fs.realpathSync.native(target))) return [];
+    const realTarget = fs.realpathSync.native(target);
+    if (!samePath(fs.realpathSync.native(active), realTarget)) return null;
+    const targetStat = fs.lstatSync(target);
+    if (!targetStat.isDirectory()) return null;
     const descriptors = committedSkillDescriptors(stableBuiltInSkillDescriptors(root, userDataDir), manifest);
-    for (const descriptor of descriptors) {
-      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
-      if (hashDirectorySync(descriptor.absolutePath) !== manifest.fingerprints[descriptor.name]) return [];
-      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
-    }
-    return descriptors;
+    return { raw, manifest, target, realTarget, targetStat, descriptors };
   } catch {
-    return [];
+    return null;
   }
 }
 
