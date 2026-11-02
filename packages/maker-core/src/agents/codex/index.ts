@@ -6645,6 +6645,10 @@ assertRouteCurrent();
       const slash = parseLeadingSlashToken(
         (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
       );
+      // 组装模型输入时改用追加过资料库说明的正文：命令校验必须只看用户原始命令，
+      // 但 `library:assets/...` 这类别名要靠 `withLibraryNativeReadContext` 追加的
+      // libraryRoot / 文件路才能落到真实路径，只发原始 slash.rest 会丢掉它。
+      const libraryAugmentedSlash = parseLeadingSlashToken(content.trim());
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -6660,7 +6664,7 @@ assertRouteCurrent();
           name: pinnedSkill.name,
           path: pinnedSkill.path,
         }];
-        const prompt = slash.rest.trim();
+        const prompt = (libraryAugmentedSlash?.rest ?? slash.rest).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
