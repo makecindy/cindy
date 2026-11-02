@@ -27,6 +27,7 @@
 //              仅存的 CDN 依赖,显式 x.y.z 则不再碰 CDN manifest。
 //              (agent 侧车二进制走缓存优先的 ensureBinary:已就位且版本
 //              匹配 pin 时跳过下载;首次打包仍需网络拉一次,之后可离线。)
+//   --prepare-linux-sandbox       Linux only: explicit foreground helper preparation checkpoint.
 //   --skip-smoke                    跳过 packaged smoke test(调试用)
 //   --allow-unsigned                有版本打包放行无签名(win 缺 CINDY_WIN_SIGN_CMD /
 //                                   mac 缺 APPLE_APP_PASSWORD 时降级 ad-hoc)
@@ -44,6 +45,7 @@
 
 import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
+import { prepareLinuxSandboxCheckpoint } from './ci/linux-sandbox-checkpoint.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureBinary } from '../../../scripts/ensure-agent-binaries.mjs';
@@ -496,6 +498,9 @@ async function main() {
     process.exit(1);
   }
   const { platform, archs, region, versionSpec, skipSmoke, allowUnsigned, noSign } = args;
+  if (args.prepareLinuxSandbox && (process.platform !== 'linux' || !process.stdin.isTTY || !process.stdout.isTTY || process.getuid() === 0)) {
+    throw new Error('--prepare-linux-sandbox requires an ordinary user foreground terminal');
+  }
   // ensureBinary 的 CDN fallback 按此 region 选择清单基址；必须早于二进制准备。
   process.env.CINDY_AUTH_REGION = region;
   // mac 签名身份按区域从 release-regions.json 注入(文件缺失时静默跳过,
@@ -629,6 +634,11 @@ async function main() {
     // 读安装包里实际打进去的手册(与 drizzle 同在 Resources 下),写入 build-info。
     const packagedManual = path.join(path.dirname(drizzleOut), 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));
     const mcpAppsManual = pageManualBuildInfo(fs.existsSync(packagedManual) ? fs.readFileSync(packagedManual) : null);
+
+    if (args.prepareLinuxSandbox) {
+      const outRoot = path.join(DESKTOP_ROOT, 'out');
+      await prepareLinuxSandboxCheckpoint(outRoot, path.join(outRoot, appName + '-' + platformKey));
+    }
 
     if (skipSmoke) {
       console.log('==> Skipping packaged smoke test (--skip-smoke)');

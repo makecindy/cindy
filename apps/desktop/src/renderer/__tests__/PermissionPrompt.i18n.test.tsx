@@ -17,6 +17,28 @@ afterEach(async () => {
 });
 
 describe('PermissionPrompt i18n', () => {
+  // User-authorized remembered Auto rule: a real card must show exact scope, not a tool-wide grant.
+  it('offers remembered exact Auto command separately from allow once', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={{ requestId: 'remember', toolName: 'Bash',
+      input: { command: 'git push origin draft' },
+      rememberAutoCommand: { harness: 'claude-code', command: 'git push origin draft' } }} onRespond={onRespond} />);
+    expect(screen.getByText(/仅 Auto Review/)).toBeTruthy();
+    expect(screen.queryByText(/仅当前项目/)).toBeNull();
+    fireEvent.click(screen.getByText('以后同类都允许'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow', rememberAutoCommand: true });
+  });
+  it('shows the Main-selected project scope while submitting only remember intent', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={{ requestId: 'project-remember', toolName: 'Bash',
+      input: { command: 'git push origin draft' }, rememberAutoCommand: { harness: 'claude-code',
+        command: 'git push origin draft', projectId: '/test/current-project' } }} onRespond={onRespond} />);
+    expect(screen.getByText('仅当前项目：/test/current-project')).toBeTruthy();
+    expect(screen.getByText(/仅 Auto Review/)).toBeTruthy();
+    fireEvent.click(screen.getByText('以后同类都允许'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow', rememberAutoCommand: true });
+  });
+
   it('asks through the companion identity while retaining the exact operation and decision', () => {
     const onRespond = vi.fn();
     render(<PermissionPrompt companion={{ id: 'writer', name: '阿橘' }}

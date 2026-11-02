@@ -12452,6 +12452,10 @@
       "defer": "나중에 다운로드"
     },
     "permissionPrompt": {
+      "rememberAllow": "앞으로 같은 명령 허용",
+      "rememberScope": "Auto Review에만 적용 · {{harness}} · 정확히 일치하는 명령: {{command}}",
+      "rememberProjectScope": "현재 프로젝트만: {{project}}",
+      "rememberFailed": "허용 규칙이 저장되었는지 확인하지 못했습니다. 다시 시도하거나 한 번만 허용하세요.",
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
@@ -13813,6 +13817,28 @@
       "readOnlyHint": "읽기 전용 작업입니다. 단계와 요금 구간은 볼 수 있지만 변경할 수는 없습니다.",
       "shrinkWarning": "현재 {{used}} 사용 중 — 더 작은 창은 먼저 압축하거나 새 창으로 전환합니다.",
       "saveFailed": "컨텍스트 창 저장에 실패했습니다"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "기존 규칙의 기기 ID를 확인할 수 없습니다. 원본 데이터와 입력은 유지되며 이번에는 저장하거나 게시하지 않았습니다.",
+      "saved": "규칙이 업데이트되었습니다",
+      "published": "규칙을 게시했습니다. 실행 시 적용 여부는 아직 확인이 필요합니다.",
+      "unsupported": "이 규칙 명령 또는 작업은 지원되지 않습니다. 입력은 유지됩니다.",
+      "existingTaskOnly": "기존 로컬 Claude Code, Codex 또는 Pi 작업에서 규칙을 설정하세요",
+      "failed": "규칙 작업이 완료되지 않았습니다. 입력은 유지됩니다.",
+      "statusTitle": "개인 규칙 · 현재 작업",
+      "statusLimit": "로컬 일반 Auto 명령 승인에만 적용됩니다. 저장은 네이티브 로드를 증명하지 않습니다.",
+      "statusReasons": {
+        "pending-activation": "미적용: 저장한 변경 내용이 활성화되지 않음",
+        "ready": "Auto 검토에서 사용 가능 · 실행 시 확인",
+        "no-rules": "미적용: 저장된 규칙 없음",
+        "storage-unavailable": "미적용: 규칙 읽기 실패",
+        "unsupported-rules": "미적용: 이 엔진에서 지원하지 않음",
+        "no-current-task": "미적용: 이 엔진에서 실행 중인 작업 없음",
+        "auto-required": "미적용: Auto 모드 필요",
+        "plan-mode": "미적용: 계획 모드",
+        "native-owned": "미적용: 네이티브 검토 사용 중",
+        "runtime-unverified": "미적용: 실행 상태 미확인"
+      }
     },
     "agentStatus": {
       "readingMemory": "기억을 읽고 있어요…",

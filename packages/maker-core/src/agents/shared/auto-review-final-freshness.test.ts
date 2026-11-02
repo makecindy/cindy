@@ -15,7 +15,7 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
  let persistencePending = false;
  const directoryPermissionsPendingPersistence = () => persistencePending;
  ${closure}
- return {run:()=>reviewAutoAction({kind:'exec',command:'npm test'},['/work'],['/work'],'linux'),
+ return {run:()=>reviewAutoAction({kind:'exec',command:'npm test'}${engine === 'claude-code' ? ",['/work'],['/work'],'linux'" : ''}),
  invalidate:(kind)=>{if(kind==='intent') currentAutoReviewIntent='Do not publish';
  if(kind==='cache') autoReviewDecisionCache.clear();
  if(kind==='directory') autoReviewDirectoryGeneration++;
@@ -27,7 +27,7 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
    const waiting=new Promise<void>(resolve=>{entered=resolve;});
    const barrier=new Promise<void>(resolve=>{release=resolve;});
    const delegate:AutoReviewDelegate=async()=>({verdict:'allow'});
-   delegate.prepareRequest=async request=>{if(++calls===2){entered();await barrier;}return request;};
+   delegate.prepareRequest=async request=>{if(++calls===3){entered();await barrier;}return request;};
    const record=vi.fn();
    const deps={withAutoReviewContext,opts:{sessionId:'s',workingDir:'/work'},mutableProviderId:undefined,mutableModel:'m',mutableCatalogModel:'m',
     autoReviewActionContext:{precedingBlockedActions:[],record},autoReviewDecisionCache:new Map(),
@@ -35,6 +35,10 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
     sessionReviewPlatform:'linux',mutableExtraDirs:[],mutableWritableDirs:[]};
    const runtime=new Function(...Object.keys(deps),script).call({deps:{reviewAutoPermissionAction:delegate}},...Object.values(deps));
    const result=runtime.run();await waiting;
+   // Prepare #1 prepares; #2 precedes evaluate; #3 follows its resolution.
+   expect(calls).toBe(3);
+   expect(deps.resolveAutoReviewDecision).toHaveBeenCalledOnce();
+   expect(deps.autoReviewDecisionCache.size).toBe(1);
    expect(record).not.toHaveBeenCalled();runtime.invalidate(kind);release();
    expect((await result).verdict).toBe(kind==='unchanged'?'allow':'block');
    expect(record).toHaveBeenCalledTimes(kind==='unchanged'?1:0);

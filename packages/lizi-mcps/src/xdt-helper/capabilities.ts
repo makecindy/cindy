@@ -29,6 +29,11 @@ export interface CapabilityEntry {
 
 export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
+    key: 'personal-approval-rules', title: '个人 Auto 长期规则',
+    oneLiner: '本机可信本人聊天的明确长期规则保存、修改和删除，立即供 Auto 审核消费。',
+    detail: 'control 类 edit_personal_approval_rule 由 Host 绑定当前已接受并落库的本人消息，独立保存完整原文；参数不能授权写入或改写原文。未指定端默认 Claude Code、Codex、Pi 共用，明确指定某端才限该端；未指定范围默认 user，无需技术 key，修改/删除可精确引用已保存规则正文。目前支持记住、以后请一直按这条长期要求、明确修改/删除等有限表达，歧义返回未采纳原因，显式操作立即生效，不再问 publish。status 只读显示逐端可消费或未生效原因，保存不代表原生已加载。Default/FullAccess 维持原行为；不自动同步原生文件。',
+  },
+  {
     key: 'rich-answers',
     title: '流式正文与可组合组件',
     oneLiner: '模型可自由组合正文图文、图表与交互控件，增量更新；按需查询组件协议，不要求另存 HTML。',

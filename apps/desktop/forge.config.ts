@@ -132,6 +132,8 @@ const DISCORD_RUNTIME_DEPS = ['discord.js'];
 // `@protobufjs/inquire` (the eval-based dynamic require was removed in its
 // 2026 security fixes) — don't re-add it, resolvePackageDir would throw.
 const NATIVE_RUNTIME_DEPS = [
+  // Turndown's Node ESM entry leaves a raw require; ship its existing DOM runtime.
+  '@mixmark-io/domino',
   'better-sqlite3',
   'bindings',
   'file-uri-to-path',

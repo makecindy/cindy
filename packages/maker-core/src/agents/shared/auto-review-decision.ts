@@ -1,3 +1,5 @@
+import { evaluateApprovalRules, ruleScopeMatches } from './approval-rules/evaluate.js';
+import type { UnifiedRule, RuleScope, AutoAskException, RuleOrigin, RuleHarness } from './approval-rules/types.js';
 import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
 import type { AgentKind, UserMessage } from '../../types/common.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
@@ -265,7 +267,59 @@ export function annotatePermissionRequestForAutoReview<
  * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
  * 附件数），只作低信任证据，审阅器单独呈现，不算用户原话、不构成授权。
  */
+/** Same accepted CC Query/turn only; never a persisted execution qualification. */
+export type PersonalRequirements = { fingerprint: string; scope: RuleScope; groups: readonly UnifiedRule[] };
+export type PersonalTurnObservation = PersonalRequirements & {
+  revalidate(): Promise<boolean>;
+  /** Main/store only. Never a CLI control read or persisted native qualification. */
+  readManaged?(): Promise<PersonalRequirements | { kind: 'unavailable'; reason: string } | undefined>;
+};
+export function evaluatePersonalRequirements(requirements: PersonalRequirements, command: string, harness: RuleHarness = 'claude-code') {
+  const exceptions = harness === 'claude-code' ? requirements.groups.filter(group => group.origin.harness === 'cindy'
+    && group.origin.decisionDomain === 'personal-approval'
+    && ruleScopeMatches(group.scope, requirements.scope, 'claude-code')).flatMap(group =>
+    group.clauses.filter(clause => clause.decision === 'allow' && clause.tool?.name === 'Bash'
+      && clause.matcher?.kind === 'cc-command' && clause.matcher.mode === 'exact'
+      && clause.matcher.pattern === command).flatMap(clause => clause.autoAskExceptions ?? [])) : [];
+  const groups = requirements.groups.map(group => ({ ...group, clauses: group.clauses.filter(clause =>
+    clause.decision !== 'ask' || !exceptions.some(exception => sameRuleScope(exception.scope, requirements.scope)
+      && exception.sourceGroupId === group.id && sameRuleScope(exception.sourceScope, group.scope)
+      && sameRuleOrigin(exception.sourceOrigin, group.origin)
+      && exception.clauseId === clause.id && exception.original === clause.original)) }));
+  return evaluateApprovalRules({ schemaVersion: 1, revision: 0, groups, tombstones: [] },
+    requirements.scope, command, harness);
+}
+const sameRuleScope = (left: RuleScope, right: RuleScope) => left.ownerId === right.ownerId
+  && left.executionHostId === right.executionHostId && left.projectId === right.projectId
+  && JSON.stringify([...(left.harnesses ?? [])].sort()) === JSON.stringify([...(right.harnesses ?? [])].sort());
+const sameRuleOrigin = (left: RuleOrigin, right: RuleOrigin) => left.harness === right.harness
+  && left.sourceId === right.sourceId && left.locator === right.locator && left.layer === right.layer
+  && left.dialectVersion === right.dialectVersion && left.decisionDomain === right.decisionDomain;
+/** Only matched asks observed in this real CC execution become rememberable exceptions. */
+export function matchedPersonalAutoAsks(requirements: PersonalRequirements, command: string): AutoAskException[] {
+  return requirements.groups.filter(group => group.origin.harness === 'claude-code'
+    && group.origin.decisionDomain === 'personal-approval').flatMap(group => group.clauses.flatMap(clause => {
+      if (clause.decision !== 'ask' || !clause.matcher) return [];
+      const match = evaluateApprovalRules({ schemaVersion: 1, revision: 0, groups: [{ ...group, clauses: [clause] }], tombstones: [] },
+        requirements.scope, command, 'claude-code');
+      return match.status === 'matched' && match.decision === 'ask' ? [{ scope: structuredClone(requirements.scope),
+        sourceGroupId: group.id, sourceScope: structuredClone(group.scope), sourceOrigin: { ...group.origin },
+        clauseId: clause.id, original: clause.original }] : [];
+    }));
+}
+
 export interface AutoReviewRequest {
+  /** Host-verified personal restrictions, not a user message or authorization grant. */
+  personalRequirements?: PersonalRequirements;
+  /** Original root Pi tool or Codex command-approval envelope, before normalization.
+   * Host still verifies the active instance; this is not an authorization grant. */
+  managedToolExecution?: { sessionInstanceId: string; toolName: string; input: Record<string, unknown>;
+    /** Minted only by the actual qualified root Pi RPC dispatcher. */
+    piExecution?: { rpcId: string; input: Readonly<Record<string, unknown>>; isCurrent(): boolean; isAuto(): boolean };
+    codexApproval?: { threadId: string; turnId: string; itemId: string; approvalId?: string;
+      hostGeneration: number; inputGeneration: number; directoryGeneration: number;
+      /** Actual root handler lease, independent of rule revision and FullAccess. */
+      isCurrent(): boolean; isAuto?(): boolean } };
   sessionId?: string;
   agentKind: AgentKind;
   providerId?: string | null;
@@ -299,30 +353,257 @@ export interface AutoReviewRequest {
   platform: NodeJS.Platform;
 }
 
+export type ManagedAutoReviewLease = {
+  contextKey: string; isCurrent(): boolean; isExecutionCurrent?(): boolean;
+};
+export type ManagedAutoReviewCheck =
+  | { kind: 'unavailable'; reason: string;
+      /** Pi only: unavailable storage is distinct from an unverified execution. */
+      pi?: { state: 'unverified' | 'inapplicable' } | { state: 'storage-unavailable'; lease: ManagedAutoReviewLease };
+      /** Actual Codex command approval only; never Guardian or native shortcut execution. */
+      codex?: { state: 'unverified' | 'inapplicable' } | { state: 'storage-unavailable'; lease: ManagedAutoReviewLease } }
+  | ({ kind: 'clear'; revision?: number; personalRequirements?: PersonalRequirements }
+      | { kind: 'deny' | 'ask'; revision: number; ruleId: string; reason: string }) & {
+      contextKey: string; isCurrent(): boolean;
+      /** Execution lease alone; publication can legitimately change during review. */
+      isExecutionCurrent?(): boolean };
+
 export type AutoReviewDelegate = ((request: AutoReviewRequest) => Promise<AutoReviewDecision | null>) & {
+  /** Explicit managed personal rules. Independent of delegation and model caches. */
+  precheckManagedAction?: (request: AutoReviewRequest) => Promise<ManagedAutoReviewCheck>;
   /** Re-resolve live Host authority before cache lookup and after any awaited decision. */
   prepareRequest?: (request: AutoReviewRequest) => Promise<AutoReviewRequest>;
+};
+
+/** Re-read personal policy after a human wait without re-running the reviewer. */
+export type ManagedAutoReviewFence = ((options?: { confirmed: boolean }) => Promise<AutoReviewDecision>) & {
+  /** Captured Host identity only; withdrawing Auto must never revive an old owner. */
+  isExecutionCurrent?: () => boolean;
+  /** Synchronous last-await publication/input seal for the qualified root call. */
+  isCurrent?: () => boolean;
+  canConfirmAgain?: () => boolean;
+};
+
+/** Builtin proof is independent of owner/execution authority and publication. */
+export type ManagedAutoReviewEligibility = {
+  isCurrent(): boolean;
+  captureFallback(fallback: ManagedAutoReviewFence): void;
 };
 
 export async function withAutoReviewContext(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
   evaluate: (prepared: AutoReviewRequest) => Promise<AutoReviewDecision>,
-  finalize: (decision: AutoReviewDecision) => AutoReviewDecision = decision => decision,
+  finalize: (decision: AutoReviewDecision, contribution?: 'managed') => AutoReviewDecision = decision => decision,
+  captureManagedFence?: (fence: ManagedAutoReviewFence) => void,
+  eligibility?: ManagedAutoReviewEligibility,
 ): Promise<AutoReviewDecision> {
+  const piExecution = request.agentKind === 'pi' ? request.managedToolExecution?.piExecution : undefined;
+  const codexApproval = request.agentKind === 'codex' ? request.managedToolExecution?.codexApproval : undefined;
+  const execution = piExecution ?? codexApproval;
+  const codexCandidate = !!codexApproval && !!delegate?.precheckManagedAction;
+  const qualified = (): boolean => eligibility?.isCurrent() !== false;
+  // The first Host await can outlive Auto. Keep this RPC's independent guard
+  // even when preparation fails or Main has not yet verified an execution lease.
+  let initialLease: ManagedAutoReviewLease | undefined;
+  let inapplicable = false;
+  let executionUnverified = false;
+  const piCandidate = !!piExecution && !!delegate?.precheckManagedAction && qualified();
+  if (piCandidate || codexCandidate) {
+    const current = () => !executionUnverified && execution!.isCurrent() && initialLease?.isExecutionCurrent?.() !== false
+      && (inapplicable || !!initialLease);
+    const guard: ManagedAutoReviewFence = async () => current() ? { verdict: 'allow' }
+      : { verdict: 'block', reason: 'Personal rule execution identity changed; send a new request.' };
+    guard.isExecutionCurrent = current;
+    guard.isCurrent = current;
+    captureManagedFence?.(guard);
+  }
+  const checkManaged = async (): Promise<ManagedAutoReviewCheck | undefined> => {
+    try {
+      // Qualification retirement withdraws policy, never the identity check
+      // for this already accepted RPC. Main's existing withdrawn-Auto branch
+      // verifies the same execution without reading personal policy.
+      const managedRequest = piCandidate ? { ...request, managedToolExecution: {
+        ...request.managedToolExecution!, piExecution: { ...piExecution!,
+          isAuto: () => qualified() && piExecution!.isAuto() },
+      } } : request;
+      return await delegate?.precheckManagedAction?.(managedRequest);
+    }
+    catch { return { kind: 'unavailable', reason: 'managed-policy-unavailable' }; }
+  };
+  // Capture Main's owner synchronously before preparation can switch it.
+  const initialManaged = piCandidate || codexCandidate ? checkManaged() : undefined;
   try {
     const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
     if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    const staleManaged = (): AutoReviewDecision => (pi || codexCandidate) ? invalidExecution() : ({ verdict: 'ask', unavailable: true,
+      reason: 'Personal rule execution context changed; retry against the current task.' });
+    const managed = initialManaged ? await initialManaged : qualified() ? await checkManaged() : undefined;
+    const pi = request.agentKind === 'pi' && !!request.managedToolExecution;
+    const bounded = pi || codexCandidate;
+    const managedActive = () => qualified() && execution?.isAuto?.() !== false;
+    const status = (check: ManagedAutoReviewCheck | undefined) => check?.kind === 'unavailable'
+      ? codexCandidate ? check.codex : check.pi : undefined;
+    const checkLease = (check: ManagedAutoReviewCheck | undefined): ManagedAutoReviewLease | undefined => {
+      if (check && check.kind !== 'unavailable') return check;
+      const evidence = status(check);
+      return bounded && evidence?.state === 'storage-unavailable' ? evidence.lease : undefined;
+    };
+    const lease = checkLease(managed);
+    initialLease = lease;
+    inapplicable = status(managed)?.state === 'inapplicable';
+    executionUnverified = managed?.kind === 'unavailable' && (status(managed)?.state === 'unverified'
+      || (codexCandidate && !status(managed)));
+    const invalidManaged = (check: ManagedAutoReviewCheck | undefined) => bounded
+      && check?.kind === 'unavailable' && (status(check)?.state === 'unverified' || (codexCandidate && !status(check)));
+    let executionValid = true;
+    const invalidExecution = (): AutoReviewDecision => { executionValid = false; return { verdict: 'block', reason: 'Personal rule execution identity changed; send a new request.' }; };
+    if (bounded && (execution?.isCurrent() === false || invalidManaged(managed))) return invalidExecution();
+    let latestSeal = lease?.isCurrent;
+    let reviewedKey: string | undefined;
+    let confirmationCount = 0;
+    let changedInFence = false;
     const fingerprint = JSON.stringify(prepared);
-    const decision = await evaluate(prepared);
-    if (delegate?.prepareRequest) {
+    // Authorization preparation stays independent of managed review data. The
+    // latter changes cache identity, never delegation or execution identity.
+    const ordinary = new Map<string, Promise<AutoReviewDecision>>();
+    let retainedBlock: AutoReviewDecision | undefined;
+    const currentAuthorization = async (): Promise<boolean> => {
+      if (!delegate?.prepareRequest) return true;
       const current = await delegate.prepareRequest(request);
-      if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
-        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+      return !current.authorizationError && JSON.stringify(current) === fingerprint;
+    };
+    const liveManaged = (latest: ManagedAutoReviewCheck | undefined): boolean => {
+      if (!lease) return true;
+      if (lease.isExecutionCurrent?.() === false || (bounded && execution?.isCurrent() === false)) return false;
+      if (bounded && !managedActive()) {
+        const current = checkLease(latest);
+        return !current || (execution?.isAuto?.() === false
+          ? current.isExecutionCurrent?.() !== false : current.contextKey === lease.contextKey);
+      }
+      const current = checkLease(latest);
+      if (current) latestSeal = current.isCurrent;
+      return !!current && current.contextKey === lease.contextKey && current.isCurrent();
+    };
+    const reviewData = (includeManaged: boolean, latest: ManagedAutoReviewCheck | undefined): AutoReviewRequest =>
+      includeManaged && qualified() && (!bounded || managedActive()) && latest?.kind === 'clear' && latest.personalRequirements
+        ? { ...prepared, personalRequirements: latest.personalRequirements } : prepared;
+    const dataKey = (data: AutoReviewRequest) => JSON.stringify(data.personalRequirements ?? null);
+    const policyKey = (latest: ManagedAutoReviewCheck | undefined) => JSON.stringify(codexCandidate
+      ? [status(latest)?.state === 'storage-unavailable' ? 'storage' : 'policy',
+          latest?.kind === 'clear' ? latest.personalRequirements ?? null : null]
+      : [latest?.kind, latest && latest.kind !== 'unavailable' ? latest : null]);
+    const rememberDecision = (latest: ManagedAutoReviewCheck | undefined) => {
+      if (bounded) reviewedKey = policyKey(latest);
+    };
+    const storageMissing = (latest: ManagedAutoReviewCheck | undefined) => bounded && managedActive() && status(latest)?.state === 'storage-unavailable';
+    const storageAsk = (): AutoReviewDecision => ({ verdict: 'ask', unavailable: true,
+      reason: 'Personal rules could not be read; confirm only this current tool input.' });
+    const captureFence = () => {
+      if (!lease) return;
+      const fence: ManagedAutoReviewFence = async options => {
+        try {
+          if (!await currentAuthorization()) return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+          const current = await checkManaged();
+          if (bounded && (execution?.isCurrent() === false || lease.isExecutionCurrent?.() === false || invalidManaged(current)))
+            return finalize(invalidExecution(), 'managed');
+          if (!liveManaged(current)) return finalize(staleManaged(), 'managed');
+          if (bounded) {
+            if (!managedActive()) return finalize({ verdict: 'allow' }, 'managed');
+            if (current?.kind === 'deny') return finalize({ verdict: 'block', reason: current.reason }, 'managed');
+            if (options?.confirmed === true) confirmationCount++;
+            if ((codexCandidate || options?.confirmed === true) && policyKey(current) !== reviewedKey) {
+              if (changedInFence || confirmationCount >= 2 || ordinary.size >= 2)
+                return finalize({ verdict: 'block', reason: 'Personal rules changed again; send a new request.' }, 'managed');
+              changedInFence = true;
+              return await finishReview(true);
+            }
+            if (options?.confirmed !== true) return finalize(codexCandidate && storageMissing(current) ? storageAsk()
+              : current?.kind === 'ask' && options?.confirmed === false ? { verdict: 'ask', reason: current.reason } : { verdict: 'allow' }, 'managed');
+            return finalize({ verdict: 'allow' }, 'managed');
+          }
+          // An explicit answer approves this exact ask, never a newly active deny.
+          return finalize(qualified() && current?.kind === 'deny'
+            ? { verdict: 'block', reason: current.reason }
+            : qualified() && current?.kind === 'ask' && options?.confirmed === false
+              ? { verdict: 'ask', reason: current.reason } : { verdict: 'allow' }, 'managed');
+        } catch {
+          if (bounded && !managedActive() && execution?.isCurrent() !== false && lease.isExecutionCurrent?.() !== false
+            && !prepared.delegatedTask && !prepared.authorizationError) return finalize({ verdict: 'allow' }, 'managed');
+          return finalize(staleManaged(), 'managed');
+        }
+      };
+      fence.isExecutionCurrent = () => lease.isExecutionCurrent?.() !== false && (!bounded || (executionValid && execution?.isCurrent() !== false));
+      if (bounded) fence.canConfirmAgain = () => changedInFence;
+      if (bounded) fence.isCurrent = () => fence.isExecutionCurrent!() && (!managedActive() || latestSeal?.() !== false);
+      captureManagedFence?.(fence);
+    };
+    const finishReview = async (includeManaged: boolean): Promise<AutoReviewDecision> => {
+      if (bounded && (execution?.isCurrent() === false || lease?.isExecutionCurrent?.() === false)) return finalize(invalidExecution(), 'managed');
+      if (lease?.isExecutionCurrent?.() === false) return finalize(staleManaged(), 'managed');
+      let latest = lease ? await checkManaged() : undefined;
+      if (invalidManaged(latest)) return finalize(invalidExecution(), 'managed');
+      if (!liveManaged(latest)) return finalize(staleManaged(), 'managed');
+      // One changed review-data version may be re-reviewed. No tool is replayed,
+      // and repeated mutation cannot create an unbounded model-review loop.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (!await currentAuthorization())
+          return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+        if (retainedBlock) return finalize(retainedBlock);
+        if (bounded && storageMissing(latest)) {
+          rememberDecision(latest); captureFence(); return finalize(storageAsk(), 'managed');
+        }
+        if (includeManaged && qualified() && (!bounded || managedActive()) && latest && latest.kind !== 'unavailable' && latest.kind !== 'clear') {
+          rememberDecision(latest); captureFence();
+          return finalize({ verdict: latest.kind === 'deny' ? 'block' : 'ask', reason: latest.reason }, 'managed');
+        }
+        const data = reviewData(includeManaged, latest);
+        const key = dataKey(data);
+        let pending = ordinary.get(key);
+        if (!pending) {
+          if (ordinary.size >= 2) return finalize({ verdict: 'block',
+            reason: 'Personal rules changed repeatedly; retry against the current rules.' }, 'managed');
+          pending = evaluate(data); ordinary.set(key, pending);
+        }
+        const decision = await pending;
+        if (decision.verdict === 'block') retainedBlock = decision;
+        if (!await currentAuthorization())
+          return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+        latest = lease ? await checkManaged() : undefined;
+        if (invalidManaged(latest)) return finalize(invalidExecution(), 'managed');
+        if (!liveManaged(latest)) return finalize(staleManaged(), 'managed');
+        // A real reviewer block survives withdrawal of the managed contribution.
+        if (retainedBlock) return finalize(retainedBlock);
+        if (bounded && storageMissing(latest)) { rememberDecision(latest); captureFence(); return finalize(storageAsk(), 'managed'); }
+        if (includeManaged && qualified() && (!bounded || managedActive()) && latest && latest.kind !== 'unavailable' && latest.kind !== 'clear') {
+          rememberDecision(latest); captureFence();
+          return finalize({ verdict: latest.kind === 'deny' ? 'block' : 'ask', reason: latest.reason }, 'managed');
+        }
+        if (dataKey(reviewData(includeManaged, latest)) !== key) continue;
+        rememberDecision(latest); captureFence();
+        return finalize(decision);
+      }
+      return finalize({ verdict: 'block', reason: 'Personal rules changed repeatedly; retry against the current rules.' }, 'managed');
+    };
+    if (lease) {
+      eligibility?.captureFallback(async () => {
+        try { return await finishReview(false); }
+        catch { return finalize(staleManaged(), 'managed'); }
+      });
+      if (!lease.isCurrent() || lease.isExecutionCurrent?.() === false)
+        return finalize(staleManaged(), 'managed');
+      // Capture the raw Host lease before any reviewer await, including paths
+      // that later become stale and therefore never return a review verdict.
+      captureFence();
+      // Main verified the independent execution after Auto was withdrawn. The
+      // final send still consumes this fence, without consuming personal rules.
+      if (bounded && execution?.isAuto?.() === false) return finalize({ verdict: 'allow' }, 'managed');
+      if (qualified() && managed && (managed.kind === 'deny' || managed.kind === 'ask')) {
+        rememberDecision(managed); captureFence();
+        return finalize({ verdict: managed.kind === 'deny' ? 'block' : 'ask', reason: managed.reason }, 'managed');
       }
     }
-    // No await after the live runtime fence: Host lookup may outlive accepted input.
-    return finalize(decision);
+    return await finishReview(true);
   } catch {
     return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
   }
@@ -524,9 +805,19 @@ export async function resolveAutoReviewDecision(
   hostAutoApprove = false,
   hostShortcutOnly = false,
 ): Promise<AutoReviewDecision> {
+  const personal = (request.agentKind === 'claude-code' || (request.agentKind === 'pi' && !!request.managedToolExecution)
+    || (request.agentKind === 'codex' && !!request.managedToolExecution?.codexApproval))
+    && request.action.kind === 'exec' && request.personalRequirements
+    ? evaluatePersonalRequirements(request.personalRequirements, request.action.command, request.agentKind === 'pi' ? 'pi' : request.agentKind === 'codex' ? 'codex' : 'claude-code') : undefined;
+  if (personal?.status === 'matched' && personal.decision === 'deny')
+    return { verdict: 'block', reason: 'Blocked by a current personal rule.' };
+  const personalAsk = personal?.status === 'matched' && personal.decision === 'ask';
+  const unresolvedPersonal = personal?.status === 'uncovered' || !!personal?.uncoveredRuleIds?.length;
+  if (personalAsk && !unresolvedPersonal)
+    return { verdict: 'ask', reason: 'A current personal rule requires confirmation.' };
   // Host trust skips model review only after live context preparation has
   // established that this is not a delegated task with a narrower scope.
-  if (hostAutoApprove && !request.delegatedTask) return { verdict: 'allow' };
+  if (hostAutoApprove && !request.delegatedTask && !unresolvedPersonal) return { verdict: 'allow' };
   // Outside Auto, only establish whether Host trust can skip confirmation.
   // A delegated request must use the existing human approval path, never AI.
   if (hostShortcutOnly) return { verdict: 'ask' };
@@ -539,7 +830,7 @@ export async function resolveAutoReviewDecision(
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
   // action bypasses scope review merely because the workspace tier is safe.
-  if (localTier === 'auto-approve' && !request.delegatedTask) return { verdict: 'allow' };
+  if (localTier === 'auto-approve' && !request.delegatedTask && !unresolvedPersonal) return { verdict: 'allow' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);
@@ -583,6 +874,10 @@ export async function resolveAutoReviewDecision(
       const reason = typeof decision.reason === 'string'
         ? decision.reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS)
         : '';
+      // Unknown siblings still reach the original reviewer. Its allow cannot
+      // erase the deterministic ask; its block remains a block.
+      if (personalAsk && decision.verdict === 'allow')
+        return { verdict: 'ask', reason: 'A current personal rule requires confirmation.' };
       return {
         verdict: decision.verdict,
         ...(reason ? { reason } : {}),

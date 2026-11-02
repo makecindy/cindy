@@ -923,6 +923,7 @@ export interface BuildPiAgentOpts {
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
+  getPiManagedBuiltinBashGeneration?: AgentDeps['getPiManagedBuiltinBashGeneration'];
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
@@ -2008,6 +2009,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     derivePiProxySessionToken,
     capabilityAdditions: opts.capabilityAdditions,
     reviewAutoPermissionAction: opts.reviewAutoPermissionAction,
+    getPiManagedBuiltinBashGeneration: opts.getPiManagedBuiltinBashGeneration,
     mcpProviders: opts.mcpProviders,
     makerMemory: opts.makerMemory,
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类

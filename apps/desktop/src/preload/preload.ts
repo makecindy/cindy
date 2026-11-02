@@ -7038,6 +7038,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       doctorReport?: import('../shared/cindyMakeDoctor').MakeDoctorReport;
     }> => ipcRenderer.invoke('maker:execute-desktop-command', name, ctx),
 
+    approvalRuleCommand: (
+      request: import('../shared/approvalRuleCommand').ApprovalRuleCommandRequest,
+    ): Promise<import('../shared/approvalRuleCommand').ApprovalRuleCommandResult> =>
+      ipcRenderer.invoke('maker:approval-rule:command', request)
+        .catch(() => ({ kind: 'error', code: 'OPERATION_FAILED' })),
+
     startReview: (input: {
       sourceSessionId: string;
       focus?: string;

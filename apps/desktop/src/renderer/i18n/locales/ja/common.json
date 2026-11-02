@@ -12452,6 +12452,10 @@
       "defer": "今はダウンロードしない"
     },
     "permissionPrompt": {
+      "rememberAllow": "今後同じコマンドを許可",
+      "rememberScope": "Auto Review のみ · {{harness}} · 完全一致のコマンド：{{command}}",
+      "rememberProjectScope": "現在のプロジェクトのみ：{{project}}",
+      "rememberFailed": "許可ルールの保存を確認できませんでした。再試行するか、今回のみ許可してください。",
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
@@ -13813,6 +13817,28 @@
       "readOnlyHint": "読み取り専用のタスクです。段階と価格帯は確認できますが、変更はできません。",
       "shrinkWarning": "現在 {{used}} 使用中。小さいウィンドウにすると先に圧縮または切り替えが発生します。",
       "saveFailed": "コンテキストウィンドウの保存に失敗しました"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "既存ルールのデバイス識別を確認できません。元のデータと入力は保持され、今回は保存も公開もされていません。",
+      "saved": "ルールを更新しました",
+      "published": "ルールを公開しました。実行時の適用はまだ確認が必要です。",
+      "unsupported": "このルールコマンドまたはタスクには対応していません。入力は保持されます。",
+      "existingTaskOnly": "既存のローカル Claude Code、Codex または Pi タスクでルールを設定してください",
+      "failed": "ルール操作は完了しませんでした。入力は保持されます。",
+      "statusTitle": "個人ルール · 現在のタスク",
+      "statusLimit": "ローカルの通常 Auto コマンド承認のみ。保存はネイティブ読込の証明ではありません。",
+      "statusReasons": {
+        "pending-activation": "未適用：保存内容が未反映",
+        "ready": "Auto 審査で利用可能・実行時に検証",
+        "no-rules": "未適用：保存ルールなし",
+        "storage-unavailable": "未適用：ルールの読込失敗",
+        "unsupported-rules": "未適用：このエンジンでは非対応",
+        "no-current-task": "未適用：このエンジンの実行中タスクなし",
+        "auto-required": "未適用：Auto モードが必要",
+        "plan-mode": "未適用：計画モード",
+        "native-owned": "未適用：ネイティブ側で審査",
+        "runtime-unverified": "未適用：実行状態が未検証"
+      }
     },
     "agentStatus": {
       "readingMemory": "記憶を読んでいます…",

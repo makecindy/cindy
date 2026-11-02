@@ -11,6 +11,9 @@ import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
 import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
+import { createPersonalRuleChat, configurePersonalRuleChat } from './personalRuleChat.js';
+import { isDeepStrictEqual } from 'node:util';
+import { captureManagedApprovalOwner, isManagedApprovalOwnerCurrent } from '../maker-host/managed-approval-owner.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -1204,6 +1207,8 @@ import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usage
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
+import { registerApprovalRuleCommandHandler, captureRememberedAutoCommand, type ApprovalRuleCommandDeps } from './approvalRuleCommandHandler.js';
+import { createApprovalRuleStore } from '../maker-host/approval-rule-store.js';
 import {
   registerReviewStartHandler,
   ReviewPreconditionError,
@@ -3394,10 +3399,13 @@ interface PendingInteractionEntry {
   timeoutRemainingMs?: number;
   /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
   migrated?: boolean;
+  remember?: Awaited<ReturnType<typeof captureRememberedAutoCommand>>;
+  remembering?: boolean;
   deferredDecision?: InteractionDecision;
 }
 
 const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
+let rememberApprovalDeps: ApprovalRuleCommandDeps | undefined;
 
 /**
  * submit_github_issue 工具的提交前确认桥(kind='issue_confirm')。独立于
@@ -5805,11 +5813,13 @@ export function installDesktopInteractionListener(session: {
         planFilePath?: unknown;
       },
     );
-    return new Promise<InteractionDecision>((resolve) => {
+    return new Promise<InteractionDecision>((resolve, reject) => {
       const boundaryRequest: InteractionRequest =
         req.kind === 'permission'
           ? {
               ...req,
+              autoCommand: undefined,
+              metadata: { ...req.metadata, rememberAutoCommand: undefined },
               input: redactToolInputForUntrustedBoundary(
                 req.toolName,
                 req.input,
@@ -5832,16 +5842,51 @@ export function installDesktopInteractionListener(session: {
       } else {
         schedulePendingPermissionTimeout(req.requestId, entry);
       }
-      broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
-        sessionId: session.id,
-        request: boundaryRequest,
-        persistId: interactionPersistId,
-      });
-      handleAgentIslandInteractionAfterBroadcast(
-        session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
-        boundaryRequest,
-        agentIslandInteractionEpoch,
-      );
+      void (async () => {
+        const runtime = req.kind === 'permission' && req.autoCommand ? getMakerIfReady()?.getSession(session.id) : undefined;
+        let captureCurrent = true;
+        const permission = runtime?.stablePermissionModeState;
+        const plan = runtime?.stablePlanModeState;
+        const pendingCurrent = () => captureCurrent && pendingInteractionResolvers.get(req.requestId) === entry
+          && !entry.migrated && !agentInputCoordinatorHolder?.isExecutionPaused(session.id)
+          && getMakerIfReady()?.getSession(session.id) === runtime
+          && runtime?.getStatus() === 'active'
+          && runtime.stablePermissionModeState?.mode === 'auto'
+          && isDeepStrictEqual(runtime.stablePermissionModeState, permission)
+          && isDeepStrictEqual(runtime.stablePlanModeState, plan) && plan?.enabled === false;
+        if (req.kind === 'permission' && req.autoCommand
+          && req.toolName === ({ 'claude-code': 'Bash', pi: 'bash', codex: 'exec' }[req.autoCommand.harness])
+          && req.input.command === req.autoCommand.command && !sharedPermission && runtime
+          && runtime.instanceId === req.autoCommand.sessionInstanceId
+          && rememberApprovalDeps && pendingCurrent()) {
+          try {
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            try {
+              entry.remember = await Promise.race([
+                captureRememberedAutoCommand(rememberApprovalDeps, session.id,
+                  req.autoCommand, pendingCurrent, runtime.instanceId),
+                new Promise<null>(done => { timeout = setTimeout(() => { captureCurrent = false; done(null); }, 1_000); }),
+              ]);
+            } finally { if (timeout) clearTimeout(timeout); }
+            if (entry.remember && pendingCurrent() && boundaryRequest.kind === 'permission') {
+              boundaryRequest.metadata = { ...boundaryRequest.metadata, rememberAutoCommand: {
+                harness: entry.remember.harness, command: entry.remember.command,
+                ...(entry.remember.projectId ? { projectId: entry.remember.projectId } : {}) } };
+            }
+          } catch { /* Ineligible/unavailable cards retain the existing one-time decision path. */ }
+        }
+        if (pendingInteractionResolvers.get(req.requestId) !== entry) return;
+        broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
+          sessionId: session.id,
+          request: boundaryRequest,
+          persistId: interactionPersistId,
+        });
+        handleAgentIslandInteractionAfterBroadcast(
+          session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
+          boundaryRequest,
+          agentIslandInteractionEpoch,
+        );
+      })().catch(reject);
     });
   }, (requestId, decision) => {
     cancelPendingInteraction(requestId, decision);
@@ -18478,11 +18523,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   pluginTargetReviewReady = true;
 
+  let personalRuleChat: ReturnType<typeof createPersonalRuleChat> | undefined;
+  const PERSONAL_RULE_INPUT = Symbol('host-personal-rule-input');
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     prewarmSession: prewarmSessionRuntime,
   } = createMakerSendTransaction({
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
+    capturePersonalRuleInput: (_sid, _message, sendOpts) => (sendOpts as { [PERSONAL_RULE_INPUT]?: { commit(): Promise<void> } } | undefined)?.[PERSONAL_RULE_INPUT],
     restoreArchivedSessionForSend,
     prepareProductTurn: (sessionId) => {
       const dispatch = prepareUpstreamMergeTurn(sessionId);
@@ -18864,6 +18912,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
+    if (typeof sessionId === 'string') {
+      const pending = personalRuleChat?.captureSend(sessionId, args[1], args[3]);
+      if (pending) args[3] = { ...(args[3] as object | undefined), [PERSONAL_RULE_INPUT]: pending };
+    }
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
     agentPrewarmer.markUsed(sessionId);
     // 新建页的未发送任务第一次发送：renderer 通常已先转正，这里兜底。
@@ -21698,6 +21750,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     inputCoordinator.observeClearBoundary(sid, durableRow?.clearedAt);
   };
 
+  rememberApprovalDeps = {
+    assertTrustedSender: event => assertTrustedAppRendererEvent(
+      event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    isDeviceLinkInvoke,
+    captureOwner: captureManagedApprovalOwner,
+    ownerCurrent: isManagedApprovalOwnerCurrent,
+    getInputGeneration: sid => inputCoordinator.getGeneration(sid),
+    readSession: getSessionRowSnapshotStrict,
+    isProvisional: isProvisionalSession,
+    consumerState: sid => {
+      const live = maker.getSession(sid);
+      if (!live || !['claude-code', 'codex', 'pi'].includes(live.agentKind)) return undefined;
+      return { instanceId: live.instanceId, harness: live.agentKind as 'claude-code' | 'codex' | 'pi',
+        active: live.getStatus() === 'active', local: !live.remoteHostId && !live.agentDeviceId,
+        mode: live.stablePermissionModeState?.mode ?? undefined, plan: live.stablePlanModeState?.enabled,
+        reviewOwner: live.autoReviewOwner };
+    },
+    withSessionLock: withSendToSessionLock,
+    createStore: (owner, assertCurrent, consumer) => createApprovalRuleStore({
+      ownerId: owner.ownerId, ownerDataDir: ownerScopedUserDataPath(), assertCurrent,
+      localManagedCommandHostId: owner.executionHostId,
+      ...(consumer ? { resolveManagedConsumer: () => consumer } : {}),
+    }),
+  };
+  registerApprovalRuleCommandHandler(createElectronIpcHandlerRegistry(), rememberApprovalDeps);
+  personalRuleChat = createPersonalRuleChat({ ...rememberApprovalDeps,
+    getSession: sid => maker.getSession(sid),
+    inputIdentity: sid => inputCoordinator.getAcceptedInputProvenance(sid),
+    ownerInput: sid => inputCoordinator.isActiveInputOwnerAuthored(sid) ? inputCoordinator.getAcceptedInputProvenance(sid) : null,
+    readMessage: async (sid, clientId) => {
+      const [row] = await getDbClient().drizzle.select({ role: messages.role, content: messages.content, agentMeta: messages.agentMeta })
+        .from(messages).where(and(eq(messages.sessionId, sid), eq(messages.clientId, clientId), isNull(messages.rewindAt))).limit(1);
+      return row ?? null;
+    },
+  });
+  configurePersonalRuleChat(personalRuleChat);
+
+
   const remoteInputClientIdWasPersisted = async (
     sid: string,
     clientId: string,
@@ -22893,6 +22983,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // payload and is carried only through the Host-owned action path.
           pluginSetupResponseTarget = event.sender;
         }
+      }
+      if (decision && typeof decision === 'object' && !Array.isArray(decision)
+        && (decision as Record<string, unknown>).rememberAutoCommand !== undefined) {
+        if (isDeviceLinkInvoke()) throwIpcError('PERMISSION_DENIED', 'Local Auto confirmation required');
+        assertTrustedAppRendererEvent(event);
+        const value = decision as Record<string, unknown>;
+        const entry = pendingInteractionResolvers.get(requestId);
+        if (value.rememberAutoCommand !== true || value.kind !== 'permission' || value.behavior !== 'allow'
+          || !entry?.remember || entry.remembering || entry.sharedPermission)
+          throwIpcError('PRECONDITION_FAILED', 'Remembered command unavailable');
+        if (value.updatedInput !== undefined && (!value.updatedInput || typeof value.updatedInput !== 'object'
+          || Array.isArray(value.updatedInput))) throwIpcError('INVALID_PARAMS', 'Invalid command input');
+        entry.remembering = true;
+        try {
+          try {
+            await entry.remember.save(value.updatedInput as Record<string, unknown> | undefined);
+          } catch {
+            throwIpcError('PRECONDITION_FAILED', 'Allow rule was not saved; retry or allow once');
+          }
+          if (pendingInteractionResolvers.get(requestId) !== entry)
+            return { accepted: false, remembered: true };
+          // Never forward the persistence intent as a native session grant.
+          return { accepted: resolvePendingInteraction(requestId, { kind: 'permission', behavior: 'allow',
+            ...(value.updatedInput ? { updatedInput: value.updatedInput as Record<string, unknown> } : {}) }), remembered: true };
+        } finally { entry.remembering = false; }
       }
       if (resolvePendingInteraction(requestId, decision as InteractionDecision)) {
         return { accepted: true };

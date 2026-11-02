@@ -98,6 +98,7 @@ export default defineConfig({
     // Main-process code is pure Node — no DOM needed. Renderer tests (if/when
     // added) should switch to 'jsdom' via per-file `// @vitest-environment`.
     environment: 'node',
+    globalSetup: [path.resolve(__dirname, 'src/test/vitest/retainSqliteBinding.mjs')],
     // Keep include arrays project-local: Vitest merges array options inherited
     // through extends:true, so a root include would make the resource project
     // collect standard tests too. The two projects remain mutually exclusive.

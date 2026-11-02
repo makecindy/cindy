@@ -109,6 +109,20 @@ export interface InitializeResponse {
   [k: string]: unknown;
 }
 
+/** config/read is a fresh cwd configuration view, not loaded thread policy.
+ * Keep arbitrary config values opaque; source import consumes only metadata. */
+export interface ConfigReadParams { includeLayers: boolean; cwd?: string | null }
+export interface ConfigReadResponse {
+  config?: unknown;
+  origins?: Record<string, unknown>;
+  layers?: Array<{
+    name: { type: string; file?: string; profile?: string | null; [key: string]: unknown };
+    version: string;
+    config?: unknown;
+    disabledReason?: string | null;
+  }> | null;
+}
+
 // ── ModelList (v2.rs) ───────────────────────────────────────────────────────
 
 /**

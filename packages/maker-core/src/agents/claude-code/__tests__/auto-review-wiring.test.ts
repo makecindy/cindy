@@ -28,6 +28,7 @@ import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
   type AutoReviewRequest,
+  type PersonalTurnObservation,
 } from '../../shared/auto-review-decision.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
@@ -41,6 +42,9 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeCodeAgent } from '../index.js';
+import { normalizeRuleGroup } from '../../shared/approval-rules/normalize.js';
+import { parseApprovalRuleSnapshot } from '../../shared/approval-rules/schema.js';
+import { requirementsOrigin } from '../../shared/approval-rules/requirements.js';
 
 it.each(['ask', 'auto', 'bypassPermissions'] as const)(
   'enforces a text-only turn at PreToolUse in %s and clears it on the next send',
@@ -159,9 +163,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Existing observation fixtures keep their scenarios/expectations; only this
+// test transport adapter supplies the new structured Host result contract.
+type TestObserve = (request: Parameters<NonNullable<AgentDeps['onClaudeLiveUserRules']>>[0]) =>
+  Promise<void | PersonalTurnObservation>;
+
 async function startSession(
   permissionMode: PermissionMode,
   options: {
+    observe?: TestObserve;
+    observeResult?: AgentDeps['onClaudeLiveUserRules'];
     providerId?: string;
     deviceHosted?: DeviceHostedSession;
     authSource?: 'oauth' | 'api-key';
@@ -193,14 +204,18 @@ async function startSession(
     verdict: options.reviewVerdict ?? 'allow',
     reason: 'reviewed',
   }));
-  const agent = new ClaudeCodeAgent(createDeps({
+  const agent = new ClaudeCodeAgent({ ...createDeps({
     authSource: options.authSource,
     reviewAutoPermissionAction,
     mcpProviderNames: options.mcpProviderNames,
     getMcpToolApprovalPolicy: options.mcpToolApprovalPolicy,
-  }));
+  }), onClaudeLiveUserRules: options.observeResult ?? (options.observe ? async request => {
+    const observation = await options.observe!(request);
+    return { kind: 'unavailable', reason: 'fixture-native-content-unavailable', ...(observation ? { observation } : {}) };
+  } : undefined) });
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
+    sessionInstanceId: 'personal-instance',
     model: options.model ?? 'claude-opus-4-6',
     providerId: options.providerId ?? 'xd',
     workingDir,
@@ -1256,6 +1271,7 @@ describe('Auto-review wiring: only affects the auto mode', () => {
     await canUseTool('Bash', { command: 'ls -la' }, { toolUseID: 't7' });
     // default 档下内置工具不走 auto-review 策略,照旧交 resolver。
     expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.autoCommand).toBeUndefined();
     await handle.close();
   });
 });
@@ -1345,4 +1361,649 @@ node --test .tests/cindy-contacts.test.mjs` };
     expect(seen).toEqual([]);
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
   } finally { await handle.close(); }
+});
+
+// Unit: actual send -> installed Host observation -> SDK canUseTool. Existing
+// callback tests had no personal rules and could not detect shortcut/confirmation bypass.
+describe('same-Query personal rules in CC Auto', () => {
+  // Unit / first-red contract (2026-10-26): existing tests change a matched
+  // deny/ask or the action, not residual text during the SECOND review/card.
+  // Use today's schema-valid Cindy residual (not the proposed neutral variant),
+  // so grammar/schema rejection cannot masquerade as a timing regression.
+  it.each([
+    ['review', false], ['review', true], ['confirmation', false], ['confirmation', true],
+    ['final-read', false], ['final-read', true],
+  ] as const)('binds the second %s to the reviewed original (changed=%s)', async (boundary, changed) => {
+    const texts = ['Bash(*private-v1*)', 'Bash(*private-v2*)', 'Bash(*private-v3*)'];
+    let version = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    let reviews = 0;
+    let readsAfterSecondReview = 0;
+    const reviewer = vi.fn(async () => {
+      if (++reviews === 1) return { verdict: 'ask' as const };
+      if (boundary === 'review') { entered(); await gate; }
+      return { verdict: boundary === 'confirmation' ? 'ask' as const : 'allow' as const };
+    });
+    let confirmations = 0;
+    const h = await startSession('auto', { reviewer, observe: async request => {
+      const scope = { ownerId: 'test-owner', executionHostId: 'test-host', harnesses: ['claude-code' as const] };
+      return { scope: { ...scope, projectId: request.workingDir }, groups: [], fingerprint: 'no-native-content',
+        revalidate: async () => request.execution?.isCurrent() === true,
+        readManaged: async () => {
+          // Suspend the final read, after the second reviewer and its first
+          // revalidation completed. A final refresh must not bless new text.
+          if (boundary === 'final-read' && reviews === 2 && ++readsAfterSecondReview === 2) {
+            entered(); await gate;
+          }
+          const group = normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'residual-timing-fixture',
+            locator: 'cindy://personal-approval/residual-timing-fixture', dialectVersion: '1', decisionDomain: 'personal-approval' },
+          scope, [{ id: 'known', original: 'Bash(pwd)', decision: 'allow',
+            matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' } },
+          { id: 'residual', original: texts[version]!, decision: 'deny', reason: 'unverified wildcard' }]);
+          const snapshot = parseApprovalRuleSnapshot({ schemaVersion: 1, revision: group.revision, groups: [group], tombstones: [] });
+          return { scope, groups: snapshot.groups, fingerprint: JSON.stringify(snapshot.groups) };
+        } };
+    }, interactionResolver: async () => {
+      confirmations++;
+      if (confirmations === 1) version = 1; // First card is now stale: one re-review is necessary.
+      else if (boundary === 'confirmation') { entered(); await gate; }
+      return { kind: 'permission', behavior: 'allow' };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the working directory.' });
+      const pending = h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'residual-second-' + boundary });
+      await Promise.race([reached, pending.then(result => {
+        throw new Error('Callback settled before second boundary: ' + JSON.stringify(result));
+      })]);
+      expect(reviewer).toHaveBeenCalledTimes(2);
+      expect(h.seen).toHaveLength(boundary === 'confirmation' ? 2 : 1);
+      for (const [index, original] of texts.slice(0, 2).entries()) {
+        const reviewed = reviewedRequest(reviewer, index);
+        expect(reviewed.action).toMatchObject({ kind: 'exec', command: 'pwd' });
+        expect(reviewed.personalRequirements?.groups[0]?.clauses.map(clause => clause.original))
+          .toEqual(['Bash(pwd)', original]);
+      }
+      if (changed) version = 2;
+      release();
+      const result = await pending;
+      expect.soft(result.behavior).toBe(changed ? 'deny' : 'allow');
+      expect(reviewer).toHaveBeenCalledTimes(2);
+      expect(confirmations).toBe(boundary === 'confirmation' ? 2 : 1);
+      expect(h.seen).toHaveLength(confirmations);
+    } finally { release(); await h.handle.close(); }
+  });
+
+  it('does not repeat the same live Auto ask after remembering the exact command', async () => {
+    let remembered: Extract<InteractionRequest, { kind: 'permission' }>['autoCommand'];
+    let liveDecision: 'ask' | 'deny' = 'ask';
+    const original: TestObserve = request => observe(liveDecision, 'git push')(request);
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => ({ scope: value.scope, fingerprint: String(!!remembered),
+        groups: remembered ? [normalizeRuleGroup({ harness: 'cindy', layer: 'user', sourceId: 'exact-bash:remembered',
+          locator: 'cindy://personal-approval/exact-bash/remembered', dialectVersion: '1', decisionDomain: 'personal-approval' },
+        { ...value.scope, projectId: undefined }, [{ id: 'remembered', original: 'Bash(git push)', decision: 'allow',
+          matcher: { kind: 'cc-command', mode: 'exact', pattern: 'git push' }, tool: { domain: 'exec', name: 'Bash' },
+          autoAskExceptions: remembered.autoAskExceptions }])] : [] }) };
+    }, reviewer: vi.fn(async () => ({ verdict: 'allow' as const })),
+    interactionResolver: async request => {
+      if (request.kind === 'permission') remembered = request.autoCommand;
+      expect(remembered?.autoAskExceptions).toHaveLength(1);
+      return { kind: 'permission', behavior: 'allow' };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'remember-first' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(1);
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'remember-second' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(1);
+      remembered = undefined;
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'remember-removed' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(2);
+      liveDecision = 'deny';
+      // A new accepted input supplies a new native observation; stored allow never overrides its deny.
+      await h.handle.abort();
+      await h.handle.send({ type: 'user', content: 'Check the operation again.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'remember-native-deny' })).behavior).toBe('deny');
+      expect(h.seen).toHaveLength(2);
+    } finally { await h.handle.close(); }
+  });
+  function observe(decision: 'allow' | 'ask' | 'deny', command: string, current = () => true,
+    residual = false): TestObserve {
+    return async request => ({ scope: { ownerId: 'test-owner', executionHostId: 'test-host', projectId: request.workingDir, harnesses: ['claude-code'] }, fingerprint: 'fixture:' + decision + command + residual,
+      groups: [normalizeRuleGroup({ harness: 'claude-code', layer: 'user', sourceId: 'fixture-live',
+        locator: 'claude-code-live://userSettings/fixture', dialectVersion: 'live-user-v1', decisionDomain: 'personal-approval' },
+      { ownerId: 'test-owner', executionHostId: 'test-host', harnesses: ['claude-code'] }, [
+        { id: 'known', original: 'Bash(' + command + ')', decision,
+          matcher: { kind: 'cc-command', mode: 'exact', pattern: command } },
+        ...(residual ? [{ id: 'unknown', original: 'Bash(*private*)', decision: 'deny' as const, reason: 'unverified wildcard' }] : []),
+      ])], revalidate: async () => current() && request.execution?.isCurrent() !== false });
+  }
+  // Real send/canUseTool: managed state can change after input acceptance,
+  // including while the original reviewer or human confirmation is pending.
+  it.each(['ask', 'deny', 'allow'] as const)('consumes the current managed %s without another send', async decision => {
+    const original = observe('allow', 'unrelated');
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => {
+        const active = await observe(decision, 'git push')(request);
+        return { ...active!, fingerprint: 'active:' + decision };
+      } };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'immediate-' + decision })).behavior)
+        .toBe(decision === 'deny' ? 'deny' : 'allow');
+      expect(h.seen).toHaveLength(decision === 'ask' ? 1 : 0);
+    } finally { await h.handle.close(); }
+  });
+  it.each(['reviewer', 'confirmation'] as const)('discards an old %s allow when a managed deny becomes active', async boundary => {
+    let decision: 'allow' | 'deny' = 'allow';
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = observe('allow', 'unrelated');
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => (await observe(decision, 'git push')(request))! };
+    }, reviewer: vi.fn(async () => { if (boundary === 'reviewer') await gate; return { verdict: boundary === 'confirmation' ? 'ask' as const : 'allow' as const }; }),
+    interactionResolver: async () => { await gate; return { kind: 'permission', behavior: 'allow' }; } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'immediate-pending' });
+      await vi.waitFor(() => expect(boundary === 'reviewer' ? vi.mocked(h.reviewAutoPermissionAction!).mock.calls.length : h.seen.length).toBe(1));
+      decision = 'deny'; release();
+      expect((await pending).behavior).toBe('deny');
+    } finally { release(); await h.handle.close(); }
+  });
+  it('invalidates the old allow cache, activates ask and deny, and removes the contribution without another input', async () => {
+    let active: 'ask' | 'deny' | undefined;
+    const original = observe('allow', 'unrelated');
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => {
+        const now = (await observe(active ?? 'allow', 'git push')(request))!;
+        return { ...now, groups: active ? now.groups : [], fingerprint: active ?? 'removed' };
+      } };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'cached-allow' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(0);
+      active = 'ask';
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'new-ask' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(1);
+      active = undefined;
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'removed-ask' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(1);
+      active = 'deny';
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'new-deny' })).behavior).toBe('deny');
+    } finally { await h.handle.close(); }
+  });
+  it('keeps native Auto routing when the managed read is unavailable', async () => {
+    const original = observe('allow', 'pwd');
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request); return value && { ...value, readManaged: async () => undefined };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the directory.' });
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'unavailable-managed' })).behavior).toBe('allow');
+      expect(h.seen).toHaveLength(0);
+    } finally { await h.handle.close(); }
+  });
+  it.each([true, false])('withdraws a pending managed-read failure in FullAccess only if identity remains current (%s)', async current => {
+    let release!: () => void; let reading = false; let ownerCurrent = true;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = observe('allow', 'unrelated', () => ownerCurrent);
+    const h = await startSession('auto', { observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => { reading = true; await gate; throw new Error('publication changed during read'); } };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'managed-full-access' });
+      await vi.waitFor(() => expect(reading).toBe(true));
+      await h.handle.setPermissionMode!('bypassPermissions'); ownerCurrent = current; release();
+      expect((await pending).behavior).toBe(current ? 'allow' : 'deny');
+      expect(h.seen).toHaveLength(0);
+    } finally { release(); await h.handle.close(); }
+  });
+  it('does not let a wide allow plus unknown sibling skip the actual reviewer', async () => {
+    const h = await startSession('auto', { observe: observe('allow', 'pwd', () => true, true) });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'personal-residual' })).behavior).toBe('allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce();
+      expect(reviewedRequest(h.reviewAutoPermissionAction!).personalRequirements?.groups[0]?.clauses).toHaveLength(2);
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'personal-residual-again' })).behavior).toBe('allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledTimes(2);
+    } finally { await h.handle.close(); }
+  });
+  it('reviews unknown siblings before enforcing the matched program ask', async () => {
+    const h = await startSession('auto', { observe: observe('ask', 'pwd', () => true, true) });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'personal-ask-residual' })).behavior).toBe('allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce();
+      expect(reviewedRequest(h.reviewAutoPermissionAction!).personalRequirements?.groups[0]?.clauses).toHaveLength(2);
+      expect(h.seen).toHaveLength(1);
+    } finally { await h.handle.close(); }
+  });
+  it.each(['ask', 'deny'] as const)('enforces program %s despite ordinary reviewer allow', async decision => {
+    const h = await startSession('auto', { observe: observe(decision, 'git push') });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-' + decision })).behavior)
+        .toBe(decision === 'deny' ? 'deny' : 'allow');
+      expect(h.seen).toHaveLength(decision === 'ask' ? 1 : 0);
+      if (decision === 'deny') expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+    } finally { await h.handle.close(); }
+  });
+  it('keeps personal deny when an existing per-turn confirmation policy wraps the action', async () => {
+    const h = await startSession('auto', { observe: observe('deny', 'git push') });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' }, { turnPermissionPolicy: { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true } });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-normalized' })).behavior).toBe('deny');
+      expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+    } finally { await h.handle.close(); }
+  });
+  it('rematches the real updated command after confirmation instead of using the old allow', async () => {
+    const h = await startSession('auto', { observe: observe('deny', 'git push'), reviewVerdict: 'ask',
+      interactionResolver: async () => ({ kind: 'permission', behavior: 'allow', updatedInput: { command: 'git push' } }) });
+    try {
+      await h.handle.send({ type: 'user', content: 'Download the requested file.' });
+      expect((await h.canUseTool('Bash', { command: 'git push origin main' }, { toolUseID: 'personal-updated' })).behavior).toBe('deny');
+      expect(h.seen).toHaveLength(1);
+    } finally { await h.handle.close(); }
+  });
+  it.each(['program-ask', 'unknown'] as const)('reviews edited Bash input with its %s instead of reusing the old card', async scenario => {
+    const reviewer = vi.fn().mockResolvedValueOnce({ verdict: 'ask' })
+      .mockResolvedValue({ verdict: scenario === 'unknown' ? 'ask' : 'allow' });
+    let confirmations = 0;
+    const h = await startSession('auto', {
+      observe: observe(scenario === 'unknown' ? 'allow' : 'ask', 'git push', () => true, scenario === 'unknown'),
+      reviewer, interactionResolver: async () => ++confirmations === 1
+        ? { kind: 'permission', behavior: 'allow', updatedInput: { command: 'git push' } }
+        : { kind: 'permission', behavior: 'deny', reason: 'Decline the edited command.' },
+    });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const result = await h.canUseTool('Bash', { command: 'git push origin main' }, { toolUseID: 'personal-edited-' + scenario });
+      expect(result.behavior).toBe('deny');
+      expect(h.seen).toHaveLength(2);
+      expect(h.seen[1]).toMatchObject({ kind: 'permission', input: { command: 'git push' },
+        autoCommand: { harness: 'claude-code', command: 'git push' } });
+      expect(reviewer).toHaveBeenCalledTimes(scenario === 'unknown' ? 2 : 1);
+      if (scenario === 'unknown') {
+        const edited = reviewedRequest(reviewer, 1);
+        expect(edited.action).toMatchObject({ kind: 'exec', command: 'git push' });
+        expect(edited.personalRequirements?.groups[0]?.clauses).toHaveLength(2);
+      }
+    } finally { await h.handle.close(); }
+  });
+  // Real callback timing regression: the edited command's reviewer result must
+  // not consume an ask published only while that second review was pending.
+  it.each(['allow', 'deny', 'full-access'] as const)('rechecks a new ask during edited-command review (%s)', async answer => {
+    let activeAsk = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = observe('allow', 'unrelated');
+    const reviewer = vi.fn().mockResolvedValueOnce({ verdict: 'ask' })
+      .mockImplementation(async () => { await gate; return { verdict: 'allow' }; });
+    let confirmations = 0;
+    const h = await startSession('auto', { reviewer, observe: async request => {
+      const value = await original(request);
+      return value && { ...value, readManaged: async () => {
+        const current = (await observe('ask', 'git push')(request))!;
+        return { ...current, groups: activeAsk ? current.groups : [], fingerprint: String(activeAsk) };
+      } };
+    }, interactionResolver: async () => ++confirmations === 1
+      ? { kind: 'permission', behavior: 'allow', updatedInput: { command: 'git push' } }
+      : { kind: 'permission', behavior: answer === 'deny' ? 'deny' : 'allow' } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push origin main' }, { toolUseID: 'edited-pending-ask' });
+      await vi.waitFor(() => expect(reviewer).toHaveBeenCalledTimes(2));
+      activeAsk = true;
+      if (answer === 'full-access') await h.handle.setPermissionMode!('bypassPermissions');
+      release();
+      expect((await pending).behavior).toBe(answer === 'deny' ? 'deny' : 'allow');
+      expect(h.seen).toHaveLength(answer === 'full-access' ? 1 : 2);
+      if (answer !== 'full-access') expect(h.seen[1]).toMatchObject({ kind: 'permission', input: { command: 'git push' } });
+    } finally { release(); await h.handle.close(); }
+  });
+  it.each(['reviewer', 'confirmation'] as const)('rejects pending %s after a new accepted input', async stage => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = await startSession('auto', { observe: observe('allow', 'git push'),
+      reviewer: vi.fn(async () => { if (stage === 'reviewer') await gate; return { verdict: stage === 'reviewer' ? 'allow' as const : 'ask' as const }; }),
+      interactionResolver: async () => { await gate; return { kind: 'permission', behavior: 'allow' }; } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-new-input' });
+      await vi.waitFor(() => stage === 'reviewer'
+        ? expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce() : expect(h.seen).toHaveLength(1));
+      await h.handle.steer!({ type: 'user', content: 'Stop that work.' });
+      release();
+      expect((await pending).behavior).toBe('deny');
+    } finally { release(); await h.handle.close(); }
+  });
+  it.each(['allow', 'deny'] as const)('keeps FullAccess and explicit human %s semantics after a personal ask', async behavior => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = await startSession('auto', { observe: observe('ask', 'git push'),
+      interactionResolver: async () => { await gate; return { kind: 'permission', behavior }; } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-full' });
+      await vi.waitFor(() => expect(h.seen).toHaveLength(1));
+      if (behavior === 'allow') await h.handle.setPermissionMode!('bypassPermissions');
+      release();
+      const result = await pending;
+      if (behavior === 'deny') await h.handle.setPermissionMode!('bypassPermissions');
+      expect(result.behavior).toBe(behavior);
+      expect(h.seen).toHaveLength(1);
+    } finally { release(); await h.handle.close(); }
+  });
+  it('keeps the existing FullAccess dismissal while the SDK mode control is still pending', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = await startSession('auto', { observe: observe('ask', 'git push'),
+      interactionResolver: () => new Promise<InteractionDecision>(() => {}) });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      const pending = h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-full-pending-control' });
+      await vi.waitFor(() => expect(h.seen).toHaveLength(1));
+      h.fakeQuery.setPermissionMode.mockImplementationOnce(async () => { await gate; });
+      const switching = h.handle.setPermissionMode!('bypassPermissions');
+      expect((await pending).behavior).toBe('allow');
+      release();
+      await switching;
+    } finally { release(); await h.handle.close(); }
+  });
+  it('retains a real accepted-turn lease after the observation deadline ends', async () => {
+    let requestSeen: Parameters<NonNullable<AgentDeps['onClaudeLiveUserRules']>>[0] | undefined;
+    const delegate = observe('deny', 'git push');
+    const h = await startSession('auto', { observe: async request => { requestSeen = request; return delegate(request); } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect(requestSeen?.isCurrent()).toBe(false);
+      expect(requestSeen?.signal.aborted).toBe(true);
+      expect(requestSeen?.execution?.isCurrent()).toBe(true);
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-after-observation' })).behavior).toBe('deny');
+    } finally { await h.handle.close(); }
+  });
+  it.each(['reviewer', 'confirmation'] as const)('discards a stale Host lease after pending %s', async stage => {
+    let current = true;
+    const h = await startSession('auto', { observe: observe('allow', 'git push', () => current),
+      reviewer: async () => { if (stage === 'reviewer') current = false; return { verdict: stage === 'confirmation' ? 'ask' : 'allow' }; },
+      interactionResolver: async () => { current = false; return { kind: 'permission', behavior: 'allow' }; } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Do the requested work.' });
+      expect((await h.canUseTool('Bash', { command: 'git push' }, { toolUseID: 'personal-stale' })).behavior).toBe('deny');
+    } finally { await h.handle.close(); }
+  });
+});
+
+// Unit: revision56 acceptance showed native shortcuts bypassing canUseTool.
+// Exercise the actual agent-registered hooks independently from its callback;
+// the transport stub neither merges decisions nor turns hook ask into callback.
+// Existing callback/timing coverage cannot prove that missing routing decision.
+describe('whole personal requirements at the registered Bash hook boundary', () => {
+  const original = 'Read(private)\r\n  保留完整原文 🧪 e\u0301\n末行  ';
+  const observe: TestObserve = async request => {
+    const scope = { ownerId: 'test-owner', executionHostId: 'test-host',
+      projectId: request.workingDir, harnesses: ['claude-code' as const] };
+    const group = normalizeRuleGroup(requirementsOrigin('hook-routing'), scope, [
+      { id: 'requirement', original, decision: 'requirement', reason: 'user-authored-verbatim',
+        tool: { domain: 'exec', name: 'Bash' } },
+      { id: 'known', original: 'Read(explicit exec pwd)', decision: 'allow',
+        matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' }, tool: { domain: 'exec', name: 'Bash' } },
+    ]);
+    const snapshot = parseApprovalRuleSnapshot({ schemaVersion: 1, revision: 1, groups: [group], tombstones: [] });
+    return { scope, groups: [], fingerprint: 'no-native-ask-fixture',
+      revalidate: async () => request.execution?.isCurrent() === true,
+      readManaged: async () => ({ scope, groups: snapshot.groups, fingerprint: JSON.stringify(snapshot.groups) }) };
+  };
+  it.each(['cindy', 'native', 'default', 'full-access', 'plan', 'descendant', 'no-observer', 'text-only'] as const)(
+    'routes only the qualified Cindy Auto root to its callback (%s)', async scenario => {
+      const mode = scenario === 'default' ? 'ask' : scenario === 'full-access' ? 'bypassPermissions' : 'auto';
+      const h = await startSession(mode, {
+        observe: scenario === 'no-observer' ? undefined : observe,
+        initMcpServerNames: ['routing-fixture'],
+        ...(scenario === 'native' ? { providerId: 'anthropic', authSource: 'oauth' as const } : {}),
+      });
+      try {
+        if (scenario === 'plan') await h.handle.setPlanMode!(true);
+        await h.handle.send({ type: 'user', content: 'Show the current directory.' }, { toolsDisabled: scenario === 'text-only' });
+        expect(h.handle.requestSessionId).toBe('sdk-auto-review');
+        expect(h.handle.getAutoReviewOwner?.()).toBe(scenario === 'native' ? 'native' : 'cindy');
+        const registered = sdkMock.query.mock.calls.at(-1)![0].options.hooks.PreToolUse;
+        const results: unknown[] = [];
+        for (const matcher of registered) {
+          if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test('Bash')) continue;
+          for (const hook of matcher.hooks) results.push(await hook({
+            hook_event_name: 'PreToolUse', session_id: 'sdk-auto-review', cwd: h.workingDir,
+            transcript_path: '', tool_name: 'Bash', tool_input: { command: 'pwd' },
+            ...(scenario === 'descendant' ? { agent_id: 'child-1', agent_type: 'worker' } : {}),
+          }, 'hook-routing-pwd', { signal: new AbortController().signal }));
+        }
+        const ask = expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'ask' }) });
+        if (scenario === 'cindy') expect(results).toContainEqual(ask);
+        else expect(results).not.toContainEqual(ask);
+        if (scenario === 'text-only') expect(results).toContainEqual(expect.objectContaining({
+          hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }),
+        }));
+        expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+        expect(h.seen).toHaveLength(0);
+      } finally { await h.handle.close(); }
+    },
+  );
+  it('already reviews the complete group and allows without a human card when called directly', async () => {
+    const h = await startSession('auto', { observe, initMcpServerNames: ['routing-fixture'] });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the current directory.' });
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'direct-callback-pwd' })).behavior).toBe('allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce();
+      const request = reviewedRequest(h.reviewAutoPermissionAction);
+      expect(request.personalRequirements?.groups).toHaveLength(1);
+      expect(request.personalRequirements?.groups[0]?.clauses.map(clause => clause.original))
+        .toEqual([original, 'Read(explicit exec pwd)']);
+      expect(JSON.stringify(request.userIntent)).not.toContain('Read(private)');
+      expect(h.seen).toHaveLength(0);
+    } finally { await h.handle.close(); }
+  });
+
+  // These calls enumerate registered handlers only; no SDK decision merger or
+  // automatic hook-to-callback execution is supplied by the test transport.
+  function registeredBashCall(h: { handle: AgentSessionHandle; workingDir: string },
+    registered = sdkMock.query.mock.calls.at(-1)![0].options.hooks.PreToolUse,
+    command = { command: 'pwd' }, signal = new AbortController().signal) {
+    return (async () => {
+      const results: unknown[] = [];
+      for (const matcher of registered) {
+        if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test('Bash')) continue;
+        for (const hook of matcher.hooks) results.push(await hook({
+          hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: command,
+          session_id: h.handle.requestSessionId, tool_use_id: 'lease-pwd', cwd: h.workingDir,
+          transcript_path: '',
+        }, 'lease-pwd', { signal }));
+      }
+      return results;
+    })();
+  }
+  const routeAsk = () => expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'ask' }) });
+  const contextDeny = () => expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }) });
+
+  it.each(['unchanged', 'edited', 'deleted', 'deny'] as const)('refreshes the whole group between route and callback (%s)', async change => {
+    let version: 'unchanged' | 'edited' | 'deleted' | 'deny' = 'unchanged';
+    const h = await startSession('auto', { initMcpServerNames: ['routing-fixture'], observe: async request => {
+      const value = await observe(request);
+      if (!value?.readManaged) throw new Error('Expected managed observation');
+      return { ...value, readManaged: async () => {
+        const managed = await value.readManaged!();
+        if (!managed || 'kind' in managed) throw new Error('Expected readable fixture');
+        const groups = version === 'deleted' ? [] : managed.groups.map(group => ({ ...group,
+          clauses: group.clauses.map(clause => clause.decision === 'requirement' && version === 'edited'
+            ? { ...clause, original: original + ' edited' }
+            : clause.decision !== 'requirement' && version === 'deny' ? { ...clause, decision: 'deny' as const } : clause) }));
+        return { ...managed, groups, fingerprint: JSON.stringify(groups) };
+      } };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the current directory.' });
+      expect(await registeredBashCall(h)).toContainEqual(routeAsk());
+      expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+      version = change;
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'lease-pwd' })).behavior).toBe(change === 'deny' ? 'deny' : 'allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledTimes(change === 'deleted' || change === 'deny' ? 0 : 1);
+      if (change !== 'deleted' && change !== 'deny') expect(reviewedRequest(h.reviewAutoPermissionAction).personalRequirements?.groups[0]?.clauses[0]?.original)
+        .toBe(original + (change === 'edited' ? ' edited' : ''));
+      expect(h.seen).toHaveLength(0);
+    } finally { await h.handle.close(); }
+  });
+
+  it.each(['stop', 'directory', 'input', 'signal', 'full-access'] as const)('rechecks the captured execution while route read is pending (%s)', async change => {
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void; const reading = new Promise<void>(resolve => { entered = resolve; });
+    const h = await startSession('auto', { initMcpServerNames: ['routing-fixture'], observe: async request => {
+      const value = await observe(request);
+      if (!value?.readManaged) throw new Error('Expected managed observation');
+      return { ...value, readManaged: async () => { entered(); await gate; return value.readManaged!(); } };
+    } });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the current directory.' });
+      const actualInput = { command: 'pwd' }; const cancellation = new AbortController();
+      const pending = registeredBashCall(h, undefined, actualInput, cancellation.signal);
+      await reading;
+      if (change === 'stop') await h.handle.abort();
+      if (change === 'directory') await h.handle.setExtraDirs!([await makeTempDir()]);
+      if (change === 'input') actualInput.command = 'printf CHANGED';
+      if (change === 'signal') cancellation.abort();
+      if (change === 'full-access') await h.handle.setPermissionMode!('bypassPermissions');
+      release();
+      const results = await pending;
+      expect(results).not.toContainEqual(routeAsk());
+      if (change === 'full-access') expect(results).not.toContainEqual(contextDeny());
+      else expect(results).toContainEqual(contextDeny());
+      expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+      expect(h.seen).toHaveLength(0);
+    } finally { release(); await h.handle.close(); }
+  });
+
+  it('never borrows the next Query personal lease from an old registered hook', async () => {
+    const h = await startSession('auto', { observe, initMcpServerNames: ['routing-fixture'] });
+    try {
+      await h.handle.send({ type: 'user', content: 'Show the current directory.' });
+      const oldHooks = sdkMock.query.mock.calls.at(-1)![0].options.hooks.PreToolUse;
+      expect(await registeredBashCall(h, oldHooks)).toContainEqual(routeAsk());
+      await h.handle.abort();
+      await h.handle.setExtraDirs!([await makeTempDir()]);
+      const nextQuery = createFakeQuery(['routing-fixture']);
+      sdkMock.query.mockReturnValue(nextQuery);
+      await h.handle.send({ type: 'user', content: 'Show the current directory again.' });
+      expect(sdkMock.query.mock.results.at(-1)?.value).toBe(nextQuery);
+      expect(await registeredBashCall(h)).toContainEqual(routeAsk());
+      const stale = await registeredBashCall(h, oldHooks);
+      expect(stale).not.toContainEqual(routeAsk());
+      expect(stale).toContainEqual(contextDeny());
+    } finally { await h.handle.close(); }
+  });
+
+  // Unit C: same actual send/gate/callback, new Host result protocol only.
+  // Existing timing cases begin with an accepted verified observation; they miss
+  // early handoff/final replacement and candidates never accepted by the queue.
+  it.each(['final-unavailable', 'final-native-ask', 'mode-cycle', 'acceptance-failed'] as const)(
+    'keeps the input lease and native final content distinct (%s)', async scenario => {
+      let observations = 0;
+      const h = await startSession('auto', { initMcpServerNames: ['routing-fixture'],
+        observeResult: async request => {
+          observations++;
+          const value = await observe(request);
+          if (!value) throw new Error('Expected managed fixture');
+          request.onManagedObservation?.(value);
+          if (scenario === 'final-native-ask') {
+            const native = normalizeRuleGroup({ harness: 'claude-code', layer: 'user', sourceId: 'native-final',
+              locator: 'claude-code-live://userSettings/native-final', dialectVersion: 'live-user-v1', decisionDomain: 'personal-approval' },
+            value.scope, [{ id: 'ask', original: 'Bash(pwd)', decision: 'ask',
+              matcher: { kind: 'cc-command', mode: 'exact', pattern: 'pwd' } }]);
+            return { kind: 'saved', revision: 1, observation: { ...value, groups: [native] } };
+          }
+          // Missing final native content must not erase the independent handoff.
+          return { kind: 'unavailable', reason: 'native-content-failed' };
+        },
+        interactionResolver: async () => ({ kind: 'permission', behavior: 'deny' }),
+      });
+      try {
+        if (scenario === 'acceptance-failed') {
+          const queue = sdkMock.query.mock.calls.at(-1)![0].prompt as { push(value: unknown): boolean };
+          vi.spyOn(queue, 'push').mockReturnValueOnce(false);
+          await expect(h.handle.send({ type: 'user', content: 'Unaccepted input.' })).rejects.toThrow('input queue is closed');
+        } else {
+          await h.handle.send({ type: 'user', content: 'Report pwd.' });
+          if (scenario === 'mode-cycle') {
+            await h.handle.setPermissionMode!('ask');
+            await h.handle.setPermissionMode!('auto');
+          }
+        }
+        if (scenario === 'acceptance-failed' || scenario === 'mode-cycle') {
+          expect(await registeredBashCall(h)).toContainEqual(contextDeny());
+          expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'unverified-input' })).behavior).toBe('deny');
+          expect(h.reviewAutoPermissionAction).not.toHaveBeenCalled();
+          expect(h.seen).toHaveLength(0);
+          await h.handle.send({ type: 'user', content: 'New accepted input: report pwd.' });
+          expect(observations).toBe(2);
+        }
+        expect(await registeredBashCall(h)).toContainEqual(routeAsk());
+        expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'current-accepted-input' })).behavior)
+          .toBe(scenario === 'final-native-ask' ? 'deny' : 'allow');
+        expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce();
+        expect(h.seen).toHaveLength(scenario === 'final-native-ask' ? 1 : 0);
+        if (scenario === 'final-native-ask') {
+          expect(reviewedRequest(h.reviewAutoPermissionAction).personalRequirements?.groups[0]?.clauses[0]?.decision).toBe('ask');
+        }
+      } finally { await h.handle.close(); }
+    },
+  );
+
+  it('ignores late early-handoff and final results after the next input is accepted', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    let finished!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const completed = new Promise<void>(resolve => { finished = resolve; });
+    let attempts = 0;
+    const h = await startSession('auto', { initMcpServerNames: ['routing-fixture'], observeResult: async request => {
+      const value = await observe(request);
+      if (!value) throw new Error('Expected managed fixture');
+      if (++attempts === 1) {
+        entered(); await gate;
+        request.onManagedObservation?.(value); // Deliberately after the bounded deadline.
+        finished();
+        return { kind: 'unavailable', reason: 'late', observation: value };
+      }
+      request.onManagedObservation?.(value);
+      return { kind: 'unavailable', reason: 'native-content-failed' };
+    } });
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      const sending = h.handle.send({ type: 'user', content: 'First unverified input.' });
+      await reached;
+      await vi.advanceTimersByTimeAsync(1001);
+      await sending;
+      vi.useRealTimers();
+      expect(await registeredBashCall(h)).toContainEqual(contextDeny());
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'first-unverified' })).behavior).toBe('deny');
+      await h.handle.send({ type: 'user', content: 'Next accepted input.' });
+      release(); await completed;
+      expect(await registeredBashCall(h)).toContainEqual(routeAsk());
+      expect((await h.canUseTool('Bash', { command: 'pwd' }, { toolUseID: 'next-after-late' })).behavior).toBe('allow');
+      expect(h.reviewAutoPermissionAction).toHaveBeenCalledOnce();
+      expect(h.seen).toHaveLength(0);
+    } finally { vi.useRealTimers(); release(); await h.handle.close(); }
+  });
+
 });

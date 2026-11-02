@@ -1425,6 +1425,11 @@ export class Maker {
     this.localPiPackageRuntimeGeneration += 1;
   }
 
+  /** Read the existing package fence without changing runtime lifecycle. */
+  getLocalPiPackageRuntimeGeneration(): number {
+    return this.localPiPackageRuntimeGeneration;
+  }
+
   /** 列出所有当前激活的 session */
   listActiveSessions(): Session[] {
     return Array.from(this.activeSessions.values());

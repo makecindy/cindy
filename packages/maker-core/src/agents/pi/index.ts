@@ -1,3 +1,4 @@
+import { isSupportedManagedCommand } from '../shared/approval-rules/evaluate.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
@@ -160,6 +161,8 @@ import {
   withAutoReviewContext,
   toolAutoReviewAction,
   type AutoReviewDecision,
+  type AutoReviewRequest,
+  type ManagedAutoReviewFence,
 } from '../shared/auto-review-decision.js';
 import { applyPiDisabledSkillSettings, filterPiDisabledProjectSkills, piDisabledDiscoveryPaths } from './skill-activation.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
@@ -3476,6 +3479,7 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode =
       reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
+    let personalPermissionGeneration = 0;
     let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
@@ -3977,6 +3981,22 @@ export class PiAgent extends BaseAgent {
     // package/resource loader. Ordinary local runtimes receive installed roots
     // in their own settings.json; Cindy inspection below is advisory metadata.
     // Review stays hermetic, and SSH runtimes never receive controller paths.
+    const readManagedBuiltinGeneration = (): number | undefined => {
+      try {
+        const generation = this.deps.getPiManagedBuiltinBashGeneration?.();
+        return typeof generation === 'number' && Number.isSafeInteger(generation) && generation >= 0
+          ? generation : undefined;
+      } catch { return undefined; }
+    };
+    // Capture before resource discovery yields. Once observed stale, this exact
+    // runtime cannot recover builtin identity from its old startup arrays.
+    const managedBuiltinGeneration = readManagedBuiltinGeneration();
+    let managedBuiltinRetired = managedBuiltinGeneration === undefined;
+    const isManagedBuiltinBashCurrent = (): boolean => {
+      if (!managedBuiltinRetired && readManagedBuiltinGeneration() !== managedBuiltinGeneration)
+        managedBuiltinRetired = true;
+      return !managedBuiltinRetired;
+    };
     let managedPackageResources: {
       extensions: string[];
       skills: Array<{ path: string; name: string; description?: string }>;
@@ -4334,7 +4354,10 @@ export class PiAgent extends BaseAgent {
     };
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false,
+      managedToolExecution?: Pick<NonNullable<AutoReviewRequest['managedToolExecution']>, 'toolName' | 'input' | 'piExecution'>,
+      captureManagedFence?: (fence: ManagedAutoReviewFence) => void,
+      captureManagedFallback?: (fallback: ManagedAutoReviewFence) => void): Promise<AutoReviewDecision> => {
       // Directory grants become active only after their permission snapshot is
       // durable. While persistence is pending, neither the requested roots nor
       // the old runtime roots are a complete authorization view, so fail closed
@@ -4350,6 +4373,8 @@ export class PiAgent extends BaseAgent {
       }
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
+        ...(managedToolExecution && opts.sessionInstanceId
+          ? { managedToolExecution: { ...managedToolExecution, sessionInstanceId: opts.sessionInstanceId } } : {}),
         sessionId: opts.sessionId,
         agentKind: 'pi' as const,
         providerId: mutableProviderId,
@@ -4366,17 +4391,22 @@ export class PiAgent extends BaseAgent {
       let cacheKey: string | undefined;
       let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        // Losing builtin proof must not start a new model review after the
+        // owner has already switched this ordinary Bash call to Full Access.
+        if (managedToolExecution && permissionMode === 'bypassPermissions')
+          return Promise.resolve({ verdict: 'allow' });
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        cacheKey = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
+        const cacheRequest = prepared.managedToolExecution?.piExecution ? { ...prepared, managedToolExecution: { ...prepared.managedToolExecution, piExecution: undefined } } : prepared;
+        cacheKey = JSON.stringify([cacheRequest, hostAutoApprove, hostShortcutOnly]);
         pending = autoReviewDecisionCache.get(cacheKey);
         if (!pending) {
           pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove, hostShortcutOnly);
           autoReviewDecisionCache.set(cacheKey, pending);
         }
         return pending;
-      }, (decision) => {
+      }, (decision, contribution) => {
         if (!pending || !cacheKey) return decision;
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
             || autoReviewDecisionCache.get(cacheKey) !== pending) {
@@ -4385,9 +4415,13 @@ export class PiAgent extends BaseAgent {
         if (directoryGeneration !== autoReviewDirectoryGeneration || directoryPermissionsPendingPersistence()) {
           return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
         }
-        autoReviewActionContext.record(action, decision);
+        // A withdrawn managed verdict must not pollute ordinary reviewer history.
+        if (contribution !== 'managed') autoReviewActionContext.record(action, decision);
         return decision;
-      });
+      }, captureManagedFence, managedToolExecution ? {
+        isCurrent: isManagedBuiltinBashCurrent,
+        captureFallback: fallback => captureManagedFallback?.(fallback),
+      } : undefined);
     };
     let closed = false;
     /**
@@ -5890,9 +5924,28 @@ export class PiAgent extends BaseAgent {
               isPermissionContextClosed: () => closed || piProcessExited || proc.isClosed || accountBoundaryTeardown,
               turnPermissionPolicy: activeTurnPermissionPolicy,
               sessionId: opts.sessionId ?? '',
+              sessionInstanceId: opts.sessionInstanceId,
               workingDir: opts.workingDir ?? '',
               remote: Boolean(opts.remoteHostId),
               deviceHosted: Boolean(hosted),
+              // Do not infer builtin identity from a name when native/project
+              // extensions can replace that tool. Their execution stays native.
+              personalAutoApplicable: planModeActive === false && !reviewMode && !opts.botRuntimeProfile
+                && !hostedGuest && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly,
+              personalPermissionGeneration,
+              captureRememberCommand: () => {
+                const authority = currentAutoReviewAuthority;
+                const intent = currentAutoReviewIntent;
+                const actions = autoReviewActionContext.precedingBlockedActions;
+                const directory = autoReviewDirectoryGeneration;
+                return () => !closed && !piProcessExited && !proc.isClosed && !accountBoundaryTeardown
+                  && !isCurrentTurnHostAbortRequested(ctx, true) && currentAutoReviewIntent === intent && currentAutoReviewAuthority === authority
+                  && autoReviewActionContext.precedingBlockedActions === actions
+                  && autoReviewDirectoryGeneration === directory;
+              },
+              managedBuiltinBash: isManagedBuiltinBashCurrent() && nativePackagePaths.length === 0
+                && managedPackageResources.extensions.length === 0
+                && projectResourceCli.extensions.length === 0,
               allowPiPackageManagement,
               piPackageManagementToken,
               resumeSubagent,
@@ -8450,6 +8503,7 @@ export class PiAgent extends BaseAgent {
         // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
         // 值得再提醒一次。
         if (nextMode !== requestedPermissionSnapshot.mode) {
+          personalPermissionGeneration++;
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
           autoReviewConfirmUndeliveredNotice.reset();
@@ -9039,7 +9093,10 @@ export class PiAgent extends BaseAgent {
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
-      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean) => Promise<AutoReviewDecision>;
+      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean,
+        managedToolExecution?: Pick<NonNullable<AutoReviewRequest['managedToolExecution']>, 'toolName' | 'input' | 'piExecution'>,
+        captureManagedFence?: (fence: ManagedAutoReviewFence) => void,
+        captureManagedFallback?: (fallback: ManagedAutoReviewFence) => void) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -9063,6 +9120,11 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       /** 设备托管会话：文件改动由任务所在电脑的执行器抓取。 */
       deviceHosted?: boolean;
+      managedBuiltinBash: boolean;
+      personalAutoApplicable: boolean;
+      personalPermissionGeneration: number;
+      captureRememberCommand?: () => () => boolean;
+      sessionInstanceId?: string;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
       controlSubagentRunner: (
@@ -9485,6 +9547,11 @@ export class PiAgent extends BaseAgent {
         // refusal of a call the boundary cancelled. The process is being closed
         // by that same teardown, so the extension's pending request goes with it.
         if (getPermissionCtx().isAccountBoundaryTornDown()) return;
+        if (resolution === 'allow' && managedConfirmationFence
+          && (managedConfirmationFence.isExecutionCurrent?.() === false
+            || (getPermissionCtx().permissionMode === 'auto' && getPermissionCtx().managedBuiltinBash
+              && managedConfirmationFence.isCurrent?.() === false)))
+          resolution = piPermissionDenial('system-deny', 'Execution or personal rules changed; send a new request.');
         if (method === 'input') {
           proc.send({ type: 'extension_ui_response', id, value: resolution });
           return;
@@ -9585,6 +9652,10 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const rememberCurrent = getPermissionCtx().captureRememberCommand?.();
+      let managedConfirmationFence: ManagedAutoReviewFence | undefined;
+      let managedDecisionFallback: ManagedAutoReviewFence | undefined;
+      let personalConfirmations = 0;
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -9630,6 +9701,12 @@ export class PiAgent extends BaseAgent {
             toolUseId: id,
             toolName,
             input,
+            ...(!opts.unavailableHandoff && rememberCurrent && getPermissionCtx().sessionInstanceId && !mcpTarget && toolName === 'bash' && !controlPlaneWrite
+              && typeof input.command === 'string' && permissionMode === 'auto'
+              && getPermissionCtx().managedBuiltinBash && !getPermissionCtx().remote && !getPermissionCtx().deviceHosted
+              ? { autoCommand: { sessionInstanceId: getPermissionCtx().sessionInstanceId!, harness: 'pi' as const, command: input.command, cwd: getPermissionCtx().workingDir,
+                isCurrent: () => !settled && rememberCurrent() && getPermissionCtx().permissionMode === 'auto'
+                  && getPermissionCtx().managedBuiltinBash && !getPermissionCtx().isPermissionContextClosed() } } : {}),
           };
           Promise.resolve().then(() => resolver(
             annotatePermissionRequestForAutoReview(permissionRequest, {
@@ -9691,18 +9768,40 @@ export class PiAgent extends BaseAgent {
         if (isFullAccessNow() && opts?.requireExplicitDecision !== true) {
           return 'allow';
         }
+        if (++personalConfirmations > 2) return piPermissionDenial('system-deny', 'Personal rules changed repeatedly; send a new request.');
         const outcome = await requestUserDecision({
           forcePrompt: opts?.requireExplicitDecision === true,
           ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
           ...(opts?.autoReviewReason ? { autoReviewReason: opts.autoReviewReason } : {}),
         });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
-        if (outcome.decided) return outcome.resolution;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
-        return opts?.requireExplicitDecision === true
-          || !isFullAccessNow()
+        const resolution = outcome.decided || opts?.requireExplicitDecision === true || !isFullAccessNow()
           ? outcome.resolution
           : 'allow';
+        // Allow once does not edit personal rules. A new publication while the
+        // card was pending must be read before releasing this exact tool call.
+        if (resolution !== 'allow' || !managedConfirmationFence
+          || getPermissionCtx().permissionMode !== 'auto') return resolution;
+        let checked = await managedConfirmationFence({ confirmed: true });
+        if (isFullAccessNow()) return 'allow';
+        // A managed block may have resolved just before the package edge. This
+        // second readonly fence drops that contribution but still checks the
+        // owner/input/directory lease; it never retries review or execution.
+        if (checked.verdict === 'block' && !getPermissionCtx().managedBuiltinBash)
+          checked = await managedConfirmationFence();
+        if (isFullAccessNow()) return 'allow';
+        if (checked.verdict === 'ask' && managedConfirmationFence.canConfirmAgain?.() === true
+          && getPermissionCtx().permissionMode === 'auto' && personalConfirmations < 2) {
+          if (checked.unavailable) notifyAutoReviewUnavailable();
+          return requestUserConfirmation({ forcePrompt: true, unavailableHandoff: checked.unavailable, autoReviewReason: checked.reason });
+        }
+        if (managedConfirmationFence.isExecutionCurrent?.() === false)
+          return piPermissionDenial('system-deny', 'Execution identity changed; send a new request.');
+        if (getPermissionCtx().permissionMode !== 'auto' || checked.verdict === 'ask')
+          return piPermissionDenial('system-deny', checked.reason ?? 'Personal rule execution context changed.');
+        return checked.verdict === 'block'
+          ? piPermissionDenial('auto-review-deny', checked.reason) : resolution;
       };
       void (async () => {
         // 普通工具的 Full access 优先收口,压在所有后续判定之前。bridge 侧按 perm 文件现读
@@ -9773,9 +9872,29 @@ export class PiAgent extends BaseAgent {
             action.resolvedPath = resolvedWritePath;
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
-          const decision = await reviewAutoAction(turnPolicyForcePrompt
+          const piQualified = permissionMode === 'auto' && !turnPolicyForcePrompt && !mcpTarget && toolName === 'bash'
+            && getPermissionCtx().managedBuiltinBash && getPermissionCtx().personalAutoApplicable
+            && !getPermissionCtx().remote && !getPermissionCtx().deviceHosted
+            && typeof input.command === 'string' && isSupportedManagedCommand(input.command, 'pi');
+          const actualInput = piQualified ? Object.freeze(JSON.parse(JSON.stringify(input)) as Record<string, unknown>) : undefined;
+          const actualKey = JSON.stringify(actualInput);
+          const modeGeneration = getPermissionCtx().personalPermissionGeneration;
+          const piExecution = actualInput ? { rpcId: id, input: actualInput,
+            isCurrent: () => !!rememberCurrent?.() && !getPermissionCtx().isPermissionContextClosed()
+              && JSON.stringify(input) === actualKey && (getPermissionCtx().permissionMode !== 'auto'
+                || getPermissionCtx().personalPermissionGeneration === modeGeneration),
+            isAuto: () => getPermissionCtx().permissionMode === 'auto' } : undefined;
+          let decision = await reviewAutoAction(turnPolicyForcePrompt
             ? toolAutoReviewAction(toolName, input, undefined, action)
-            : action, hostAutoApprove, permissionMode !== 'auto');
+            : action, hostAutoApprove, permissionMode !== 'auto',
+            piExecution ? { toolName, input: actualInput!, piExecution } : undefined,
+            fence => { managedConfirmationFence = fence; },
+            fallback => { managedDecisionFallback = fallback; });
+          // The dispatcher continuation is another await boundary: package
+          // retirement can happen after shared policy returned its verdict.
+          if (getPermissionCtx().permissionMode !== 'bypassPermissions'
+            && managedDecisionFallback && !getPermissionCtx().managedBuiltinBash)
+            decision = await managedDecisionFallback();
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
           //   - 已收紧到 ask(或其它非 auto/bypass)→ 破坏性调用即便 verdict=allow 也必须走

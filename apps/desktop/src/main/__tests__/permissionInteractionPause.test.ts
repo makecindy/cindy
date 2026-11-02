@@ -1,3 +1,12 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { captureRememberedAutoCommand, type ApprovalRuleCommandDeps } from '../maker-ipc/approvalRuleCommandHandler';
+import { createApprovalRuleStore } from '../maker-host/approval-rule-store';
+import { McpSetupBridge } from '../maker-ipc/mcpSetupBridge';
+import { normalizeRuleGroup } from '../../../../../packages/maker-core/src/agents/shared/approval-rules/normalize';
+import { evaluatePersonalRequirements, matchedPersonalAutoAsks } from '../../../../../packages/maker-core/src/agents/shared/auto-review-decision';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +24,7 @@ const names = new Set([
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
   'bindSharedPermission',
+  'isPermissionInteractionDecision',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
@@ -47,7 +57,7 @@ return { install: installDesktopInteractionListener, hold: ${holdInputSource},
 }).outputText;
 const MINUTE = 60_000;
 
-function harness() {
+function harness(extra: Record<string, unknown> = {}) {
   let sharedTask: SharedTaskPeerCapture | undefined;
   const held = new Set<string>();
   const coordinator = {
@@ -76,7 +86,17 @@ function harness() {
     MAKER_PUSH: { INTERACTION_REQUEST: 'request', INTERACTION_DISMISSED: 'dismissed' },
     handleAgentIslandInteractionAfterBroadcast: vi.fn(), handleAgentIslandInteractionDismissed: vi.fn(),
     dismissRendererInteraction: dismiss, persistInteractionDecision: vi.fn(),
-    goalAskAnswerObserver: null, ghostSetupInteractionBridge: { cleanupForSession: vi.fn() },
+    goalAskAnswerObserver: null, ghostSetupInteractionBridge: { cleanupForSession: vi.fn(), resolve: () => false },
+    mcpSetupBridge: new McpSetupBridge({ broadcast: vi.fn() }),
+    captureRememberedAutoCommand, rememberApprovalDeps: undefined, isDeepStrictEqual,
+    throwIpcError: (_code: string, message: string) => { throw new Error(message); },
+    isDeviceLinkInvoke: () => false, assertTrustedAppRendererEvent: () => {},
+    handleAgentIslandInteractionDismissedByRequestId: vi.fn(),
+    issueConfirmBridge: { resolve: () => false }, renameSessionsConfirmBridge: { resolve: () => false },
+    taskActionConfirmBridge: { resolveFromIpc: () => false }, orcaWorkerPermissionConfirmBridge: { resolveFromIpc: () => false },
+    ghostGrantConfirmBridge: { resolve: () => false }, getBotAuthorizationService: () => undefined,
+    getInputHandoffService: () => undefined, inputHandoffActor: () => undefined, log: { warn: vi.fn() },
+    ...extra,
   };
   const runtime = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
     install: (session: InteractionSession) => void;
@@ -86,7 +106,7 @@ function harness() {
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
-  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal) => {
+  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal, autoCommand?: Extract<InteractionRequest, { kind: 'permission' }>['autoCommand']) => {
     const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
     runtime.install(session);
     const lease = channel ? beginInteractionRoute(session, {
@@ -96,11 +116,11 @@ function harness() {
       onCancel: () => true,
     }) : undefined;
     const settled = vi.fn();
-    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest, signal);
+    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: autoCommand?.harness === 'codex' ? 'exec' : autoCommand?.harness === 'pi' ? 'bash' : 'Bash', input: { command: autoCommand?.command }, ...(autoCommand ? { autoCommand } : {}) } as InteractionRequest, signal);
     void promise.then(settled);
     return { promise, settled, lease };
   };
-  return { ...runtime, request, entries, dismiss, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
+  return { ...runtime, request, entries, dismiss, broadcast: deps.broadcastToAllWindows, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
@@ -423,5 +443,126 @@ describe('permission timeout follows the task pause lifecycle', () => {
     await vi.advanceTimersByTimeAsync(60 * MINUTE);
     expect(p.settled).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Real production listener + IPC handler -> actual owner store -> reopened active artifact.
+// Existing pause cases did not exercise persistence, identity or save failure; unit, test-only temp owner.
+describe('remembered local Auto command confirmation', () => {
+  it.each(['claude-code', 'pi', 'codex', 'codex-wrapped', 'claude-code-project'] as const)('persists %s only on remember and leaves ordinary allow once unwritten', async scenario => {
+    if (scenario === 'claude-code-project') vi.useRealTimers();
+    const target = scenario === 'claude-code-project' ? 'claude-code' : scenario === 'codex-wrapped' ? 'codex' : scenario;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remember-card-'));
+    try {
+      const row = { status: 'active', source: 'desktop', agentKind: target === 'claude-code' ? 'cc' : target,
+        workingDir: dir, workspaceKind: 'project' };
+      let ownerCurrent = true;
+      let evidenceCurrent = true;
+      let runtime = { instanceId: 'instance', stablePermissionModeState: { mode: 'auto', generation: 1 },
+        stablePlanModeState: { enabled: false, generation: 1 }, getStatus: () => 'active' };
+      const scope = { ownerId: 'owner', executionHostId: 'host', harnesses: [target] };
+      const deps: ApprovalRuleCommandDeps = {
+        assertTrustedSender: () => {}, isDeviceLinkInvoke: () => false,
+        captureOwner: () => ({ ownerId: 'owner', executionHostId: 'host', generation: '1', dbClient: row }),
+        ownerCurrent: () => ownerCurrent, getInputGeneration: () => 0, isProvisional: () => false,
+        readSession: async () => row as never, withSessionLock: async (_id, run) => run(),
+        createStore: (_owner, assertCurrent, consumer) => createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: dir,
+          assertCurrent, localManagedCommandHostId: 'host', ...(consumer ? { resolveManagedConsumer: () => consumer } : {}) }),
+      };
+      let trusted = true;
+      let remote = false;
+      const h = harness({ rememberApprovalDeps: deps, getMakerIfReady: () => ({ getSession: () => runtime }),
+        isDeviceLinkInvoke: () => remote,
+        assertTrustedAppRendererEvent: () => { if (!trusted) throw new Error('Untrusted sender'); } });
+      const command = { sessionInstanceId: 'instance', harness: target, command: scenario === 'codex-wrapped'
+        ? "/bin/bash -lc 'touch /home/xd.guest/approval-test-work/CINDY_REMEMBER_TARGET_c20261026a'"
+        : 'git push origin draft', cwd: dir, isCurrent: () => evidenceCurrent };
+      const nativeAsk = normalizeRuleGroup({ harness: 'claude-code', sourceId: 'live-user', layer: 'user',
+        locator: 'claude-code-live://userSettings/test', dialectVersion: 'live-user-v1', decisionDomain: 'personal-approval' },
+        { ...scope, harnesses: ['claude-code'] }, [{ id: 'ask', original: 'Bash(git push origin draft)', decision: 'ask',
+          matcher: { kind: 'cc-command', mode: 'exact', pattern: command.command } }]);
+      const live = { scope: { ...scope, projectId: fs.realpathSync(dir) }, fingerprint: 'live', groups: [nativeAsk] };
+      const evidence = { ...command, ...(target === 'claude-code'
+        ? { autoAskExceptions: matchedPersonalAutoAsks(live, command.command) } : {}) };
+      const store = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: dir, assertCurrent: () => {} });
+      if (scenario === 'claude-code-project') {
+        const seed = await captureRememberedAutoCommand(deps, 'task', command, () => true, 'instance');
+        await seed!.save();
+        const previous = await store.readSnapshot(scope);
+        const user = previous.groups[0]!;
+        const project = normalizeRuleGroup(user.origin, { ...scope, projectId: fs.realpathSync(dir) },
+          user.clauses.map(clause => ({ ...clause, decision: 'ask' as const })));
+        await store.applyManagedEdit(previous.revision, project.scope, [project], [], undefined, true);
+      }
+      const originalGroups = (await store.readSnapshot(scope)).groups;
+      const once = h.request('once', 'task', 'permission', undefined, undefined, command);
+      await vi.waitFor(() => expect(h.entries.get('once')?.remember).toBeTruthy());
+      expect(h.broadcast.mock.calls.at(-1)?.[1].request.autoCommand).toBeUndefined();
+      expect(h.broadcast.mock.calls.at(-1)?.[1].request.metadata.rememberAutoCommand.command).toBe(command.command);
+      expect(h.broadcast.mock.calls.at(-1)?.[1].request.metadata.rememberAutoCommand.projectId)
+        .toBe(scenario === 'claude-code-project' ? fs.realpathSync(dir) : undefined);
+      await h.resolveFromIpc({}, 'once', { kind: 'permission', behavior: 'allow' });
+      await once.promise;
+      expect((await store.readSnapshot(scope)).groups).toEqual(originalGroups);
+      const remembered = h.request('remember', 'task', 'permission', undefined, undefined, evidence);
+      await vi.waitFor(() => expect(h.entries.get('remember')?.remember).toBeTruthy());
+      // Failure keeps the same pending card; no successful optimistic acknowledgement.
+      // A failed marker filesystem read is a real store error, not a mocked save success.
+      const markerDir = path.join(dir, 'command-approval-runtime');
+      fs.mkdirSync(markerDir, { recursive: true });
+      const marker = path.join(markerDir, 'publish-state.json');
+      const oldMarker = fs.existsSync(marker) ? fs.readFileSync(marker) : null;
+      if (oldMarker) fs.unlinkSync(marker);
+      fs.mkdirSync(marker);
+      await expect(h.resolveFromIpc({}, 'remember', { kind: 'permission', behavior: 'allow', rememberAutoCommand: true } as never)).rejects.toThrow();
+      expect(h.entries.has('remember')).toBe(true);
+      expect(remembered.settled).not.toHaveBeenCalled();
+      fs.rmdirSync(marker);
+      if (oldMarker) fs.writeFileSync(marker, oldMarker);
+      expect(await h.resolveFromIpc({}, 'remember', { kind: 'permission', behavior: 'allow', rememberAutoCommand: true } as never))
+        .toMatchObject({ accepted: true, remembered: true });
+      expect(await remembered.promise).toMatchObject({ kind: 'permission', behavior: 'allow' });
+      const fresh = createApprovalRuleStore({ ownerId: 'owner', ownerDataDir: dir, assertCurrent: () => {},
+        resolveManagedConsumer: () => ({ scope: { ...scope, projectId: fs.realpathSync(dir) }, sessionId: 'task', sessionInstanceId: 'instance' }) });
+      const active = await fresh.readPublishedManagedSnapshot();
+      expect(active.kind === 'published-managed' && active.groups[0]?.clauses[0]).toMatchObject({ decision: 'allow', matcher: { pattern: command.command, mode: 'exact' } });
+      if (scenario === 'claude-code-project' && active.kind === 'published-managed') {
+        expect(active.groups).toHaveLength(1);
+        expect(active.groups[0]!.scope.projectId).toBe(fs.realpathSync(dir));
+        expect((await fresh.readSnapshot(scope)).groups.find(group => !group.scope.projectId)?.clauses[0]?.decision).toBe('allow');
+      }
+      if (target === 'claude-code' && active.kind === 'published-managed') {
+        expect(active.groups[0]!.clauses[0]!.autoAskExceptions).toEqual(evidence.autoAskExceptions);
+        expect(evaluatePersonalRequirements({ ...live, groups: [nativeAsk, ...active.groups] }, command.command))
+          .toMatchObject({ status: 'matched', decision: 'allow' });
+      }
+      for (const edge of ['untrusted', 'remote', 'default', 'full', 'instance', 'stop', 'explicit-deny'] as const) {
+        const id = 'guard-' + edge;
+        const guarded = h.request(id, 'task', 'permission', undefined, undefined, command);
+        await vi.waitFor(() => expect(h.entries.get(id)?.remember).toBeTruthy());
+        const oldMarker = fs.readFileSync(path.join(dir, 'command-approval-runtime', 'publish-state.json'), 'utf8');
+        if (edge === 'untrusted') trusted = false;
+        if (edge === 'remote') remote = true;
+        if (edge === 'default') runtime.stablePermissionModeState = { mode: 'ask', generation: 2 };
+        if (edge === 'full') runtime.stablePermissionModeState = { mode: 'bypassPermissions', generation: 3 };
+        const previousRuntime = runtime;
+        if (edge === 'instance') runtime = { ...runtime, instanceId: 'replacement' };
+        if (edge === 'stop') h.cleanup('task', 'session_aborted');
+        if (edge === 'explicit-deny') await h.resolveFromIpc({}, id, { kind: 'permission', behavior: 'deny' });
+        await expect(h.resolveFromIpc({}, id, { kind: 'permission', behavior: 'allow', rememberAutoCommand: true } as never)).rejects.toThrow();
+        expect(fs.readFileSync(path.join(dir, 'command-approval-runtime', 'publish-state.json'), 'utf8')).toBe(oldMarker);
+        trusted = true; remote = false; runtime = previousRuntime;
+        await h.resolveFromIpc({}, id, { kind: 'permission', behavior: 'allow' });
+        await guarded.promise;
+        runtime.stablePermissionModeState = { mode: 'auto', generation: 1 };
+      }
+      const stale = h.request('stale', 'task', 'permission', undefined, undefined, command);
+      await vi.waitFor(() => expect(h.entries.get('stale')?.remember).toBeTruthy());
+      ownerCurrent = false; evidenceCurrent = false;
+      await expect(h.resolveFromIpc({}, 'stale', { kind: 'permission', behavior: 'allow', rememberAutoCommand: true } as never)).rejects.toThrow();
+      expect(h.entries.has('stale')).toBe(true);
+      await h.resolveFromIpc({}, 'stale', { kind: 'permission', behavior: 'deny' });
+      await stale.promise;
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

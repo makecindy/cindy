@@ -12452,6 +12452,10 @@
       "defer": "暫不取"
     },
     "permissionPrompt": {
+      "rememberAllow": "同類命令恆許",
+      "rememberScope": "惟 Auto 審核 · {{harness}} · 確切命令：{{command}}",
+      "rememberProjectScope": "惟此專案：{{project}}",
+      "rememberFailed": "允許規則是否存妥未可驗。請重試，或僅許此次。",
       "alwaysAllowScoped": "此差事恆許 {{scope}}",
       "alwaysAllowScopedHint": "及於整個差事，且僅限此處所列之範圍。",
       "alwaysAllowSessionHint": "及於整個差事，不止此一請求。",
@@ -13846,6 +13850,28 @@
       "readOnlyHint": "唯讀差事：可覽檔位與價差，不可改。",
       "shrinkWarning": "今已用 {{used}}，易至更小之檔，將先觸壓縮或換窗。",
       "saveFailed": "上下文視窗檔位存之未成"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "舊規則之裝置身分未可驗。原資料與輸入皆存，未儲存亦未發布。",
+      "saved": "規則已更。",
+      "published": "規則已發布，執行時是否適用仍待驗。",
+      "unsupported": "此規則指令或任務尚不支援，輸入仍存。",
+      "existingTaskOnly": "請於既有本機 Claude Code、Codex 或 Pi 任務設規則",
+      "failed": "規則操作未竟，輸入仍存。",
+      "statusTitle": "個人規則 · 當前任務",
+      "statusLimit": "惟本機普通根任務之 Auto 命令審批。存妥不謂原生已載。",
+      "statusReasons": {
+        "pending-activation": "未生效：所存變更待啟用",
+        "ready": "Auto 審核可取用，執行時再驗",
+        "no-rules": "未生效：尚無所存規則",
+        "storage-unavailable": "未生效：規則未可讀",
+        "unsupported-rules": "未生效：此引擎尚不支援",
+        "no-current-task": "未生效：此引擎無當前任務",
+        "auto-required": "未生效：須用 Auto 模式",
+        "plan-mode": "未生效：處於 Plan 模式",
+        "native-owned": "未生效：審批由原生審核掌理",
+        "runtime-unverified": "未生效：執行環境未驗"
+      }
     },
     "agentStatus": {
       "readingMemory": "方讀記憶…",

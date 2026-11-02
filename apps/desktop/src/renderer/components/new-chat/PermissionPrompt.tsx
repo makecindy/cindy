@@ -95,6 +95,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
+  const rememberCommand = permission.rememberAutoCommand?.command === input.command
+    ? permission.rememberAutoCommand : undefined;
   const isMediaDownload = toolName === 'cindy.media.download';
   // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
   // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
@@ -248,6 +250,16 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         )}
       </div>
 
+      {rememberCommand && (
+        <p className="mt-2 whitespace-pre-wrap break-all text-12 text-[var(--status-bar-meta)]">
+          {t('newChat.permissionPrompt.rememberScope', { harness: { 'claude-code': 'Claude Code', pi: 'Pi', codex: 'Codex' }[rememberCommand.harness],
+            command: rememberCommand.command })}
+          {rememberCommand.projectId && <span className="block">
+            {t('newChat.permissionPrompt.rememberProjectScope', { project: rememberCommand.projectId })}
+          </span>}
+        </p>
+      )}
+
       {/* Action buttons — inline text + kbd badges, right-aligned.
           flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
           下允许整行折行,而不是把 Deny / Allow once 挤出容器。 */}
@@ -308,6 +320,13 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
               </kbd>
             </Button>
           </Tip>
+        )}
+
+        {rememberCommand && (
+          <Button pressFeedback={false} variant="secondary" size="lg" className={secondaryActionClass}
+            disabled={submitting} onClick={() => onRespond({ behavior: 'allow', rememberAutoCommand: true })}>
+            {t('newChat.permissionPrompt.rememberAllow')}
+          </Button>
         )}
 
         {/* Allow once (primary) */}

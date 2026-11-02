@@ -12593,6 +12593,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "rememberAllow": "Permitir sempre comandos semelhantes",
+      "rememberScope": "Apenas Auto Review · {{harness}} · comando exato: {{command}}",
+      "rememberProjectScope": "Apenas este projeto: {{project}}",
+      "rememberFailed": "Não foi possível confirmar a gravação da regra. Tente novamente ou permita uma vez.",
       "alwaysAllowScoped": "Permitir sempre {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se a toda a sessão e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se a toda a sessão, não apenas a este pedido.",
@@ -14040,6 +14044,28 @@
       "readOnlyHint": "Tarefa só de leitura: pode consultar os escalões e os intervalos de preços, mas não alterá-los.",
       "shrinkWarning": "{{used}} já em utilização — uma janela menor compacta ou inicia um novo contexto primeiro.",
       "saveFailed": "Falha ao guardar o escalão da janela de contexto"
+    },
+    "approvalRule": {
+      "hostIdentityConflict": "Não foi possível verificar a identidade do dispositivo de uma regra existente. Os dados e a entrada foram preservados; nada foi guardado nem publicado.",
+      "saved": "Regra atualizada.",
+      "published": "Regra publicada. Falta verificar a aplicação em execução.",
+      "unsupported": "Este comando de regras ou esta tarefa não são suportados. A entrada foi preservada.",
+      "existingTaskOnly": "Defina regras numa tarefa local existente de Claude Code, Codex ou Pi",
+      "failed": "A operação de regras não terminou. A entrada foi preservada.",
+      "statusTitle": "Regras pessoais · Tarefa atual",
+      "statusLimit": "Apenas aprovações locais de comandos Auto em tarefas principais normais. Guardar não comprova o carregamento nativo.",
+      "statusReasons": {
+        "pending-activation": "Sem efeito: alterações guardadas aguardam ativação",
+        "ready": "Disponível para Auto Review; verificação ao executar",
+        "no-rules": "Sem efeito: não há regras guardadas",
+        "storage-unavailable": "Sem efeito: não foi possível ler as regras",
+        "unsupported-rules": "Sem efeito: não suportadas por este motor",
+        "no-current-task": "Sem efeito: não há tarefa atual neste motor",
+        "auto-required": "Sem efeito: requer o modo Auto",
+        "plan-mode": "Sem efeito: modo Plan",
+        "native-owned": "Sem efeito: a revisão nativa controla a aprovação",
+        "runtime-unverified": "Sem efeito: execução não verificada"
+      }
     },
     "agentStatus": {
       "readingMemory": "A ler a memória…",

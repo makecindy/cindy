@@ -12,6 +12,7 @@
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import type { AutoAskException } from '../agents/shared/approval-rules/types.js';
 import {
   parseToolLoopErrorDetails,
   type ToolLoopErrorDetails,
@@ -322,6 +323,16 @@ type InteractionRequestBase = {
   toolUseId?: string;
 };
 
+/** Local adapter evidence. Functions never cross the Renderer/remote boundary. */
+export interface AutoCommandConfirmation {
+  sessionInstanceId: string;
+  harness: 'claude-code' | 'pi' | 'codex';
+  command: string;
+  cwd: string;
+  autoAskExceptions?: AutoAskException[];
+  isCurrent(): boolean;
+}
+
 export type InteractionRequest =
   | (InteractionRequestBase & {
       kind: 'permission';
@@ -331,6 +342,8 @@ export type InteractionRequest =
       displayName?: string;
       description?: string;
       suggestions?: unknown[];
+      /** Internal, created only at a real root Auto command confirmation. Main strips it. */
+      autoCommand?: AutoCommandConfirmation;
       metadata?: Record<string, unknown>;
     })
   | (InteractionRequestBase & {

@@ -412,8 +412,8 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(sessionViewSource).not.toContain('forgetRecoverableHandoff(');
       expect(pendingHandoffSource).toContain('function forgetRecoverableHandoff(');
       expect(pendingHandoffSource).not.toContain('export function forgetRecoverableHandoff(');
-      // 三处交接与内置 Skill 失败后回填 composer 都要走同一交付入口。
-      expect(sessionViewSource.match(/deliverRecoverableHandoff\(sessionId,/g)).toHaveLength(4);
+      // 三处交接、内置 Skill 失败与个人规则命令回填 composer 都走同一交付入口。
+      expect(sessionViewSource.match(/deliverRecoverableHandoff\(sessionId,/g)).toHaveLength(5);
     });
 
     it('内存里没有 pending 时才走恢复,且只回填输入框、不自动补发', () => {

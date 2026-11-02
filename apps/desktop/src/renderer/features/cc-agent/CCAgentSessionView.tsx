@@ -50,6 +50,8 @@ import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { isApprovalRuleCommand } from '../../../shared/approvalRuleCommand';
+import type { PersonalRuleStatus } from '@cindy/mcps';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import {
@@ -2166,6 +2168,52 @@ function CCAgentSessionContent({
   // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,
   // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
+  const personalRuleContext = [sessionId, realAgentKind, session?.permissionMode, planModeEnabled].join(':');
+  const [personalRuleStatus, setPersonalRuleStatus] = useState<{ sessionId: string; context: string;
+    owner: ReturnType<typeof getDataOwnerGeneration>; statuses: PersonalRuleStatus[] } | null>(null);
+  const [personalRuleRefresh, refreshPersonalRules] = useState(0);
+  const latestRuleInputId = messages.findLast(message => message.role === 'user')?.id;
+  useEffect(() => {
+    let retired = false;
+    const owner = getDataOwnerGeneration();
+    if (!sessionId || readOnly || remoteDeviceId || session?.remoteHostId || session?.source !== 'desktop'
+      || session.status !== 'active' || !['claude-code', 'codex', 'pi'].includes(realAgentKind)) {
+      setPersonalRuleStatus(null);
+      return;
+    }
+    // Never retain availability from a previous task, permission mode or owner.
+    setPersonalRuleStatus(null);
+    void window.electronAPI.maker.approvalRuleCommand({ sessionId, text: '/approval-rule status' }).then(result => {
+      if (retired || !isDataOwnerGenerationCurrent(owner) || currentSessionIdRef.current !== sessionId) return;
+      if (result.kind === 'status') setPersonalRuleStatus({ sessionId, context: personalRuleContext, owner, statuses: result.statuses });
+    }).catch(() => {
+      if (retired || !isDataOwnerGenerationCurrent(owner) || currentSessionIdRef.current !== sessionId) return;
+      setPersonalRuleStatus({ sessionId, context: personalRuleContext, owner, statuses: (['claude-code', 'codex', 'pi'] as const).map(harness => ({
+        harness, savedRules: 0, consumableRules: 0, state: 'not-effective',
+        reason: 'runtime-unverified', nativeQualification: 'unverified',
+      })) });
+    });
+    return () => { retired = true; };
+  }, [sessionId, readOnly, remoteDeviceId, session?.remoteHostId, session?.source, session?.status,
+    session?.permissionMode, realAgentKind, planModeEnabled, latestRuleInputId, isAgentBusy, personalRuleRefresh, personalRuleContext]);
+  const visiblePersonalRules = personalRuleStatus && personalRuleStatus.sessionId === sessionId
+    && personalRuleStatus.context === personalRuleContext && isDataOwnerGenerationCurrent(personalRuleStatus.owner)
+    && personalRuleStatus.statuses.some(status => status.savedRules > 0 || status.reason === 'storage-unavailable' || status.reason === 'runtime-unverified' || status.reason === 'pending-activation')
+    ? personalRuleStatus.statuses : null;
+  const personalRuleStatusPanel = visiblePersonalRules ? (
+    <div className="space-y-1 text-xs text-muted-foreground" role="status">
+      <div>{t('ccAgent.approvalRule.statusTitle')}</div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {visiblePersonalRules.map(status => (
+          <span key={status.harness}>
+            {({ 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' })[status.harness]} · {t(
+              'ccAgent.approvalRule.statusReasons.' + status.reason)}
+          </span>
+        ))}
+      </div>
+      <div>{t('ccAgent.approvalRule.statusLimit')}</div>
+    </div>
+  ) : null;
   const isCodex = displayAgentKind === 'codex';
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
@@ -4016,6 +4064,42 @@ function CCAgentSessionContent({
     ) => {
       if (readOnly) return false;
       if (cindyMakeInputLocked) return false;
+      if (!opts?.literalText && isApprovalRuleCommand(message) && (realAgentKind === 'claude-code' || realAgentKind === 'pi' || realAgentKind === 'codex')
+        && session?.source === 'desktop' && !remoteDeviceId && !session.remoteHostId) {
+        const commandOwner = getDataOwnerGeneration();
+        if (!sessionId || !session || session.status !== 'active'
+          || opts?.deliveryMode === 'steer' || files?.length || mentions?.length
+          || opts?.quotesEncoded || opts?.agentReferences?.length || opts?.builtInSkillIntent
+          || message.includes('\n') || message.includes('\r')) {
+          toast.warning(t('ccAgent.approvalRule.unsupported'));
+          return false;
+        }
+        try {
+          const result = await window.electronAPI.maker.approvalRuleCommand({ sessionId, text: message });
+          if (!isDataOwnerGenerationCurrent(commandOwner) || currentSessionIdRef.current !== sessionId)
+            return false;
+          if (result.kind === 'status') {
+            setPersonalRuleStatus({ sessionId, context: personalRuleContext, owner: commandOwner, statuses: result.statuses });
+            return true;
+          }
+          if (result.kind === 'saved') {
+            refreshPersonalRules(value => value + 1);
+            toast.success(t('ccAgent.approvalRule.saved'));
+            return true;
+          }
+          if (result.kind === 'published') {
+            toast.success(t('ccAgent.approvalRule.published'));
+            return true;
+          }
+          if (result.kind === 'error') toast.error(t(result.code === 'host-identity-conflict'
+            ? 'ccAgent.approvalRule.hostIdentityConflict' : 'ccAgent.approvalRule.failed'));
+          else toast.warning(t('ccAgent.approvalRule.unsupported'));
+        } catch (err) {
+          log.warn('Approval command failed', err);
+          toast.error(t('ccAgent.approvalRule.failed'));
+        }
+        return false;
+      }
       invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const sendOwner = getDataOwnerGeneration();
@@ -4353,6 +4437,7 @@ function CCAgentSessionContent({
       return accepted;
     },
     [
+      personalRuleContext,
       maybeDispatchDesktopSlashCommand,
       maybeShowContextUsage,
       invalidateHistoryRecoveryNavigation,
@@ -4919,6 +5004,18 @@ function CCAgentSessionContent({
         // resolve false / 抛错都保留(见该函数注释)。
         if (!isDataOwnerGenerationCurrent(handoffOwner)) return;
         let pendingText = pending.text;
+        if (isApprovalRuleCommand(pending.text)) {
+          restoreRemoteOptimisticDraft(sessionId, {
+            clientId: 'pending-approval-rule:' + pending.createdAt,
+            text: plainTextToTiptapDoc(pending.text),
+            builtInSkillIntent: pending.builtInSkillIntent,
+            attachments: pending.files ?? [],
+            browserComments: [],
+          });
+          await deliverRecoverableHandoff(sessionId, () => true);
+          toast.warning(t('ccAgent.approvalRule.existingTaskOnly'));
+          return;
+        }
         const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files, {
           builtInSkillIntent: pending.builtInSkillIntent,
           piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
@@ -5382,6 +5479,17 @@ function CCAgentSessionContent({
   const composerRuntimeVisible =
     !pendingPlanReview &&
     (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
+
+  const composerAccessory = cindyMakeRecoveryId && session ? (
+      <CindyMakeEditingActions
+        key={`${session.id}:${cindyMakeRecoveryId}`}
+        sessionId={session.id}
+        messageId={cindyMakeRecoveryId}
+      />
+    ) : pendingReplyQuote && sessionId ? (
+      <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
+        getMessage={getQuoteMessage} names={botQuoteNames} />
+    ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined;
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6115,16 +6223,7 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
-                  topSlot={cindyMakeRecoveryId && session ? (
-                    <CindyMakeEditingActions
-                      key={`${session.id}:${cindyMakeRecoveryId}`}
-                      sessionId={session.id}
-                      messageId={cindyMakeRecoveryId}
-                    />
-                  ) : pendingReplyQuote && sessionId ? (
-                    <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
-                      getMessage={getQuoteMessage} names={botQuoteNames} />
-                  ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  topSlot={personalRuleStatusPanel ? (<>{personalRuleStatusPanel}{composerAccessory}</>) : composerAccessory}
                   // Picking 「回复」 brings the caret here, ready to type the reply.
                   focusRequest={pendingReplyQuote}
                   onSend={handleSend}
