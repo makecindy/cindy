@@ -1,7 +1,7 @@
 import {
   nextHistoryCacheReceipt, type HistoryCacheReceipt,
   readHistoryWorkDetails, readContinuousHistoryPage, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
-  type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkSummary,
+  type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkReference, type HistoryWorkSummary,
 } from './historyView.js';
 
 export interface HistoryWorkDetailState<T extends HistoryMessageSource> {
@@ -35,9 +35,9 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
   /** False when the owning screen already coordinates focus/reconnect snapshots. */
   refreshOnResume?: boolean;
   page(before?: string): Promise<HistoryViewPage<T>>;
-  details(summary: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<T>>;
+  details(ref: HistoryWorkReference, after?: string): Promise<HistoryDetailPage<T>>;
   /** Full replacement of this view's intent; empty releases detail streaming. */
-  expanded(summaries: readonly HistoryWorkSummary[]): Promise<void>;
+  expanded(refs: readonly HistoryWorkReference[]): Promise<void>;
   /** Local diagnostics only: counts and lifecycle, never message bodies. */
   diagnostic?(event: HistoryViewDiagnostic): void;
 }
@@ -50,6 +50,19 @@ export interface HistoryViewDiagnostic {
   detailMessageCount: number;
   ready: boolean;
   stale: boolean;
+}
+
+/** Display-only artifact paths and live tool inputs are not read-request inputs. */
+function workReference(summary: HistoryWorkSummary): HistoryWorkReference {
+  return {
+    key: summary.key,
+    firstMessageId: summary.firstMessageId,
+    lastMessageId: summary.lastMessageId,
+    ...(summary.firstStoredMessageId === undefined ? {} : { firstStoredMessageId: summary.firstStoredMessageId }),
+    ...(summary.lastStoredMessageId === undefined ? {} : { lastStoredMessageId: summary.lastStoredMessageId }),
+    ...(summary.liveMessageIds === undefined ? {} : { liveMessageIds: [...summary.liveMessageIds] }),
+    ...(summary.parentToolUseId === undefined ? {} : { parentToolUseId: summary.parentToolUseId }),
+  };
 }
 
 /**
@@ -302,7 +315,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       if (version !== this.intentVersion || generation !== this.generation || !this.networkAvailable) return;
       // Empty replacement intents must release old interest even before a reset view is ready.
       const summaries = this.active ? historyWorkSummaries(this.state.items).filter((item) => this.state.expanded.has(item.key)) : [];
-      await this.transport.expanded(summaries);
+      await this.transport.expanded(summaries.map(workReference));
     }).catch(() => {
       // Detail interest is advisory; a transient ACK failure must not poison a successful page.
       if (this.active && version === this.intentVersion && generation === this.generation) this.invalidate();
@@ -344,7 +357,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     token.promise = (async () => {
       try {
         await readHistoryWorkDetails({
-          readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
+          readPage: (cursor) => this.transport.details(workReference(summary), cursor ?? undefined),
           isCurrent: current,
           onPage: (rows) => {
             const incoming = new Set(rows.map((row) => row.clientId));
@@ -391,7 +404,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
             // or subscribing to hidden activity. Mount/collapse cannot cancel it.
             try {
               await readHistoryWorkDetails({
-                readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
+                readPage: (cursor) => this.transport.details(workReference(summary), cursor ?? undefined),
                 isCurrent: current,
                 onPage: (rows) => { messages.push(...rows); },
               });

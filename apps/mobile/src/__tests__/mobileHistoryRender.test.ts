@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
+import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkReference } from '@cindy/maker-shared/message-window';
 import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
@@ -19,13 +19,13 @@ const outline = (items: MobileMessageRenderItem[]): unknown[] => items.map((item
   : { key: item.key, type: item.type });
 
 function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) {
-  const details = vi.fn(async (summary: HistoryWorkSummary, after?: string) => {
+  const details = vi.fn(async (summary: HistoryWorkReference, after?: string) => {
     const start = rows.findIndex((item) => item.id === (after ?? summary.firstMessageId)) + (after ? 1 : 0);
     const end = rows.findIndex((item) => item.id === summary.lastMessageId) + 1;
     const messages = rows.slice(start, Math.min(start + 2, end));
     return { version: 1 as const, messages, hasMore: start + 2 < end, nextCursor: messages.at(-1)?.id ?? null };
   });
-  const expanded = vi.fn(async (_refs: readonly HistoryWorkSummary[]) => undefined);
+  const expanded = vi.fn(async (_refs: readonly HistoryWorkReference[]) => undefined);
   const view = new HistoryViewController<RemoteMessage>({
     page: async () => ({ version: 1, items: projectHistoryView(rows, streaming, lazyDetails), hasMore: false, nextCursor: null }),
     details, expanded,
