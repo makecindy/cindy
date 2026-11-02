@@ -143,6 +143,8 @@ const INITIAL_DISCOVERY_WAIT_MS = 10_000;
  * 取值覆盖 device-link 一次完整握手超时(15s)再留余量;上线即清除。
  */
 const CONNECTING_GRACE_MS = 20_000;
+/** 首台远程设备 bootstrap 完成的启动计时只打一次(与 main 的 startup 里程碑对读)。 */
+let firstRemoteDeviceBootstrapLogged = false;
 
 /**
  * best-effort push 的窗口内 anti-entropy 周期。列表、置顶、归档/删除走 sessions:patched /
@@ -636,6 +638,11 @@ export function useDeviceLinkRemoteProjects(
       // 预取被控端能力(model/effort/fast/permission/fork/rewind),使首次打开远程会话时
       // 模型下拉等不为空、modelDefinitions 同步层已热。成功后逐项预取，避免弱网突发。
       if (result === 'ok') {
+        if (!firstRemoteDeviceBootstrapLogged) {
+          firstRemoteDeviceBootstrapLogged = true;
+          // 与 main 的 `startup` 里程碑对读:这里的基准是 renderer 启动,不是进程启动。
+          log.info(`startup milestone first-remote-device-bootstrapped +${Math.round(performance.now())}ms since renderer start peer=${deviceId.slice(0, 8)}`);
+        }
         await prefetchDeviceCapabilities(deviceId);
         if (!canBootstrap(deviceId, lifecycleEpoch)) return;
         await prefetchDeviceProviders(deviceId);

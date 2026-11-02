@@ -607,6 +607,7 @@ import {
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
+import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -9278,6 +9279,7 @@ app.on('ready', async () => {
   if (!(await initClientEndpoints())) {
     return; // 用户在错误框选择退出,app.exit 已调用
   }
+  markStartupMilestone('client-endpoints-ready');
   registerClientEndpointsIpc();
 
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
@@ -10009,6 +10011,7 @@ app.on('ready', async () => {
   }
   startupWindowCreationAllowed = true;
   createWindow();
+  markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start
   // its tiny helper after the first window exists so drag latency never pays
   // a dev swiftc compile or process-spawn cost.
