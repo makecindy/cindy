@@ -861,6 +861,8 @@ describe('provider group relay for shared users', () => {
   // the tombstone's atomic rename. A failed rename followed by the same forget
   // ID must keep rejecting (O keeps it pending), then survive retry and restart
   // with no old native IDs (provider-sharing-direct-execution, deletion rules).
+  // CI #41004717568 exhausted the setup poll's 3s deadline before exercising
+  // forget. Await the real index rename instead; keep disk assertions and EIO injection.
   it('acknowledges a repeated direct forget only after its tombstone is durable', async () => {
     const started: Started[] = [];
     const peer = providerShareGuestPeer('share-durable', 'member-durable', 'guest-pc');
@@ -898,17 +900,26 @@ describe('provider group relay for shared users', () => {
     const originalRename = fs.promises.rename.bind(fs.promises);
     let failRename = false;
     let failedWrites = 0;
+    let nativeIdWritten: (() => void) | undefined;
+    const nextNativeIdWrite = () => new Promise<void>((resolve) => { nativeIdWritten = resolve; });
     const rename = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
       if (String(to) === indexFile && failRename) {
         failedWrites += 1;
         throw Object.assign(new Error('injected guest index rename failure'), { code: 'EIO' });
       }
-      return originalRename(from, to);
+      await originalRename(from, to);
+      if (String(to) === indexFile && readRecord()?.nativeIds.length === 1) {
+        nativeIdWritten?.();
+        nativeIdWritten = undefined;
+      }
     });
     try {
       await grant('old-task', 1);
+      const oldNativeIdWritten = nextNativeIdWrite();
       await open('old-task');
-      await waitFor(() => started.length === 1 && readRecord().nativeIds.length === 1);
+      await oldNativeIdWritten;
+      expect(started).toHaveLength(1);
+      expect(readRecord().nativeIds).toHaveLength(1);
       const oldNative = readRecord().nativeIds[0];
       failRename = true;
       await expect(forget()).rejects.toThrow('injected guest index rename failure');
@@ -930,8 +941,11 @@ describe('provider group relay for shared users', () => {
       expect(readRecord().nativeIds).toEqual([]);
       await grant('new-task', 2);
       await expect(open('new-task', { options: { resumeSessionId: oldNative } })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      const newNativeIdWritten = nextNativeIdWrite();
       await open('new-task');
-      await waitFor(() => started.length === 2 && readRecord().nativeIds.length === 1);
+      await newNativeIdWritten;
+      expect(started).toHaveLength(2);
+      expect(readRecord().nativeIds).toHaveLength(1);
       await forget(); // old epoch must not delete the newly granted task
       expect(readRecord().cleanupEpoch).toBe(2);
       expect(readRecord().nativeIds).toEqual([`sdk-direct-forget-durable-${started[1].input.hostSessionId}`]);

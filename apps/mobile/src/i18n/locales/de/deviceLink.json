@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Computer nicht verbunden",
+    "hint": "Gespeicherte Inhalte sind verfügbar. Verbinde deinen Computer, um mehr zu laden."
+  },
+  "recovery": {
+    "syncing": "Synchronisierung läuft…",
+    "recovered": "Wiederhergestellt",
+    "syncingHint": "Inhalte von deinem Computer werden aktualisiert."
+  },
+  "syncFailed": "Synchronisierung fehlgeschlagen",
+  "resync": "Erneut synchronisieren",
+  "resyncing": "Erneute Synchronisierung",
+  "syncShort": "Synchronisieren",
+  "deviceUnresponsiveTitle": "Noch keine Antwort",
+  "deviceUnresponsiveHint": "Noch keine Antwort erhalten. Automatischer Neuversuch.",
+  "localNetwork": {
+    "title": "Smartphone-Netzwerk nicht verfügbar",
+    "hint": "Prüfe die Netzwerkverbindung deines Smartphones. Sobald sie wieder verfügbar ist, wird die Verbindung automatisch wiederhergestellt."
+  },
+  "serviceConnection": {
+    "title": "Dienst nicht erreichbar",
+    "hint": "Dein Smartphone kann den Dienst gerade nicht erreichen. Die Verbindung wird automatisch wiederhergestellt."
+  },
+  "connectStep1": "Installiere und öffne {{appName}} auf deinem Computer",
+  "connectStep2": "Melde dich mit demselben Konto wie auf deinem Smartphone an",
+  "connectStep3": "Aktiviere unter Einstellungen → Fernverbindung die Option „Geräten mit demselben Konto erlauben, diesen Computer zu steuern“",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} in der Cloud – demnächst verfügbar",
+  "cloudTeaserCopy": "Nach dem Start funktioniert die mobile App eigenständig, ganz ohne Computer.",
+  "sectionFirstRun": "Loslegen",
+  "sectionOffline": "Verbundene Geräte",
+  "sectionRemoteDisabled": "Auf deinem Computer",
+  "sectionAccessRevoked": "Zugriff erneut genehmigen",
+  "retryAccess": "Zugriff erneut versuchen",
+  "recheck": "Erneut prüfen",
+  "deviceRemovedTitle": "Gerät entfernt",
+  "deviceRemovedHint": "Melde dich ab und wieder an, um das Gerät wieder zur Geräteliste hinzuzufügen.",
+  "authFailedTitle": "Anmeldung abgelaufen",
+  "authFailedHint": "Deine Anmeldung ist abgelaufen. Melde dich ab und wieder an.",
+  "replacedTitle": "Verbindung ersetzt",
+  "replacedHint": "Diese Geräteverbindung wurde an anderer Stelle ersetzt. Die Verbindung wird jetzt wiederhergestellt.",
+  "tooManyConnectionsTitle": "Zu viele Verbindungen",
+  "tooManyConnectionsHint": "Für dieses Konto sind zu viele Geräte online. Trenne ein anderes Gerät und versuch es erneut.",
+  "versionMismatchTitle": "Versionskonflikt",
+  "versionMismatchHint": "Diese App-Version ist mit dem Dienst nicht kompatibel. Aktualisiere auf die neueste Version und versuch es erneut.",
+  "unstableTitle": "Verbindung bricht immer wieder ab",
+  "unstableHint": "Die Verbindung ist instabil. Prüfe dein Netzwerk und warte, bis die Verbindung wiederhergestellt ist.",
+  "relay": {
+    "label": {
+      "online": "Mit Relay verbunden",
+      "connecting": "Verbindung mit Relay wird hergestellt",
+      "stopped": "Verbindung mit Relay getrennt"
+    },
+    "hint": {
+      "online": "Aufgaben auf dem entfernten Computer können synchronisiert werden.",
+      "lastSynced": "Zuletzt synchronisiert: {{time}}",
+      "connecting": "Aufgaben auf dem entfernten Computer werden automatisch erneut abonniert, sobald das Netzwerk wieder verfügbar ist.",
+      "stopped": "Die Verbindung wird fortgesetzt, wenn du zur App zurückkehrst oder dich erneut anmeldest."
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} kann nicht verwendet werden, da auf dem Computer kein API-Schlüssel konfiguriert ist. Richte in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter einen ein und versuch es erneut.",
+    "noOauth": "{{agent}} kann nicht verwendet werden, da die Kontoautorisierung auf dem Computer nicht abgeschlossen ist. Verbinde das Konto in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter erneut und versuch es noch einmal.",
+    "noCredentials": "{{agent}} kann nicht verwendet werden, da auf dem Computer keine Anmeldung vorliegt. Melde dich in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter an und versuch es erneut.",
+    "noEncryption": "{{agent}} kann nicht verwendet werden, da der sichere Systemspeicher auf dem Computer nicht verfügbar ist. Prüfe die Schlüsselbundverwaltung unter macOS oder die Kontoverschlüsselung unter Windows und starte {{appName}} auf dem Computer neu.",
+    "proxyNotReady": "{{agent}} ist auf dem Computer noch nicht bereit. Versuch es gleich erneut. Falls das Problem weiterhin besteht, starte {{appName}} auf dem Computer neu.",
+    "default": "{{agent}} kann nicht verwendet werden, da die Anmeldung auf dem Computer nicht verfügbar ist. Melde dich auf dem Computer in {{appName}} unter Einstellungen → Modellanbieter erneut an. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "Auf dem entfernten Computer ist die Fernsteuerung deaktiviert.",
+    "channelNotAllowed": "Die aktuelle Desktop-Version unterstützt diese Remote-Funktion nicht.",
+    "accessRevoked": "Dieser Computer hat den mobilen Zugriff widerrufen.",
+    "deviceUnresponsive": "Noch keine Antwort erhalten. Automatischer Neuversuch.",
+    "versionMismatch": "Die Version des Dienstprotokolls stimmt nicht überein. Aktualisiere die App und versuche es erneut.",
+    "payloadTooLarge": "Diese Übertragung ist zu groß. Teile sie in kleinere Teile auf und versuche es erneut.",
+    "mediaFetchFailed": "Die Datei konnte nicht vom Computer abgerufen werden. Versuche es später erneut.",
+    "voiceTranscribeFailed": "Die Sprachtranskription ist fehlgeschlagen. Versuche es erneut oder nutze die Tastatur.",
+    "linkNotOpen": "Die Steuerverbindung zum Computer wurde getrennt und wird wiederhergestellt.",
+    "accountChanged": "Das Codex-Konto oder der Arbeitsbereich hat sich geändert. Aktualisiere das Kontingent und bestätige erneut.",
+    "offerExpired": "Das Angebot zum Zurücksetzen von Codex ist abgelaufen. Aktualisiere das Kontingent und bestätige erneut.",
+    "preconditionFailed": "Die Bedingungen für den Vorgang haben sich geändert. Aktualisiere und bestätige erneut.",
+    "transient": "Das Netzwerk oder der entfernte Computer ist vorübergehend nicht verfügbar. Synchronisiere später erneut.",
+    "callFailed": "Der Remote-Aufruf wurde nicht abgeschlossen. Versuche es gleich erneut.",
+    "unclassified": "Diese Aktion wurde nicht abgeschlossen. Versuche es gleich erneut.",
+    "notFound": "Dieses Element existiert nicht mehr. Kehre zur Liste zurück und aktualisiere sie, bevor du es erneut versuchst."
+  }
+}

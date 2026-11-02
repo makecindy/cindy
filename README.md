@@ -15,6 +15,10 @@
   <strong><a href="https://cindy.app/download">Download Cindy</a></strong> &nbsp;·&nbsp; <a href="https://cindy.app">Website</a> &nbsp;·&nbsp; <a href="CONTRIBUTING.en.md">Build with us</a> &nbsp;·&nbsp; <a href="SUPPORT.en.md">Get help</a>
 </p>
 
+<p align="center">
+  <a href=".github/assets/star-history/trending-2026-10-26.png">★ GitHub Trending #1 · 2026.10.26</a>
+</p>
+
 Cindy is an **open-source AI agent, ready out of the box and yours to shape**.
 Connect your computers and phone, bring the models and subscriptions you already
 use, and build a companion that knows how you like to work.
@@ -102,6 +106,21 @@ billing still apply; the free client does not mean unlimited model usage.
 
 Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
 for installation, updates, keyring setup and migration from a manual install.
+
+<h3 align="center">Okay, maybe a little popular.</h3>
+
+<p align="center">
+  <a href="https://github.com/makecindy/cindy/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark-mobile.svg">
+      <source media="(max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light-mobile.svg">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light.svg">
+      <img src=".github/assets/star-history/stars-light.svg" width="100%" alt="Cindy GitHub star history">
+    </picture>
+  </a>
+</p>
+<p align="center"><sub>Every star means something.</sub></p>
 
 ---
 

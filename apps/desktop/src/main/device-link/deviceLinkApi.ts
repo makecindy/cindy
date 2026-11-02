@@ -11,7 +11,24 @@ import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 /** 当前中转的 REST 基础地址(WebSocket 地址由它推出)。 */
 export function resolveDeviceLinkApiBase(): string {
-  return activeSelfHostedRelay()?.baseUrl ?? getClientEndpoint('deviceLinkApiBaseUrl');
+  return activeSelfHostedRelay()?.baseUrl ?? officialDeviceLinkApiBase();
+}
+
+/** 官方中转的 REST 基础地址:跨账号连接不随中转选择切换。 */
+export function officialDeviceLinkApiBase(): string {
+  return getClientEndpoint('deviceLinkApiBaseUrl');
+}
+
+/** 官方服务的 REST 入口。共享任务附件只存在于官方存储,不随中转选择切换。 */
+export function officialDeviceLinkApiFetch<T>(
+  apiPath: string,
+  opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
+): Promise<T> {
+  return serverApiFetch<T>(apiPath, {
+    ...opts,
+    // 401 重试可随账号区域更新官方端点，不能随中转选择跨到自建地址。
+    baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl'),
+  });
 }
 
 export function deviceLinkApiFetch<T>(
@@ -19,11 +36,7 @@ export function deviceLinkApiFetch<T>(
   opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
 ): Promise<T> {
   const relay = activeSelfHostedRelay();
-  if (!relay) return serverApiFetch<T>(apiPath, {
-    ...opts,
-    // 401 重试可随账号区域更新官方端点，不能随中转选择跨到自建地址。
-    baseUrl: () => getClientEndpoint('deviceLinkApiBaseUrl'),
-  });
+  if (!relay) return officialDeviceLinkApiFetch<T>(apiPath, opts);
   return serverApiFetch<T>(apiPath, {
     ...opts,
     baseUrl: relay.baseUrl,

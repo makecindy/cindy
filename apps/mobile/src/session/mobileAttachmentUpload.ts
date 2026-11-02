@@ -1,7 +1,8 @@
 import { apiFetchRaw } from '@/api/client';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
@@ -65,7 +66,7 @@ export async function presignMobileAttachmentUpload(
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
     () => apiFetch<MobileAttachmentPresignResult>('/api/device-link/media/presign-put', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: options.sharedTaskId ? getOfficialDeviceLinkApiBaseUrl() : DEVICE_LINK_API_BASE_URL,
       method: 'POST',
       token: options.token,
       timeoutMs: PRESIGN_TIMEOUT_MS,
@@ -445,7 +446,7 @@ export async function deleteMobileAttachmentUpload(
 ): Promise<void> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   await apiFetch<{ deleted: boolean }>('/api/device-link/media', {
-    baseUrl: DEVICE_LINK_API_BASE_URL,
+    baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
     method: 'DELETE',
     token: options.token,
     body: { key: ossKey },

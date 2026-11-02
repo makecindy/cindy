@@ -40,12 +40,18 @@
 - 从 Cindy 已固定版本的 Pi 二进制读取生成数据：
   `pnpm sync:pi-model-catalog --pi-bundle /path/to/pi --source-version 0.85.1 --generated-at 2026-09-12T00:00:00Z`。
   仅解析生成的字面量数据，不执行二进制。旧版本已有的 Astra/xAI 修正由具名函数保留，新版本不套旧版本修正。
+  Pi 1.x 的每个分片包在惰性 `__esm` 初始化里，同一分片还混有图片与分类模型；读取器两种布局都认，
+  只收 `type` 为空或 `chat` 的行。
 - OpenRouter 全量资料审计：`pnpm exec tsx tools/pi/audit-openrouter.mts`。
   只调用公开 `GET /api/v1/models`，不用 Key、不发推理请求；也可传本地响应 JSON 路径离线审计。
 
 本次导入 Pi 0.85.1 共 39 个有模型的供应商、1,355 条记录（另有一个空 `.manifest` 元数据键，不计作供应商），包含同型号的不同渠道。
 这不是可调用数量：账号准入、余额和实时供应状态仍由实际连接决定。
 未更改 Server 正本，也未声称生产客户端已部署。用户已授权启动隔离 DEV 并反馈实测问题。
+
+2026-10-30 只把 Pi 1.4.0 中 ID 含 `deepseek` 的行合并进来（`supplementalSources` 有记录），其它型号
+仍是 0.85.1 资料，整表同步随 Pi 版本升级另做。新地址与原供应商记录不同的行（OpenCode Zen/Go 已改到
+`/inference`）没有合并，否则会悄悄改掉已有连接的请求地址。
 
 ## 用户实测后的补充验收
 

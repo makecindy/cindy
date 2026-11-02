@@ -155,6 +155,13 @@ export interface InputHandoffSnapshot {
   failure?: InputHandoffFailure;
   /** The target is driven by the agent (for example a CDP-controlled browser). */
   agentControlled?: true;
+  /**
+   * The step is a QR code cut out of a screenshot the agent supplied, not a
+   * window the Host can see: show that the picture came from the agent, and
+   * let the owner hand back after scanning (the Host cannot detect it).
+   * Older clients ignore it and still show `agentControlled` and skip.
+   */
+  agentPicture?: true;
   /** Remote controllers may submit values through the signed v3 exchange. */
   remoteInput?: true;
   /** The request has settled; kept briefly for terminal feedback only. */

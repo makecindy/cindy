@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Compartilhado por {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Compartilhamento indisponível"
+  },
+  "link": {
+    "title": "Compartilhamento de provedores",
+    "heading": "Abra este link em um computador",
+    "body": "O compartilhamento de provedores só pode ser solicitado e usado no {{appName}} em um computador. Envie o link para seu computador e abra-o lá, ou cole-o em Configurações → Provedores → Provedores compartilhados comigo.",
+    "note": "Os links de compartilhamento expiram 5 minutos após a criação e só funcionam uma vez.",
+    "copy": "Copiar link de compartilhamento",
+    "copied": "Link de compartilhamento copiado",
+    "copyFailed": "Não foi possível copiar o link de compartilhamento. Tente novamente em instantes."
+  }
+}

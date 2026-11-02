@@ -12,6 +12,7 @@ import {
   type BotGlance,
   type BotAutonomyExecution,
 } from '../../shared/botAutonomy.js';
+import type { BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import {
@@ -21,7 +22,7 @@ import {
 } from '../maker-host/bot-autonomy-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { filterFollowUpEvents, resolveSchedulerBotId, type FollowUpSubject } from './follower.js';
-import { readBotDirectory, readLocalSessionMetas, readTaskOwnership } from './hostData.js';
+import { readBotDirectory, readBotSystemSkillsOffFor, readLocalSessionMetas, readTaskOwnership } from './hostData.js';
 import type { BotAutonomyRuntime, GlanceOptions } from './runtime.js';
 import { errorCode, type BotAutonomyInputProjection } from './taskWatch.js';
 
@@ -31,6 +32,9 @@ export interface BotAutonomyHostDeps {
   readSessionExecution(sessionId: string): BotAutonomyExecution | null;
   /** A durable terminal receipt owns this event's execution, including pending delivery. */
   isCompletionHandledByTeammate(sessionId: string, botId: string, execution: BotAutonomyExecution): Promise<boolean | null>;
+  hasTaskDeliveryOrigin?(sessionId: string): Promise<boolean>;
+  restoreTaskDeliveries?(): void;
+  noteTaskDelivery?(sessionId: string, execution: BotAutonomyExecution, final: boolean): boolean;
   /** 某个本机任务当前挂起的交互请求（只读）。 */
   getPendingInteractions(sessionId: string): readonly unknown[];
   getMainWindow(): BrowserWindow | null;
@@ -54,6 +58,7 @@ export function getActiveBotAutonomy(): typeof current {
 
 export function setActiveBotAutonomy(next: typeof current): void {
   current = next;
+  if (next && scopeIsCurrent(next.scope)) hostDeps.restoreTaskDeliveries?.();
 }
 
 export function scopeIsCurrent(scope: string): boolean {
@@ -67,15 +72,17 @@ export function noteBotAutonomyInputProjection(projection: unknown): void {
   runtime.watch.applyInputProjection(projection as BotAutonomyInputProjection);
 }
 
-/** Only followed work needs a model delivery report; no extra teammate context. */
+/** Followed work and tasks with a recorded origin share the same delivery report. */
 export async function readTaskDeliveryNote(sessionId: string): Promise<string | null> {
   const active = current;
   if (!active || !scopeIsCurrent(active.scope)) return null;
   const ownership = await readTaskOwnership(ownerScopedUserDataPath());
   if (current !== active || !scopeIsCurrent(active.scope)) return null;
   if ([...ownership.bots.values()].some(bot => bot.canonicalSessionId === sessionId)) return null;
-  if (!ownership.creatorBySession.has(sessionId) && !active.runtime.watch.getSchedulerBotId()) return null;
-  return '[Task delivery] Host bookkeeping, not a user message: before your final answer in every turn, call cindy_helper.call_tool({name:"report_task_delivery",args:{final_delivery:true|false}}). Judge whether this turn newly delivers the requested result: PR delivered for human review, merged/closed, or goal achieved is true; intermediate review fixes, waiting for CI, or repeated status is false. A true report followed by normal completion notifies the following teammate.';
+  const hasOrigin = await hostDeps.hasTaskDeliveryOrigin?.(sessionId);
+  if (current !== active || !scopeIsCurrent(active.scope)) return null;
+  if (!ownership.creatorBySession.has(sessionId) && !active.runtime.watch.getSchedulerBotId() && !hasOrigin) return null;
+  return '[Task delivery] Host bookkeeping, not a user message: before your final answer in every turn, call cindy_helper.call_tool({name:"report_task_delivery",args:{final_delivery:true|false}}). Judge whether this turn newly delivers the requested result: PR delivered for human review, merged/closed, or goal achieved is true; intermediate review fixes, waiting for CI, or repeated status is false. A true report followed by normal completion is delivered by the host to the recorded original conversation, or uses existing follow-up when no origin is recorded.';
 }
 
 export function reportTaskDelivery(sessionId: string, finalDelivery: boolean, sessionInstanceId?: string):
@@ -83,8 +90,11 @@ export function reportTaskDelivery(sessionId: string, finalDelivery: boolean, se
   const active = current;
   const execution = hostDeps.readSessionExecution?.(sessionId);
   if (!active || !scopeIsCurrent(active.scope) || !execution
-    || (sessionInstanceId !== undefined && sessionInstanceId !== execution.instanceId)
-    || !active.runtime.watch.reportDelivery(sessionId, execution, finalDelivery)) {
+    || (sessionInstanceId !== undefined && sessionInstanceId !== execution.instanceId)) {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The current task execution is not running.' };
+  }
+  const originReported = hostDeps.noteTaskDelivery?.(sessionId, execution, finalDelivery) ?? false;
+  if (!active.runtime.watch.reportDelivery(sessionId, execution, finalDelivery) && !originReported) {
     return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The current task execution is not running.' };
   }
   return { ok: true };
@@ -125,7 +135,7 @@ function assertOwner(scope: string): void {
   if (!scopeIsCurrent(scope)) throwIpcError('PRECONDITION_FAILED', 'App session changed; retry in the current account.');
 }
 
-/** 设置「自动跟进所有任务」归谁；null = 关闭。目标伙伴必须存在且没被归档。 */
+/** 设置「自动跟进所有任务」归谁；null = 关闭。目标伙伴必须存在、没被归档，且没关掉「跟进」。 */
 export async function setBotAutonomySchedulerBotId(schedulerBotId: string | null): Promise<BotAutonomySettingsView> {
   const scope = activeOwnerScopeKey();
   assertOwner(scope);
@@ -134,6 +144,7 @@ export async function setBotAutonomySchedulerBotId(schedulerBotId: string | null
     assertOwner(scope);
     const bot = bots.get(schedulerBotId);
     if (!bot || bot.status === 'archived' || bot.status === 'deleting') throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (bot.followOff) throwIpcError('PRECONDITION_FAILED', 'SYSTEM_SKILL_OFF: this teammate\'s follow-up system Skill is turned off');
   }
   await writeBotAutonomySchedulerBotId(schedulerBotId);
   return afterSettingsChange(scope);
@@ -153,6 +164,14 @@ async function afterSettingsChange(scope: string): Promise<BotAutonomySettingsVi
   if (runtime) await runtime.refreshFollowers().catch((error) => log.warn('autonomy refresh failed', { error: errorCode(error) }));
   log.info('autonomy scheduler setting changed');
   return getBotAutonomySettingsView();
+}
+
+/**
+ * 伙伴当前关掉的系统技能（cindy-bots-runtime.md §6「伙伴技能分层」）：例行任务执行前据此跳过它的跟进与「每天查待办」，
+ * 待办设置与执行入口据此拒绝。
+ */
+export async function botSystemSkillsOff(botId: string): Promise<BotSystemSkillId[]> {
+  return readBotSystemSkillsOffFor(botId);
 }
 
 /** null means startup is not ready; an empty batch has lost its authorization. */

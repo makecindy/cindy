@@ -1503,3 +1503,84 @@ describe('GhostTurnOriginTracker', () => {
     expect(origin.acceptsInteraction(undefined)).toBe(false);
   });
 });
+
+// Bug/rule: control points (2026-10-31) ask only the plugin the task chose, never every installed
+// plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
+// Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
+describe('control points', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const point = 'will-schedule-run' as const;
+  const data = {
+    scheduleId: 's1', runId: 'r1', name: 'Daily', prompt: 'summarize', executionMode: 'agent' as const,
+    trigger: 'cron' as const, firedAt: 1,
+  };
+  const approved = (id: string): InstalledGhost => ({ ...ghost(id, { hooks: [point] }), approvedControlPoints: [point] });
+
+  it('asks only the chosen plugin and returns its skip', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
+    running.add('p1').add('p2');
+    const result = gw.screenControlPoint(point, data, { pluginId: 'p2', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.map((item) => item.ghostId)).toEqual(['p2']);
+    expect(sent[0].payload).toMatchObject({ name: point, data, deadline: 1_000 + 30_000 });
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    gw.handleVerdict('p2', { type: 'event-verdict', hookId, action: 'skip', reason: 'nothing new' });
+    expect(await result).toEqual({ action: 'skip', ghostId: 'p2', ghostName: '意识p2', reason: 'nothing new', failure: false });
+  });
+
+  it('applies the task failure setting to an unapproved, missing or silent plugin', async () => {
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [ghost('pre', { hooks: [point] }), approved('p1')] });
+    running.add('pre').add('p1');
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'pre', onFailure: 'skip' }))
+      .toMatchObject({ action: 'skip', ghostId: 'pre', failure: true });
+    expect(await gw.screenControlPoint(point, data, { pluginId: 'gone', onFailure: 'block' }))
+      .toMatchObject({ action: 'block', ghostId: 'gone', failure: true });
+    expect(sent).toHaveLength(0);
+
+    const blocked = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await blocked).toMatchObject({ action: 'block', ghostId: 'p1', failure: true });
+
+    const allowed = gw.screenControlPoint(point, data, { pluginId: 'p1', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(30_000 + 10);
+    expect(await allowed).toEqual({ action: 'allow' });
+  });
+
+  // Rule (2026-10-31): only the new-task point may pick a model; the route is reduced to the four
+  // known fields before Main validates it, and a route sent to a run point is just "no objection".
+  it('returns a sanitized route only at the new-task point', async () => {
+    const start = 'will-start-task' as const;
+    const startData = { modelId: 'auto', text: 'fix the login bug', attachmentCount: 0, route: { agentKind: 'codex' as const, model: 'm1', providerId: 'p' } };
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [start, point] }), approvedControlPoints: [start, point] }],
+    });
+    running.add('r1');
+    const verdict = (index: number, route: unknown) => gw.handleVerdict('r1', {
+      type: 'event-verdict', hookId: (sent[index].payload as { hookId: string }).hookId, action: 'route', reason: 'code', route,
+    });
+
+    const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', endpoint: 'https://evil' });
+    expect(await routed).toEqual({
+      action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high' },
+    });
+
+    const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(1, { agentKind: 'gpt', model: 'opus', providerId: 'anthropic' });
+    expect(await malformed).toEqual({ action: 'allow' });
+
+    const runPoint = gw.screenControlPoint(point, data, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
+    expect(await runPoint).toEqual({ action: 'allow' });
+  });
+});

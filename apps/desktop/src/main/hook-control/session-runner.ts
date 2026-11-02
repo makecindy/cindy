@@ -153,6 +153,7 @@ import {
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
@@ -569,7 +570,8 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
 /** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
 function formatHookIncompleteNotice(skippedNames: string[]): string {
   const locale = getResolvedMainLocale();
-  const separator = locale === 'en' || locale === 'ko' ? ', ' : '、';
+  const modern = modernLocaleOf(locale);
+  const separator = modern === 'zh-CN' || modern === 'zh-TW' || modern === 'ja' ? '、' : ', ';
   const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
   return t('imBot.outboundAttachmentsIncomplete', locale)
     .replace('{{count}}', String(skippedNames.length))
@@ -592,7 +594,8 @@ async function collectOutboundForFinalText(
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
   provider?: string,
-): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
+  relayXVideo?: HookRunRequest['relayXVideo'],
+): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments']; xMediaIds?: string[] }> {
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
@@ -618,6 +621,7 @@ async function collectOutboundForFinalText(
       },
       allowedFileRoots,
       provider,
+      ...(canReadLocal && relayXVideo ? { relayVideo: relayXVideo } : {}),
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       formatIncompleteNotice: formatHookIncompleteNotice,
       log,
@@ -628,6 +632,7 @@ async function collectOutboundForFinalText(
     return {
       finalText: collected.text,
       ...(collected.attachments.length > 0 ? { attachments: collected.attachments } : {}),
+      ...(collected.xMediaIds.length > 0 ? { xMediaIds: collected.xMediaIds } : {}),
     };
   } catch (err) {
     log.warn(
@@ -1306,7 +1311,7 @@ export function createMakerHookSessionRunner(deps: {
       const publicCompanionNote = req.companionBotId
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1614,7 +1619,7 @@ export function createMakerHookSessionRunner(deps: {
         observer.stop();
         const collected = observer.errorReason === 'output-limit'
           ? await collectOutboundForFinalText(
-            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log, req.source?.im,
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log, req.source?.im, req.relayXVideo,
           )
           : { finalText: '' };
         // 额度类失败要说清是哪个供应商: 名字只在这里按需读一次(读不到退回「当前供应商」)。
@@ -1647,9 +1652,11 @@ export function createMakerHookSessionRunner(deps: {
         allowedFileRoots,
         log,
         req.source?.im,
+        req.relayXVideo,
       );
       let finalText = collected.finalText;
       const outAttachments = collected.attachments;
+      const xMediaIds = collected.xMediaIds;
       if (inboundAttachmentFailures > 0) {
         const warning =
           `⚠️ Incoming attachment processing incomplete: ${inboundAttachmentFailures} ` +
@@ -1662,6 +1669,7 @@ export function createMakerHookSessionRunner(deps: {
         errorMessage: null,
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
+        ...(xMediaIds !== undefined ? { xMediaIds } : {}),
       };
     },
 

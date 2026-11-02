@@ -4,7 +4,7 @@
  * 群专线是一条普通 Cindy Session：权限请求 / 提问经 maker 事件进入 makerChatStore，
  * 与任务页是同一份状态（按 sessionId 分片），这里只读它的轻量快照并复用任务页的
  * PermissionPrompt / AskUserQuestionPrompt / InputHandoffCard，作答也走同一条路径。其它交互（计划
- * 审阅、插件配置等）在群里只提示「在等你确认」。
+ * 审阅、插件配置等）显示「在等你确认」，并提供原任务入口来处理。
  *
  * 灵动岛活动镜像报告等待交互、store 里却没有卡片时（窗口刚重载、错过了实时推送），
  * 先显示这条提示，再按任务页打开时的同一路径补读一次这条专线：ensureInitialMessages
@@ -13,6 +13,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { CircleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
@@ -30,6 +33,7 @@ export function BotGroupPendingInteraction({
   bot: BotChatIdentity;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const subscribe = useCallback(
     (listener: () => void) => makerChatStore.subscribeLight(sessionId, listener),
     [sessionId],
@@ -111,12 +115,15 @@ export function BotGroupPendingInteraction({
     light.pendingRemoteDesktopConfirmation !== null;
   if (!waiting) return null;
   return (
-    <p
-      role="status"
-      className="flex items-center gap-1.5 text-13 text-[var(--text-secondary)]"
-    >
-      <CircleAlert size={14} className="shrink-0 text-[var(--warning-fg)]" aria-hidden />
-      {t('bots.groupChat.waitingConfirm', { name: bot.name })}
-    </p>
+    <div className="flex flex-wrap items-center gap-1.5 text-13 text-[var(--text-secondary)]">
+      <p role="status" className="flex items-center gap-1.5">
+        <CircleAlert size={14} className="shrink-0 text-[var(--warning-fg)]" aria-hidden />
+        {t('bots.groupChat.waitingConfirm', { name: bot.name })}
+      </p>
+      <Button type="button" variant="secondary" tone="quiet" size="sm" compact
+        onClick={() => navigate(standardSessionRoute(sessionId))}>
+        {t('bots.groupChat.progress.viewProcess')}
+      </Button>
+    </div>
   );
 }

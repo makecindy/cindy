@@ -8,5 +8,6 @@
   "messageSource": "Sent by $t(mcpApps.appName) “{{name}}”",
   "serverId": "MCP Server ID: {{id}}",
   "exitFullscreen": "Exit Fullscreen",
-  "mobileUpdateRequired": "Update Cindy on this phone to open this card."
+  "mobileUpdateRequired": "Update Cindy on this phone to open this card.",
+  "filesOnExecutionComputer": "View file contents on the execution computer"
 }

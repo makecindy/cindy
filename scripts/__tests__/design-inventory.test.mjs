@@ -985,28 +985,22 @@ test('语音浮窗纳入 globals.css 与直接渲染的 VoiceInputStatusNotice',
   assert.ok(generated.bareRadii > 10, `裸圆角应高于 10(实际 ${generated.bareRadii})`);
 });
 
-test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () => {
-  // 与 BARE_RADIUS_RE 同口径的行为级断言:经 scanStyleStats 出来的统计必须数到
-  // style 对象声明。用真实文件钉死:LoginCaptchaOverlay.tsx 的 borderRadius: 18。
-  const { surfaces } = buildGeneratedSurfaces(ROOT, {});
-  const login = surfaces.find((surface) => surface.id === 'desktop.auth.login');
-  // 上一轮口径(只认 rounded* 与 border-radius:)登录页裸圆角为 6;
-  // LoginCaptchaOverlay 的 borderRadius: 18 等内联声明并入后必须更高。
-  assert.ok(login.bareRadii > 6, `camelCase borderRadius 应计入裸圆角(实际 ${login.bareRadii})`);
-  // 会话工作台含 ImageLightbox 的 borderRadius: '9999px'。
-  const session = surfaces.find((surface) => surface.id === 'desktop.chat.session');
-  const lightboxPath = 'apps/desktop/src/renderer/components/chat/ImageLightbox.tsx';
-  assert.ok(session.styleSources.includes(lightboxPath), 'ImageLightbox 必须可达');
-  // 独立统计这个文件：3 处 rounded-full + 2 处 camelCase borderRadius。
-  // 不能用整个工作台的圆角总数作下限，否则合法删除 B 版等组件也会误报扫描器退化。
-  const isolated = buildGeneratedSurfaces(ROOT, {
-    catalog: [{
-      ...catalogSurfaces().find((surface) => surface.id === session.id),
-      styleRoots: [lightboxPath],
-      extraStyleRoots: [],
-    }],
-  }).surfaces[0];
-  assert.equal(isolated.bareRadii, 5, 'ImageLightbox 的两个内联圆角必须计入');
+test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', (t) => {
+  // CI #8356: scan the production generator with an isolated source fixture.
+  // UI refactors may legitimately remove radii; the scanner's contract stays fixed.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-radius-inventory-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = 'apps/desktop/src/renderer/fixture.tsx';
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), `
+    export const Fixture = () => <div className="rounded-full" style={{ borderRadius: '9999px' }} />;
+    // borderRadius: 99 is a comment, not a style.
+  `);
+  const catalog = [{ ...catalogSurfaces().find(surface => surface.id === 'desktop.chat.session'),
+    styleRoots: [file], extraStyleRoots: [] }];
+  const result = buildGeneratedSurfaces(root, { catalog }).surfaces[0];
+  assert.ok(result.styleSources.includes(file));
+  assert.equal(result.bareRadii, 2, 'class and camelCase style both count, comments do not');
 });
 
 test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块映射必须与 catalog 一致', () => {

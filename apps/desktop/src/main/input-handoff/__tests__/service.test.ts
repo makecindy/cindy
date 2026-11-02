@@ -5,14 +5,14 @@ import {
   parseInputHandoffEndRecord,
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
-import { INPUT_HANDOFF_MAX_PER_TASK, InputHandoffService, buildInputHandoffContinuation } from '../service.js';
+import { INPUT_HANDOFF_MAX_PER_TASK, InputHandoffService, buildInputHandoffContinuation, type InputHandoffServiceDeps } from '../service.js';
 import { readInputHandoffSetting } from '../botPolicy.js';
 import { fakeDesktop, type FakeStage } from './fakeDesktop.js';
 
 const services: InputHandoffService[] = [];
 afterEach(() => services.splice(0).forEach((s) => s.cleanupAll()));
 
-function harness(start?: FakeStage) {
+function harness(start?: FakeStage, qrFromPicture?: InputHandoffServiceDeps['qrFromPicture']) {
   const desktop = fakeDesktop({ start });
   const snapshots: InputHandoffSnapshot[] = [];
   const continued: string[] = [];
@@ -32,6 +32,7 @@ function harness(start?: FakeStage) {
     notifyOwner: (_session, snapshot) => notified.push(snapshot),
     describeDevice: (deviceId) => (deviceId === 'phone-1' ? { name: 'Synthetic Phone', platform: 'mobile' } : {}),
     terminalRetentionMs: 0,
+    ...(qrFromPicture ? { qrFromPicture } : {}),
     sessionTiming: { now: () => clock, sleep: async (ms) => { clock += ms; }, finishingDelayMs: 5 },
   });
   services.push(service);
@@ -129,6 +130,98 @@ describe('代输入 owner controls', () => {
     expect(h.service.start({ sessionId: 'task', purpose: 'Again', target: { app: 'Example' } })).toMatchObject({ ok: false, errorCode: 'RATE_LIMITED' });
     h.advance(60 * 60_000);
     expect(h.service.start({ sessionId: 'task', purpose: 'Later', target: { app: 'Example' } }).ok).toBe(true);
+  });
+});
+
+// ask_owner (2026-10-30): a target the host cannot use is reported when the agent
+// asks, not as target_gone after its turn ended; a QR code in the agent's own
+// screenshot (a simulator inside Cindy) is scanned and handed back by the owner.
+describe('代输入 requests the agent makes', () => {
+  it.each([
+    [{ app: 'Cindy' }, 'TARGET_IS_CINDY'],
+    [{ pid: 1 }, 'TARGET_IS_CINDY'],
+    [{ app: 'Feishu' }, 'TARGET_NOT_FOUND'],
+    [{ app: 'Example' }, null],
+  ] as const)('checks target %j before starting', async (target, errorCode) => {
+    const problem = await harness().service.checkTarget(target);
+    expect(problem?.errorCode ?? null).toBe(errorCode);
+    if (errorCode === 'TARGET_NOT_FOUND') expect(problem!.message).toContain('Example, Google Chrome');
+    if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('kind="scan"');
+  });
+
+  // Seen in a real run: a Chinese desktop lists Finder as 访达, and a dev build
+  // runs as Electron, so "Finder" and "Cindy" both came back TARGET_NOT_FOUND.
+  it('finds an app named in English on a localized desktop and knows a dev build is Cindy', async () => {
+    const h = harness();
+    const shown = { index: 0, title: '', frame: [0, 0, 800, 600], focused: true, minimized: false };
+    h.desktop.driver.windows = async () => ({ frontmost: 5, apps: [
+      { pid: 5, app: '访达', bundleId: 'com.apple.finder', windows: [shown] },
+      { pid: 1, app: 'Electron', bundleId: 'com.github.Electron', windows: [shown] },
+    ] });
+    expect(await h.service.checkTarget({ app: 'Finder' })).toBeNull();
+    expect((await h.service.checkTarget({ app: 'Cindy' }))?.errorCode).toBe('TARGET_IS_CINDY');
+  });
+
+  it('scans a code from the agent\'s screenshot, shows where it leads, and hands back on the owner\'s word', async () => {
+    const h = harness(undefined, async () => ({ text: 'https://passport.feishu.cn/qr/abc', jpeg: Buffer.from('jpeg'), width: 8, height: 8 }));
+    const started = await h.service.startImageQr({ sessionId: 'task', purpose: 'Scan to sign in', image: Buffer.from('png') });
+    if (!started.ok) throw new Error(started.errorCode);
+    const card = h.latest();
+    expect(card).toMatchObject({
+      phase: 'ready', picture: true, qr: 'scan', agentPicture: true, agentControlled: true, controls: [],
+      source: { app: 'Cindy', origin: 'https://passport.feishu.cn' },
+    });
+    expect(h.notified).toHaveLength(1);
+    expect(h.service.picture(started.requestId, card.revision)?.qr).toEqual({ text: 'https://passport.feishu.cn/qr/abc', url: 'https://passport.feishu.cn/qr/abc' });
+    // Nothing on the agent's screen can be tapped or typed into from here.
+    expect(await h.service.submit(started.requestId, { expectedRevision: card.revision, values: {}, action: { kind: 'tap', x: 0.5, y: 0.5 } })).toBe(false);
+    h.service.resolve(started.requestId, { kind: 'input_handoff', action: 'done', expectedRevision: card.revision }, { deviceId: 'phone-1' });
+    await vi.waitFor(() => expect(h.continued).toHaveLength(1));
+    expect(h.continued[0]).toContain('status=succeeded');
+    expect(h.continued[0]).toContain('scanned the code');
+    expect(h.continued[0]).not.toContain('/qr/abc');
+  });
+
+  it.each([
+    [null, 'NO_QR_FOUND'],
+    [{ error: 'not_image' as const }, 'NOT_AN_IMAGE'],
+    [{ error: 'unreadable' as const }, 'QR_UNREADABLE'],
+    [undefined, 'UNSUPPORTED'],
+  ])('refuses a screenshot it cannot use (%j) without showing anything', async (found, errorCode) => {
+    const h = harness(undefined, found === undefined ? undefined : async () => found);
+    expect(await h.service.startImageQr({ sessionId: 'task', purpose: 'Scan', image: Buffer.from('png') }))
+      .toMatchObject({ ok: false, errorCode });
+    expect(h.snapshots).toEqual([]);
+    expect(h.notified).toEqual([]);
+  });
+
+  // PR #8083 review: closing the task while the picture is read must not pop a card later.
+  it('shows nothing when the task closes while the screenshot is being read', async () => {
+    let decoded!: (value: { text: string; jpeg: Buffer; width: number; height: number }) => void;
+    const h = harness(undefined, () => new Promise((resolve) => { decoded = resolve; }));
+    const pending = h.service.startImageQr({ sessionId: 'task', purpose: 'Scan', image: Buffer.from('png') });
+    await vi.waitFor(() => expect(decoded).toBeTypeOf('function'));
+    h.service.cleanupForSession('task');
+    const jpeg = Buffer.from('jpeg');
+    decoded({ text: 'https://passport.feishu.cn/qr/abc', jpeg, width: 8, height: 8 });
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+    expect(h.snapshots).toEqual([]);
+    expect(h.notified).toEqual([]);
+    expect(jpeg.every((byte) => byte === 0)).toBe(true);
+  });
+
+  // PR #8083 review: once a device takes over, a decision sent against the earlier revision is stale.
+  it('refuses a stale decision from before another device took over the scan', async () => {
+    const h = harness(undefined, async () => ({ text: 'https://passport.feishu.cn/qr/abc', jpeg: Buffer.from('jpeg'), width: 8, height: 8 }));
+    const started = await h.service.startImageQr({ sessionId: 'task', purpose: 'Scan', image: Buffer.from('png') });
+    if (!started.ok) throw new Error(started.errorCode);
+    const before = h.latest().revision;
+    h.service.resolve(started.requestId, { kind: 'input_handoff', action: 'claim', expectedRevision: before }, { deviceId: 'phone-1' });
+    await vi.waitFor(() => expect(h.latest().holder).toMatchObject({ deviceId: 'phone-1' }));
+    h.service.resolve(started.requestId, { kind: 'input_handoff', action: 'cancel', expectedRevision: before }, { local: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.service.isCurrent(started.requestId)).toBe(true);
+    expect(h.continued).toEqual([]);
   });
 });
 

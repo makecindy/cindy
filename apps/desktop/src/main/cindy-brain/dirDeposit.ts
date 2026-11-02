@@ -77,6 +77,11 @@ function isEnvFile(name: string): boolean {
   return name === '.env' || name.startsWith('.env.');
 }
 
+/** 单文件交接沿用 dir 的排除口径(凭证与平台垃圾)。 */
+export function isDepositExcludedFileName(name: string): boolean {
+  return EXCLUDE_FILE_NAMES.has(name) || isEnvFile(name);
+}
+
 /**
  * 递归收集目录下可上传文件(限额:数量 / 单文件 / 总量,超限即错)。
  * 返回 either 形态,message 是可直达模型的人话(不含主机侧敏感信息)。

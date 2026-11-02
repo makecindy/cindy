@@ -41,21 +41,6 @@ export function useOpenGroupMask() {
   });
 }
 
-export function GroupMaskSettingsEntry({ groupId }: { groupId: string }) {
-  const mask = useGroupMask(groupId);
-  return mask ? <MaskSettingsEntry mask={mask} /> : null;
-}
-
-function MaskSettingsEntry({ mask }: { mask: GroupMaskPresentation }) {
-  const open = useOpenGroupMask();
-  const { t } = useTranslation();
-  return <button type="button" data-testid="group-mask-settings-entry" onClick={open}
-    className="flex min-h-11 w-full items-center gap-3 rounded-lg text-left text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
-    <span className="flex-1">{t(key('title'))}</span>
-    <span className="text-[var(--text-secondary)]">{t(key(`status.${mask.status}`))}</span><ChevronRight size={14} />
-  </button>;
-}
-
 export function GroupMaskIndicator({ groupId, onTakeOver }: { groupId: string; onTakeOver: () => void }) {
   const mask = useGroupMask(groupId);
   return mask ? <MaskIndicator mask={mask} onTakeOver={onTakeOver} /> : null;

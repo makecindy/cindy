@@ -103,4 +103,47 @@ describe('Main-owned writable directory picker grants', () => {
       scopeId: 'session-a', senderId: 7, requestedDirs: [alias], previousDirs: [],
     })).rejects.toThrow(/changed after it was selected/i);
   });
+
+  // #7395: use the production issue/consume entry with controlled now, no real wait.
+  // The existing one-use/target-swap cases did not exercise expiry or its error code.
+  // Tier: unit (existing unique temporary filesystem fixture).
+  it.each([299_999, 300_000, 300_001])('classifies the five-minute boundary at %dms', async (now) => {
+    const output = join(fixture, 'output');
+    mkdirSync(output);
+    await issueWritableDirectoryPickerGrant({ scopeId: 'draft', senderId: 7, directory: output, now: 0 });
+    const request = () => consumeWritableDirectoryPickerGrants({
+      scopeId: 'draft', senderId: 7, requestedDirs: [output], previousDirs: [], now,
+    });
+    if (now < 300_000) await expect(request()).resolves.toBeUndefined();
+    else {
+      await expect(request()).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' });
+      await expect(request()).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' });
+    }
+  });
+
+  it('retains unexpired grants after a mixed batch fails and accepts a fresh picker proof', async () => {
+    const first = join(fixture, 'first');
+    const second = join(fixture, 'second');
+    mkdirSync(first);
+    mkdirSync(second);
+    await issueWritableDirectoryPickerGrant({ scopeId: 'draft', senderId: 7, directory: first, now: 0 });
+    await issueWritableDirectoryPickerGrant({ scopeId: 'draft', senderId: 7, directory: second, now: 200_000 });
+    const request = (requestedDirs: string[]) => consumeWritableDirectoryPickerGrants({
+      scopeId: 'draft', senderId: 7, requestedDirs, previousDirs: [], now: 300_001,
+    });
+    await expect(request([first, second])).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' });
+    await expect(request([second])).resolves.toBeUndefined();
+    await issueWritableDirectoryPickerGrant({ scopeId: 'draft', senderId: 7, directory: first, now: 300_001 });
+    await expect(request([first])).resolves.toBeUndefined();
+  });
+
+  it('distinguishes an unavailable directory from missing authorization', async () => {
+    const output = join(fixture, 'output');
+    mkdirSync(output);
+    await issueWritableDirectoryPickerGrant({ scopeId: 'draft', senderId: 7, directory: output });
+    rmSync(output, { recursive: true });
+    await expect(consumeWritableDirectoryPickerGrants({
+      scopeId: 'draft', senderId: 7, requestedDirs: [output], previousDirs: [],
+    })).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_UNAVAILABLE' });
+  });
 });
