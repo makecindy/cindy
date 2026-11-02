@@ -24,6 +24,22 @@ it('isolates completed imports by account and server and refuses stale owner acc
   expect(() => store.save(group, receipt)).toThrow('OWNER_CHANGED');
 });
 
+it('persists terminal migration failures by account and server', () => {
+  fixture.root = mkdtempSync(path.join(tmpdir(), 'cindy-chat-migration-failure-'));
+  const group = '10000000-0000-4000-8000-000000000001';
+  let current = true;
+  const store = chatMigrationReceipts('https://chat.example.test', 'alice', () => current);
+  expect(store.readFailure(group)).toBeNull();
+  store.saveFailure(group, 'CONVERSATION_ARCHIVED');
+  expect(chatMigrationReceipts('https://chat.example.test', 'alice', () => true).readFailure(group))
+    .toEqual({ version: 1, code: 'CONVERSATION_ARCHIVED' });
+  expect(chatMigrationReceipts('https://chat.example.test', 'bob', () => true).readFailure(group)).toBeNull();
+  expect(chatMigrationReceipts('https://other.example.test', 'alice', () => true).readFailure(group)).toBeNull();
+  current = false;
+  expect(() => store.readFailure(group)).toThrow('OWNER_CHANGED');
+  expect(() => store.saveFailure(group, 'CONVERSATION_NOT_FOUND')).toThrow('OWNER_CHANGED');
+});
+
 it('restores device workspace choices in the same account without sharing them with another owner', () => {
   fixture.root = mkdtempSync(path.join(tmpdir(), 'cindy-chat-workspace-'));
   const room = '10000000-0000-4000-8000-000000000001';

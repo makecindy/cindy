@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { migrateLocalGroups, type LocalChatUpgrade } from '../chatServerMigration.js';
+import {
+  CHAT_UPGRADE_RETRY_INITIAL_MS,
+  CHAT_UPGRADE_RETRY_MAX_MS,
+  migrateLocalGroups,
+  nextChatUpgradeRetryDelay,
+  terminalChatMigrationCode,
+  type LocalChatUpgrade,
+} from '../chatServerMigration.js';
 import type { BotGroupMessageView, BotGroupSummary } from '../../../shared/botGroupChat.js';
 
 const groupId = '10000000-0000-4000-8000-000000000001';
@@ -132,5 +139,119 @@ describe('local groups upgrade', () => {
     await expect(migrateLocalGroups(f.deps)).rejects.toThrow('MEDIA_STORAGE_UNAVAILABLE');
     expect(f.committed.size).toBe(0);
     expect(JSON.stringify(f.rows)).toBe(source);
+  });
+  it('persists terminal failures and skips the group on later runs', async () => {
+    const f = fixture();
+    let failure: { code: string } | null = null;
+    const saveFailure = vi.fn((_id: string, code: string) => { failure = { code }; });
+    f.deps.receipts = {
+      read: () => null,
+      save: vi.fn(),
+      readFailure: () => failure,
+      saveFailure,
+    };
+    f.deps.onError = vi.fn();
+    f.deps.api = vi.fn(async (route: string) => {
+      if (route === '/conversations') {
+        throw Object.assign(new Error('CONVERSATION_ARCHIVED'), {
+          code: 'CONVERSATION_ARCHIVED',
+          status: 409,
+        });
+      }
+      return {};
+    }) as LocalChatUpgrade['api'];
+
+    const result = await migrateLocalGroups(f.deps);
+    expect(result.size).toBe(0);
+    expect(saveFailure).toHaveBeenCalledWith(groupId, 'CONVERSATION_ARCHIVED');
+    expect(f.deps.onError).toHaveBeenCalledWith(
+      groupId,
+      expect.any(Error),
+      { terminal: true, code: 'CONVERSATION_ARCHIVED' },
+    );
+
+    vi.mocked(f.deps.api).mockClear();
+    await migrateLocalGroups(f.deps);
+    expect(f.deps.api).not.toHaveBeenCalled();
+  });
+  it('lets a completed receipt supersede a stale terminal failure', async () => {
+    const f = fixture();
+    f.deps.receipts = {
+      read: () => ({ roomId, sequence: 135, version: 2 }),
+      save: vi.fn(),
+      readFailure: () => ({ code: 'CONVERSATION_ARCHIVED' }),
+      saveFailure: vi.fn(),
+    };
+    f.deps.messages = vi.fn(async () => []);
+    f.deps.api = vi.fn() as unknown as LocalChatUpgrade['api'];
+
+    const result = await migrateLocalGroups(f.deps);
+    expect(result.get(groupId)).toBe(roomId);
+    expect(f.deps.api).not.toHaveBeenCalled();
+  });
+  it('retries a terminal failure when its receipt cannot be persisted', async () => {
+    const f = fixture();
+    f.deps.receipts = {
+      read: () => null,
+      save: vi.fn(),
+      readFailure: () => null,
+      saveFailure: vi.fn(() => { throw new Error('EACCES'); }),
+    };
+    f.deps.onError = vi.fn();
+    f.deps.api = vi.fn(async (route: string) => {
+      if (route === '/conversations') {
+        throw Object.assign(new Error('CONVERSATION_ARCHIVED'), {
+          code: 'CONVERSATION_ARCHIVED',
+          status: 409,
+        });
+      }
+      return {};
+    }) as LocalChatUpgrade['api'];
+
+    await migrateLocalGroups(f.deps);
+    const calls = vi.mocked(f.deps.onError).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[2]).toBeUndefined();
+  });
+  it('honors a terminal receipt before legacy finalization', async () => {
+    const f = fixture();
+    f.deps.receipts = {
+      read: () => ({ roomId, sequence: 135 }),
+      save: vi.fn(),
+      readFailure: () => ({ code: 'CONVERSATION_ARCHIVED' }),
+      saveFailure: vi.fn(),
+    };
+    f.deps.messages = vi.fn(async () => []);
+    f.deps.afterMessages = vi.fn();
+    f.deps.api = vi.fn() as unknown as LocalChatUpgrade['api'];
+
+    const result = await migrateLocalGroups(f.deps);
+    expect(result.size).toBe(0);
+    expect(f.deps.afterMessages).not.toHaveBeenCalled();
+    expect(f.deps.api).not.toHaveBeenCalled();
+  });
+  it('backs transient upgrade retries off to a bounded ceiling', () => {
+    expect(nextChatUpgradeRetryDelay(0)).toBe(CHAT_UPGRADE_RETRY_INITIAL_MS);
+    expect(nextChatUpgradeRetryDelay(CHAT_UPGRADE_RETRY_INITIAL_MS)).toBe(120_000);
+    expect(nextChatUpgradeRetryDelay(480_000)).toBe(900_000);
+    expect(nextChatUpgradeRetryDelay(CHAT_UPGRADE_RETRY_MAX_MS)).toBe(CHAT_UPGRADE_RETRY_MAX_MS);
+  });
+  it.each([
+    ['CONVERSATION_ARCHIVED', 'CONVERSATION_ARCHIVED'],
+    ['CONVERSATION_NOT_FOUND', 'CONVERSATION_NOT_FOUND'],
+    ['CONVERSATION_DISSOLVED', 'CONVERSATION_DISSOLVED'],
+    ['NOT_A_GROUP', 'CONVERSATION_NOT_FOUND'],
+  ])('classifies %s as terminal', (code, expected) => {
+    expect(terminalChatMigrationCode(Object.assign(new Error(code), { code }))).toBe(expected);
+  });
+  it('keeps retryable group errors retryable', () => {
+    expect(terminalChatMigrationCode(Object.assign(new Error('CONVERSATION_CHANGED'), {
+      code: 'CONVERSATION_CHANGED',
+      status: 409,
+    }))).toBeNull();
+    expect(terminalChatMigrationCode(Object.assign(new Error('REQUEST_FAILED'), {
+      code: 'REQUEST_FAILED',
+      status: 503,
+    }))).toBeNull();
   });
 });

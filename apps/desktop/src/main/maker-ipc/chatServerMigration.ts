@@ -3,6 +3,28 @@ import { randomUUID } from 'node:crypto';
 import type { BotGroupAttachment, BotGroupMessageView, BotGroupSummary, BotGroupPlanView } from '../../shared/botGroupChat.js';
 import { isBotGroupRuntimeFailureCode, readBotGroupRuntimeFailureDetail } from '../../shared/botGroupChat.js';
 
+export const CHAT_UPGRADE_RETRY_INITIAL_MS = 60_000;
+export const CHAT_UPGRADE_RETRY_MAX_MS = 15 * 60_000;
+export function nextChatUpgradeRetryDelay(current: number): number {
+  if (!Number.isFinite(current) || current <= 0) return CHAT_UPGRADE_RETRY_INITIAL_MS;
+  return Math.min(CHAT_UPGRADE_RETRY_MAX_MS, Math.max(CHAT_UPGRADE_RETRY_INITIAL_MS, current * 2));
+}
+
+/** Server-side group states that can never be repaired by an import retry. */
+export function terminalChatMigrationCode(error: unknown): string | null {
+  const value = error && typeof error === 'object'
+    ? error as { code?: unknown; message?: unknown; status?: unknown } : null;
+  const raw = typeof value?.code === 'string' ? value.code
+    : typeof value?.message === 'string' ? value.message : '';
+  if (raw === 'CONVERSATION_ARCHIVED' || raw === 'CONVERSATION_NOT_FOUND' || raw === 'CONVERSATION_DISSOLVED') {
+    return raw;
+  }
+  if (raw === 'NOT_A_GROUP') return 'CONVERSATION_NOT_FOUND';
+  // Do not infer terminal state from a bare 404: an older server may simply not
+  // implement the import route, and the group may remain migratable later.
+  return null;
+}
+
 export type ChatApi = <T>(route: string, method?: string, data?: unknown, actorId?: string) => Promise<T>;
 export interface ChatContentBlock { type: string; text?: string; mediaId?: string; caption?: string; namespace?: string; schemaRevision?: number; fallback?: string; data?: Record<string, unknown> }
 export interface LocalChatUpgrade {
@@ -16,10 +38,16 @@ export interface LocalChatUpgrade {
   attachments: (roomId: string, source: string, files: BotGroupAttachment[], actorId: string) => Promise<ChatContentBlock[]>;
   afterMessages?: (sourceId: string, roomId: string) => Promise<void>;
   onRoom?: (sourceId: string, roomId: string) => void;
-  onError?: (sourceId: string, error: unknown) => void;
+  onError?: (
+    sourceId: string,
+    error: unknown,
+    info?: { terminal: true; code: string },
+  ) => void;
   receipts?: {
     read: (groupId: string) => { roomId: string; sequence: number; version?: 2 } | null;
     save: (groupId: string, receipt: { roomId: string; sequence: number; version?: 2 }) => void;
+    readFailure?: (groupId: string) => { code: string } | null;
+    saveFailure?: (groupId: string, code: string) => void;
   };
 }
 
@@ -30,17 +58,27 @@ export async function migrateLocalGroups(deps: LocalChatUpgrade): Promise<Map<st
     try {
       check();
       const receipt = deps.receipts?.read(group.id);
+      const failure = deps.receipts?.readFailure?.(group.id);
       if (receipt && !(await deps.messages(group.id, receipt.sequence)).length) {
-        check();
-        // Already upgraded: no management request on a group since left/transferred.
-        migrated.set(group.id, receipt.roomId);
-        deps.onRoom?.(group.id, receipt.roomId);
-        if (receipt.version !== 2) {
-          await deps.afterMessages?.(group.id, receipt.roomId);
-          deps.receipts?.save(group.id, { ...receipt, version: 2 });
+        // A v2 receipt is fully finalized and wins over a stale failure file.
+        // A legacy receipt still needs afterMessages; if a terminal failure was
+        // recorded while finalizing it, honor that failure instead of retrying
+        // the same finalization on every restart.
+        if (receipt.version === 2 || !failure) {
+          check();
+          // Already upgraded: no management request on a group since left/transferred.
+          migrated.set(group.id, receipt.roomId);
+          deps.onRoom?.(group.id, receipt.roomId);
+          if (receipt.version !== 2) {
+            await deps.afterMessages?.(group.id, receipt.roomId);
+            deps.receipts?.save(group.id, { ...receipt, version: 2 });
+          }
+          continue;
         }
-        continue;
       }
+      // A terminal failure is persisted once: do not touch the server again for
+      // this local group, even after a restart or a new foreground open.
+      if (failure) continue;
       const participants = await Promise.all(group.members.map(m => deps.bot(m.botId, m.name)));
       const room = await deps.api<{ id: string }>('/conversations', 'POST', {
         operationId: randomUUID(), sourceId: group.id, kind: 'group', name: group.name,
@@ -129,6 +167,28 @@ export async function migrateLocalGroups(deps: LocalChatUpgrade): Promise<Map<st
       migrated.set(group.id, room.id);
     } catch (error) {
       check();
+      const terminal = terminalChatMigrationCode(error);
+      if (terminal) {
+        const persist = deps.receipts?.saveFailure;
+        let recorded = !persist;
+        if (persist) {
+          try {
+            persist(group.id, terminal);
+            recorded = true;
+          } catch {
+            // Do not suppress scheduling unless the terminal state is durable:
+            // otherwise a later open has no receipt and would stay IMPORT_PENDING.
+            recorded = false;
+          }
+        }
+        if (!deps.onError) throw error;
+        if (recorded) {
+          deps.onError(group.id, error, { terminal: true, code: terminal });
+        } else {
+          deps.onError(group.id, error);
+        }
+        continue;
+      }
       if (!deps.onError) throw error;
       deps.onError(group.id, error);
     }
