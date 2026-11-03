@@ -2,14 +2,6 @@ import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-c
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
-/**
- * The agent serving this route on another computer is gone (remote-agent/controller/proxyHandle).
- * Another candidate route can still run the turn; an owner disconnect is `user-revoked`, not this.
- */
-export function isRemoteAgentRouteLost(signals: InterruptedTurnErrorSignals): boolean {
-  return isRemoteAgentRouteLostReason(signals.reason);
-}
-
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
   // Account/budget exhaustion is not a property of the failed candidate: every
@@ -17,7 +9,9 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   // only hides the real cause. Reuse the shared deterministic signal that the
   // Codex terminal retry, Cindy AI search and the error banner already honour.
   if (matchesDeterministicUsageExhaustionText(signals.message ?? '')) return false;
-  if (isRemoteAgentRouteLost(signals)) return true;
+  // The agent serving this route on another computer is gone; another candidate route can still run the
+  // turn. An owner disconnect is `user-revoked`, not this.
+  if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && ![

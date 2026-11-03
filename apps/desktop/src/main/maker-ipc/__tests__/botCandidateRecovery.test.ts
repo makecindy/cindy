@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isRemoteAgentRouteLost } from '../botCandidateRecovery';
+import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
@@ -22,7 +22,7 @@ function harness(bot = true) {
   const liveSession = {};
   const rebuildLeases = new WeakMap<object, number>();
   const deps = {
-    isInterruptedTurnError, isBotCandidateUnavailable, isRemoteAgentRouteLost, canResumeAfterRuntimeFallback,
+    isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
     isContinuationOnlyAutoResumeReason,
     providerGroupService: { mayHandleTurnError: groupMayHandle },
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
@@ -211,7 +211,6 @@ describe('Bot candidate recovery', () => {
     { reason: 'remote_agent_closed', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-gone).' },
     { reason: 'remote_agent_lost', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (unreachable).' },
   ])('allows a different candidate when the remote agent of the route is gone %j', (signals) => {
-    expect(isRemoteAgentRouteLost(signals)).toBe(true);
     expect(isBotCandidateUnavailable(signals)).toBe(true);
   });
 
@@ -219,7 +218,6 @@ describe('Bot candidate recovery', () => {
     { reason: 'user-revoked', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-disconnected).' },
     { reason: 'remote_agent_restarted', message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.' },
   ])('keeps an owner disconnect or same-computer reconnect out of the model chain %j', (signals) => {
-    expect(isRemoteAgentRouteLost(signals)).toBe(false);
     expect(isBotCandidateUnavailable(signals)).toBe(false);
   });
 
@@ -246,13 +244,15 @@ describe('Bot candidate recovery', () => {
     expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
 
-  it('leaves a lost remote agent to a provider group that can move the same model', () => {
+  // The group's failover never takes a Bot task (isProviderGroupFailoverEligible), so yielding to it
+  // would only make the declined hand-back find the Bot recovery still waiting on the group.
+  it('moves a Bot on even when its route belongs to a provider group', async () => {
     const h = harness();
     h.groupMayHandle.mockReturnValue(true);
-    expect(h.onResumableTurnError('s', remoteClosed, h.item)).toBeNull();
-    expect(h.groupMayHandle).toHaveBeenCalledWith('s', remoteClosed);
-    expect(h.guard).not.toHaveBeenCalled();
-    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
   });
 
   const overload = { reason: 'upstream-overload', message: 'Selected model is at capacity. Please try a different model.' };

@@ -1542,7 +1542,6 @@ import {
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
 import {
   isBotCandidateUnavailable,
-  isRemoteAgentRouteLost,
   canResumeAfterRuntimeFallback,
   type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
@@ -20370,9 +20369,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const botInput = botFallbackInputs.has(item.createOpts);
-      // A provider group keeps the chosen model and moves to another computer, so it
-      // owns a lost remote agent before the companion's model chain does.
-      if (botInput && isRemoteAgentRouteLost(signals) && providerGroupService?.mayHandleTurnError(sessionId, signals)) return null;
       const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
       const sameRouteRetryable = isInterruptedTurnError(signals);
       const erroredAt = Date.now();
