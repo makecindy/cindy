@@ -160,14 +160,15 @@ async function openGlance(target: BotChatIdentity = bot) {
 describe('BotGlanceButton', () => {
   // A never-run rule must be visible in the same list as ordinary tasks. Multiple run
   // sessions for one rule must not duplicate it or discard its latest unread result.
+  // Recency follows ordinary task activity (creation for never-run rules), not rule edits.
   it('mixes never-run routines and tasks, groups runs, and opens the existing routine settings', async () => {
     h.routines = [
-      { id: 'clean', name: '磁盘低空间自动清理', enabled: true, updatedAt: 30 },
-      { id: 'issues', name: '跟进 issue 和 bug', enabled: false, updatedAt: 20 },
+      { id: 'clean', name: '磁盘低空间自动清理', enabled: true, createdAt: 30, updatedAt: 900 },
+      { id: 'issues', name: '跟进 issue 和 bug', enabled: false, createdAt: 1, updatedAt: 999 },
       { id: 'builtin', name: 'Internal follow-up', builtin: 'follow-up', updatedAt: 40 },
     ];
     h.sessions = [
-      { id: 'ordinary', title: 'Ordinary task', status: 'active', updatedAt: new Date(10).toISOString() },
+      { id: 'ordinary', title: 'Ordinary task', status: 'active', lastActivityAt: new Date(25).toISOString(), updatedAt: new Date(990).toISOString() },
       ...['newest', 'older'].map((id, i) => ({ id, title: `Run ${id}`, status: 'active',
         updatedAt: new Date(19 - i).toISOString(), companion: { id: bot.id, role: 'routine', routineId: 'issues' } })),
     ];
@@ -176,7 +177,7 @@ describe('BotGlanceButton', () => {
     const popover = await openGlance();
     await screen.findByText('磁盘低空间自动清理');
     expect(screen.getAllByTestId('bot-glance-task').map(row => row.querySelector('[title]')?.getAttribute('title')))
-      .toEqual(['磁盘低空间自动清理', '跟进 issue 和 bug', 'Ordinary task']);
+      .toEqual(['磁盘低空间自动清理', 'Ordinary task', '跟进 issue 和 bug']);
     expect(screen.queryByText('Run newest')).toBeNull();
     expect(screen.queryByText('Internal follow-up')).toBeNull();
     expect(popover.querySelectorAll('[aria-label="routines.title"]')).toHaveLength(2);

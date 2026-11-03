@@ -732,7 +732,7 @@ function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
     }).map(task => ({ key: `task:${task.deviceLinkDeviceId ?? ''}:${task.id}`, task, routine: null, at: sessionActivityMs(task) }));
     return [...ordinary, ...routines.map(routine => {
       const task = latest.get(routine.id);
-      return { key: `routine:${routine.id}`, routine, task, at: Math.max(routine.updatedAt, task ? sessionActivityMs(task) : 0) };
+      return { key: `routine:${routine.id}`, routine, task, at: task ? sessionActivityMs(task) : routine.createdAt };
     })].sort((a, b) => b.at - a.at).slice(0, OUTPUT_LIMIT);
   }, [tasks, routines, bot.id, bot.deviceId]);
   const openRoutines = () => {
