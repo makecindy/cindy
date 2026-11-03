@@ -2090,4 +2090,7 @@ it('keeps a liveScreen declaration as a granted capability only in v3', () => {
   expect(declared.ok && declared.manifest.liveScreen).toBe(true);
   const absent = validateGhostManifest(base);
   expect(absent.ok && absent.manifest).not.toHaveProperty('liveScreen');
+  // Without a node worker the declaration could never run: refuse it at install.
+  const { node: _node, ...withoutNode } = base;
+  expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
 });

@@ -3425,6 +3425,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       reason: 'slots 声明了 "node" 但缺少 node 工作进程详单',
     };
   }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {

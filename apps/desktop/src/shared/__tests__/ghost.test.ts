@@ -5119,7 +5119,7 @@ describe('liveScreen declaration', () => {
     entry: 'main.js',
   };
   const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
-  it('is listed in plugin details only together with node, which it needs to run', () => {
+  it('is listed in plugin details, and refused without the node worker it needs to run', () => {
     const withNode = validateGhostManifest({ ...base, node, liveScreen: true });
     expect(withNode.ok).toBe(true);
     if (!withNode.ok) return;
@@ -5128,8 +5128,6 @@ describe('liveScreen declaration', () => {
       expect.objectContaining({ key: 'live-screen', kind: 'live-screen', labelKey: 'liveScreen', detailKey: 'liveScreenDetail' }),
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
-    expect(alone.ok).toBe(true);
-    if (!alone.ok) return;
-    expect(ghostPermissionItems(alone.manifest).map((item) => item.key)).not.toContain('live-screen');
+    expect(alone.ok).toBe(false);
   });
 });
