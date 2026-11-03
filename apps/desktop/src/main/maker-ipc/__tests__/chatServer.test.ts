@@ -1108,6 +1108,39 @@ describe('Chat Server result delivery and refresh', () => {
     expect(page.messages?.find(message => message.id === 'quoting-message')).toMatchObject({
       quote: { from: firstName, authorId: botId } });
   });
+  // #8433 review / message-source.md: a human actor may anchor a server event.
+  // The HTTP message origin, never a card's own claim, establishes system identity.
+  it.each(['system', 'user', undefined] as const)(
+    'keeps server origin separate from actor and quote identity (%s)', async origin => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' },
+      { id: selfId, kind: 'human', state: 'joined', name: 'Alice' }];
+    const originalId = '70000000-0000-4000-8000-000000000003';
+    const base = { deleted: false, createdAt: '2026-11-03T00:00:00Z', threadRootId: null,
+      authorId: selfId, author: { kind: 'human', name: 'Alice' } };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [
+        { ...base, id: originalId, seq: '41', ...(origin ? { origin } : {}), content: [{ type: 'card',
+          namespace: 'cindy.membership', schemaRevision: 1, fallback: 'Alice joined',
+          data: { type: 'member.joined', actorId: selfId, displayName: 'Alice', origin: 'system' } }] },
+        { ...base, id: 'quoting-message', seq: '42', origin: 'user', content: [buildBotGroupQuoteCard({
+          messageId: originalId, authorName: 'Alice', authorKind: 'user', excerpt: 'Alice joined',
+          attachmentCount: 0, attachmentName: null, sequence: 41 })] },
+      ] };
+      return response(route);
+    });
+    const page = await service.teammateHistory!({ botId: 'local-bot', groupId: roomId, query: 'joined', limit: 2 });
+    const expectedKind = origin === 'system' ? 'system' : 'human';
+    const original = page.messages!.find(message => message.id === originalId)!;
+    expect(original).toMatchObject({ authorId: selfId, author: 'Alice', authorKind: expectedKind });
+    if (origin) expect(original).toHaveProperty('origin', origin); else expect(original).not.toHaveProperty('origin');
+    const quoting = page.messages!.find(message => message.id === 'quoting-message')!;
+    expect(quoting).toMatchObject({ authorKind: 'human', origin: 'user',
+      quote: { from: 'Alice', authorId: selfId, authorKind: expectedKind } });
+    if (origin) expect(quoting.quote).toHaveProperty('origin', origin); else expect(quoting.quote).not.toHaveProperty('origin');
+  });
   // #8433 review / message-source.md, unit: production HTTP adapter + reader.
   // A deleted original's old share fallback must not survive in history/search;
   // the execution-context tests did not exercise this separate history route.
@@ -1183,7 +1216,7 @@ describe('Chat Server result delivery and refresh', () => {
       : state === 'missing' || state === 'thread-original' ? { messageId: originalId, from: 'Old name', text: 'old quote words',
           attachmentCount: 1, attachmentName: 'old.pdf', snapshot: true }
         : { messageId: originalId, from: 'Current author', text: 'edited quote words',
-          attachmentCount: 1, attachmentName: 'current.pdf' });
+          attachmentCount: 1, attachmentName: 'current.pdf', authorKind: 'human' });
     }
     const search = await service.teammateHistory!({ ...input, query: 'old quote words' });
     expect(search.messages).toHaveLength(['missing', 'unknown', 'thread-original'].includes(state) ? 1 : 0);

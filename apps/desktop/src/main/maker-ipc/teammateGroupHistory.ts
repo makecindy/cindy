@@ -13,6 +13,8 @@ export interface TeammateGroupHistoryQuery {
 interface Room { id: string; name: string; kind?: string; state: string }
 interface Member { id: string; kind: string; state: string; name?: string; ownerActorId?: string; ownerName?: string }
 interface Message {
+  /** Server-stamped message source, independent of the actor who anchors it. */
+  origin?: string;
   authorId?: string;
   id: string; seq: string; deleted: boolean; createdAt: string; threadRootId: string | null;
   author: { name: string; kind: string };
@@ -20,9 +22,15 @@ interface Message {
   content: Array<{ type: string; text?: string; fallback?: string; caption?: string }>;
 }
 type HistoryQuote = { messageId: string; deleted: true } | {
-  messageId: string; authorId?: string; from: string; text: string; attachmentCount: number;
+  messageId: string; authorId?: string; authorKind?: string; origin?: string; from: string; text: string; attachmentCount: number;
   attachmentName: string | null; snapshot?: true;
 };
+// Match promptMessage/messageView: only the HTTP message's server origin can
+// establish a system record; actor kind or a card payload cannot substitute for it.
+const historySource = (message: Message) => ({
+  authorKind: message.origin === 'system' ? 'system' : message.author.kind,
+  ...(message.origin ? { origin: message.origin } : {}),
+});
 // Match the execution context: recognized references never contribute their fallback
 // to the author's own words. Unknown card revisions remain ordinary readable content.
 const historyText = (message: Message) => readBotGroupThreadShareCard(message) ? ''
@@ -37,12 +45,12 @@ function historyQuote(message: Message, known: ReadonlyMap<string, Message>, aut
   if (!original) return { messageId: quote.messageId, from: quote.authorName, text: quote.excerpt,
     attachmentCount: quote.attachmentCount, attachmentName: quote.attachmentName, snapshot: true };
   const files = original.content.filter(block => block.type === 'media').map(block => ({ name: block.caption ?? '' }));
-  return { messageId: quote.messageId, ...(original.authorId ? { authorId: original.authorId } : {}), from: authorName(original), text: botGroupQuoteExcerpt(historyText(original)),
+  return { messageId: quote.messageId, ...(original.authorId ? { authorId: original.authorId } : {}), ...historySource(original), from: authorName(original), text: botGroupQuoteExcerpt(historyText(original)),
     attachmentCount: files.length, attachmentName: botGroupQuoteAttachmentName(files) };
 }
 export interface TeammateGroupHistoryResult {
   groups?: Array<{ id: string; name: string }>;
-  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
+  messages?: Array<{ id: string; sequence: string; author: string; authorId?: string; authorKind: string; origin?: string; createdAt: string; threadRootId: string | null; text: string; attachments: string[]; maskAttribution?: BotGroupMessageView['maskAttribution']; sharedReplyId?: string; quote?: HistoryQuote }>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -96,7 +104,7 @@ export function createTeammateGroupHistoryReader(deps: {
       const quote = historyQuote(message, known, authorName);
       const searchable = [text, quote && !('deleted' in quote) ? quote.text : ''].join('\n');
       if (!message.deleted && (!query || searchable.toLocaleLowerCase().includes(query))) {
-        const record = { id: message.id, sequence: message.seq, author: authorName(message), ...(message.authorId ? { authorId: message.authorId } : {}), authorKind: message.author.kind,
+        const record = { id: message.id, sequence: message.seq, author: authorName(message), ...(message.authorId ? { authorId: message.authorId } : {}), ...historySource(message),
           createdAt: message.createdAt, threadRootId: message.threadRootId, text,
           ...(shared ? { sharedReplyId: shared.messageId } : {}),
           ...(quote ? { quote } : {}),
