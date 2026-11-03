@@ -13445,7 +13445,7 @@
         "empty": "Aucune commande disponible."
       },
       "cost": {
-        "title": "Utilisation de la session",
+        "title": "Consommation de la session",
         "tokensUsed": "Jetons utilisés (ce tour)"
       },
       "pwd": {
