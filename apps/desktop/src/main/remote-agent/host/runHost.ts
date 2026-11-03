@@ -86,8 +86,11 @@ import {
   decodeOpenPayload,
   decodeSendOptions,
   decodeUserMessage,
+  MAX_MANAGED_SKILL_BYTES,
   MAX_MANAGED_SKILL_FILES,
   REMOTE_AGENT_MAX_PERSONAL_FILES,
+  REMOTE_AGENT_SYNC_FILE_BYTES,
+  REMOTE_AGENT_SYNC_TOTAL_BYTES,
   managedSkillPluginLayout,
   parseManagedSkillCommand,
   type RemoteAgentOpenPayload,
@@ -1897,6 +1900,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   ): Promise<RemoteAgentWirePersonal> {
     if (!personal.managedSkills) return personal;
     const own = await ownManagedSkills(guest);
+    const byteLimit = memberDigests ? MAX_MANAGED_SKILL_BYTES : REMOTE_AGENT_SYNC_TOTAL_BYTES;
+    const sizeOf = (list: readonly RemoteAgentWireFile[]) => list.reduce((sum, file) => sum + Buffer.byteLength(file.data, 'base64'), 0);
     const skills: RemoteAgentWireManagedSkill[] = [];
     const filesBySkill = new Map<string, RemoteAgentWireFile[]>();
     for (const file of personal.managedFiles ?? []) {
@@ -1915,6 +1920,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const source = own.get(skill.command);
       const list = source ? await listManagedSkillFiles(source) : null;
       if (!source || !list || (await managedSkillDigest(source, list)) !== skill.digest) continue;
+      // 与正常收集同样的大小限制(指纹的清单允许更大)：放不下就整个不带，读文件之前先按大小判断。
+      if (list.some((file) => file.size > REMOTE_AGENT_SYNC_FILE_BYTES)
+        || list.reduce((sum, file) => sum + file.size, 0) > byteLimit) continue;
       const files: RemoteAgentWireFile[] = [];
       for (const file of list) {
         files.push({ path: `${skill.dir}/${file.relative}`, data: (await fsp.readFile(file.local)).toString('base64') });
@@ -1927,10 +1935,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const files = [...personal.files];
     const limit = memberDigests ? MAX_MANAGED_SKILL_FILES : REMOTE_AGENT_MAX_PERSONAL_FILES;
     const target = memberDigests ? managedFiles : files;
+    // 旧版组内电脑与个人配置共用额度：已有的个人文件先占。
+    let bytes = memberDigests ? 0 : sizeOf(files);
     for (const skill of skills) {
       const skillFiles = filesBySkill.get(skill.dir) ?? [];
-      if (target.length + skillFiles.length > limit) continue;
+      const skillBytes = sizeOf(skillFiles);
+      if (target.length + skillFiles.length > limit || bytes + skillBytes > byteLimit) continue;
       target.push(...skillFiles);
+      bytes += skillBytes;
       kept.push(skill);
     }
     const next: RemoteAgentWirePersonal = { ...personal, files, managedSkills: kept };

@@ -2272,12 +2272,16 @@ describe('provider group reshare consent', () => {
     const pr = own('pr');
     const learn = own('learn');
     const secret = own('secret');
+    // 指纹允许比同步限制更大的 Skill：补文件时也要按同步限制，放不下就整个不带。
+    const big = own('big');
+    fs.writeFileSync(path.join(big, 'asset.bin'), Buffer.alloc(600 * 1024, 1));
     const opens: Array<{ personal: Record<string, unknown> }> = [];
     let oldMember = false;
     const env = setup({
       plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
       owner: { managedSkills: async () => [
         { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+        { command: 'cindy:big', dir: big },
       ] },
       intercept: async (_agentDeviceId, request, forward) => {
         if (request.op === 'caps') {
@@ -2292,6 +2296,7 @@ describe('provider group reshare consent', () => {
     const personal = { files: [], managedSkills: [
       { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest: await managedSkillDigest(pr), reuse: true },
       { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn), reuse: true },
+      { command: 'cindy:big', dir: '.claude/skills/cindy-big', digest: await managedSkillDigest(big), reuse: true },
       // 受邀者点名提供者装的插件 Skill：组所在电脑不替它补文件。
       { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
     ] };

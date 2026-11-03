@@ -37,8 +37,11 @@ import {
   PROJECT_INSTRUCTION_DIRECTORIES as DIRECTORIES,
   PROJECT_INSTRUCTION_FILES as TOP_LEVEL_FILES,
   PROJECT_SETTINGS_FILES as SETTINGS_FILES,
+  MAX_MANAGED_SKILL_BYTES,
   MAX_MANAGED_SKILL_FILES,
   MAX_MANAGED_SKILLS,
+  REMOTE_AGENT_SYNC_FILE_BYTES,
+  REMOTE_AGENT_SYNC_TOTAL_BYTES,
   isSafeProjectFilePath,
   managedSkillDir,
   managedSkillPluginLayout,
@@ -50,8 +53,8 @@ import {
   type RemoteAgentWirePersonal,
 } from '../wire';
 const MAX_FILES = 512;
-const MAX_FILE_BYTES = 512 * 1024;
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_BYTES = REMOTE_AGENT_SYNC_FILE_BYTES;
+const MAX_TOTAL_BYTES = REMOTE_AGENT_SYNC_TOTAL_BYTES;
 const MAX_DEPTH = 6;
 /** 扫描时最多看这么多个文件：链接指向很大的目录时不一直扫下去。 */
 const MAX_CANDIDATES = 8 * MAX_FILES;
@@ -75,8 +78,6 @@ function newBudget(options: CollectOptions = {}, maxFiles = MAX_FILES, maxBytes 
   return { files: 0, bytes: 0, skipCredentials: options.skipCredentials === true, maxFiles, maxBytes };
 }
 
-/** 新运行端给托管 Skill 的单独额度(不与项目说明、个人配置争)。 */
-const MAX_MANAGED_TOTAL_BYTES = 16 * 1024 * 1024;
 
 /**
  * 读一个文件(跟随链接)。超出数量与大小上限、不是普通文件，或受邀者任务里的凭证类文件返回 null。
@@ -443,7 +444,7 @@ export async function collectPersonalConfig(
     personal.managedSkills = [];
     const agentDigests = options.agentDigests;
     // 新运行端：托管 Skill 单独额度。旧运行端：个人配置先占，托管 Skill 用剩下的(收到超过上限的文件会拒绝打开)。
-    const managedBudget = agentDigests ? newBudget(options, MAX_MANAGED_SKILL_FILES, MAX_MANAGED_TOTAL_BYTES) : budget;
+    const managedBudget = agentDigests ? newBudget(options, MAX_MANAGED_SKILL_FILES, MAX_MANAGED_SKILL_BYTES) : budget;
     const managedFiles: RemoteAgentWireFile[] = agentDigests ? [] : personal.files;
     const taken = new Set(roots.map(({ relative }) => relative));
     for (const skill of options.managedSkills) {

@@ -198,6 +198,11 @@ export interface RemoteAgentWireManagedSkill {
 
 /** 新运行端单独给托管 Skill 的文件额度。 */
 export const MAX_MANAGED_SKILL_FILES = 2048;
+/** 同步给对方的单个文件、一批文件的大小上限（项目说明、个人配置；旧运行端的托管 Skill 与个人配置共用后者）。 */
+export const REMOTE_AGENT_SYNC_FILE_BYTES = 512 * 1024;
+export const REMOTE_AGENT_SYNC_TOTAL_BYTES = 4 * 1024 * 1024;
+/** 新运行端单独给托管 Skill 的大小额度。 */
+export const MAX_MANAGED_SKILL_BYTES = 16 * 1024 * 1024;
 /** `personal.managedSkills` 的条目上限：超过时接收方拒绝整个打开，收集时就要截断。 */
 export const MAX_MANAGED_SKILLS = 512;
 

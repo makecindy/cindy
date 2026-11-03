@@ -1981,7 +1981,8 @@ Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任�
   其余文件放进 `personal.managedFiles`，单独 2048 个文件、16 MB 额度，不占个人配置的 512。旧运行端不声明，控制端
   仍用上面的共用额度方式。`caps` 本来每次打开前都问，不多一次往返；两台版本与插件相同时打开、连回都不再传托管 Skill。
 - 供应商组中转：受邀者看到的是组所在电脑的 `caps`。组所在电脑转发前按组内电脑的 `caps` 重排：那台也有同指纹的继续
-  只报名字，没有的用组所在电脑自己那份补成文件（指纹与受邀者一致才补）；组内电脑是旧版时文件放回 `files`，放不下 512 的
+  只报名字，没有的用组所在电脑自己那份补成文件（指纹与受邀者一致才补，且按正常收集的大小限制：单个文件 512 KB、
+  新版 16 MB、旧版与个人配置共用 4 MB，放不下整个不带）；组内电脑是旧版时文件放回 `files`，放不下 512 的
   Skill 整个不带。
 - 控制端列不出托管 Skill 时不带该字段，对方沿用原规则。实现见 `controller/projectFiles.ts`、`host/runHost.ts`，
   回归见 `mirror.test.ts`、`roundtrip.test.ts`、`guestHost.test.ts`、`groupRelay.test.ts` 与三 harness 的
