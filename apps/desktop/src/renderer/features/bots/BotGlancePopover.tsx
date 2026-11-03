@@ -204,7 +204,7 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
         row.current ? (
           <Check size={14} className="text-[var(--text-primary)]" aria-label={t('bots.glance.current')} />
         ) : row.unread ? (
-          <span aria-label={t('bots.devicePicker.unread')} className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />
+          <span aria-label={t('bots.devicePicker.unread')} className="size-1.5 rounded-full bg-[var(--card-status-done)]" />
         ) : null
       }
       onClick={!row.current && row.online ? row.onSelect : undefined}

@@ -1,5 +1,5 @@
 import { teammateSelectionStyle } from './teammateSelection';
-import { TeammateStatusDot } from './TeammateStatusDot';
+import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
 /**
  * 统一伙伴列表里的群聊行，和伙伴私聊共同按最新消息排序。
@@ -37,7 +37,6 @@ import {
 } from './botGroupPresentation';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 import { botGroupUnreadCount } from './botReadState';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -213,7 +212,6 @@ export function BotGroupSidebarRow({
       )}
     >
       <span className="relative shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
-        <TeammateStatusDot status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
@@ -226,14 +224,13 @@ export function BotGroupSidebarRow({
         className={cn(
           'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums',
           mutedClass,
+          groupTeammateStatus(group, bots, islandActivity, unread > 0) !== 'idle' && 'invisible',
         )}
       >
         {timestamp}
-        <span className="mt-1 flex items-center justify-end gap-1">
-          {unread > 0 && group.serverUnread?.mentioned && <span className="text-[var(--text-primary)]" title={t('bots.groupChat.server.thread.hintMentioned')}>@</span>}
-          <NavigationCountBadge count={unread} label={t('sidebar.teammateUnreadCount', { count: unread })} className="w-fit" />
-        </span>
+        <span aria-hidden className="mt-1 flex items-center justify-end gap-1" />
       </span>
+      <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} />
     </button>
     {children}
     </div>

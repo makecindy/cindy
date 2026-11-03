@@ -1,7 +1,6 @@
 import { teammateSelectionStyle } from './teammateSelection';
-import { aggregateTeammateStatus, TEAMMATE_AVATAR } from '@cindy/maker-shared/teammate-status';
-import { TeammateStatusDot } from './TeammateStatusDot';
-import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
+import { TeammateStatusDot, TeammateRowStatus } from './TeammateStatusDot';
+import { aggregateRosterStatus, localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
@@ -59,7 +58,6 @@ import {
   botListSubtitle,
   botListTimestampAt,
   formatBotListTimestamp,
-  formatBotUnreadBadge,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
@@ -75,15 +73,6 @@ import {
 
 const readRevision = () => JSON.stringify(getBotLastReadAtMap());
 
-/**
- * 未读药丸。用的是登记在 DESIGN.md §10 的窄作用域 token `--bot-unread-bg` /
- * `--bot-unread-fg`（双模式同值 #417CDD + 白字），不是反相 CTA：白底药丸落在选中行
- * 的浅灰选中态上会和选中态互相抢焦点，而「有新消息」在 IM 里本来就有一个所有人都
- * 认得的颜色。这个 token 只服务伙伴列表的未读徽标与待办点，不外溢到别的地方。
- */
-const UNREAD_BADGE_CLASS =
-  'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]';
-
 /** 段头悬停动作:与置顶 / 项目段头同款,鼠标离开后只保留键盘焦点或打开中的菜单。 */
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -94,8 +83,8 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 const HEADER_ICON_BUTTON_CLASS =
   'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
-/** 36px 头像居中放在 48px 热区内，留出右下状态点的位置。 */
-const AVATAR_SLOT_PX = TEAMMATE_AVATAR.stripTarget + TEAMMATE_AVATAR.gap;
+/** Only the collapsed strip is compact: unchanged 36px portrait, 40px target, 4px gap. */
+const AVATAR_SLOT_PX = 44;
 const CHAT_PREVIEW_LIMIT = 5;
 
 /**
@@ -114,7 +103,7 @@ function useAvatarRowCapacity(ref: RefObject<HTMLDivElement | null>, active: boo
     observer.observe(element);
     return () => observer.disconnect();
   }, [ref, active]);
-  return width > 0 ? Math.max(1, Math.floor((width + 8) / AVATAR_SLOT_PX)) : Number.POSITIVE_INFINITY;
+  return width > 0 ? Math.max(1, Math.floor((width + 4) / AVATAR_SLOT_PX)) : Number.POSITIVE_INFINITY;
 }
 
 /**
@@ -252,7 +241,7 @@ export function TeammatesSection() {
   const statusForBot = (bot: BotProfile | (typeof remoteBots)[number]) => 'deviceId' in bot
     ? remoteTeammateStatus(bot, isRemoteBotUnread(bot), isCloudCompanionRemote(cloud, bot))
     : localTeammateStatus(bot, islandActivity, (unreadByBotId[bot.id] ?? 0) > 0);
-  const cindyStatus = aggregateTeammateStatus(cindyOptions.map(option => statusForBot(option.bot)));
+  const cindyStatus = aggregateRosterStatus(cindyOptions.map(option => statusForBot(option.bot)));
   const hasMultipleCindys = cindyOptions.length > 1;
   const routeCindy = cindyOptions.find(option => option.key === cindyDeviceKey({ id: botId ?? '', deviceId }));
   // Follow the open Cindy chat; otherwise the local-first roster is the default.
@@ -528,7 +517,7 @@ export function TeammatesSection() {
 
       {collapsed ? (
         // 收起:单行头像,未读带点;顺序与展开时一致,放不下的收进末尾「+N」(点开即展开整段)。
-        <div ref={avatarRowRef} className="flex flex-nowrap items-center gap-2 overflow-hidden py-1 pr-0 pl-[22px]">
+        <div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">
           {(() => {
             const entries = visibleChats.map((entry) => {
               const key = entry.kind === 'group' ? `group:${entry.group.id}`
@@ -572,11 +561,9 @@ export function TeammatesSection() {
                       onClick={() => openChat(entry)}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
-                      className="relative isolate flex h-12 w-12 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="relative isolate flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {/* Preserve the quiet selection plate independently of the smaller portrait. */}
-                      {selected ? <span aria-hidden data-teammate-selected className="absolute -inset-1 -z-10 rounded-xl bg-sidebar-item-active" /> : null}
-                      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full">
+                      <span data-teammate-selected={selected || undefined} className={cn('relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full', selected && 'ring-1 ring-[var(--text-tertiary)] ring-offset-2 ring-offset-sidebar')}>
                         {entry.kind === 'group' ? (
                           <BotGroupSidebarAvatar members={entry.group.members} compact />
                         ) : (entry.kind === 'cindy' ? currentCindy?.bot : entry.bot) ? (
@@ -593,11 +580,11 @@ export function TeammatesSection() {
                       type="button"
                       onClick={() => { toggleCollapsed(); setShowAllChats(true); }}
                       aria-label={moreLabel}
-                      className="group/overflow flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-11 font-medium tabular-nums text-[var(--sidebar-nav-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="group/overflow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-11 font-medium tabular-nums text-[var(--sidebar-nav-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-[var(--surface-chip)] px-1.5 group-hover/overflow:bg-sidebar-item-hover">
                         +{hidden.length}
-                        <TeammateStatusDot status={aggregateTeammateStatus(hidden.map(item => item.status))} mentioned={hiddenMentioned} />
+                        <TeammateStatusDot status={aggregateRosterStatus(hidden.map(item => item.status))} mentioned={hiddenMentioned} />
                       </span>
                     </button>
                   </Tip>
@@ -634,7 +621,7 @@ export function TeammatesSection() {
                   : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
                     : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
                 return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
-                  status={cindyStatus} selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation))} subtitle={subtitleText}
+                  status={cindyStatus === 'done' || cindyStatus === 'unread' ? statusForBot(bot) : cindyStatus} selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation))} subtitle={subtitleText}
                   timestamp={formatBotListTimestamp(local
                     ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                     : 'activityAt' in bot ? bot.activityAt : 0, now, t)}
@@ -660,8 +647,8 @@ export function TeammatesSection() {
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
-                    className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /><TeammateStatusDot status={statusForBot(bot)} /></span>
+                    className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex min-w-0 items-baseline gap-2">
                         <span className="min-w-0 truncate text-14 leading-5">{bot.name}</span>
@@ -669,7 +656,8 @@ export function TeammatesSection() {
                       </span>
                       <span className={cn('truncate text-12 leading-4', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]')}>{statusForBot(bot) === 'awaiting' ? t('bots.avatarStatus.awaiting') : bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} /> : bot.preview || bot.description || t('bots.list.startChat')}</span>
                     </span>
-                    <span className={cn('min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]')}>{formatBotListTimestamp(bot.activityAt, now, t)}</span>
+                    <span className={cn('min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums', selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]', statusForBot(bot) !== 'idle' && 'invisible')}>{formatBotListTimestamp(bot.activityAt, now, t)}</span>
+                    <TeammateRowStatus status={statusForBot(bot)} />
                   </button>
                 );
               }
@@ -734,7 +722,7 @@ export function TeammatesSection() {
                     className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     {/* Keep the existing avatar size alongside identity and message preview. */}
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /><TeammateStatusDot status={statusForBot(bot)} /></span>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -776,21 +764,13 @@ export function TeammatesSection() {
                       </span>
                     </span>
                     {/*
-                      时间与未读共用右对齐列；相对时间按文字宽度撑开，避免折行。
+                      保留原时间列宽度；状态点覆盖在行尾，避免切换状态时布局移动。
                     */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
-                      <span className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-                      <span className="flex min-h-4 items-center justify-end">
-                        {unread > 0 ? (
-                          <span
-                            className={UNREAD_BADGE_CLASS}
-                            aria-label={t('bots.list.unread', { count: unread })}
-                          >
-                            {formatBotUnreadBadge(unread)}
-                          </span>
-                        ) : null}
-                      </span>
+                      <span className={cn('min-h-4 text-11 tabular-nums', mutedClass, statusForBot(bot) !== 'idle' && 'invisible')}>{timestamp}</span>
+                      <span aria-hidden className="flex min-h-4 items-center justify-end" />
                     </span>
+                    <TeammateRowStatus status={statusForBot(bot)} />
                   </button>
                   {renderBotContextMenu(bot, selected)}
                 </div>

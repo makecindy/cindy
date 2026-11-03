@@ -120,7 +120,7 @@ it.each([
         const row = within(screen.getByTestId('cindy-device-row'));
         expect(row.queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
         if (unreadCount > 1) {
-          expect(row.getByLabelText(i18n.t('bots.list.unread', { count: unreadCount }))).toBeTruthy();
+          expect(view.container.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
         }
         expect(
           view.container.querySelector('[data-teammate-status="error"]') !==
@@ -128,10 +128,7 @@ it.each([
         ).toBe(offline);
       }
       if (unreadCount > 0) {
-        const label =
-          unreadCount > 1
-            ? i18n.t('bots.list.unread', { count: unreadCount })
-            : en.bots.devicePicker.unread;
+        const label = en.bots.devicePicker.unread;
         expect(within(option).getByLabelText(label)).toBeTruthy();
       } else {
         expect(within(option).queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
@@ -189,7 +186,7 @@ it.each([true, false])(
       selected ? 'bg-sidebar-item-active' : 'text-[var(--sidebar-nav-text)]',
     );
     const trigger = screen.getByRole('combobox');
-    // The compact row must retain the picker's 24px click/focus target.
+    // Preserve main's 24px device picker click/focus target.
     expect(trigger.className.split(/\s+/)).toContain('h-6');
     expect(trigger.className).toContain('text-inherit');
     expect(trigger.className).toContain('[--button-face-bg:transparent]');

@@ -4,11 +4,10 @@ import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { TeammateStatusDot } from './TeammateStatusDot';
+import { TeammateRowStatus } from './TeammateStatusDot';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { CindyDevicePicker } from './CindyDevicePicker';
 import type { CindyDeviceOption } from './cindyDeviceRoster';
-import { formatBotUnreadBadge } from './botListDisplay';
 
 /** One visual row, with separate sibling buttons for opening chat and choosing its device. */
 export function CindyDeviceRow({
@@ -63,7 +62,6 @@ export function CindyDeviceRow({
       />
       <span className="pointer-events-none relative flex shrink-0">
         <BotAvatar bot={bot} size="row" />
-        <TeammateStatusDot status={status} />
       </span>
       <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5">
         <span className="flex min-w-0 items-center gap-2">
@@ -91,24 +89,16 @@ export function CindyDeviceRow({
             )}
           />
         </span>
-        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
+        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass, status !== 'idle' && 'invisible')}>{timestamp}</span>
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
           title={typeof subtitle === 'string' ? subtitle : undefined}
         >
           {subtitle}
         </span>
-        <span className="flex min-h-4 items-center justify-end">
-          {current.unread && current.unreadCount ? (
-            <span
-              aria-label={t('bots.list.unread', { count: current.unreadCount })}
-              className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
-            >
-              {formatBotUnreadBadge(current.unreadCount)}
-            </span>
-          ) : null}
-        </span>
+        <span aria-hidden className="flex min-h-4 items-center justify-end" />
       </div>
+      <TeammateRowStatus status={status} />
       {children}
     </div>
   );

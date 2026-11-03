@@ -454,7 +454,7 @@ describe('TeammatesSection header', () => {
 
   it('keeps the collapsed row on one line and folds the rest into +N', async () => {
     const original = globalThis.ResizeObserver;
-    // 4 slots: 3 avatars + the +N chip (56px per slot, 8px gap).
+    // 5 slots: 4 avatars + the +N chip (40px target, 4px gap).
     globalThis.ResizeObserver = class {
       constructor(private readonly callback: ResizeObserverCallback) {}
       observe() { this.callback([{ contentRect: { width: 216 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
@@ -468,10 +468,10 @@ describe('TeammatesSection header', () => {
       await renderSidebar();
       fireEvent.click(header());
       const avatars = screen.getAllByRole('button', { name: /^Mate \d$/ });
-      expect(avatars).toHaveLength(3);
+      expect(avatars).toHaveLength(4);
       // The open chat keeps a slot even when it sorts past the cut.
       expect(screen.getByRole('button', { name: 'Mate 4' }).getAttribute('aria-current')).toBe('page');
-      const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +3' });
+      const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       fireEvent.click(more);
       expect(header().getAttribute('aria-expanded')).toBe('true');
     } finally {
@@ -503,6 +503,18 @@ describe('TeammatesSection header', () => {
     mocks.unread = {};
     view.rerender(<TeammatesSection />);
     expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
+  });
+
+  it('keeps an error ahead of a pending decision, even after read acknowledgement', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'Writer' }), needsAttention: true }];
+    mocks.unread = { 'bot-1': 1 };
+    mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'needs-interaction' }]]);
+    const view = await renderSidebar();
+    expect(view.container.querySelector('[data-teammate-status="error"]')).not.toBeNull();
+    mocks.unread = {};
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status="error"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="awaiting"]')).toBeNull();
   });
 
   it('leaves session notifications to the task sidebar', async () => {
@@ -676,18 +688,14 @@ describe('TeammatesSection rows', () => {
     }
   });
 
-  it('paints the unread badge with the registered IM-unread blue, not the inverse CTA', async () => {
+  it('uses a green unread point without an inverse selection color', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'Busy' })];
     mocks.unread = { 'bot-1': 2 };
-
-    await renderSidebar();
-
-    const badge = screen.getByLabelText('bots.list.unread:{"count":2}');
-    // 反相 CTA 白底药丸落在选中行的浅灰选中态上会和选中态抢焦点;未读在 IM 里
-    // 本来就有一个所有人都认得的颜色。token 登记见 DESIGN.md §10。
-    expect(badge.className).toContain('bg-[var(--bot-unread-bg)]');
-    expect(badge.className).toContain('text-[var(--bot-unread-fg)]');
-    expect(badge.className).not.toContain('accent-cta-bg');
+    const view = await renderSidebar();
+    const point = view.container.querySelector('[data-teammate-status="unread"] > span') as HTMLElement;
+    expect(point.style.backgroundColor).toBe('var(--card-status-done)');
+    expect(point.closest('[data-teammate-row-status]')).not.toBeNull();
+    expect(view.container.querySelector('[data-teammate-status]')?.textContent).toBe('');
   });
 
   it('keeps settings and import out of each row while the row itself opens chat', async () => {
@@ -739,7 +747,7 @@ describe('TeammatesSection rows', () => {
     expect(screen.getByTestId('bot-delete-dialog').textContent).toBe('PR steward');
   });
 
-  it('shows an unread count only for Bots with unread replies, capped at 99+', async () => {
+  it('shows a single unread point for unread Bots regardless of count', async () => {
     mocks.profiles = [
       bot({ id: 'bot-read', name: 'Read', lastMessagePreview: 'Nothing new' }),
       bot({ id: 'bot-unread', name: 'Unread', lastMessagePreview: 'Fresh reply' }),
@@ -749,13 +757,13 @@ describe('TeammatesSection rows', () => {
 
     await renderSidebar();
 
-    expect(screen.getByLabelText('bots.list.unread:{"count":3}').textContent).toBe('3');
-    expect(screen.getByLabelText('bots.list.unread:{"count":100}').textContent).toBe('99+');
+    expect(screen.getAllByLabelText('bots.avatarStatus.unread')).toHaveLength(2);
+    expect(screen.queryByText('99+')).toBeNull();
     // A read Bot carries no badge at all — zero must never render as "0".
     expect(screen.queryByLabelText('bots.list.unread:{"count":0}')).toBeNull();
     expect(screen.getByText('Nothing new').className).not.toContain('font-medium');
     expect(screen.getByText('Fresh reply').className).not.toContain('font-medium');
-    expect(screen.getByLabelText('bots.list.unread:{"count":3}').className).toContain('tabular-nums');
+    expect(screen.getAllByLabelText('bots.avatarStatus.unread').every(point => point.textContent === '')).toBe(true);
     expect(screen.getByText('Read').className).not.toContain('font-medium');
     expect(screen.getByText('Unread').className).toContain('font-medium');
   });

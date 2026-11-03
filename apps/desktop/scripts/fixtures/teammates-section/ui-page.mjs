@@ -27,7 +27,7 @@ export default {
   },
   cases: {
     'group-types': {
-      about: 'Group and private rows retain their original avatars without type markers; running/unread @ points remain',
+      about: 'Group and private rows retain their original avatars without type markers; running/unread status semantics remain',
       data: {
         profiles: profiles.slice(0, 2).map((bot, index) => ({ ...bot, lastMessageAt: Date.now() - (index + 5) * 60000, lastMessagePreview: ['设计稿已更新', '收到，继续整理'][index], avatar: `cindy://avatar/preset/${['cindy', 'dash'][index]}` })),
         remoteBots: [], route: '/bots/groups/type-1',
@@ -139,7 +139,7 @@ export default {
       await section.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
       assert.equal(await section.locator('[data-teammate-mention]').count(), 2);
       await ui.capture('collapsed-group-private');
-      assert.equal(expandedTypeMarks, 0, 'expanded groups have no extra type icon');
+      assert.equal(expandedTypeMarks, 0, 'expanded groups keep main without extra type icons');
       assert.equal(await section.locator('button:has(svg.lucide-users):visible').count(), 0, 'collapsed avatars have no extra type badge');
       return;
     }
@@ -147,6 +147,18 @@ export default {
       await ui.capture('expanded-groups');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
       await ui.capture('collapsed-groups');
+      for (const count of [1, 2, 3, 4, 5]) {
+        const button = page.getByRole('button', { name: new RegExp(`^Group ${count}(?: ·|$)`) });
+        await button.click();
+        await button.locator('[data-teammate-selected]').waitFor();
+        assert.equal(await button.getAttribute('aria-current'), 'page');
+        assert.equal(await page.locator('[data-teammate-selected]').count(), 1);
+        const ring = button.locator('[data-teammate-selected]');
+        const geometry = await ring.evaluate(node => ({ width: node.getBoundingClientRect().width, offset: getComputedStyle(node).getPropertyValue('--tw-ring-offset-width').trim() }));
+        assert.equal(geometry.width, 36);
+        assert.equal(geometry.offset, '2px');
+        await ui.capture(`selected-${count}`);
+      }
       return;
     }
     // Read the painted selection, including the wrapper used by local/Cindy rows.
@@ -169,11 +181,13 @@ export default {
     }
     if (ui.case === 'states') {
       const expandedAvatar = await selectedRow.locator('[aria-hidden="true"]').first().boundingBox();
-      for (const state of ['running', 'awaiting', 'done', 'unread', 'error']) {
+      assert.equal(await page.locator('[data-teammate-status="running"]').count(), 0, 'expanded running uses the subtitle only');
+      for (const state of ['awaiting', 'done', 'unread', 'error']) {
         const dot = page.locator(`[data-teammate-status="${state}"]`);
         assert.equal(await dot.count(), 1);
         const size = await dot.evaluate(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height }));
-        assert.equal(size.width, 14); assert.equal(size.height, 14);
+        assert.equal(size.width, 16); assert.equal(size.height, 16);
+        assert.equal((await dot.locator('span').boundingBox()).width, 8, 'expanded core matches Session');
       }
       await ui.capture('expanded-states');
       await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
@@ -186,9 +200,11 @@ export default {
       const portrait = await selected.locator('[aria-hidden="true"]:not([data-teammate-selected])').first().boundingBox();
       const target = await selected.boundingBox();
       const dotBox = await dot.boundingBox();
-      assert.ok(portrait && expandedAvatar && portrait.width < expandedAvatar.width, 'collapsed portrait is smaller than the list portrait');
-      assert.ok(target.width >= 48 && target.height >= 48, 'smaller portrait preserves its touch target');
+      assert.ok(portrait && expandedAvatar && portrait.width === 36 && expandedAvatar.width === 44, 'collapsed and expanded portrait geometry');
+      assert.ok(target.width === 40 && target.height === 40, 'collapsed strip uses the approved compact target');
       assert.ok(dotBox.x + dotBox.width <= target.x + target.width && dotBox.y + dotBox.height <= target.y + target.height, 'corner dot fits within the reserved target space');
+      assert.equal(dotBox.width, 14, 'collapsed dot retains its 2px rim');
+      assert.equal((await dot.locator('span').boundingBox()).width, 10, 'collapsed core remains 10px');
       await ui.capture('collapsed-states');
       return;
     }
@@ -197,7 +213,7 @@ export default {
       const plate = page.locator('button[aria-current="page"] > [data-teammate-selected]');
       await plate.waitFor();
       const box = await plate.boundingBox();
-      assert.ok(box && box.width === 56 && box.height === 56, 'the selection plate is 56px around the 48px touch target');
+      assert.ok(box && box.width === 36 && box.height === 36, 'selection ring follows the 36px portrait');
       assert.equal(await page.locator('[data-teammate-mention]').count(), 0);
       await ui.capture('collapsed-plain');
       return;
@@ -208,9 +224,9 @@ export default {
       await badge.first().waitFor();
       assert.equal(await badge.count(), 2, 'only the groups that mention the user are marked');
       const box = await badge.first().boundingBox();
-      assert.ok(box && box.width === 18 && box.height === 18, 'the @ point keeps its 18px ring geometry');
-      const colors = await badge.evaluateAll(nodes => nodes.map(node => node.style.backgroundColor));
-      assert.deepEqual(colors, ['var(--status-bar-accent)', 'var(--bot-unread-bg)'], 'running stays orange, otherwise unread blue');
+      assert.ok(box && box.width === 14 && box.height === 14, 'mentions use the same compact status point');
+      const colors = await badge.evaluateAll(nodes => nodes.map(node => node.firstElementChild.style.backgroundColor));
+      assert.deepEqual(colors, ['var(--warning-accent)', 'var(--card-status-done)'], 'running stays orange, otherwise unread green');
       assert.equal(await page.locator('button:has([data-teammate-mention]) [data-teammate-status]').count(), 2, 'one indicator per marked avatar');
       await ui.capture('collapsed-mention');
       return;
@@ -218,18 +234,16 @@ export default {
     if (ui.case.startsWith('long-speakers-')) {
       const running = page.getByTestId('bot-group-running');
       const label = running.locator('[title]');
-      const badge = page.getByLabel(await ui.t('sidebar.teammateUnreadCount', { count: ui.data.groups[0].serverUnread.count }));
+      const badge = page.locator('[data-teammate-status="running"]');
       const metrics = await label.evaluate(node => ({
         width: node.clientWidth, fullWidth: node.scrollWidth,
         right: node.getBoundingClientRect().right, overflow: getComputedStyle(node).overflow,
         textOverflow: getComputedStyle(node).textOverflow,
       }));
-      const badgeBox = await badge.boundingBox();
       assert.ok(metrics.width > 0 && metrics.fullWidth > metrics.width, 'long names reach the text boundary');
       assert.equal(metrics.overflow, 'hidden');
       assert.equal(metrics.textOverflow, 'ellipsis');
-      assert.ok(badgeBox && metrics.right < badgeBox.x, 'preview leaves space before the unread badge');
-      assert.equal(await badge.innerText(), ui.data.groups[0].serverUnread.count > 99 ? '99+' : '11');
+      assert.equal(await badge.count(), 0, 'expanded running has no duplicate orange point');
       return;
     }
     if (ui.case === 'device-names') {
@@ -257,6 +271,17 @@ export default {
     await header.click();
     await rows.first().waitFor({ state: 'detached' });
     await ui.capture('avatars');
+    const overflow = page.getByRole('button', { name: new RegExp(`^${await ui.t('bots.list.sectionExpand')} · \\+`) });
+    if (await overflow.count()) {
+      const circle = await overflow.locator('span').first().boundingBox();
+      assert.equal(circle.width, 36, '+N circle matches portrait size');
+      assert.equal(circle.height, 36);
+      await overflow.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await rows.count(), 6, '+N opens the full roster');
+      await header.click();
+      await rows.first().waitFor({ state: 'detached' });
+    }
     await header.click();
     assert.equal(await rows.count(), 5, 'reopening the section restores its compact preview');
   },
