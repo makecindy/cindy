@@ -141,6 +141,12 @@ describe('redactSensitiveText', () => {
       extractNonSecretErrorSignals('Authorization: Bearer secret-token, HTTP 401: Unauthorized'),
     ).toEqual({ errorStatus: 401, usageLimit: false });
     expect(
+      extractNonSecretErrorSignals('Authorization: Bearer secret-token, HTTP 402 Payment Required'),
+    ).toEqual({ errorStatus: 402, usageLimit: false });
+    expect(
+      extractNonSecretErrorSignals('{"status": 402, "message": "payment required"}'),
+    ).toEqual({ errorStatus: 402, usageLimit: false });
+    expect(
       extractNonSecretErrorSignals('Authorization: Bearer secret-token, code 429'),
     ).toEqual({ errorStatus: 429, usageLimit: false });
     expect(

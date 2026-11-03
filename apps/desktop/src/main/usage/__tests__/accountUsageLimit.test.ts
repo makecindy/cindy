@@ -30,6 +30,7 @@ import {
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   xaiAccountUsageLimit,
+  antigravityQuotaLimit,
 } from '../accountUsageLimit';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../codexResetAutoUse';
 import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefresh';
@@ -318,5 +319,38 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
       resetAtMs: RESET_WEEK * 1000,
     });
     expect(mocks.xai).not.toHaveBeenCalled();
+  });
+});
+
+describe('antigravityQuotaLimit', () => {
+  const now = 1_800_000_000_000;
+  const future = now / 1000 + 3600;
+  const payload = {
+    windows: [
+      { key: 'gemini-5h', window: { utilization: 40, resetsAt: future } },
+      { key: 'gemini-weekly', window: { utilization: 60, resetsAt: future } },
+      { key: 'gemini-argon-wtu-weekly', window: { utilization: 100, resetsAt: future } },
+      { key: '3p-5h', window: { utilization: 100, resetsAt: future + 60 } },
+      { key: '3p-weekly', window: { utilization: 10, resetsAt: future } },
+    ],
+  };
+
+  it('reports argon-4 as limited only from its own group', () => {
+    expect(antigravityQuotaLimit(payload, 'gemini-4-argon', now)).toEqual({ limited: true, resetAtMs: future * 1000 });
+  });
+
+  it('keeps other Gemini models available while argon is exhausted', () => {
+    expect(antigravityQuotaLimit(payload, 'gemini-3-pro', now)).toEqual({ limited: false, resetAtMs: null });
+  });
+
+  it('maps Claude and GPT models to the third-party group', () => {
+    expect(antigravityQuotaLimit(payload, 'claude-sonnet-5-5', now)?.limited).toBe(true);
+    expect(antigravityQuotaLimit(payload, 'gpt-oss-120b', now)?.limited).toBe(true);
+  });
+
+  it('returns null without data or model', () => {
+    expect(antigravityQuotaLimit(null, 'gemini-3-pro', now)).toBeNull();
+    expect(antigravityQuotaLimit(payload, null, now)).toBeNull();
+    expect(antigravityQuotaLimit({ windows: [] }, 'gemini-3-pro', now)).toBeNull();
   });
 });

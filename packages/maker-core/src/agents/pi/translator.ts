@@ -89,7 +89,7 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: 401 | 402 | 429 | 529;
   usageLimit?: true;
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
 }
