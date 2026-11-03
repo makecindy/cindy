@@ -2654,6 +2654,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat workspace",
         "dialogueDirectoryDescription": "For new sessions only. Existing files stay where they are.",
+        "projectsRootTitle": "New project location",
+        "projectsRootInferred": "Suggested",
+        "projectsRootDefault": "Default",
+        "projectsRootChoose": "Change directory",
+        "projectsRootReset": "Restore suggested location",
+        "projectsRootDescription": "Where project folders go when you create a project from a session. If not set, a location is suggested from where your existing projects are.",
+        "projectsRootFailed": "Couldn't update the new project location",
         "dialogueDirectoryOpen": "Open directory",
         "dialogueDirectoryChoose": "Change directory",
         "dialogueDirectoryReset": "Restore default location",
@@ -8609,7 +8616,7 @@
     "localModeEntry": "Skip Sign-In",
     "localModeOpening": "Skipping sign-in…",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
-    "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+    "consentStatement": "I agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
       "title": "Terms of Service & Privacy Policy",
       "body": "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
@@ -14438,6 +14445,26 @@
           "cancel": "Cancel"
         }
       },
+      "newProjectDialog": {
+        "title": "New project",
+        "description": "Creates a project folder and moves this session to the new project.",
+        "descriptionMoveFiles": "Creates a project folder, moves this session's files into it, and moves the session to the new project.",
+        "nameLabel": "Project name",
+        "namePlaceholder": "e.g. my-app",
+        "targetPath": "Will create {{path}}",
+        "location": "Location",
+        "locationInferred": "Suggested from your existing projects",
+        "locationWillCreate": "This folder doesn't exist yet and will be created",
+        "changeLocation": "Change…",
+        "remember": "Use this location for new projects",
+        "cancel": "Cancel",
+        "create": "Create Project",
+        "nameTaken": "A folder with this name already exists",
+        "nameInvalid": "Names can't contain \\ / : * ? \" < > | or end with a period or space",
+        "loadFailed": "Couldn't load the project location",
+        "failed": "Failed to create project",
+        "done": "Project created and session moved"
+      },
       "sessionMenu": {
         "moreActions": "More actions",
         "rename": "Rename",
@@ -14451,6 +14478,7 @@
         "moveToProject": "Move task",
         "moveToProjectHeading": "Projects on this computer",
         "browseProjectFolder": "Choose project folder",
+        "newProject": "New project…",
         "moveToDialogue": "Move to Chat",
         "noProjects": "No recent projects",
         "moveToProjectDone": "Moved to project",
@@ -15852,6 +15880,7 @@
     "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
     "agentPicture": "This code is from a screenshot the agent took, so Cindy can't see the original screen or tell when you're done. Check that it leads to the site you mean to sign in to, and choose Hand Back to Agent after scanning.",
     "error": {
+      "raise": "Couldn't open the window. Switch to it on the computer.",
       "decision": "That didn't go through. Try again.",
       "stale": "The screen has changed. Use the latest version.",
       "submit": "Your input didn't go through. Try again."
@@ -15887,6 +15916,9 @@
       "picture": "Show screen",
       "backToForm": "Back to form",
       "liveView": "Live View",
+      "openWindow": "Open sign-in window",
+      "openRemoteDesktop": "Open remote desktop",
+      "useForm": "Use the form instead",
       "fill": "Fill In",
       "skip": "Skip",
       "continue": "Continue",
@@ -15894,6 +15926,9 @@
       "showPassword": "Show Password",
       "hidePassword": "Hide Password",
       "scan": "Scan"
+    },
+    "directSignIn": {
+      "hint": "Sign in directly in the window. Cindy continues on its own when you finish."
     },
     "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",
     "unnamedField": "Field",

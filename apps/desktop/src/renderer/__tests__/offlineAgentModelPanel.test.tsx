@@ -133,7 +133,7 @@ function renderRemoteAgentPicker(onRelocate: (selection: RemoteAgentRelocation) 
 
 function renderRemoteDevicePicker(deviceId = 'cloud-device') {
   return render(
-    <ModelSelector
+    <ModelSelector remoteAgent={undefined}
       modelId="cloud-model"
       effort="medium"
       vendorKey="cc"

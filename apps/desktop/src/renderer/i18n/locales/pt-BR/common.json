@@ -2689,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espaço de trabalho da conversa",
         "dialogueDirectoryDescription": "Apenas para novas sessões. Os arquivos existentes permanecem onde estão.",
+        "projectsRootTitle": "Local de novos projetos",
+        "projectsRootInferred": "Sugerido",
+        "projectsRootDefault": "Padrão",
+        "projectsRootChoose": "Alterar diretório",
+        "projectsRootReset": "Restaurar local sugerido",
+        "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não for definido, um local é sugerido com base nos seus projetos existentes.",
+        "projectsRootFailed": "Não foi possível atualizar o local de novos projetos",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar local padrão",
@@ -5990,7 +5997,7 @@
           "check": {
             "checking": "Verificando o servidor…",
             "checkingHint": "Conectando ao servidor para verificar o sistema, as portas e os serviços existentes.",
-            "idle": "Depois que você escolher um servidor, o Cindy verifica se é possível fazer a implantação nele.",
+            "idle": "Escolha um servidor para a Cindy verificar se dá para implantar nele.",
             "ready": "Pronto para implantar",
             "blocked": "Não é possível implantar automaticamente",
             "recheck": "Verificar novamente",
@@ -8676,9 +8683,9 @@
     "localModeEntry": "Pular login",
     "localModeOpening": "Pulando login…",
     "localModeDescription": "Não é necessário ter uma conta do Cindy. Os dados ficam neste dispositivo; modelos na nuvem, acesso entre dispositivos e serviços do marketplace ficam indisponíveis.",
-    "consentStatement": "Li e concordo com os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
+    "consentStatement": "Aceito os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy>",
     "consentDialog": {
-      "title": "Termos e privacidade",
+      "title": "Termos e Política de Privacidade",
       "body": "Para continuar, leia e aceite os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy.",
       "agree": "Aceitar",
       "disagree": "Agora não"
@@ -14577,6 +14584,26 @@
         "archived_many": "{{count}} sessões arquivadas",
         "deleted_many": "{{count}} sessões excluídas"
       },
+      "newProjectDialog": {
+        "title": "Novo projeto",
+        "description": "Cria uma pasta de projeto e move esta sessão para o novo projeto.",
+        "descriptionMoveFiles": "Cria uma pasta de projeto, move os arquivos desta sessão para ela e move a sessão para o novo projeto.",
+        "nameLabel": "Nome do projeto",
+        "namePlaceholder": "ex.: my-app",
+        "targetPath": "Será criado {{path}}",
+        "location": "Local",
+        "locationInferred": "Sugerido com base nos seus projetos existentes",
+        "locationWillCreate": "Esta pasta ainda não existe e será criada",
+        "changeLocation": "Alterar…",
+        "remember": "Usar este local para novos projetos",
+        "cancel": "Cancelar",
+        "create": "Criar projeto",
+        "nameTaken": "Já existe uma pasta com este nome",
+        "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
+        "loadFailed": "Não foi possível carregar o local do projeto",
+        "failed": "Falha ao criar o projeto",
+        "done": "Projeto criado e sessão movida"
+      },
       "sessionMenu": {
         "moreActions": "Mais ações",
         "rename": "Renomear",
@@ -14590,6 +14617,7 @@
         "moveToProject": "Mover tarefa",
         "moveToProjectHeading": "Projetos neste computador",
         "browseProjectFolder": "Escolher pasta do projeto",
+        "newProject": "Novo projeto…",
         "moveToDialogue": "Mover para Conversa",
         "noProjects": "Nenhum projeto recente",
         "moveToProjectDone": "Movida para o projeto",
@@ -15995,6 +16023,7 @@
     "agentControlled": "O Agent abriu esta tela. Verifique se é realmente onde você quer entrar antes de preenchê-la.",
     "agentPicture": "Este código vem de uma captura de tela feita pelo Agent, então o Cindy não pode ver a tela original nem saber quando você terminou. Verifique se ele leva ao site em que você pretende entrar e escolha Devolver ao Agent após escanear.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "Não deu certo. Tente novamente.",
       "stale": "A tela mudou. Use a versão mais recente.",
       "submit": "Sua entrada não foi enviada. Tente novamente."
@@ -16030,6 +16059,9 @@
       "picture": "Mostrar tela",
       "backToForm": "Voltar ao formulário",
       "liveView": "Visualização ao vivo",
+      "openWindow": "Abrir janela de login",
+      "openRemoteDesktop": "Abrir área de trabalho remota",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Pular",
       "continue": "Continuar",
@@ -16037,6 +16069,9 @@
       "showPassword": "Mostrar senha",
       "hidePassword": "Ocultar senha",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Faça login diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
     "unnamedField": "Campo",

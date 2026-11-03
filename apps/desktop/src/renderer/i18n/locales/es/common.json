@@ -2689,6 +2689,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Espacio de conversación",
         "dialogueDirectoryDescription": "Sólo para nuevas sesiones. Los archivos existentes permanecen donde están.",
+        "projectsRootTitle": "Ubicación de nuevos proyectos",
+        "projectsRootInferred": "Sugerida",
+        "projectsRootDefault": "Predeterminada",
+        "projectsRootChoose": "Cambiar directorio",
+        "projectsRootReset": "Restaurar ubicación sugerida",
+        "projectsRootDescription": "Aquí se crean las carpetas de proyecto cuando creas un proyecto desde una sesión. Si no se define, se sugiere una ubicación según tus proyectos existentes.",
+        "projectsRootFailed": "No se pudo actualizar la ubicación de nuevos proyectos",
         "dialogueDirectoryOpen": "Abrir directorio",
         "dialogueDirectoryChoose": "Cambiar directorio",
         "dialogueDirectoryReset": "Restaurar ubicación predeterminada",
@@ -8676,9 +8683,9 @@
     "localModeEntry": "Omitir inicio de sesión",
     "localModeOpening": "Omitiendo inicio de sesión…",
     "localModeDescription": "No necesitas una cuenta de Cindy. Los datos permanecen en este dispositivo; los modelos en la nube, el acceso entre dispositivos y los servicios del marketplace no están disponibles.",
-    "consentStatement": "He leído y acepto los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy>",
+    "consentStatement": "Acepto los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy>",
     "consentDialog": {
-      "title": "Términos y privacidad",
+      "title": "Términos y Política de privacidad",
       "body": "Para continuar, lee y acepta los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy.",
       "agree": "Aceptar",
       "disagree": "Ahora no"
@@ -14577,6 +14584,26 @@
         "archived_many": "Se archivaron {{count}} sesiones",
         "deleted_many": "Se eliminaron {{count}} sesiones"
       },
+      "newProjectDialog": {
+        "title": "Nuevo proyecto",
+        "description": "Crea una carpeta de proyecto y mueve esta sesión al nuevo proyecto.",
+        "descriptionMoveFiles": "Crea una carpeta de proyecto, mueve a ella los archivos de esta sesión y mueve la sesión al nuevo proyecto.",
+        "nameLabel": "Nombre del proyecto",
+        "namePlaceholder": "p. ej., my-app",
+        "targetPath": "Se creará {{path}}",
+        "location": "Ubicación",
+        "locationInferred": "Sugerida según tus proyectos existentes",
+        "locationWillCreate": "Esta carpeta aún no existe y se creará",
+        "changeLocation": "Cambiar…",
+        "remember": "Usar esta ubicación para nuevos proyectos",
+        "cancel": "Cancelar",
+        "create": "Crear proyecto",
+        "nameTaken": "Ya existe una carpeta con este nombre",
+        "nameInvalid": "El nombre no puede contener \\ / : * ? \" < > | ni terminar en punto o espacio",
+        "loadFailed": "No se pudo cargar la ubicación del proyecto",
+        "failed": "No se pudo crear el proyecto",
+        "done": "Proyecto creado y sesión movida"
+      },
       "sessionMenu": {
         "moreActions": "Más acciones",
         "rename": "Cambiar nombre",
@@ -14590,6 +14617,7 @@
         "moveToProject": "Mover tarea",
         "moveToProjectHeading": "Proyectos en esta computadora",
         "browseProjectFolder": "Elegir carpeta del proyecto",
+        "newProject": "Nuevo proyecto…",
         "moveToDialogue": "Mover a Chat",
         "noProjects": "No hay proyectos recientes",
         "moveToProjectDone": "Se movió al proyecto",
@@ -15995,6 +16023,7 @@
     "agentControlled": "El Agent abrió esta pantalla. Antes de completarla, comprueba que sea donde quieres iniciar sesión.",
     "agentPicture": "Este código proviene de una captura tomada por el Agent. Cindy no puede ver la pantalla original ni saber cuándo terminas. Comprueba que lleve al sitio donde quieres iniciar sesión. Después de escanearlo, elige Devolver al Agent.",
     "error": {
+      "raise": "No se pudo abrir la ventana. Cambia a ella en el ordenador.",
       "decision": "Eso no sucedió. Intentar otra vez.",
       "stale": "La pantalla ha cambiado. Utilice la última versión.",
       "submit": "Tu entrada no fue aprobada. Intentar otra vez."
@@ -16030,6 +16059,9 @@
       "picture": "Mostrar pantalla",
       "backToForm": "volver al formulario",
       "liveView": "Vista en vivo",
+      "openWindow": "Abrir ventana de inicio de sesión",
+      "openRemoteDesktop": "Abrir escritorio remoto",
+      "useForm": "Usar el formulario",
       "fill": "Completar",
       "skip": "Omitir",
       "continue": "Continuar",
@@ -16037,6 +16069,9 @@
       "showPassword": "Mostrar contraseña",
       "hidePassword": "Ocultar contraseña",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Inicia sesión directamente en la ventana. Al terminar, se continuará automáticamente."
     },
     "remoteUnavailable": "Esta computadora no admite entradas remotas. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
     "unnamedField": "campo",

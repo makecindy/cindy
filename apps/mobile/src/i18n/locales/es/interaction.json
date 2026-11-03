@@ -299,6 +299,8 @@
       "picture": "Mostrar pantalla",
       "backToForm": "volver al formulario",
       "liveView": "Vista en vivo",
+      "openRemoteDesktop": "Abrir escritorio remoto",
+      "useForm": "Usar el formulario",
       "fill": "Completar",
       "skip": "Omitir",
       "continue": "Continuar",
@@ -306,6 +308,9 @@
       "showPassword": "Mostrar contraseña",
       "hidePassword": "Ocultar contraseña",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Inicia sesión directamente en la ventana. Al terminar, se continuará automáticamente."
     },
     "remoteUnavailable": "Esta computadora no admite entradas remotas. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
     "unnamedField": "campo",

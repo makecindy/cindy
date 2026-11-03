@@ -4394,6 +4394,44 @@ describe('AgentIslandService native publishing', () => {
     ]);
   });
 
+  // Codex Micro lit only local tasks: other-device tasks the island shows never reached it.
+  it('gives activity consumers the other-device tasks the island shows, without relaying them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_state: AgentIslandDisplayState, _frame: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    const remote = {
+      sessionId: 'r1', deviceId: 'd1', deviceName: 'Studio', title: 'Remote task', workingDir: null,
+      workspaceKind: null, agentKind: null, phase: 'running' as const, detail: 'Working',
+    };
+
+    service.handleUserPrompt({ sessionId: 'local', agentKind: 'codex' }, 'Work');
+    service.setDeviceSessions([remote]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local', phase: 'running' }),
+      expect.objectContaining({ sessionId: 'r1', phase: 'running' }),
+    ]);
+    // The relay payload still carries only this computer's tasks.
+    expect(service.getSessionActivitySnapshots().map((item) => item.sessionId)).toEqual(['local']);
+
+    service.setDeviceSessions([{ ...remote, phase: 'completed' }]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toContainEqual(
+      expect.objectContaining({ sessionId: 'r1', phase: 'completed', attention: true }),
+    );
+
+    // Leaving the sidebar scope or disconnecting drops the task from the consumer too.
+    service.setDeviceSessions([]);
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'local' }),
+    ]);
+    service.resetRuntimeState();
+  });
+
   it.each([
     [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
   ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {

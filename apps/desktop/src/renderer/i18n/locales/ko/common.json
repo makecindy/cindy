@@ -2624,6 +2624,13 @@
       "storage": {
         "dialogueDirectoryTitle": "대화 작업 공간",
         "dialogueDirectoryDescription": "새 세션에만 적용됩니다. 기존 파일은 원래 위치에 유지됩니다.",
+        "projectsRootTitle": "새 프로젝트 저장 위치",
+        "projectsRootInferred": "추천",
+        "projectsRootDefault": "기본",
+        "projectsRootChoose": "폴더 변경",
+        "projectsRootReset": "추천 위치로 복원",
+        "projectsRootDescription": "세션에서 프로젝트를 만들 때 프로젝트 폴더가 이곳에 생성됩니다. 설정하지 않으면 기존 프로젝트 위치를 바탕으로 추천합니다.",
+        "projectsRootFailed": "새 프로젝트 저장 위치를 업데이트하지 못했습니다",
         "dialogueDirectoryOpen": "폴더 열기",
         "dialogueDirectoryChoose": "폴더 변경",
         "dialogueDirectoryReset": "기본 위치로 복원",
@@ -14372,6 +14379,26 @@
           "cancel": "취소"
         }
       },
+      "newProjectDialog": {
+        "title": "새 프로젝트",
+        "description": "프로젝트 폴더를 만들고 이 세션을 새 프로젝트로 옮깁니다.",
+        "descriptionMoveFiles": "프로젝트 폴더를 만들어 이 세션의 파일을 옮기고, 세션을 새 프로젝트로 옮깁니다.",
+        "nameLabel": "프로젝트 이름",
+        "namePlaceholder": "예: my-app",
+        "targetPath": "{{path}} 폴더를 만듭니다",
+        "location": "위치",
+        "locationInferred": "기존 프로젝트를 바탕으로 추천한 위치입니다",
+        "locationWillCreate": "아직 없는 폴더라 새로 만듭니다",
+        "changeLocation": "변경…",
+        "remember": "앞으로 새 프로젝트를 이 위치에 만들기",
+        "cancel": "취소",
+        "create": "프로젝트 만들기",
+        "nameTaken": "같은 이름의 폴더가 이미 있습니다",
+        "nameInvalid": "이름에 \\ / : * ? \" < > |를 쓸 수 없으며, 마침표나 공백으로 끝날 수 없습니다",
+        "loadFailed": "프로젝트 위치를 불러오지 못했습니다",
+        "failed": "프로젝트를 만들지 못했습니다",
+        "done": "프로젝트를 만들고 세션을 옮겼습니다"
+      },
       "sessionMenu": {
         "moreActions": "더 보기",
         "rename": "이름 변경",
@@ -14385,6 +14412,7 @@
         "moveToProject": "작업 이동",
         "moveToProjectHeading": "현재 컴퓨터의 프로젝트",
         "browseProjectFolder": "프로젝트 폴더 선택",
+        "newProject": "새 프로젝트…",
         "moveToDialogue": "대화로 이동",
         "noProjects": "최근 프로젝트 없음",
         "moveToProjectDone": "프로젝트로 이동했습니다",
@@ -15785,6 +15813,7 @@
     "agentControlled": "이 화면은 Agent가 열었습니다. 입력하기 전에 실제로 로그인하려는 곳인지 확인하세요.",
     "agentPicture": "이 코드는 Agent가 찍은 스크린샷에서 가져온 것이라 Cindy는 원래 화면을 볼 수 없고, 스캔해도 자동으로 계속하지 않습니다. 로그인하려는 사이트로 연결되는지 확인하고, 스캔한 뒤 \"Agent에게 넘기기\"를 누르세요.",
     "error": {
+      "raise": "창을 열 수 없습니다. 컴퓨터에서 해당 창으로 전환하세요.",
       "decision": "요청이 전달되지 않았습니다. 다시 시도하세요.",
       "stale": "화면이 바뀌었습니다. 최신 내용으로 진행하세요.",
       "submit": "입력이 전달되지 않았습니다. 다시 시도하세요."
@@ -15820,6 +15849,9 @@
       "picture": "화면 보기",
       "backToForm": "양식으로 돌아가기",
       "liveView": "실시간 화면",
+      "openWindow": "로그인 창 열기",
+      "openRemoteDesktop": "원격 데스크톱 열기",
+      "useForm": "양식으로 입력",
       "fill": "입력",
       "skip": "건너뛰기",
       "continue": "계속",
@@ -15827,6 +15859,9 @@
       "showPassword": "암호 표시",
       "hidePassword": "암호 숨기기",
       "scan": "스캔"
+    },
+    "directSignIn": {
+      "hint": "창에서 직접 로그인하세요. 완료되면 자동으로 계속됩니다."
     },
     "remoteUnavailable": "이 컴퓨터는 원격으로 입력을 받을 수 없습니다. 호스트 컴퓨터에서 이 단계를 완료한 뒤 Agent에게 넘기세요.",
     "unnamedField": "입력란",
