@@ -370,9 +370,6 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
         >
           {copiedImage ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
         </ToolbarButton>
-        <ToolbarButton onClick={reset} label={t('attachmentPreview.fit')}>
-          <Maximize size={16} />
-        </ToolbarButton>
       </PreviewFooter>
       </div>
     </FocusScope>
