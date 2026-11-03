@@ -3897,24 +3897,6 @@ function ExpandedView({
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
-                  belowScopeHeader={
-                    <PluginSidebarWidgets
-                      sessions={sidebarSessions}
-                      allKnownProjects={visibleProjectUniverse}
-                      activeSessionId={activeSessionId}
-                      runningSessionIds={displayRunningSessionIds}
-                      attachedSessionIds={attachedSessionIds}
-                      notifications={sidebarNotifications}
-                      selectedSessionIds={selectedSessionIds}
-                      onSessionClick={handleSessionClick}
-                      onAction={handleActionClick}
-                      onRename={handleRename}
-                      onTogglePin={handleTogglePin}
-                      onMoveSession={handleMoveSession}
-                      projectOptions={projectPickerOptions}
-                      onScheduleAction={handleScheduleAction}
-                    />
-                  }
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
@@ -3961,6 +3943,24 @@ function ExpandedView({
                   remoteDeviceIndex={remoteDeviceIndex}
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
+                  belowScopeHeader={
+                    <PluginSidebarWidgets
+                      sessions={sidebarSessions}
+                      allKnownProjects={visibleProjectUniverse}
+                      activeSessionId={activeSessionId}
+                      runningSessionIds={displayRunningSessionIds}
+                      attachedSessionIds={attachedSessionIds}
+                      notifications={sidebarNotifications}
+                      selectedSessionIds={selectedSessionIds}
+                      onSessionClick={handleSessionClick}
+                      onAction={handleActionClick}
+                      onRename={handleRename}
+                      onTogglePin={handleTogglePin}
+                      onMoveSession={handleMoveSession}
+                      projectOptions={projectPickerOptions}
+                      onScheduleAction={handleScheduleAction}
+                    />
+                  }
                 />
               </>
             )}

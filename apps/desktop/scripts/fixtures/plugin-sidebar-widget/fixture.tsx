@@ -12,6 +12,8 @@ const sessions = [
   session('done-b', '修复暗色主题下文字看不清'),
   session('awaiting-a', '发布流程：确认版本号'),
   session('error-a', '竞品价格监控'),
+  session('run-a', '每日依赖检查'),
+  session('run-b', '每日依赖检查'),
 ];
 const group = (key: GhostSidebarWidgetGroup['tone'], label: string, taskIds: string[]): GhostSidebarWidgetGroup =>
   ({ key, label, tone: key, taskIds });
@@ -23,6 +25,7 @@ const VARIANTS: Record<string, GhostSidebarWidgetGroup[]> = {
   four: [running, done, awaiting, group('error', '出错', ['error-a'])],
   unknown: [group('done', '刚完成', ['done-a', 'gone']), group('error', '出错', ['gone'])],
   empty: [group('running', '运行中', ['gone'])],
+  runs: [group('done', '刚完成', ['run-a', 'run-b'])],
 };
 const noop = () => {};
 const empty = new Set<string>();

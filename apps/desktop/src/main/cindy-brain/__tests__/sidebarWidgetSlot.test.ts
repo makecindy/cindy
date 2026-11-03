@@ -68,6 +68,7 @@ describe('GhostSidebarWidgetSlot', () => {
     ['unknown tone', { groups: [group({ tone: 'purple' })] }],
     ['too many tasks', { groups: [group({ taskIds: Array.from({ length: 51 }, (_, i) => `t${i}`) })] }],
     ['non-string task id', { groups: [group({ taskIds: [1] })] }],
+    ['duplicate task id', { groups: [group({ taskIds: ['task-1', 'task-1'] })] }],
     ['null payload', null],
   ])('rejects %s', (_name, payload) => {
     expect(slot.handle('board', payload).ok).toBe(false);
@@ -89,6 +90,16 @@ describe('GhostSidebarWidgetSlot', () => {
     expect(slot.handle('board', { groups: [group({ label: '进行中' })] })).toEqual({ ok: true });
     expect(slot.handle('board', { groups: [] })).toEqual({ ok: true });
     expect(broadcast).toHaveBeenLastCalledWith([]);
+  });
+
+  it('clearing keeps the rate limit, so alternating with a push cannot bypass it; forget resets it', () => {
+    slot.handle('board', { groups: [group()] });
+    expect(slot.handle('board', { groups: [] })).toEqual({ ok: true });
+    expect(slot.handle('board', { groups: [group()] }).ok).toBe(false);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+
+    slot.forget('board');
+    expect(slot.handle('board', { groups: [group()] })).toEqual({ ok: true });
   });
 
   it('forgets one plugin without touching others, and reset clears every plugin', () => {

@@ -22,15 +22,9 @@ import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../lib/sessionSourceLabel';
-import { SessionEntryList, type SessionEntryListProps } from './SessionEntryList';
+import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 
-/** 空索引 = 不做定时任务分组,每次运行各占一行。 */
-const NO_AUTOMATION_GROUPING: SessionEntryListProps['scheduleSessionIndex'] = new Map();
-
-type ListProps = Omit<
-  SessionEntryListProps,
-  'sessions' | 'sourceLabelMap' | 'sessionVariant' | 'sectionCollapsed' | 'scheduleSessionIndex'
->;
+type ListProps = Omit<SessionEntryRowsProps, 'entries' | 'sourceLabelMap' | 'sessionVariant'>;
 
 export interface PluginSidebarWidgetsProps extends ListProps {
   sessions: readonly Session[];
@@ -117,10 +111,10 @@ function PluginSidebarWidget({
       </Tip>
       {expanded && sourceLabelMap ? (
         <div className="flex flex-col gap-0.5 rounded-lg bg-sidebar-item-hover py-1">
-          <SessionEntryList
+          {/* 直接给普通行:胶囊的数量要和展开的行数一致,定时任务的多次运行不收成组头。 */}
+          <SessionEntryRows
             {...listProps}
-            sessions={expanded.sessions}
-            scheduleSessionIndex={NO_AUTOMATION_GROUPING}
+            entries={expanded.sessions.map((session) => ({ kind: 'session', session }))}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={mode === 'list' ? 'list' : 'text'}
           />

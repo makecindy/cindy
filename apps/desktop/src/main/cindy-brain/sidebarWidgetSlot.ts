@@ -60,6 +60,7 @@ function parseGroups(raw: unknown): GhostSidebarWidgetGroup[] | string {
     if (taskIds.some((id) => typeof id !== 'string' || !id || id.length > MAX_TASK_ID_LENGTH)) {
       return 'taskIds 只能包含任务 id 字符串';
     }
+    if (new Set(taskIds).size !== taskIds.length) return 'taskIds 不能重复';
     groups.push({ key, label: cleaned, tone: tone as GhostSidebarWidgetTone, taskIds: taskIds as string[] });
   }
   return groups;
@@ -85,7 +86,7 @@ export class GhostSidebarWidgetSlot {
     if (typeof groups === 'string') return { ok: false, message: groups };
 
     if (groups.length === 0) {
-      this.forget(ghostId);
+      this.clear(ghostId);
       return { ok: true };
     }
     if (JSON.stringify(this.entries.get(ghostId)) === JSON.stringify(groups)) return { ok: true };
@@ -105,10 +106,15 @@ export class GhostSidebarWidgetSlot {
     return [...this.entries].map(([ghostId, groups]) => ({ ghostId, groups }));
   }
 
-  /** 意识退出、停用、卸载或主动收起:撤掉它的状态条。 */
+  /** 主动收起:保留限速时间,否则交替上报和收起就能绕过限速。 */
+  private clear(ghostId: string): void {
+    if (this.entries.delete(ghostId)) this.deps.broadcast(this.snapshot());
+  }
+
+  /** 意识退出、停用或卸载:撤掉状态条,下一世的第一条不受上一世限速影响。 */
   forget(ghostId: string): void {
     this.lastChangedAt.delete(ghostId);
-    if (this.entries.delete(ghostId)) this.deps.broadcast(this.snapshot());
+    this.clear(ghostId);
   }
 
   /** 换账号:任务 id 属于旧账号,整表作废。 */
