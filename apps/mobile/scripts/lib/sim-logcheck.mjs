@@ -1,6 +1,8 @@
 // mobile:sim:logcheck 的纯逻辑:定位 Metro 日志,并判定最近一次打包之后的 ERROR / WARN。
+import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TEE_PRELOAD = join(
@@ -13,15 +15,23 @@ const ENTRY_BUNDLED = /\b(?:iOS|Android) Bundled\b.*\bindex\.js\b/;
 const BUNDLE_FAILED = /\b(?:iOS|Android) Bundling failed\b/;
 const LOG_ENTRY = /^\s*(ERROR|WARN)\s+(.*)$/;
 
+/**
+ * Metro 原始输出可能带凭证(请求或错误对象),不能落进仓库工作区,即使被 gitignore。
+ * 放在系统临时目录,按 worktree 分开,同一端口的多个 worktree 互不覆盖。
+ */
 export function metroLogPath(mobileDir, port) {
-  return join(mobileDir, "logs", `metro-${port}.log`);
+  const worktreeKey = createHash("sha256")
+    .update(resolve(mobileDir))
+    .digest("hex")
+    .slice(0, 16);
+  return join(tmpdir(), "cindy-metro-logs", worktreeKey, `metro-${port}.log`);
 }
 
 /** 每次启动 Metro 时清空旧日志。失败时删掉旧日志并返回 null,不阻止 Metro 启动。 */
 export function prepareMetroLog(mobileDir, port, { source, region, launch }) {
   const path = metroLogPath(mobileDir, port);
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(
       path,
       `# sim-start port=${port} region=${region} source=${source} launch=${launch}\n`,

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeMetroLog,
@@ -238,7 +238,7 @@ describe("incomplete Metro log", () => {
     const mobileDir = mkdtempSync(join(tmpdir(), "metro-log-prepare-"));
     try {
       const path = metroLogPath(mobileDir, 8081);
-      mkdirSync(join(mobileDir, "logs"));
+      mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, `${BUNDLED}\n`, { mode: 0o400 });
       chmodSync(path, 0o400);
       const result = prepareMetroLog(mobileDir, 8081, {
@@ -249,7 +249,19 @@ describe("incomplete Metro log", () => {
       if (result === null) expect(existsSync(path)).toBe(false);
       else expect(readFileSync(path, "utf8")).not.toContain("Bundled");
     } finally {
+      rmSync(dirname(metroLogPath(mobileDir, 8081)), {
+        recursive: true,
+        force: true,
+      });
       rmSync(mobileDir, { recursive: true, force: true });
     }
+  });
+
+  // Review #8560: raw Metro output can carry credentials, so it must never land in the worktree.
+  it("keeps the log outside the worktree and apart for each worktree", () => {
+    const path = metroLogPath("/repo/apps/mobile", 8081);
+    expect(relative("/repo", path).startsWith("..")).toBe(true);
+    expect(path).not.toBe(metroLogPath("/other/apps/mobile", 8081));
+    expect(path).toBe(metroLogPath("/repo/apps/mobile", 8081));
   });
 });
