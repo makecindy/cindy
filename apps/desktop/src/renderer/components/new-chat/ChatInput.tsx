@@ -202,7 +202,7 @@ import {
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
-import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
+import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
@@ -305,7 +305,13 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
+import {
+  addRecentWritableDir,
+  countUserExtraDirs,
+  MAX_EXTRA_DIRS,
+  pickAndAddExtraDir,
+} from './extraDirsActions';
+import { AddDirectoryPanel } from './AddDirectoryPanel';
 import { applyListBackspace } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -1780,6 +1786,9 @@ export function ChatInput({
   // 合成「+」面板自带搜索框（「+」面板浮在输入框上方、盖住了输入框,在看不见的
   // 输入框里盲打是死路）。面板形态下查询词只认这个框。
   const [atPanelSearch, setAtPanelSearch] = useState('');
+  // 「+」面板当前显示「添加目录」二级页(只在面板打开期间有效，面板一关就复位)。
+  const [addDirViewOpen, setAddDirViewOpen] = useState(false);
+  const openAddDirectoryViewRef = useRef<() => void>(() => {});
   const setSyntheticAtAnchor = useCallback((next: number | null) => {
     const previous = syntheticAtAnchorRef.current;
     syntheticAtAnchorRef.current = next;
@@ -5028,22 +5037,9 @@ export function ChatInput({
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
         disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
-        run: () => {
-          void pickAndAddExtraDir({
-            extraDirs: currentWritableDirs,
-            otherDirs: currentExtraDirs,
-            workingDir,
-            writableGrantScope,
-            onChange: onWritableDirsChange,
-            confirm: confirmDialog,
-            parentDirectoryConfirm: {
-              title: t('extraDirs.writableParentConfirmTitle'),
-              description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
-              confirmText: t('extraDirs.parentConfirmAccept'),
-              cancelText: t('extraDirs.parentConfirmCancel'),
-            },
-          });
-        },
+        // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
+        opensPanelPage: true,
+        run: () => openAddDirectoryViewRef.current(),
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -5057,7 +5053,6 @@ export function ChatInput({
   }, [
     collaboration,
     composerMutationLocked,
-    confirmDialog,
     extraDirs,
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
@@ -5073,7 +5068,6 @@ export function ChatInput({
     deviceLinkDeviceId,
     writableDirs,
     writableGrantScope,
-    workingDir,
   ]);
 
   const atResources = useMemo(
@@ -5537,9 +5531,10 @@ export function ChatInput({
       if (!editor) return;
       const range = resolveEffectiveAtRange();
       if (!range) return;
-      editor
-        .chain()
-        .focus()
+      // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
+      // 编辑器时「+」弹层按焦点离开收起，刚打开的下一级页面会随之关掉。
+      const chain = entry.action.opensPanelPage ? editor.chain() : editor.chain().focus();
+      chain
         .command(({ tr }) => {
           tr.delete(range.from, range.to);
           return true;
@@ -5588,6 +5583,57 @@ export function ChatInput({
     if (!editor || editor.isDestroyed) return null;
     return editor.view.dom;
   }, [editor]);
+
+  useEffect(() => {
+    if (!syntheticAtOpen) setAddDirViewOpen(false);
+  }, [syntheticAtOpen]);
+  // 「添加目录…」从 @ 或「+」触发都落到「+」面板的二级页：选中动作已收起原面板，这里在同一轮重新打开。
+  openAddDirectoryViewRef.current = () => {
+    handleComposerSuggestionOpenChange(true);
+    setAddDirViewOpen(true);
+  };
+  const handleAddRecentDir = useCallback(
+    async (option: FolderPickerOption) => {
+      if (!onWritableDirsChange || !writableGrantScope) return;
+      await addRecentWritableDir({
+        path: option.path,
+        writableDirs: writableDirs ?? [],
+        otherDirs: extraDirs ?? [],
+        writableGrantScope,
+        onChange: onWritableDirsChange,
+      });
+      closeComposerSuggestionPanel();
+    },
+    [closeComposerSuggestionPanel, extraDirs, onWritableDirsChange, writableDirs, writableGrantScope],
+  );
+  const handleBrowseExtraDir = useCallback(async () => {
+    if (!onWritableDirsChange || !writableGrantScope) return;
+    const added = await pickAndAddExtraDir({
+      extraDirs: writableDirs ?? [],
+      otherDirs: extraDirs ?? [],
+      workingDir,
+      writableGrantScope,
+      onChange: onWritableDirsChange,
+      confirm: confirmDialog,
+      parentDirectoryConfirm: {
+        title: t('extraDirs.writableParentConfirmTitle'),
+        description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
+        confirmText: t('extraDirs.parentConfirmAccept'),
+        cancelText: t('extraDirs.parentConfirmCancel'),
+      },
+    });
+    // 取消或未加入时留在二级页，用户可以改选最近目录。
+    if (added) closeComposerSuggestionPanel();
+  }, [
+    closeComposerSuggestionPanel,
+    confirmDialog,
+    extraDirs,
+    onWritableDirsChange,
+    t,
+    workingDir,
+    writableDirs,
+    writableGrantScope,
+  ]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
@@ -9899,48 +9945,59 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    <AtMentionPanel
-                      embedded
-                      searchValue={atPanelSearch}
-                      onSearchChange={setAtPanelSearch}
-                      query={atQuery}
-                      state={atState}
-                      entries={filteredAt}
-                      focusedIndex={atFocus}
-                      onFocusedIndexChange={setAtFocus}
-                      onSelect={handleComposerSuggestionSelect}
-                      onClose={closeComposerSuggestionPanel}
-                      onRetry={() => runAtScan(atQuery)}
-                      referenceDirs={
-                        !settingsLocked && onExtraDirsChange
-                          ? {
-                              dirs: extraDirs ?? [],
-                              onRemove: (path) => {
-                                void onExtraDirsChange(
-                                  (extraDirs ?? []).filter((item) => item !== path),
-                                );
-                              },
-                            }
-                          : null
-                      }
-                      writableDirs={
-                        !settingsLocked && onWritableDirsChange
-                          ? {
-                              dirs: writableDirs ?? [],
-                              onRemove: (path) => {
-                                if (onWritableDirRemove) {
-                                  void onWritableDirRemove(path);
-                                } else {
-                                  void onWritableDirsChange(
-                                    (writableDirs ?? []).filter((item) => item !== path),
+                    addDirViewOpen ? (
+                      <AddDirectoryPanel
+                        addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
+                        workingDir={workingDir}
+                        onBack={() => setAddDirViewOpen(false)}
+                        onSelectRecent={handleAddRecentDir}
+                        onBrowse={handleBrowseExtraDir}
+                        maxHeight={paletteMaxHeight}
+                      />
+                    ) : (
+                      <AtMentionPanel
+                        embedded
+                        searchValue={atPanelSearch}
+                        onSearchChange={setAtPanelSearch}
+                        query={atQuery}
+                        state={atState}
+                        entries={filteredAt}
+                        focusedIndex={atFocus}
+                        onFocusedIndexChange={setAtFocus}
+                        onSelect={handleComposerSuggestionSelect}
+                        onClose={closeComposerSuggestionPanel}
+                        onRetry={() => runAtScan(atQuery)}
+                        referenceDirs={
+                          !settingsLocked && onExtraDirsChange
+                            ? {
+                                dirs: extraDirs ?? [],
+                                onRemove: (path) => {
+                                  void onExtraDirsChange(
+                                    (extraDirs ?? []).filter((item) => item !== path),
                                   );
-                                }
-                              },
-                            }
-                          : null
-                      }
-                      maxHeight={paletteMaxHeight}
-                    />
+                                },
+                              }
+                            : null
+                        }
+                        writableDirs={
+                          !settingsLocked && onWritableDirsChange
+                            ? {
+                                dirs: writableDirs ?? [],
+                                onRemove: (path) => {
+                                  if (onWritableDirRemove) {
+                                    void onWritableDirRemove(path);
+                                  } else {
+                                    void onWritableDirsChange(
+                                      (writableDirs ?? []).filter((item) => item !== path),
+                                    );
+                                  }
+                                },
+                              }
+                            : null
+                        }
+                        maxHeight={paletteMaxHeight}
+                      />
+                    )
                   }
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}

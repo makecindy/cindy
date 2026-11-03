@@ -5555,6 +5555,11 @@ interface ElectronAPI {
       success: boolean;
       path: string | null;
     }>;
+    /** 把最近项目列表里的目录授权为当前任务的可写目录（只认列表里原样保存的路径）。 */
+    authorizeRecentWritableDirectory: (params: {
+      directory: string;
+      writableGrantScope: string;
+    }) => Promise<{ success: true }>;
     /** 打开系统文件选择对话框，返回用户选中的文件路径（取消时 path=null）。 */
     showOpenFile: (params?: {
       defaultPath?: string;
