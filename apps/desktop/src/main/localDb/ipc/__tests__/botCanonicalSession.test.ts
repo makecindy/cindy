@@ -245,6 +245,12 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
     ownerScopedUserDataPath: () => join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex')),
   };
 });
+vi.mock('../../../assistantSamplingSettlement.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../assistantSamplingSettlement.js')>();
+  return { ...actual, assistantSamplingSettlements: actual.createAssistantSamplingSettlementStore(
+    () => join(h.userDataDir, 'sampling-settlements', createHash('sha256').update(h.ownerScopeKey).digest('hex')),
+  ) };
+});
 
 import {
   archiveBotChannelLanes,
@@ -4283,6 +4289,43 @@ describe('Bots list unread projection', () => {
     expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
       lastMessagePreview: 'Accepted reply', lastReplyAt: 2000,
     });
+  });
+
+  it.each([true, { runtimeId: 'retired-runtime' }])('does not promote orphaned pending replies after close (%j)', async samplingAttemptPending => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'accepted', role: 'assistant', content: 'Accepted reply', createdAt: 2000,
+      agentMeta: { samplingAttemptPending: false, turnCompleted: true } });
+    for (let index = 0; index < 105; index++) insertMessage(sessionId, {
+      id: `orphan-${index}`, role: 'assistant', content: 'Unconfirmed prose', createdAt: 3000 + index,
+      agentMeta: { samplingAttemptPending, turnCompleted: true, turnCostUsd: 0.01 },
+    });
+    h.getSession.mockReturnValue(null);
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastMessageAt: 2000,
+    });
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({
+      lastMessagePreview: 'Accepted reply', lastReplyAt: 2000,
+    });
+  });
+
+  it.each(['local', 'remote'])('recovers an accepted intent through %s projection without creating a cloud host', async projection => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'accepted-pending', role: 'assistant', content: 'Accepted after close', createdAt: 2000,
+      agentMeta: { samplingAttemptPending: { runtimeId: 'old-runtime' }, turnCompleted: true } });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-pending', patch: { samplingAttemptPending: false } });
+    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.js');
+    clearSessionPersistState(sessionId);
+    h.getSession.mockReturnValue(null);
+    if (projection === 'local') {
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+      expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ lastMessagePreview: 'Accepted after close', lastMessageAt: 2000 });
+    } else {
+      expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({ lastMessagePreview: 'Accepted after close', lastReplyAt: 2000 });
+    }
+    expect(assistantSamplingSettlements.list(sessionId)).toEqual([]);
   });
 
   it('counts only replies that landed after the read position', async () => {

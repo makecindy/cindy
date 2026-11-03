@@ -3,6 +3,19 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
   { kind: 'image', url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png' },
 ]) }));
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
+import type { PendingSamplingSettlement } from '../assistantSamplingSettlement.js';
+const settlements = vi.hoisted(() => ({ entries: new Map<string, PendingSamplingSettlement>(), sequence: 0 }));
+vi.mock('../assistantSamplingSettlement.js', () => ({ assistantSamplingSettlements: {
+  put(entry: Omit<PendingSamplingSettlement, 'file'>) {
+    const file = `${ownerScopeState.scope.ownerScopeKey}/${++settlements.sequence}`;
+    const stored = { ...entry, file };
+    settlements.entries.set(file, stored);
+    return stored;
+  },
+  list(sessionId: string) { return [...settlements.entries.values()].filter(entry =>
+    entry.sessionId === sessionId && entry.file.startsWith(`${ownerScopeState.scope.ownerScopeKey}/`)); },
+  acknowledge(entry: PendingSamplingSettlement) { settlements.entries.delete(entry.file); },
+} }));
 vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
 import { readTaskResultsForReply } from '../botTaskReplyResults.js';
 /**
@@ -120,6 +133,8 @@ it.each(['accepted', 'failed'])('retries a rejected %s metadata patch and retire
     threadId: 't', turnId: 'u', attempt: 1, agentMessageIds: ['item'],
   } });
   await drainPersistQueue();
+  // Close before any mirror read: the durable intent must outlive runtime cleanup.
+  clearSessionPersistState(sessionId);
   await flushAssistantSamplingMetadata(sessionId);
   expect(patchMessageAgentMetaWithResult).toHaveBeenLastCalledWith(sessionId, persistId, expect.objectContaining({ samplingAttemptPending: false }));
   const patches = vi.mocked(patchMessageAgentMetaWithResult).mock.calls.filter(([id]) => id === sessionId);

@@ -31,6 +31,7 @@ import { readTaskResultsForReply } from './botTaskReplyResults.js';
  */
 
 import { createId } from '@paralleldrive/cuid2';
+import { assistantSamplingSettlements, type PendingSamplingSettlement } from './assistantSamplingSettlement.js';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
@@ -219,33 +220,27 @@ const samplingRuntimeIds = new Map<string, string>();
 export function getAssistantSamplingRuntimeId(sessionId: string): string | null {
   return samplingRuntimeIds.get(sessionId) ?? null;
 }
-/** Settled metadata remains retryable until its existing durable write succeeds. */
-const samplingMetaPatches = new Map<string, Map<string, { patch: Record<string, unknown>; writing: boolean }>>();
-
+/** Persist the outcome before enqueueing its DB patch, so close/account switch
+ * cannot erase the only proof that an item was accepted or failed. */
 function queueSamplingMetaPatch(sessionId: string, persistId: string, patch: Record<string, unknown>): void {
-  let patches = samplingMetaPatches.get(sessionId);
-  if (!patches) { patches = new Map(); samplingMetaPatches.set(sessionId, patches); }
-  const entry = { patch, writing: true };
-  patches.set(persistId, entry);
-  enqueueWrite(`assistant_sampling_meta:${sessionId}:${persistId}`, async ownerScope => {
-    try {
-      const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, patch);
-      // A resolved null means the row was removed, not a retryable write error.
-      if (patches.get(persistId) === entry) patches.delete(persistId);
-      if (!patches.size && samplingMetaPatches.get(sessionId) === patches) samplingMetaPatches.delete(sessionId);
-      if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
-    } finally { entry.writing = false; }
+  queueSamplingSettlement(assistantSamplingSettlements.put({ sessionId, persistId, patch }));
+}
+
+function queueSamplingSettlement(entry: PendingSamplingSettlement): void {
+  enqueueWrite(`assistant_sampling_meta:${entry.sessionId}:${entry.persistId}`, async ownerScope => {
+    const patched = await patchMessageAgentMetaWithResult(entry.sessionId, entry.persistId, entry.patch);
+    // A resolved null means the row was removed. A rejection leaves the intent intact.
+    assistantSamplingSettlements.acknowledge(entry);
+    if (patched) await broadcastMessageAgentMetaUpdate(entry.sessionId, entry.persistId, ownerScope);
   });
 }
 
-/** Mirror reads retry settled metadata and then read after the existing FIFO, never before it. */
+/** Replay only the active owner's durable intents, including after process restart. */
 export async function flushAssistantSamplingMetadata(sessionId: string): Promise<void> {
-  for (const [persistId, entry] of samplingMetaPatches.get(sessionId) ?? []) {
-    if (!entry.writing) queueSamplingMetaPatch(sessionId, persistId, entry.patch);
-  }
+  await drainPersistQueue();
+  for (const entry of assistantSamplingSettlements.list(sessionId)) queueSamplingSettlement(entry);
   await drainPersistQueue();
 }
-
 
 /** Release only SDK-proven accepted items (or the remaining items at a terminal boundary). */
 export function onAssistantSamplingAccepted(sessionId: string, itemIds?: readonly string[]): void {
@@ -442,7 +437,6 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   if (current === undefined || parsed > current) {
     assistantItemPersistIds.delete(sessionId);
     pendingSamplingItems.delete(sessionId);
-    samplingMetaPatches.delete(sessionId);
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
@@ -3146,7 +3140,6 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 
 export function clearSessionPersistState(sessionId: string): void {
   samplingRuntimeIds.delete(sessionId);
-  samplingMetaPatches.delete(sessionId);
   assistantItemPersistIds.delete(sessionId);
   pendingSamplingItems.delete(sessionId);
   clearSessionThinkingSnapshots(sessionId);
