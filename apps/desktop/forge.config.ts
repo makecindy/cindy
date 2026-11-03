@@ -1215,8 +1215,30 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     if (arch !== 'x64' && arch !== 'arm64')
       throw new Error('Unsupported Windows desktop architecture');
     const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
-    for (const helper of ['windows-input', 'windows-host']) {
+    // The host EXE and cdylib otherwise compete for the same PDB filename.
+    // Match source-mode builds by isolating their Cargo output directories.
+    for (const [helper, buildTarget, artifact, destination] of [
+      [
+        'windows-input',
+        '--bin',
+        'cindy-windows-desktop-input.exe',
+        'cindy-windows-desktop-input.exe',
+      ],
+      [
+        'windows-host',
+        '--bin',
+        'cindy-windows-desktop-host.exe',
+        'cindy-windows-desktop-host.exe',
+      ],
+      [
+        'windows-host',
+        '--lib',
+        'cindy_windows_desktop_host.dll',
+        'cindy-windows-desktop-host.node',
+      ],
+    ] as const) {
       const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const targetDir = path.join(root, 'target', buildTarget === '--lib' ? 'addon' : 'bin');
       const result = spawnSync(
         'cargo',
         [
@@ -1225,21 +1247,21 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
           '--locked',
           '--target',
           target,
+          '--config',
+          path.join(__dirname, 'native', 'remote-desktop', '.cargo', 'config.toml'),
           '--manifest-path',
           path.join(root, 'Cargo.toml'),
+          '--target-dir',
+          targetDir,
+          buildTarget,
+          ...(buildTarget === '--bin' ? [path.parse(artifact).name] : []),
         ],
         { stdio: 'inherit' },
       );
       if (result.error || result.status !== 0)
         throw new Error(`Remote desktop ${helper} build failed`);
-      const output = path.join(root, 'target', target, 'release');
-      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
-      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
-      if (helper === 'windows-host')
-        fs.copyFileSync(
-          path.join(output, 'cindy_windows_desktop_host.dll'),
-          path.join(destDir, `${name}.node`),
-        );
+      const output = path.join(targetDir, target, 'release');
+      fs.copyFileSync(path.join(output, artifact), path.join(destDir, destination));
     }
   }
 }
