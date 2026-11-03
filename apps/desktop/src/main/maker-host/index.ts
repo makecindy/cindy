@@ -91,6 +91,7 @@ import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus, getRemoteOrcaSession, listWorkersByLead, getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createOrcaRemoteWorkerBridge } from '../maker-ipc/orcaRemoteWorkerBridge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
@@ -1000,8 +1001,7 @@ function broadcastVisionBridgeEvent(
 
 export function getMaker(): Maker {
   if (!_maker) {
-    // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
-    // 顺序错了, 早抛比 session.start 时再炸更清晰。
+    makerStartupGate.assertComplete();
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
     // 顺序错了, 早抛比 session.start 时再炸更清晰。
     const claudePath = getReadyBinaryPath('claude-code');
