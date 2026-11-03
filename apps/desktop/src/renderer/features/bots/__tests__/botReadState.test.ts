@@ -101,7 +101,14 @@ describe('Bot read positions', () => {
     window.dispatchEvent(new StorageEvent('storage', { key: 'cindy.bots.readState.v1.owner-1' }));
     expect(listener).toHaveBeenCalledOnce();
     expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+    const mark = 'cindy.bots.readState.v1.mark.' + JSON.stringify('owner-1') + '.' + JSON.stringify(['group:g', 300]);
+    window.localStorage.setItem(mark, '1');
+    window.dispatchEvent(new StorageEvent('storage', { key: mark, newValue: '1', storageArea: window.localStorage }));
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 300 })).toBe(false);
     seedBotGroupReadState([]); expect(getBotLastReadAt(botGroupReadKey('g'))).toBeNull();
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBeNull();
     off();
   });
 
@@ -123,7 +130,8 @@ describe('Bot read positions', () => {
       else if (action === 'prune-bots') pruneBotReadState(['bot-alive']);
       else seedBotGroupReadState([{ id: 'g', lastReplyAt: 200 }, { id: 'new-group', lastReplyAt: 400 }]);
       expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
-      const saved = JSON.parse(window.localStorage.getItem('cindy.bots.readState.v1.owner-1')!);
+      resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+      const saved = getBotLastReadAtMap();
       expect(saved['group:g']).toBe(200);
       expect(saved['thread:other']).toBe(300);
       expect(saved['bot-alive']).toBe(action === 'mark' ? 400 : 200);
@@ -135,6 +143,27 @@ describe('Bot read positions', () => {
       }
       resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
       expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+    },
+  );
+
+  // Unit / review4460020582: pause the actual storage commit after its
+  // read, let another renderer commit, then restore from persisted facts.
+  it.each([['group:g', 'group:g'], ['bot-1', 'thread:other']])(
+    'preserves concurrent explicit reads for %s and %s after reload', (olderId, newerId) => {
+      setBotReadStateOwner('owner-1');
+      markBotRead(olderId, 100);
+      const set = Storage.prototype.setItem;
+      let interleave = true;
+      const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+        if (interleave) { interleave = false; markBotRead(newerId, 300); }
+        set.call(this, key, value);
+      });
+      try { markBotRead(olderId, 200); } finally { spy.mockRestore(); }
+      expect(interleave).toBe(false);
+      resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+      expect(getBotLastReadAt(newerId)).toBe(300);
+      expect(getBotLastReadAt(olderId)).toBe(olderId === newerId ? 300 : 200);
+      if (olderId === 'group:g') expect(isBotGroupUnread({ id: 'g', lastReplyAt: 300 })).toBe(false);
     },
   );
 
@@ -203,6 +232,8 @@ describe('Bot read positions', () => {
 
     expect(getBotLastReadAtMap()).toEqual({});
     expect(markBotRead('bot-1', 5_000)).toBe(true);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });
 
   it('counts a group\'s unread messages from the host\'s incoming times, and falls back to one without them', () => {

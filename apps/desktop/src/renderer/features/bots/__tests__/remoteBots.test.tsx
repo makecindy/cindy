@@ -506,6 +506,41 @@ it('hydrates exact creation attribution through the existing task-card API on ea
   expect(h.invoke).toHaveBeenCalledWith('b', 'maker:bot-delegations:list', ['canonical']);
 });
 
+// Unit / review4460020599: one host can publish 200 delegation results.
+// Count actual storage reads rather than a machine-dependent elapsed-time limit.
+it('reuses a refresh read snapshot across delegation publishes without regressing an intervening read', async () => {
+  h.devices = [host('a')];
+  const value: { collectionId: string; items: unknown[] } = collection();
+  value.items = Array.from({ length: 200 }, (_, index) => ({
+    ...collection().items[0],
+    ref: { ...collection().items[0].ref, id: 'bot-' + index },
+    display: { title: 'Bot ' + index, lastReplyAt: 400 },
+  }));
+  window.localStorage.setItem(readEntryKey(h.owner, 'a', 'bot-0', 100), '1');
+  let finish!: (value: unknown) => void;
+  let first = true;
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return value;
+    if (first) { first = false; return new Promise(resolve => { finish = resolve; }); }
+    return { ok: true, delegations: [] };
+  });
+  const get = vi.spyOn(Storage.prototype, 'getItem');
+  try {
+    const { result } = renderHook(useRoster);
+    await waitFor(() => expect(finish).toBeDefined());
+    act(() => markRemoteBotRead('a', 'bot-0', 300));
+    const prefix = 'cindy.remoteBotReads.v1.entry.' + JSON.stringify(h.owner) + '.';
+    const scans = () => get.mock.calls.filter(([key]) => key.startsWith(prefix)).length;
+    const before = scans();
+    await act(async () => { finish({ ok: true, delegations: [] }); });
+    await waitFor(() => expect(result.current.at(-1)?.delegatedSessionIds).toEqual([]));
+    expect(h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list')).toHaveLength(200);
+    expect(scans() - before).toBe(0);
+    expect(result.current[0].readAt).toBe(300);
+    expect(isRemoteBotUnread(result.current[0])).toBe(true);
+  } finally { get.mockRestore(); }
+});
+
 it('refreshes creation attribution on a delegation push, keeps it on failure and clears it on a successful empty read', async () => {
   h.devices = [host('a')];
   let response: unknown = { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'child' }] };

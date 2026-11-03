@@ -27,6 +27,25 @@ function storageKey(): string {
   return `${STORAGE_KEY_PREFIX}.${activeOwnerId ?? 'signed-out'}`;
 }
 
+// Explicit acknowledgements are immutable facts, not competing whole-map writes.
+function markPrefix(): string {
+  return `${STORAGE_KEY_PREFIX}.mark.${JSON.stringify(activeOwnerId ?? 'signed-out')}.`;
+}
+function storedMarks(): { key: string; botId: string; at: number }[] {
+  const prefix = markPrefix();
+  const marks: { key: string; botId: string; at: number }[] = [];
+  for (const key of Object.keys(window.localStorage)) {
+    if (!key.startsWith(prefix)) continue;
+    try {
+      const row: unknown = JSON.parse(key.slice(prefix.length));
+      if (Array.isArray(row) && row.length === 2 && typeof row[0] === 'string' && row[0]
+        && typeof row[1] === 'number' && Number.isFinite(row[1]) && row[1] > 0
+        && window.localStorage.getItem(key) === '1') marks.push({ key, botId: row[0], at: row[1] });
+    } catch { /* Ignore malformed display-cache entries. */ }
+  }
+  return marks;
+}
+
 // Writers refresh synchronously: another window can commit before its storage
 // event invalidates this renderer cache. Getters can keep their cached snapshot.
 function readStorage(refresh = false): ReadStateMap {
@@ -34,12 +53,14 @@ function readStorage(refresh = false): ReadStateMap {
   const next: ReadStateMap = refresh ? { ...cache } : {};
   try {
     const raw = window.localStorage.getItem(storageKey());
-    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    let parsed: unknown;
+    try { parsed = raw ? JSON.parse(raw) : null; } catch { /* Read valid facts even if the legacy map is corrupt. */ }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       for (const [botId, at] of Object.entries(parsed as Record<string, unknown>)) {
         if (typeof at === 'number' && Number.isFinite(at) && at > 0) next[botId] = Math.max(next[botId] ?? 0, at);
       }
     }
+    for (const mark of storedMarks()) next[mark.botId] = Math.max(next[mark.botId] ?? 0, mark.at);
   } catch {
     // Keep known reads when storage is unavailable; an initial failure degrades
     // to "nothing read yet", never a crash in the sidebar.
@@ -49,10 +70,13 @@ function readStorage(refresh = false): ReadStateMap {
   return next;
 }
 
-function writeStorage(next: ReadStateMap): void {
+function writeStorage(next: ReadStateMap, removed: readonly string[] = []): void {
   cache = next;
   try {
+    const removedIds = new Set(removed);
+    const marks = removed.length ? storedMarks().filter(mark => removedIds.has(mark.botId)) : [];
     window.localStorage.setItem(storageKey(), JSON.stringify(next));
+    for (const mark of marks) window.localStorage.removeItem(mark.key);
   } catch {
     // Keep the in-memory value so the current session still behaves correctly.
   }
@@ -85,7 +109,18 @@ export function markBotRead(botId: string, at: number = Date.now()): boolean {
   const current = readStorage(true);
   const previous = current[botId] ?? 0;
   if (at <= previous) return false;
-  writeStorage({ ...current, [botId]: Math.floor(at) });
+  at = Math.floor(at);
+  try {
+    window.localStorage.setItem(markPrefix() + JSON.stringify([botId, at]), '1');
+    // Only older facts for this identity can be discarded. A concurrent newer
+    // acknowledgement or another conversation is never a cleanup candidate.
+    for (const mark of storedMarks()) {
+      if (mark.botId === botId && mark.at < at) window.localStorage.removeItem(mark.key);
+    }
+  } catch { /* Keep the session watermark when storage is unavailable. */ }
+  const updated = readStorage(true);
+  cache = { ...updated, [botId]: Math.max(updated[botId] ?? 0, at) };
+  for (const subscriber of subscribers) subscriber();
   return true;
 }
 
@@ -120,12 +155,12 @@ export function pruneBotReadState(botIds: readonly string[]): boolean {
     if (botId.startsWith('group:') || botId.startsWith('thread:') || alive.has(botId)) next[botId] = at;
     else changed = true;
   }
-  if (changed) writeStorage(next);
+  if (changed) writeStorage(next, Object.keys(current).filter(key => next[key] === undefined));
   return changed;
 }
 
 function onStorage(event: StorageEvent): void {
-  if (event.key !== null && event.key !== storageKey()) return;
+  if (event.key !== null && event.key !== storageKey() && !event.key.startsWith(markPrefix())) return;
   cache = null;
   for (const subscriber of subscribers) subscriber();
 }
@@ -195,7 +230,9 @@ export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void
     const key = botGroupReadKey(group.id);
     if (next[key] === undefined) next[key] = Math.max(1, latestGroupReplyAt(group));
   }
-  if (JSON.stringify(next) !== JSON.stringify(current)) writeStorage(next);
+  if (JSON.stringify(next) !== JSON.stringify(current)) {
+    writeStorage(next, Object.keys(current).filter(key => next[key] === undefined));
+  }
 }
 
 /** Private-chat topics use the same owner-scoped, monotonic local read positions, per topic Session. */

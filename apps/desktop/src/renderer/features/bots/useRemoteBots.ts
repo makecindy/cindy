@@ -98,13 +98,13 @@ function mergeReadPositions(rows: RemoteBot[], positions: ReadonlyMap<string, nu
     return at !== undefined && at > (bot.readAt ?? -1) ? { ...bot, readAt: at } : bot;
   });
 }
-const publish = (next: RemoteBot[]) => {
+const publish = (next: RemoteBot[], readPositions?: ReadonlyMap<string, number>) => {
   // A sibling may have marked a reply read before its storage event arrives.
   // Every cache writer must merge that position rather than rewind it.
   let stored: string | null = null;
-  let reads = new Map<string, number>();
+  let reads: ReadonlyMap<string, number> = readPositions ?? new Map<string, number>();
   try { if (owner) stored = window.localStorage.getItem(CACHE_PREFIX + owner); } catch { /* unavailable cache */ }
-  try { if (owner) reads = savedReadPositions(owner); } catch { /* unavailable cache */ }
+  try { if (owner && !readPositions) reads = savedReadPositions(owner); } catch { /* unavailable cache */ }
   next = mergeReadPositions(next, cachedReadPositions(stored));
   next = mergeReadPositions(next, reads);
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
@@ -250,7 +250,9 @@ export function useRemoteBotSync(): void {
           templateId: previous.get(bot.id)?.templateId,
           readAt: previous.get(bot.id)?.readAt ?? savedReads.get(readKey(bot)) ?? bot.lastReplyAt ?? 0,
         }));
-        publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
+        // Delegation reads below share this refresh's read snapshot. Their
+        // updates map the current roster, retaining reads received meanwhile.
+        publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots], savedReads);
         // Older released hosts already expose the task-card list, even when their
         // directory has no task links. Read serially per host; never per task row.
         for (const bot of bots) {
@@ -266,7 +268,7 @@ export function useRemoteBotSync(): void {
             const created = remoteBotCreatedTaskIds(tasks, bot.id);
             if (created === null) continue;
             publish(snapshot.map(row => row.deviceId === deviceId && row.id === bot.id
-              ? { ...row, delegatedSessionIds: created } : row));
+              ? { ...row, delegatedSessionIds: created } : row), savedReads);
           } catch { /* Keep this host's last known attribution on a temporary read failure. */ }
         }
         if (current() && generations.get(deviceId) === epoch) taskRefreshes.delete(deviceId);

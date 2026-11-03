@@ -165,7 +165,9 @@ describe('group list mirror', () => {
   // Unit / review4457346603: a stale secondary list or visibility push must not
   // delete a newer group's shared read mark and silently read its next reply.
   it.each(['list', 'visibility'] as const)('preserves group read marks after a stale secondary %s', async boundary => {
-    window.localStorage.removeItem('cindy.bots.readState.v1.owner');
+    for (const key of Object.keys(window.localStorage)) {
+      if (key.startsWith('cindy.bots.readState.v1.')) window.localStorage.removeItem(key);
+    }
     resetBotReadStateForTests();
     setBotReadStateOwner('owner');
     markBotRead(botGroupReadKey('g1'), 50);
@@ -196,7 +198,9 @@ describe('group list mirror', () => {
       expect(isBotGroupUnread(created)).toBe(false);
     } finally {
       cleanup(); resetBotReadStateForTests();
-      window.localStorage.removeItem('cindy.bots.readState.v1.owner');
+      for (const key of Object.keys(window.localStorage)) {
+        if (key.startsWith('cindy.bots.readState.v1.')) window.localStorage.removeItem(key);
+      }
     }
   });
 
