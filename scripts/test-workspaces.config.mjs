@@ -132,6 +132,7 @@ const mobileGuardInclude = [
   'src/__tests__/homeChromeMenusAndroid.test.ts',
   'src/__tests__/homeDesktopFirst.test.ts',
   'src/__tests__/inactiveSessionListSubscriptions.test.ts',
+  'src/__tests__/managedVoiceRefineBudget.test.ts',
   'src/__tests__/mobileGoalCommands.test.ts',
   'src/__tests__/mobilePiRosterSessionBinding.test.ts',
   'src/__tests__/mobilePresentationRefresh.test.ts',
