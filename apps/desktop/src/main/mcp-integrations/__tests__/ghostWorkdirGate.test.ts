@@ -469,6 +469,7 @@ beforeEach(() => {
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
+  cardRegisterMock.mockClear();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
   releaseMutationMock.mockClear();
@@ -3874,6 +3875,7 @@ describe('plugin page audience and shared tool execution', () => {
     alsSessionContextMock.mockReturnValue({ sessionId: 'waking-task', sessionInstanceId: 'waking-instance', workingDir: '/other' });
     expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
     expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }));
+    expect(cardRegisterMock).toHaveBeenCalledTimes(1);
     expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ sessionId: 's1', sessionInstanceId: 's1-instance' }));
   });
   it('uses the explicit card task context and still enforces its workdir gate', async () => {
