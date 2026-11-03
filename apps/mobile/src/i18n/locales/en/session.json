@@ -451,6 +451,7 @@
     "chipArchived": "Archived",
     "titleFallback": "Remote session",
     "unnamedTitle": "Untitled session",
+    "openSection": "Open",
     "renameAction": "Rename Session",
     "copyLinkAction": "Copy Session Link",
     "unpin": "Unpin",

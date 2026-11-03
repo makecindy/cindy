@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import packagedRuntime from "../../../../../tools/codex-package/latest.json";
 import defaultPolicy from "./native-auto-review-policy-0.145.0.md?raw";
 import currentPolicy from "./native-auto-review-policy-0.153.4.md?raw";
 import { AUTO_REVIEW_CONTINUATION_POLICY } from "../shared/continuation-policy.js";
 import { nativeAutoReviewContinuationConfig } from "./native-auto-review-policy.js";
 
 describe("native auto-review continuation configuration", () => {
-  it.each(['0.153.4', '0.156.0', '0.159.2'])("uses %s's verified complete policy", (version) => {
+  it("covers the packaged runtime with a verified policy", () => {
+    expect(nativeAutoReviewContinuationConfig(`cindy/${packagedRuntime.version} (macOS)`, {})["auto_review.policy"])
+      .toBeTruthy();
+  });
+  it.each(["0.153.4", "0.156.0", "0.159.2", "0.166.0"])("uses %s's verified complete policy", (version) => {
     expect(nativeAutoReviewContinuationConfig(`cindy/${version} (macOS)`, {})["auto_review.policy"])
       .toBe(`${currentPolicy.trim()}\n\n## Scoped continuation of authorized work\n${AUTO_REVIEW_CONTINUATION_POLICY}`);
   });
@@ -29,6 +34,10 @@ describe("native auto-review continuation configuration", () => {
     "codex/0.153.4-alpha",
     "codex/0.156.0-alpha",
     "codex/0.156.1",
+    "codex/0.159.3",
+    "codex/0.166.0-alpha",
+    "codex/0.166.1",
+    "codex/0.167.0",
   ])(
     "never substitutes a policy copied from a different runtime: %s",
     (version) => {
@@ -39,14 +48,16 @@ describe("native auto-review continuation configuration", () => {
     { auto_review: { policy: "custom policy" } },
     { auto_review: { policy: "" } },
     { auto_review: null },
+    { auto_review: [] },
+    { auto_review: "custom policy" },
     { "auto_review.policy": "custom policy" },
     { guardian_policy_config: "managed policy" },
   ])(
     "retains custom/managed policy and ambiguous configuration: %j",
     (config) => {
-      expect(
-        nativeAutoReviewContinuationConfig("codex/0.145.0", config),
-      ).toEqual({});
+      for (const version of ["0.145.0", "0.153.4", "0.156.0", "0.159.2", "0.166.0"]) {
+        expect(nativeAutoReviewContinuationConfig(`codex/${version}`, config)).toEqual({});
+      }
     },
   );
 });
