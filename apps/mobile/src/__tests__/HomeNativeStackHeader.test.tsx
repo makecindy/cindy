@@ -3,9 +3,10 @@ import { act, createElement as el, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ dark: false, frameWidth: 390, naturalWidth: null as number | null, mirroredBars: [] as number[] }));
+const h = vi.hoisted(() => ({ dark: false, frameWidth: 390, naturalWidth: null as number | null }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value },
+  Image: () => null,
   Pressable: ({ children }: any) => el('div', null, typeof children === 'function' ? children({ pressed: false }) : children),
   View: ({ children, onLayout, style }: any) => {
     // The hidden measuring row reports the title's natural width, as on device.
@@ -36,10 +37,13 @@ vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   usesNativePullDownMenu: () => true,
 }));
 vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ usesNativeStackHeader: () => true }));
-vi.mock('@/platform/chrome/HomeStackHeader', () => ({
-  centeredHomeTitleWidth: (barWidth: number) => { h.mirroredBars.push(barWidth); return 200; },
+// Keep the real centered-width arithmetic; only the bar chrome is replaced.
+vi.mock('@/platform/chrome/HomeStackHeader', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/platform/chrome/HomeStackHeader')>(),
   HomeStackHeader: ({ title, children }: any) => el('div', null, title, children),
 }));
+vi.mock('@/platform/chrome/homeMenuIcon', () => ({ homeMenuIcon: 'home-menu', homeMenuArtworkSize: 26 }));
+vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: () => null }));
 vi.mock('@/platform/chrome/homeDisplayIcon', () => ({
   homeDisplayIcon: 'plain-ellipsis',
   homeDisplayAttentionIcon: { light: 'ellipsis-dot-light', dark: 'ellipsis-dot-dark' },
@@ -64,7 +68,6 @@ beforeEach(() => {
   h.dark = false;
   h.frameWidth = 390;
   h.naturalWidth = null;
-  h.mirroredBars = [];
   node = document.createElement('div');
   root = createRoot(node);
 });
@@ -106,15 +109,18 @@ async function renderTitleWidth(props: { statusRowReserve?: number; remoteDeskto
 
 // Regression: Duo portrait home (2026-11-03). The bar shares the status row there, so UIKit puts
 // the trailing items left of the status area; a title sized for the full 662pt bar ran under them.
+// Widths come from the real centeredHomeTitleWidth. A 238pt reserve (status area with a Live
+// Activity, as in the report) moves the trailing items left of the bar's center, so no name can be
+// centered on the bar: every name takes the gap before the shifted items instead of 360pt.
 it.each([
   // [reserve, remote desktop, natural title width, expected title view width]
-  [238, true, 150, 200], // short name: centered between margins mirrored past the status area
-  [238, true, 300, 224], // long name: the gap up to the shifted trailing pill, not 360
-  [238, false, 300, 268], // one trailing item is still asymmetric beside the status area
+  [238, true, 150, 224], // even a short name: the gap up to the shifted trailing pill
+  [238, true, 300, 224],
+  [238, false, 150, 268], // one trailing item is still asymmetric beside the status area
+  [60, false, 150, 360], // a narrow status area still leaves room to center on the bar
   [0, false, 300, 360], // ordinary wide bar keeps its centered cap
 ] as const)('Duo reserve=%s remote=%s natural=%s sizes the title view to %s', async (reserve, remoteDesktop, natural, width) => {
   h.frameWidth = 662;
   h.naturalWidth = natural;
   expect(await renderTitleWidth({ statusRowReserve: reserve, remoteDesktop })).toBe(width);
-  expect(h.mirroredBars.at(-1)).toBe(662 - reserve * 2);
 });

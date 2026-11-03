@@ -94,6 +94,9 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   // When the bar shares the status row (Duo portrait) the trailing items sit
   // left of the status area: the gap loses that width and the mirrored margins
   // lose it on both sides, so the sides are asymmetric even with one item.
+  // A wide status area (a Live Activity) can push the trailing items past the
+  // bar's center; the mirrored width then bottoms out and every name takes
+  // the gap, since a centered title would sit under the items.
   const trailingItems = showRemoteGuide ? 0 : onOpenRemoteDesktop ? 2 : 1;
   const reserve = Math.max(0, statusRowReserve);
   const mirroredWidth = centeredHomeTitleWidth(barWidth - reserve * 2, trailingItems);
