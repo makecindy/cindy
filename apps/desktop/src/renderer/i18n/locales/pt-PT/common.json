@@ -6087,7 +6087,7 @@
           "backgroundHint": "Fechar esta janela não interrompe a implementação",
           "background": "Continuar em segundo plano",
           "doneTitle": "{{name}} está pronto",
-          "doneHint": "Este computador ainda utiliza a rota atual. Escolha Utilizar esta rota para mudar e, em seguida, adicione o telemóvel e outros computadores.",
+          "doneHint": "Este computador ainda utiliza a rota atual. Escolha Usar esta rota para mudar e, em seguida, adicione o telemóvel e outros computadores.",
           "doneLater": "Também pode mudar mais tarde em Rota de ligação",
           "use": "Usar esta rota",
           "finish": "Concluído"

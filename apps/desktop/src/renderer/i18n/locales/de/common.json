@@ -5842,7 +5842,7 @@
         "requests": {
           "item": "{{name}} möchte beitreten",
           "verify": "Kopplungscode",
-          "verifyHint": "Genehmige nur, wenn der Code mit dem auf diesem Gerät übereinstimmt.",
+          "verifyHint": "Genehmige nur, wenn er mit dem Code auf dem anderen Gerät übereinstimmt.",
           "replaces": "Dieses Gerät ist schon einmal beigetreten. Durch die Genehmigung wird sein alter Zugangsnachweis widerrufen.",
           "approve": "Genehmigen",
           "reject": "Ablehnen",
@@ -5864,7 +5864,7 @@
         },
         "confirm": {
           "ownerTitle": "Relay auf diesem Computer stoppen?",
-          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relais.",
+          "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relay.",
           "memberTitle": "Zurück zum Cindy-Relay wechseln?",
           "memberDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay. Um erneut beizutreten, fordere einen neuen Beitrittslink an.",
           "serverTitle": "Zurück zum Cindy-Relay wechseln?",
@@ -5887,7 +5887,7 @@
           "SECURE_STORAGE_UNAVAILABLE": "Der System-Schlüsselbund ist nicht verfügbar, daher können die Relay-Anmeldeinformationen nicht sicher gespeichert werden.",
           "PORT_IN_USE": "Port {{port}} wird bereits verwendet. Wähle einen anderen Port.",
           "START_FAILED": "Das Relay konnte nicht gestartet werden. Versuche einen anderen Port.",
-          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Beliebiges Netzwerk“.",
+          "EXTERNAL_URL_REQUIRED": "Gib die Adresse ein, die andere Geräte verwenden, oder stelle „Wer kann sich verbinden“ auf „Jedes Netzwerk“.",
           "SSH_FAILED": "Verbindung zum Server nicht möglich. Prüfe seine SSH-Einstellungen unter „Remote“.",
           "SHELL_UNAVAILABLE": "Dieses SSH-Konto kann keine Befehle ausführen (zum Beispiel das git-Konto eines Git-Dienstes) und daher nicht für die Bereitstellung verwendet werden. Wähle einen Server, bei dem du dich mit einer Shell anmelden kannst.",
           "NEEDS_ROOT": "Hierfür ist das root-Konto oder ein Konto erforderlich, das sudo ohne Passwort verwenden kann. Cindy fragt dich nie nach deinem Serverpasswort.",
