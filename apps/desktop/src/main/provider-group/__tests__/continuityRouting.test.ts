@@ -10,7 +10,7 @@ import { createGroupContinuityClient } from '../continuityClient.js';
 import type { ProviderGroupRemoteClient } from '../remoteClient.js';
 
 function fixture() {
-  const clock = { wall: 0, mono: 0, current: true, ownerOnline: true, allowed: true, running: 0 };
+  const clock = { wall: 0, mono: 0, current: true, generation: 0, ownerOnline: true, allowed: true, running: 0 };
   const bind = vi.fn(async (_origin: string, _grant: GroupContinuityGrant, _task: string, current: () => boolean) => {
     if (!current()) throw new Error('revoked');
   });
@@ -34,7 +34,9 @@ function fixture() {
   const invoke = vi.fn(async (_target: string, _channel: string, args: unknown[], options?: { preSend?: () => void }) => {
     options?.preSend?.(); return { ok: true, result: await executor.handle('C', args[0]) };
   });
-  const client = createGroupContinuityClient({ livePick, invoke, capture: () => () => clock.current,
+  const client = createGroupContinuityClient({ livePick, invoke, capture: () => {
+    const generation = clock.generation; return () => clock.current && clock.generation === generation;
+  },
     ownerMayRespond: () => clock.ownerOnline, retryable: error => (error as { code?: string }).code === 'NOT_CONNECTED',
     wall: () => clock.wall, mono: () => clock.mono });
   const input = { providerId: 'openai', agentKind: 'codex' as const, model: 'model', exclude: [] as string[] };
@@ -100,6 +102,60 @@ describe('same-account group continuity routing', () => {
     expect(f.bind).not.toHaveBeenCalled();
     expect(secondBind).toHaveBeenCalledTimes(1);
     expect(f.livePick).toHaveBeenCalledTimes(2);
+  });
+
+  it('spreads simultaneous offline picks across equally loaded prepared executors using their current reservations', async () => {
+    const f = fixture();
+    const second = { ...f.config.members[0], key: 'device:M2:openai', agentDeviceId: 'M2' };
+    f.config.members.push(second);
+    const secondExecutor = createGroupContinuityExecutor({ capture: () => () => f.clock.current,
+      inspect: async () => ({ running: 0, fastPolicyRequired: true }), bindFast: async () => {},
+      wall: () => f.clock.wall, mono: () => f.clock.mono });
+    await f.pick('warm-M');
+    const ack = await secondExecutor.handle('O', { action: 'continuity-prepare', grant: { ...f.grant, id: 'grant-2' } });
+    f.livePick.mockResolvedValueOnce(parseProviderGroupRemotePick({ kind: 'member', member: second, label: 'M2',
+      continuity: { ...ack, config: f.config } }, 'openai'));
+    await f.pick('warm-M2');
+    f.invoke.mockImplementation(async (target, _channel, args, options) => {
+      options?.preSend?.(); return { ok: true, result: await (target === 'M2' ? secondExecutor : f.executor).handle('C', args[0]) };
+    });
+    f.clock.ownerOnline = false;
+    const picks = await Promise.all(Array.from({ length: 8 }, (_, i) => f.pick(`new-${i}`)));
+    expect(picks.filter(pick => pick.kind === 'member' && pick.member.agentDeviceId === 'M')).toHaveLength(4);
+    expect(picks.filter(pick => pick.kind === 'member' && pick.member.agentDeviceId === 'M2')).toHaveLength(4);
+    expect(f.livePick).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not admit an old caller waiting in the group queue after the account generation changes and a new route is installed', async () => {
+    const f = fixture(); await f.pick(); f.clock.ownerOnline = false;
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    f.inspect.mockImplementationOnce(async () => { entered(); await waiting; return { running: 0, fastPolicyRequired: true }; });
+    const first = f.pick('old-1').catch(error => error);
+    await started;
+    const second = f.pick('old-2').catch(error => error);
+    f.clock.generation++; f.clock.ownerOnline = true; await f.pick('new-owner-warm');
+    f.clock.ownerOnline = false; release();
+    const results = await Promise.all([first, second]);
+    expect(results.every(result => result instanceof Error)).toBe(true);
+    expect(f.bind).not.toHaveBeenCalled();
+  });
+
+  it('samples live load for the next task instead of joining a previous timed-out inspection', async () => {
+    const f = fixture(); await f.pick(); f.clock.ownerOnline = false;
+    vi.useFakeTimers();
+    let release!: () => void;
+    f.invoke.mockImplementationOnce(() => new Promise(resolve => {
+      release = () => resolve({ ok: true, result: { id: f.grant.id, remainingMs: 1_800_000, running: 0 } });
+    }));
+    try {
+      const stalled = f.pick('stalled').catch(error => error);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await stalled).toBeInstanceOf(Error);
+      expect(await f.pick('next')).toMatchObject({ kind: 'member', member: { agentDeviceId: 'M' } });
+      expect(f.bind.mock.calls.map(call => call[2])).toEqual(['next']);
+    } finally { release(); vi.useRealTimers(); }
   });
 
   it('does not turn an old/unprepared peer, a refusal or a quota rebalance into an offline route', async () => {

@@ -7,6 +7,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as providerCache from '@/hooks/useDeviceProviders';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderMetadataDenied } from '../../main/device-link/providerMetadataContinuity';
+vi.mock('../../main/appSessionState.js', () => ({ activeOwnerScopeKey: () => 'catalog-test-owner', isAppSessionBoundaryPending: () => false }));
+vi.mock('../../main/clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://catalog.invalid' }));
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -15,6 +19,39 @@ import {
 
 beforeEach(() => {
   providerCache.evictAllDeviceProviders();
+  invalidateProviderMetadataContinuity();
+});
+
+// Unit integration: real Main fallback/late denial -> IPC notification adapter ->
+// real renderer cache publisher. Previously a returned stale display survived its denial.
+it('clears a displayed fallback immediately on Main late denial, even while its fresh read is offline, without clearing a neighbour', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  let phase = 'fresh', deny!: (value: import('@cindy/device-link').InvokeResultPayload) => void;
+  const invoke = async (target: string, channel: string, args: unknown[]) => {
+    if (channel !== 'maker:provider:list') return { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] };
+    const reply = await invokeProviderMetadataContinuity(target, channel, args, async () => {
+      if (target === 'N' || phase === 'fresh') return { ok: true, result: result(target) };
+      if (phase === 'hold') return new Promise(resolve => { deny = resolve; });
+      throw Object.assign(new Error('offline'), { code: 'NOT_CONNECTED' });
+    });
+    if (!reply.ok) throw Object.assign(new Error(reply.error.message), { code: reply.error.code });
+    return reply.result;
+  };
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const events = vi.fn(), unsubscribe = providerCache.subscribeDeviceProviders('M', events);
+  const off = onProviderMetadataDenied(target => { void refreshRemoteCatalogSnapshot(target,
+    { providerContinuity: { stale: true, remainingMs: 0 } }); });
+  try {
+    await Promise.all(['M', 'N'].map(id => providerCache.prefetchDeviceProviders(id)));
+    phase = 'hold'; const refreshing = refreshRemoteCatalogSnapshot('M');
+    await vi.advanceTimersByTimeAsync(2000); await refreshing;
+    expect(providerCache.getCachedDeviceProviders('M')?.providers).toHaveLength(1);
+    events.mockClear(); phase = 'offline'; deny({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(providerCache.getCachedDeviceProviders('M')).toBeNull();
+    expect(providerCache.getCachedDeviceProviders('N')?.providers).toHaveLength(1);
+    expect(events).toHaveBeenCalledWith({ status: 'loading' });
+  } finally { off(); unsubscribe(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });
 
 // Unit: a mounted/forwarded catalog must not outlive the Main-owned trust budget.

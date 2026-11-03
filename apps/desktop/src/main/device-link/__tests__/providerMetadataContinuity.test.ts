@@ -7,7 +7,7 @@ const identity = vi.hoisted(() => ({ owner: 'owner-a:1', endpoint: 'https://a.in
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => identity.owner, isAppSessionBoundaryPending: () => identity.pending }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => identity.endpoint }));
 import { invokeProviderMetadataContinuity as read, invalidateProviderMetadataContinuity as invalidate,
-  readProviderDirectoryContinuity } from '../providerMetadataContinuity.js';
+  readProviderDirectoryContinuity, captureProviderMetadataContinuityScope, onProviderMetadataDenied } from '../providerMetadataContinuity.js';
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
@@ -57,6 +57,44 @@ describe('Main provider metadata continuity', () => {
     const request = vi.fn(catalog);
     await expect(read('M', 'maker:provider:list', [], request, () => false)).rejects.toThrow('scope changed');
     expect(request).not.toHaveBeenCalled();
+  });
+
+  // The reader already tests one late-denied entry. Main must invalidate sibling
+  // metadata and captured routing scopes after its 2s fallback has returned.
+  it.each(['envelope', 'rejection', 'http403'])('retires the whole current target after a late %s denial without retiring another target', async form => {
+    const notified = vi.fn(); const off = onProviderMetadataDenied(notified);
+    try {
+      await read('M', 'maker:provider:list', [], catalog);
+      await read('M', 'maker:get-capabilities', [], catalog);
+      await read('N', 'maker:provider:list', [], catalog);
+      const current = captureProviderMetadataContinuityScope('M');
+      let settle!: () => void;
+      const refresh = read('M', 'maker:provider:list', [], () => new Promise((resolve, reject) => {
+        settle = () => form === 'envelope' ? resolve({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } })
+          : reject(form === 'http403' ? Object.assign(new Error('denied'), { statusCode: 403 }) : failure('ACCESS_REVOKED'));
+      }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await refresh).toMatchObject({ ok: true });
+      settle(); await vi.advanceTimersByTimeAsync(0);
+      expect(current()).toBe(false);
+      expect(notified).toHaveBeenCalledExactlyOnceWith('M');
+      await expect(read('M', 'maker:get-capabilities', [], async () => { throw failure(); })).rejects.toThrow('NOT_CONNECTED');
+      expect(await read('N', 'maker:provider:list', [], async () => { throw failure(); })).toMatchObject({ ok: true });
+    } finally { off(); }
+  });
+
+  it('does not notify or invalidate the new owner when the old owner receives a late denial', async () => {
+    await read('M', 'maker:provider:list', [], catalog);
+    let deny!: () => void;
+    const old = read('M', 'maker:provider:list', [], () => new Promise((_resolve, reject) => { deny = () => reject(failure('ACCESS_REVOKED')); }));
+    await vi.advanceTimersByTimeAsync(2000); await old;
+    identity.owner = 'owner-b:2'; await read('M', 'maker:provider:list', [], catalog);
+    const current = captureProviderMetadataContinuityScope('M'), notified = vi.fn(); const off = onProviderMetadataDenied(notified);
+    try {
+      deny(); await vi.advanceTimersByTimeAsync(0);
+      expect(current()).toBe(true); expect(notified).not.toHaveBeenCalled();
+      expect(await read('M', 'maker:provider:list', [], async () => { throw failure(); })).toMatchObject({ ok: true });
+    } finally { off(); }
   });
 
   it('does not reset the 30-minute budget when another computer returns a stale directory', async () => {

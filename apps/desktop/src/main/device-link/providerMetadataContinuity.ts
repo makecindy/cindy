@@ -1,6 +1,6 @@
 /** Read-only, owner-scoped directory continuity. Never used for execution grants or mutations. */
 import { createHash } from 'node:crypto';
-import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMetadataContinuity,
+import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMetadataContinuity, isProviderAccessDeniedError,
   type InvokeResultPayload, type MetadataContinuityScope } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -27,6 +27,12 @@ export function isTemporaryProviderMetadataFailure(error: unknown): boolean {
 const reader = new MetadataContinuityReader({ retryable: isTemporaryProviderMetadataFailure });
 let generation = 0;
 const targetGenerations = new Map<string, number>();
+const denialListeners = new Set<(target: string) => void>();
+/** A late denial must retire displays which already received the bounded fallback. */
+export function onProviderMetadataDenied(listener: (target: string) => void): () => void {
+  denialListeners.add(listener);
+  return () => { denialListeners.delete(listener); };
+}
 
 /** Known denials/permission edits invalidate even in-flight snapshots. Presence loss does not. */
 export function invalidateProviderMetadataContinuity(target?: string): void {
@@ -81,16 +87,30 @@ export async function invokeProviderMetadataContinuity(
   try {
     const resource = createHash('sha256').update(JSON.stringify([target, channel, args])).digest('hex');
     const result = await reader.read(capturedScope, resource, async () => {
-      const result = await request();
-      if (!result.ok) {
-        failure = result;
-        throw Object.assign(new Error(result.error.message), { code: result.error.code });
+      try {
+        const result = await request();
+        if (!result.ok) {
+          failure = result;
+          throw Object.assign(new Error(result.error.message), { code: result.error.code });
+        }
+        const forwarded = readProviderMetadataContinuity(result.result);
+        if (forwarded && forwarded.remainingMs <= 0) {
+          throw Object.assign(new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired'), { code: 'MODEL_VISIBILITY_NOT_READY' });
+        }
+        return result.result;
+      } catch (error) {
+        // This physical read can finish after reader.read returned its 2s fallback.
+        // Fence the captured owner/realm/permission generation before touching any target.
+        const status = error && typeof error === 'object'
+          ? (error as { status?: unknown; statusCode?: unknown }).statusCode ?? (error as { status?: unknown }).status : undefined;
+        if (capturedScope.current() && (isProviderAccessDeniedError(error) || status === 401 || status === 403)) {
+          invalidateProviderMetadataContinuity(target);
+          for (const listener of denialListeners) {
+            try { listener(target); } catch { /* Notification cannot undo the permission fence. */ }
+          }
+        }
+        throw error;
       }
-      const forwarded = readProviderMetadataContinuity(result.result);
-      if (forwarded && forwarded.remainingMs <= 0) {
-        throw Object.assign(new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired'), { code: 'MODEL_VISIBILITY_NOT_READY' });
-      }
-      return result.result;
     });
     return { ok: true, result: result.value && typeof result.value === 'object' && !Array.isArray(result.value)
       ? { ...result.value, providerContinuity: { stale: result.stale

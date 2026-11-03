@@ -2,6 +2,7 @@
  * Existing device generations remain the authority for disconnect/owner changes.
  */
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
+import { readProviderMetadataContinuity } from '@cindy/device-link';
 import { evictAllRemoteCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import {
   evictAllDeviceProviders,
@@ -25,9 +26,11 @@ export function invalidateRemoteCatalogSnapshots(): void {
   refreshes.clear();
 }
 
-export async function refreshRemoteCatalogSnapshot(deviceId: string): Promise<void> {
-  const generation = evictDeviceProviders(deviceId, { retainDisplaySnapshot: true });
-  evictDeviceCapabilities(deviceId, { retainDisplaySnapshot: true });
+export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown): Promise<void> {
+  // A Main-observed denial clears display copies before any fresh RPC can finish.
+  const retainDisplaySnapshot = readProviderMetadataContinuity(notification)?.remainingMs !== 0;
+  const generation = evictDeviceProviders(deviceId, { retainDisplaySnapshot });
+  evictDeviceCapabilities(deviceId, { retainDisplaySnapshot });
   const previous = refreshes.get(deviceId);
   const refresh = {
     // An intervening eviction belongs to disconnect/ownership handling. Its new

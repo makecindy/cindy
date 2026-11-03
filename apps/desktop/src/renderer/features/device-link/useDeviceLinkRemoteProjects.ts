@@ -1079,7 +1079,7 @@ export function useDeviceLinkRemoteProjects(
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
-      void refreshRemoteCatalogSnapshot(push.deviceId);
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);
     });
 
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap

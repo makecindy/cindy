@@ -21,7 +21,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const catalog = vi.hoisted(() => ({
-  refresh: vi.fn<(deviceId: string) => Promise<void>>(async () => undefined),
+  refresh: vi.fn<(deviceId: string, notification?: unknown) => Promise<void>>(async () => undefined),
   cached: new Set<string>(),
   subscriptions: new Set<string>(),
   stale: new Set<string>(),
@@ -134,12 +134,27 @@ describe('useProviderShareAgentDevices', () => {
       catalogPush?.({ deviceId: 'share:unknown', channel: 'maker:provider:changed', payload: {} });
       catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:event', payload: {} });
     });
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}]]);
     // A failed soft refresh leaves no authoritative cache, but another push
     // must still retry the previously recognized subscription (never API peers).
     catalog.cached.delete('share:subscription');
     act(() => catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} }));
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription'], ['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}], ['share:subscription', {}]]);
+  });
+
+  // Unit: the real received-share push listener must propagate a late denial for
+  // API catalogs as well as subscriptions; ordinary soft refresh stays selective.
+  it('forwards an expired-directory notification for every active share, excluding paused and unknown shares', async () => {
+    initial = [share({ shareId: 'subscription' }), share({ shareId: 'api' }), share({ shareId: 'paused', status: 'paused' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear(); catalog.subscriptions.add('share:subscription');
+    const payload = { providerContinuity: { stale: true, remainingMs: 0 } };
+    act(() => {
+      for (const id of ['subscription', 'api', 'paused', 'unknown'])
+        catalogPush?.({ deviceId: `share:${id}`, channel: 'maker:provider:changed', payload });
+    });
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', payload], ['share:api', payload]]);
   });
 
   it('refreshes stale subscription catalogs even when a membership snapshot has no changes', async () => {

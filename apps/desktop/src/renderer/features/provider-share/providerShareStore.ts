@@ -14,7 +14,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import type { ProviderShareReceived } from '@cindy/device-link';
+import { readProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
 
 import { getCachedDeviceProviders, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
@@ -146,8 +146,8 @@ export function ensureProviderShareReceivedStarted(): void {
   unsubscribeCatalogPush = window.electronAPI?.deviceLink?.onRemotePush?.(push => {
     if (push.channel !== 'maker:provider:changed' || !push.deviceId.startsWith('share:')) return;
     if (!receivedSnapshot.received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
-    if (hasSubscriptionShareCatalog(push.deviceId)) {
-      void refreshRemoteCatalogSnapshot(push.deviceId).catch(() => undefined);
+    if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0 || hasSubscriptionShareCatalog(push.deviceId)) {
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload).catch(() => undefined);
     }
   });
   api.onReceivedChanged((list) => {

@@ -19,7 +19,7 @@ export function createGroupContinuityClient(deps: {
 }) {
   const rows = new Map<string, Row>();
   const cursors = new Map<string, string>();
-  const inspecting = new Map<string, Promise<{ running: number } | null>>();
+  const fallbackQueues = new Map<string, { tail: Promise<void>; pending: number }>();
   const valid = (row: Row) => row.current() && deps.wall() < row.wall && deps.mono() < row.mono;
   const prune = () => { for (const [key, row] of rows) if (!valid(row)) rows.delete(key); };
   const invalidate = (owner: string, provider: string) => {
@@ -33,17 +33,12 @@ export function createGroupContinuityClient(deps: {
     const live: Array<{ row: Row; running: number }> = [];
     const work = Promise.allSettled(candidates.map(async row => {
       const id = row.pick.continuity!.id, device = row.pick.member.agentDeviceId!;
-      let flight = inspecting.get(id);
-      if (!flight) {
-        flight = deps.invoke(device, PROVIDER_GROUP_REMOTE_CHANNEL, [{ action: 'continuity-inspect', id,
-          ownerDeviceId: owner, sessionId: input.sessionId }], { preSend: () => { if (!valid(row)) throw new Error('Group routing context expired'); } })
-          .then(reply => reply.ok ? parseGroupContinuityAck(reply.result, id) : null)
-          .then(ack => ack?.running === undefined ? null : { running: ack.running })
-          .catch(() => null).finally(() => { inspecting.delete(id); });
-        inspecting.set(id, flight);
-      }
-      const result = await flight;
-      if (result && valid(row)) live.push({ row, running: result.running });
+      // Each queued pick samples M anew, including after a previous read timed out.
+      // Load is task-relative: never reuse another task's in-flight inspection.
+      const reply = await deps.invoke(device, PROVIDER_GROUP_REMOTE_CHANNEL, [{ action: 'continuity-inspect', id,
+        ownerDeviceId: owner, sessionId: input.sessionId }], { preSend: () => { if (!valid(row)) throw new Error('Group routing context expired'); } });
+      const ack = reply.ok ? parseGroupContinuityAck(reply.result, id) : null;
+      if (ack?.running !== undefined && valid(row)) live.push({ row, running: ack.running });
     }));
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { await Promise.race([work, new Promise<void>(resolve => { timer = setTimeout(resolve, 2_000); })]); }
@@ -79,6 +74,29 @@ export function createGroupContinuityClient(deps: {
       }
     }
   }
+  async function queuedFallback(owner: string, input: Input, original: unknown, current: () => boolean) {
+    // One group's read/select/admit is a transaction: M's acknowledged reservation
+    // must be visible to the next pick. Different groups keep independent queues.
+    const key = JSON.stringify([owner, input.providerId]);
+    let queue = fallbackQueues.get(key);
+    if (!queue) {
+      if (fallbackQueues.size >= 512) throw original;
+      queue = { tail: Promise.resolve(), pending: 0 }; fallbackQueues.set(key, queue);
+    }
+    if (queue.pending >= 128) throw original;
+    queue.pending++;
+    const result = queue.tail.then(() => {
+      if (!current()) throw new Error('[ACCESS_REVOKED] Group owner scope changed while waiting');
+      return fallback(owner, input, original);
+    });
+    queue.tail = result.then(() => undefined, () => undefined);
+    const active = queue;
+    void queue.tail.then(() => {
+      active.pending--;
+      if (active.pending === 0 && fallbackQueues.get(key) === active) fallbackQueues.delete(key);
+    });
+    return result;
+  }
   return {
     async pick(owner: string, input: Input): Promise<ProviderGroupRemotePick> {
       if (isScopedPeer(owner) || owner.startsWith('share:')) return deps.livePick(owner, input);
@@ -102,12 +120,12 @@ export function createGroupContinuityClient(deps: {
         const offline = Object.assign(new Error('[NOT_CONNECTED] Group owner signaling is unavailable'), { code: 'NOT_CONNECTED' });
         prune();
         if ([...rows.values()].some(row => row.owner === owner && row.provider === input.providerId
-          && row.agent === input.agentKind && row.model === input.model)) return fallback(owner, input, offline);
+          && row.agent === input.agentKind && row.model === input.model)) return queuedFallback(owner, input, offline, current);
       }
       try { return remember(await deps.livePick(owner, input)); }
       catch (error) {
         if (!current() || !deps.retryable(error)) { invalidate(owner, input.providerId); throw error; }
-        return fallback(owner, input, error);
+        return queuedFallback(owner, input, error, current);
       }
     },
   };

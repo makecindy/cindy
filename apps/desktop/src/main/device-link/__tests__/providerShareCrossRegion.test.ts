@@ -36,6 +36,7 @@ vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0-test' } }));
 vi.mock('ws', () => ({ default: class {} }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
 vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => state.userId,
   isAppSessionBoundaryPending: () => false,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.userId, ownerGeneration: 1 }),
 }));
@@ -501,8 +502,12 @@ describe('cross-region provider share', () => {
     else await client.pick('group-owner', { sessionId: 'task', providerId: 'openai', agentKind: 'codex', model: 'model', exclude: [] });
     const target = await resolveRemoteAgentTargetWhenReady('share:share-x');
     expect(target).toBe(providerShareHostPeer('share-x', 'owner-pc'));
-    await expect(crossRegionInvoke(target, 'maker:provider:list', []))
-      .resolves.toEqual({ ok: true, result: { providers: [{ id: 'openai' }] } });
+    const catalog = await crossRegionInvoke(target, 'maker:provider:list', []);
+    expect(catalog).toEqual({ ok: true, result: { providers: [{ id: 'openai' }],
+      providerContinuity: { stale: false, remainingMs: expect.any(Number) } } });
+    const remaining = (catalog as { result: { providerContinuity: { remainingMs: number } } }).result.providerContinuity.remainingMs;
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(30 * 60_000);
     expect(state.invokes).toEqual([{ target, channel: 'maker:provider:list' }]);
     expect(state.calls.map((call) => call.path)).toEqual(['/api/device-link/provider-shares/x/session']);
     expect(state.calls[0].opts).toMatchObject({ token: null, baseUrl: PEER, skipSessionInvalidation: true });

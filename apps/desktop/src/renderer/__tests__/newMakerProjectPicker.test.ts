@@ -1408,7 +1408,7 @@ describe('Shared create project picker', () => {
     expect(addedHead).toContain('prefetchDeviceGitSafetySettings(target.deviceId)');
     // ③ 「设备已不可用」类的 evict 不需要配对 —— 那几处刻意不 prefetch,别被这条规则误改。
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
-    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId);');
+    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);');
     const refreshSource = readSource('lib', 'remoteCatalogSnapshot.ts');
     const evictAt = refreshSource.search(/evictDeviceProviders\(deviceId(?:,|\))/);
     expect(evictAt).toBeGreaterThan(-1);

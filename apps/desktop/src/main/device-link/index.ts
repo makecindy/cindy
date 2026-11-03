@@ -158,7 +158,7 @@ import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
-import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
+import { invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderMetadataDenied } from './providerMetadataContinuity.js';
 import {
   isProviderShareRefusal,
   getReceivedShares,
@@ -401,6 +401,14 @@ export function getDirectDataDeviceIds(): string[] {
   return [...directDataPeers].filter(id => !isScopedPeer(id)
     && client?.getPeerPath(id) === 'direct' && client.isLinkReady(id));
 }
+onProviderMetadataDenied(target => {
+  const share = parseProviderSharePeer(target);
+  const deviceId = share?.role === 'host' ? `share:${share.shareId}` : target;
+  // Existing result metadata and local push, not a new wire permission or a link close.
+  broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed',
+    payload: { providerContinuity: { stale: true, remainingMs: 0 } } });
+  tapRemoteModelCatalogChange(target, 'maker:provider:changed', false);
+});
 // Local IPC metadata, never accepted from a push payload or sent over the wire.
 const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
 let sharedHostSourceEpoch = 0;
@@ -1999,8 +2007,9 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean },
+  options?: { preSend?: () => void; background?: boolean; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
+  if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
   return invokeProviderMetadataContinuity(deviceId, channel, args,
     () => remoteInvokeLive(deviceId, channel, args, options), () => {
@@ -2012,9 +2021,8 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; background?: boolean },
 ): Promise<InvokeResultPayload> {
-  if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   options?.preSend?.();
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
