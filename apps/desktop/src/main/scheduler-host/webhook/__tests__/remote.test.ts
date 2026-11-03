@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Schedule, Scheduler } from '@cindy/maker-scheduler';
+import { scheduleWebhookPreset, type Schedule, type Scheduler, type ScheduleWebhookSource } from '@cindy/maker-scheduler';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 // 测试价值
@@ -36,15 +36,24 @@ class FakeScheduler extends EventEmitter {
   getInflightCount() { return 0; }
 }
 
-const schedule = (id: string, events?: string[]) =>
-  ({ id, status: 'active', webhookTrigger: { endpointId: `local-${id}`, ...(events ? { events } : {}) } }) as Schedule;
+const schedule = (id: string, events?: string[], source?: ScheduleWebhookSource) =>
+  ({
+    id,
+    status: 'active',
+    webhookTrigger: { endpointId: `local-${id}`, ...(events ? { events } : {}), ...(source ? { source } : {}) },
+  }) as Schedule;
+
+const GITHUB_FORMAT = scheduleWebhookPreset('github')!.format;
 
 interface FakeEndpoint {
   id: string;
   url: string;
   scheduleId: string;
   events: string[];
+  format: unknown;
   hasSecret: boolean;
+  /** 只在假服务器里记录，用来断言客户端提交了什么。 */
+  secret?: string;
   status: 'active' | 'suspended';
   lastReceivedAt: string | null;
 }
@@ -107,12 +116,15 @@ class FakeServer {
       if (req.headers.authorization !== `Bearer ${this.validToken}`) return reply(401, { error: { code: 'UNAUTHORIZED' } });
       if (this.suspended) return reply(403, { error: { code: 'WEBHOOK_ACCOUNT_SUSPENDED' } });
       const upsert = route.match(/^PUT \/api\/v1\/endpoints\/by-schedule\/(.+)$/);
-      const secret = route.match(/^POST \/api\/v1\/endpoints\/(.+)\/secret$/);
+      const secret = route.match(/^PUT \/api\/v1\/endpoints\/(.+)\/secret$/);
+      const rotate = route.match(/^POST \/api\/v1\/endpoints\/(.+)\/rotate$/);
+      const body = () => JSON.parse(Buffer.concat(chunks).toString() || '{}') as Record<string, unknown>;
+      const byId = (id: string) => [...this.endpoints.values()].find((row) => row.id === id);
       const remove = route.match(/^DELETE \/api\/v1\/endpoints\/(.+)$/);
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
-        const { events } = JSON.parse(Buffer.concat(chunks).toString()) as { events: string[] };
+        const { events, format } = body() as { events: string[]; format: unknown };
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
         const endpoint = existing ?? {
@@ -120,19 +132,29 @@ class FakeServer {
           url: `https://webhook.test/hooks/whk-${scheduleId}`,
           scheduleId,
           events,
+          format,
           hasSecret: false,
           status: 'active' as const,
           lastReceivedAt: null,
         };
         endpoint.events = events;
+        endpoint.format = format;
         this.endpoints.set(scheduleId, endpoint);
         return reply(existing ? 200 : 201, endpoint);
       }
-      if (secret) {
-        const endpoint = [...this.endpoints.values()].find((row) => row.id === secret[1]);
+      if (secret?.[1]) {
+        const endpoint = byId(secret[1]);
         if (!endpoint) return reply(404, { error: { code: 'NOT_FOUND' } });
+        endpoint.secret = body().secret as string;
         endpoint.hasSecret = true;
-        return reply(200, { secret: 'server-secret', endpoint });
+        return reply(200, endpoint);
+      }
+      if (rotate?.[1]) {
+        const endpoint = byId(rotate[1]);
+        if (!endpoint) return reply(404, { error: { code: 'NOT_FOUND' } });
+        endpoint.id = `${endpoint.id}-r`;
+        endpoint.url = `https://webhook.test/hooks/${endpoint.id}`;
+        return reply(200, endpoint);
       }
       if (remove) {
         for (const [key, row] of this.endpoints) if (row.id === remove[1]) this.endpoints.delete(key);
@@ -196,9 +218,11 @@ describe('ScheduleWebhookHost 服务器通道', () => {
 
     const status = host.status(schedule('s1'));
     expect(status).toMatchObject({ receiver: 'cloud', url: 'https://webhook.test/hooks/whk-s1', hasSecret: false });
-    expect(server.endpoints.get('s1')?.events).toEqual(['check_suite']);
+    expect(server.endpoints.get('s1')).toMatchObject({ events: ['check_suite'], format: GITHUB_FORMAT });
 
-    expect(await host.rotateSecret(schedule('s1'))).toEqual({ secret: 'server-secret', url: 'https://webhook.test/hooks/whk-s1' });
+    const { secret } = await host.setSecret(schedule('s1'));
+    expect(secret).toMatch(/^[0-9a-f]{64}$/);
+    expect(server.endpoints.get('s1')?.secret).toBe(secret);
     expect(host.status(schedule('s1'))?.hasSecret).toBe(true);
     expect(fs.existsSync(path.join(dirs.root, 'schedule-webhooks', 'secrets'))).toBe(false);
   });
@@ -209,7 +233,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await vi.waitFor(() => expect(host.receiver()).toBe('signed-out'));
     expect(host.status(schedule('s1'))).toMatchObject({ receiver: 'signed-out', hasSecret: false });
     expect(host.status(schedule('s1'))?.url).toBeUndefined();
-    await expect(host.rotateSecret(schedule('s1'))).rejects.toThrow('WEBHOOK_ACCOUNT_REQUIRED');
+    await expect(host.setSecret(schedule('s1'))).rejects.toThrow('WEBHOOK_ACCOUNT_REQUIRED');
     expect(server.requests).toEqual([]);
     expect(server.upgrades).toBe(0);
 
@@ -235,8 +259,10 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   });
 
   it('清掉服务器上已不存在任务的地址；筛选没变时不重复写入', async () => {
-    server.endpoints.set('gone', { id: 'whk-gone', url: 'u', scheduleId: 'gone', events: [], hasSecret: true, status: 'active', lastReceivedAt: null });
-    server.endpoints.set('s1', { id: 'whk-s1', url: 'u', scheduleId: 's1', events: ['a', 'b'], hasSecret: true, status: 'active', lastReceivedAt: null });
+    const stored = { url: 'u', format: GITHUB_FORMAT, hasSecret: true, status: 'active' as const, lastReceivedAt: null };
+    server.endpoints.set('gone', { ...stored, id: 'whk-gone', scheduleId: 'gone', events: [] });
+    // 服务器返回的键顺序与本机预设不同，也不应判为有变化。
+    server.endpoints.set('s1', { ...stored, id: 'whk-s1', scheduleId: 's1', events: ['a', 'b'], format: { fields: GITHUB_FORMAT.fields, ping: GITHUB_FORMAT.ping, signature: GITHUB_FORMAT.signature, version: 1 } });
     await start([schedule('s1', ['b', 'a'])]);
     await vi.waitFor(() => expect(server.endpoints.has('gone')).toBe(false));
     expect(server.requests.filter((route) => route.startsWith('PUT'))).toEqual([]);
@@ -371,6 +397,45 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     });
     await start([schedule('s1')]);
     await vi.waitFor(() => expect(server.endpoints.has('s1')).toBe(true));
+  });
+
+  it('发送方随任务同步：粘贴的密钥原样提交，关闭签名后不能设置密钥，地址可以更换', async () => {
+    const stripe = schedule('s1', [], { preset: 'stripe' });
+    await start([stripe]);
+    await vi.waitFor(() => expect(host.status(stripe)?.connected).toBe(true));
+    expect(server.endpoints.get('s1')?.format).toMatchObject({ signature: { header: 'stripe-signature', key: 'v1' } });
+
+    const requests = server.requests.length;
+    await expect(host.setSecret(stripe, 'short')).rejects.toThrow('WEBHOOK_SECRET_INVALID');
+    expect(server.requests).toHaveLength(requests);
+    expect(await host.setSecret(stripe, 'whsec_from_stripe_dashboard')).toEqual({});
+    expect(server.endpoints.get('s1')?.secret).toBe('whsec_from_stripe_dashboard');
+
+    const gitlab = schedule('s1', [], { preset: 'gitlab' });
+    scheduler.schedules = [gitlab];
+    scheduler.emit('changed');
+    await vi.waitFor(() => expect(server.endpoints.get('s1')?.format).toMatchObject({ signature: { header: 'webhook-signature' } }));
+    expect((await host.setSecret(gitlab)).secret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
+
+    const unsigned = schedule('s1', [], { preset: 'gitlab', signed: false });
+    scheduler.schedules = [unsigned];
+    scheduler.emit('changed');
+    await vi.waitFor(() => expect(server.endpoints.get('s1')?.format).toMatchObject({ signature: null }));
+    await expect(host.setSecret(unsigned)).rejects.toThrow('WEBHOOK_UNSIGNED');
+
+    expect(await host.rotateUrl(unsigned)).toEqual({ url: 'https://webhook.test/hooks/whk-s1-r' });
+    expect(host.status(unsigned)?.url).toBe('https://webhook.test/hooks/whk-s1-r');
+  });
+
+  it('本机认不出的发送方沿用服务器上的格式，新地址则报错而不是按 GitHub 创建', async () => {
+    const custom = { ...GITHUB_FORMAT, signature: null };
+    server.endpoints.set('s1', { id: 'whk-s1', url: 'u', scheduleId: 's1', events: [], format: custom, hasSecret: false, status: 'active', lastReceivedAt: null });
+    const future = { preset: 'from-a-newer-version' } as unknown as ScheduleWebhookSource;
+    await start([schedule('s1', ['push'], future), schedule('s2', [], future)]);
+    await vi.waitFor(() => expect(server.endpoints.get('s1')?.events).toEqual(['push']));
+    expect(server.endpoints.get('s1')?.format).toEqual(custom);
+    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('failed'));
+    expect(server.endpoints.has('s2')).toBe(false);
   });
 
   it('没有任务需要接收时不保持连接', async () => {

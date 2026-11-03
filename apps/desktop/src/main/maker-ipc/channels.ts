@@ -668,7 +668,8 @@ export const MAKER_INVOKE = {
   SCHEDULE_WEBHOOK_STATUS: 'maker:schedule:webhook-status',
   /** 这台电脑现在能不能接收 Webhook：决定是否显示开关。 */
   SCHEDULE_WEBHOOK_RECEIVER: 'maker:schedule:webhook-receiver',
-  SCHEDULE_WEBHOOK_ROTATE_SECRET: 'maker:schedule:webhook-rotate-secret',
+  SCHEDULE_WEBHOOK_SET_SECRET: 'maker:schedule:webhook-set-secret',
+  SCHEDULE_WEBHOOK_ROTATE_URL: 'maker:schedule:webhook-rotate-url',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
   PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',

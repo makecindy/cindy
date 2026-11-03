@@ -7,6 +7,12 @@ import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
+import {
+  DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  resolveScheduleWebhookFormat,
+  scheduleWebhookPreset,
+  type ScheduleWebhookPresetId,
+} from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -28,6 +34,7 @@ import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotifica
 import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInput } from '@cindy/maker-scheduler';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
+import { WebhookSourceFields } from './WebhookSourceFields';
 
 import {
   getScheduleDefaultRoute,
@@ -936,6 +943,26 @@ export function ScheduleFormDialog({
                     <span className="text-xs text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                       {t('scheduler.editor.webhook.quotaHint')}
                     </span>
+                    <WebhookSourceFields
+                      preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                      signed={form.webhookSigned !== false}
+                      formatText={form.webhookFormat ?? ''}
+                      onPresetChange={(value) => {
+                        // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
+                        if (value === 'custom' && !form.webhookFormat?.trim()) {
+                          const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
+                          const format = resolveScheduleWebhookFormat(
+                            scheduleWebhookPreset(current)
+                              ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
+                              : undefined,
+                          );
+                          setField('webhookFormat', JSON.stringify(format, null, 2));
+                        }
+                        setField('webhookPreset', value);
+                      }}
+                      onSignedChange={(value) => setField('webhookSigned', value)}
+                      onFormatChange={(value) => setField('webhookFormat', value)}
+                    />
                   </>
                 )}
               </div>

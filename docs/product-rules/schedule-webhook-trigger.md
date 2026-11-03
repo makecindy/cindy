@@ -8,9 +8,20 @@
 
 使用 Webhook 必须有 Cindy 账号。未登录时隐藏开关，也不接收；已配置的任务在退出登录后暂停接收，配置保留，重新登录后恢复。当前环境没有部署 webhook-server（端点清单的 `webhookApiBaseUrl` 为空）时同样隐藏。
 
-开启后，任务详情显示接收地址，用户在那里生成密钥。密钥只显示一次，之后只能重新生成。没有密钥时，事件一律被拒绝。关闭触发条件后，地址和密钥一并作废，再次开启得到新地址。修改事件筛选不改变地址和密钥。
+开启后，任务详情显示接收地址。关闭触发条件后，地址和密钥一并作废，再次开启得到新地址。修改事件筛选或发送方不改变地址。地址泄露时可以在任务详情里更换，旧地址立即失效，配置、密钥和暂存事件都保留。
 
-事件筛选每项是 `event` 或 `event.action`，例如 `check_suite`、`pull_request.closed`；留空响应全部。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
+事件筛选每项是 `event` 或 `event.action`，例如 `check_suite`、`pull_request.closed`、`pullrequest:created`；留空响应全部。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
+
+## 发送方
+
+表单里选择发送方：GitHub（默认）、Gitea / Forgejo、Bitbucket Cloud、Linear、GitLab（签名令牌，19 及以上）、GitLab（Secret token）、Standard Webhooks（OpenAI、Anthropic、Supabase 等）、Stripe，或自定义。预设决定两件事：怎么验签，以及事件名、投递 ID、仓库、编号等字段在请求的什么位置。预设定义在 `packages/maker-scheduler/src/webhook-formats.ts`。
+
+- **服务器只执行格式描述，不内置任何一家的规则。** 新增发送方只在客户端加预设，不改服务器。格式校验在客户端和服务器各有一份（服务器 `webhook-server/src/core/format.ts`），两边一起改。
+- **默认验证签名，可以关闭。** 关闭后拿到地址的人都能触发任务，并消耗每天的接收次数，所以表单和任务详情都说明风险，任务详情提供更换地址。关闭签名只去掉验签，事件识别照旧。签名防的是地址泄露，与用量高低无关：地址出现在发送方设置页、CI 输出和日志里，比密钥更容易泄露。
+- **密钥有两种来源。** GitHub、Gitea、Bitbucket 由 Cindy 生成，用户填到发送方；Linear、Standard Webhooks、Stripe 由发送方生成，用户粘贴到 Cindy；两种 GitLab 与自定义都可以。生成的密钥只显示一次；粘贴的密钥保存后清空输入框，不回显。签名方式变了（比如从 HMAC 换成令牌）原密钥失效，需要重新设置。签名地址没有匹配的密钥时，事件一律被拒绝。
+- **自定义格式是一段 JSON**，规则见 cindy-server 的 `docs/webhook-server.md`“发送方格式”。切到自定义时以当前预设的格式作为起点。
+- **要求接收方回传握手值的服务接不了**，比如 Slack 的 `url_verification`、飞书事件订阅的 challenge。服务器回什么由服务端代码决定，格式描述管不到。
+- **本机认不出的发送方原样保留。** 更新版本写入的预设，旧版本既不改它，也不按 GitHub 同步到服务器；新地址无法创建时报错。
 
 ## 事件只是门铃
 
@@ -51,9 +62,9 @@
 
 正式入口是 webhook-server（`scheduler-host/webhook/remote.ts`），合同见 cindy-server 的 `docs/webhook-server.md`。
 
-- 地址属于“账号 + 设备 + 任务”，由服务器生成。客户端按任务同步：缺的创建，筛选变了就更新，服务器上多余的删除。
+- 地址属于“账号 + 设备 + 任务”，由服务器生成。客户端按任务同步：缺的创建，筛选或发送方格式变了就更新，服务器上多余的删除。格式按同一份校验规整后再比较，键的顺序不影响结果。
 - 只有存在开启了触发条件的任务时才保持长连接。本机不开端口。
-- 服务器验签。密钥由服务器加密保存，所以伪造请求进不了队列、叫不醒电脑，也不占配额。
+- 服务器按地址的发送方格式验签。密钥由服务器加密保存，所以伪造请求进不了队列、叫不醒电脑，也不占配额；不签名的地址除外。
 - 中国大陆版和 Global 各部署一套，`webhookApiBaseUrl` 按区域锁定，地址不跨区。
 - 账号被封停时（关闭码 4403）不自动重连，任务详情说明原因。被同一设备的新连接替换时（4409）不抢回连接。
 - `XDT_SCHEDULER_PASSIVE=1` 的实例不连接。切换账号时停止。
@@ -63,17 +74,18 @@
 正式版没有本机入口，否则未登录也能使用 Webhook。开发版设置 `XDT_SCHEDULE_WEBHOOK_LOCAL=1` 后才启动，用于不依赖服务器联调；公网事件需要自己转发，比如 `gh webhook forward`。这时密钥存在本机，走 `credentials-and-local-storage.md` 的 safeStorage，不访问服务器。
 
 - 只监听 `127.0.0.1`，只有存在开启了触发条件的任务时才启动。
-- 必须通过 `X-Hub-Signature-256`（HMAC-SHA256）校验。路由 ID 由引擎生成，调用方不能指定。
+- 只认 GitHub 格式，必须通过 `X-Hub-Signature-256`（HMAC-SHA256）校验，不看任务的发送方设置；密钥一律由 Cindy 生成，也不能更换地址。路由 ID 由引擎生成，调用方不能指定。
 - 请求体上限 5 MiB，请求超时 15 秒。
 
 ## 多端与 Agent
 
-- Agent 通过 `schedule_create` / `schedule_update` 配置，通过 `schedule_get` 的 `webhookStatus` 读接收地址和状态。未登录或没有接收服务时开启会报错，而不是让任务静默收不到事件。Agent 拿不到密钥，也不能生成：明文进入对话记录违反凭证规则，所以由用户在任务详情操作。
-- 跨设备写入明确拒绝：地址和密钥都属于任务所在电脑。`maker:schedule:webhook-status` 与 `maker:schedule:webhook-receiver` 在 Device Link 白名单内，`maker:schedule:webhook-rotate-secret` 不在。是否显示开关由任务所在电脑决定，所以读 `webhook-receiver`，不看控制端的登录状态。
+- Agent 通过 `schedule_create` / `schedule_update` 配置事件筛选和发送方（`webhookTrigger.source`），通过 `schedule_get` 的 `webhookStatus` 读接收地址和状态。未登录或没有接收服务时开启会报错，而不是让任务静默收不到事件。Agent 拿不到密钥，也不能设置：明文进入对话记录违反凭证规则，参数里夹带密钥会被拒绝，所以由用户在任务详情操作。更换地址也只在任务详情。
+- 编辑时省略发送方表示不修改，所以不认识发送方的旧客户端、手机和跨设备编辑都不会把它改回 GitHub。
+- 跨设备写入明确拒绝：地址和密钥都属于任务所在电脑。`maker:schedule:webhook-status` 与 `maker:schedule:webhook-receiver` 在 Device Link 白名单内，`maker:schedule:webhook-set-secret`（携带密钥）和 `maker:schedule:webhook-rotate-url` 不在。是否显示开关由任务所在电脑决定，所以读 `webhook-receiver`，不看控制端的登录状态。
 - `supportsScheduleWebhookTrigger` 标记主机支持；旧主机只保留已知列，会报告成功却丢掉配置，新调用方须先查这个标记。
 - 旧客户端读写新主机时配置保留：缺 key 表示不修改。纯 Webhook 任务存为 `manual: true`，旧版本只显示“手动”，不会按占位 cron 触发。
 - 项目文件自动化不支持：地址和密钥不能进仓库。复制任务不带 Webhook 配置。
 
 ## 回归重点
 
-`packages/maker-scheduler/src/__tests__/webhook-queue.test.ts` 覆盖合并、顺延、重启和忽略；`apps/desktop/src/main/scheduler-host/webhook/__tests__/` 覆盖验签、字段提取、本机 HTTP 生命周期和落盘内容，`remote.test.ts` 用与合同相同的假服务器覆盖未登录、确认时机、重连和封停；`scheduler.test.ts` 覆盖路由保持和 resume 不启动手动任务的占位 cron。
+`packages/maker-scheduler/src/__tests__/webhook-queue.test.ts` 覆盖合并、顺延、重启和忽略；`apps/desktop/src/main/scheduler-host/webhook/__tests__/` 覆盖验签、字段提取、本机 HTTP 生命周期和落盘内容，`remote.test.ts` 用与合同相同的假服务器覆盖未登录、确认时机、重连、封停、发送方同步、粘贴和生成密钥、关闭签名、更换地址，以及认不出的发送方不覆盖服务器；`scheduler.test.ts` 覆盖路由保持、省略发送方时沿用原值和 resume 不启动手动任务的占位 cron；`scheduleFormLogic.test.ts` 覆盖表单保存发送方。各预设的实际验签由 cindy-server 的 `webhook.test.ts` 和真实服务器联调覆盖。

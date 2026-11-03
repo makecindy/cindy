@@ -90,7 +90,7 @@ describe('ScheduleWebhookHost', () => {
     const url = host.status(withTrigger)!.url!;
     expect((await post(url, '{}')).status).toBe(401);
 
-    const { secret } = await host.rotateSecret(withTrigger);
+    const secret = (await host.setSecret(withTrigger)).secret!;
     expect(host.status(withTrigger)?.hasSecret).toBe(true);
     expect((await post(url, '{}', 'wrong-secret')).status).toBe(401);
     expect((await post(`${url}-other`, '{}', secret)).status).toBe(404);
@@ -110,7 +110,7 @@ describe('ScheduleWebhookHost', () => {
   it('still reads a stored secret after restart, without it being issued again', async () => {
     scheduler.schedules = [withTrigger];
     await host.start();
-    const { secret } = await host.rotateSecret(withTrigger);
+    const secret = (await host.setSecret(withTrigger)).secret!;
     await host.stop();
     host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { local: true });
     await host.start();
@@ -120,7 +120,7 @@ describe('ScheduleWebhookHost', () => {
   it('revokes the old address and secret when the trigger is turned off', async () => {
     scheduler.schedules = [withTrigger];
     await host.start();
-    const { secret } = await host.rotateSecret(withTrigger);
+    const secret = (await host.setSecret(withTrigger)).secret!;
     const other = { ...withTrigger, id: 's2', webhookTrigger: { endpointId: 'endpoint-2' } } as Schedule;
     scheduler.change([{ ...withTrigger, webhookTrigger: undefined }, other]);
     await flush();

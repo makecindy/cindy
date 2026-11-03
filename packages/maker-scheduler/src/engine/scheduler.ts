@@ -27,6 +27,7 @@ import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/s
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
+import { normalizeScheduleWebhookSource } from '../webhook-formats.js';
 
 /**
  * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
@@ -65,9 +66,13 @@ export interface RunNowOptions {
   webhook?: FireContext['webhook'];
 }
 
-const WEBHOOK_EVENT_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
+/** Colons allow resource:action names such as Bitbucket's pullrequest:created. */
+const WEBHOOK_EVENT_NAME = /^[A-Za-z0-9_.:-]{1,100}$/;
 
-/** Callers choose only the event filter; the route is host-generated and survives edits. */
+/**
+ * Callers choose the event filter and the sender; the route is host-generated and survives edits.
+ * An omitted source keeps the current one, so clients that predate sources cannot reset it.
+ */
 function normalizeWebhookTrigger(
   input: ScheduleWebhookTriggerInput | null | undefined,
   existing: ScheduleWebhookTrigger | undefined,
@@ -78,9 +83,11 @@ function normalizeWebhookTrigger(
   if (events.length > 32 || events.some((name) => !WEBHOOK_EVENT_NAME.test(name))) {
     throw new Error('invalid webhook event filter');
   }
+  const source = input.source === undefined ? existing?.source : normalizeScheduleWebhookSource(input.source);
   return {
     endpointId: existing?.endpointId ?? generateId(),
     ...(events.length ? { events } : {}),
+    ...(source ? { source } : {}),
   };
 }
 

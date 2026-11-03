@@ -7271,8 +7271,10 @@ interface ElectronAPI {
         quotaLimit?: number;
         quotaResetAt?: number;
       } | null>;
-      /** 生成新的签名密钥并作废旧密钥;明文只在这次返回。仅任务所在电脑可用。 */
-      rotateWebhookSecret: (id: string) => Promise<{ secret: string; url?: string }>;
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

@@ -15274,7 +15274,15 @@
         "eventsLabel": "이 이벤트만(선택)",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "쉼표로 구분합니다. 비워 두면 모든 이벤트에 응답합니다.",
-        "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요."
+        "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요.",
+        "sourceLabel": "보내는 곳",
+        "sourceCustom": "사용자 지정",
+        "customLabel": "형식(JSON)",
+        "customHint": "서명 방식과 이벤트 이름, 전송 ID의 위치를 JSON으로 설명합니다.",
+        "customInvalid": "사용자 지정 형식이 올바르지 않습니다. JSON을 확인하세요.",
+        "signedLabel": "서명 확인",
+        "signedHint": "시크릿을 가진 보내는 곳의 요청만 받습니다.",
+        "unsignedWarning": "서명을 끄면 주소를 아는 사람은 누구나 이 작업을 실행할 수 있고, 매일의 Webhook 수신 횟수도 소모됩니다. 주소가 유출되면 작업 세부 정보에서 주소를 변경하세요."
       }
     },
     "chips": {
@@ -15498,7 +15506,20 @@
       "rotateSecret": "시크릿 다시 생성",
       "secretOnce": "지금 이 시크릿을 복사하세요. 다시 표시되지 않습니다.",
       "secretMissing": "시크릿을 생성하기 전까지 이벤트가 거부됩니다.",
-      "rotateFailed": "시크릿을 생성하지 못했습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다."
+      "rotateFailed": "시크릿을 생성하지 못했습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "genericSender": "보내는 곳",
+      "secretFillHint": "{{sender}}의 \"{{field}}\"에 입력하세요.",
+      "secretPastePlaceholder": "{{sender}}의 \"{{field}}\" 붙여넣기",
+      "secretSave": "시크릿 저장",
+      "secretSaved": "시크릿을 저장했습니다.",
+      "secretSaveFailed": "시크릿을 저장할 수 없습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "secretInvalid": "시크릿 형식이 올바르지 않습니다. 보내는 곳에서 다시 복사하세요.",
+      "secretPasteMissing": "보내는 곳의 시크릿을 붙여넣기 전까지 이벤트는 거부됩니다.",
+      "unsignedNotice": "서명이 꺼져 있습니다. 주소를 아는 사람은 누구나 이 작업을 실행할 수 있습니다. 주소가 유출되면 변경하세요.",
+      "rotateUrl": "주소 변경",
+      "rotateUrlConfirmTitle": "수신 주소를 변경할까요?",
+      "rotateUrlConfirmBody": "이전 주소는 바로 사용할 수 없게 되므로 새 주소를 보내는 곳에 입력하세요. 설정과 시크릿은 그대로입니다.",
+      "rotateUrlFailed": "주소를 변경할 수 없습니다. 잠시 후 다시 시도하세요."
     }
   },
   "issueTracker": {

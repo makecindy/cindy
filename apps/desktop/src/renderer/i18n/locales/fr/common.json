@@ -15482,7 +15482,15 @@
         "eventsLabel": "Uniquement ces événements (facultatif)",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "Séparez par des virgules. Laissez vide pour répondre à tous les événements.",
-        "quotaHint": "Les réceptions Webhook sont limitées par jour et le filtrage ici ne réduit pas ce nombre. Chez l'expéditeur, comme GitHub, sélectionnez uniquement les événements utiles."
+        "quotaHint": "Les réceptions Webhook sont limitées par jour et le filtrage ici ne réduit pas ce nombre. Chez l'expéditeur, comme GitHub, sélectionnez uniquement les événements utiles.",
+        "sourceLabel": "Expéditeur",
+        "sourceCustom": "Personnalisé",
+        "customLabel": "Format (JSON)",
+        "customHint": "Décrivez en JSON la façon dont les requêtes sont signées et l'emplacement du nom d'événement et de l'ID de livraison.",
+        "customInvalid": "Le format personnalisé n'est pas valide. Vérifiez le JSON.",
+        "signedLabel": "Vérifier les signatures",
+        "signedHint": "N'accepter que les requêtes d'un expéditeur qui détient le secret.",
+        "unsignedWarning": "Sans signature, toute personne qui connaît l'adresse peut déclencher cette tâche et consommer vos réceptions Webhook quotidiennes. Si l'adresse fuite, changez-la dans les détails de la tâche."
       }
     },
     "chips": {
@@ -15706,7 +15714,20 @@
       "rotateSecret": "Régénérer le secret",
       "secretOnce": "Copiez ce secret maintenant. Il ne sera plus affiché.",
       "secretMissing": "Les événements sont refusés tant qu'aucun secret n'est généré.",
-      "rotateFailed": "Impossible de générer le secret. Les secrets ne peuvent être gérés que sur l'ordinateur qui exécute cette tâche."
+      "rotateFailed": "Impossible de générer le secret. Les secrets ne peuvent être gérés que sur l'ordinateur qui exécute cette tâche.",
+      "genericSender": "l'expéditeur",
+      "secretFillHint": "Saisissez-le dans « {{field}} » de {{sender}}.",
+      "secretPastePlaceholder": "Collez « {{field}} » de {{sender}}",
+      "secretSave": "Enregistrer le secret",
+      "secretSaved": "Secret enregistré.",
+      "secretSaveFailed": "Impossible d'enregistrer le secret. Les secrets ne peuvent être gérés que sur l'ordinateur qui exécute cette tâche.",
+      "secretInvalid": "Ce secret n'a pas le format attendu. Copiez-le de nouveau depuis l'expéditeur.",
+      "secretPasteMissing": "Les événements sont refusés tant que vous n'avez pas collé le secret de l'expéditeur.",
+      "unsignedNotice": "Signatures désactivées : toute personne qui connaît l'adresse peut déclencher cette tâche. Si l'adresse fuite, changez-la.",
+      "rotateUrl": "Changer d'adresse",
+      "rotateUrlConfirmTitle": "Changer l'adresse de réception ?",
+      "rotateUrlConfirmBody": "L'ancienne adresse cesse de fonctionner immédiatement : saisissez la nouvelle dans l'expéditeur. Les réglages et le secret restent les mêmes.",
+      "rotateUrlFailed": "Impossible de changer l'adresse. Réessayez plus tard."
     }
   },
   "issueTracker": {

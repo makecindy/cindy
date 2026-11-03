@@ -1,3 +1,5 @@
+import type { ScheduleWebhookSource } from './webhook-formats.js';
+
 export type ScheduleKind = 'cron';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
@@ -147,6 +149,8 @@ export interface ScheduleWebhookTrigger {
   endpointId: string;
   /** 只响应这些事件，每项为 `event` 或 `event.action`；缺省响应全部。 */
   events?: string[];
+  /** 发送方：预设及是否签名，或自定义格式。缺省等于 GitHub 预设并签名。 */
+  source?: ScheduleWebhookSource;
 }
 
 /** 写入时不接受 endpointId：新开启由引擎生成，已开启则沿用。 */

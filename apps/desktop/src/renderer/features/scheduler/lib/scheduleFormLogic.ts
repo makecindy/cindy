@@ -22,6 +22,12 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import {
+  DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  parseWebhookFormat,
+  scheduleWebhookPreset,
+  type ScheduleWebhookSource,
+} from '@cindy/maker-scheduler/webhook-formats';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
 export const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
@@ -142,6 +148,12 @@ export interface ScheduleFormState {
   webhookEnabled?: boolean;
   /** 逗号分隔的事件筛选，原样保留用户输入。 */
   webhookEvents?: string;
+  /** 发送方预设 id，或 custom。 */
+  webhookPreset?: string;
+  /** 是否验证签名；只对预设生效，自定义格式在 JSON 里写。 */
+  webhookSigned?: boolean;
+  /** 自定义格式的 JSON 文本，原样保留用户输入。 */
+  webhookFormat?: string;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   modelAgentDeviceId?: string;
@@ -587,6 +599,48 @@ export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormS
     ? form.boundAgent.agentKind : form.agentKind;
 }
 
+/** 编辑已有任务时，从它的发送方得到表单初值。 */
+export function webhookSourceFormFields(
+  source: ScheduleWebhookSource | undefined,
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat'> {
+  if (source?.preset === 'custom') {
+    return { webhookPreset: 'custom', webhookSigned: true, webhookFormat: JSON.stringify(source.format, null, 2) };
+  }
+  return {
+    webhookPreset: source?.preset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+    webhookSigned: !(source && 'signed' in source && source.signed === false),
+    webhookFormat: '',
+  };
+}
+
+/** 自定义格式的 JSON 文本；不合法时返回 null。 */
+export function parseWebhookFormatText(text: string | undefined): ScheduleWebhookSource | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text ?? '');
+  } catch {
+    return null;
+  }
+  const format = parseWebhookFormat(value);
+  return format ? { preset: 'custom', format } : null;
+}
+
+/**
+ * 保存时提交的发送方。本机认不出的预设（来自更新的版本）不提交，由引擎沿用原值，
+ * 否则会被当成 GitHub 覆盖掉。
+ */
+function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhookSource } {
+  const preset = form.webhookPreset;
+  if (preset === undefined) return {};
+  if (preset === 'custom') {
+    const source = parseWebhookFormatText(form.webhookFormat);
+    return source ? { source } : {};
+  }
+  const known = scheduleWebhookPreset(preset);
+  if (!known) return {};
+  return { source: form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id } };
+}
+
 export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput {
   const isHeartbeat = !!form.targetSessionId.trim();
   const isScript = (form.executionMode ?? 'agent') === 'script';
@@ -623,7 +677,10 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
     ...(form.webhookEnabled === undefined ? {} : {
       webhookTrigger: form.webhookEnabled
-        ? { events: (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean) }
+        ? {
+            events: (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+            ...webhookSourceInput(form),
+          }
         : null,
     }),
     notify: {

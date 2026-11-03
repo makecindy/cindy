@@ -3,7 +3,13 @@
  * 长连接送达，本机不开端口。合同见 cindy-server 仓 docs/webhook-server.md。
  */
 import { connectionBackoffDelayMs } from '@cindy/im/connection-retry';
-import type { Schedule, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
+import {
+  parseWebhookFormat,
+  resolveScheduleWebhookFormat,
+  type Schedule,
+  type ScheduleWebhookEvent,
+  type WebhookFormat,
+} from '@cindy/maker-scheduler';
 import WebSocket, { type ClientOptions } from 'ws';
 
 const CLOSE_TOKEN_EXPIRED = 4401;
@@ -18,9 +24,18 @@ export interface RemoteEndpointView {
   url: string;
   scheduleId: string;
   events: string[];
+  /** 服务器上保存的发送方格式；存储损坏时为 null。 */
+  format: WebhookFormat | null;
+  /** 签名地址是否有和当前格式匹配的密钥。 */
   hasSecret: boolean;
   status: 'active' | 'suspended';
   lastReceivedAt: string | null;
+}
+
+/** 本机希望服务器上的地址是什么样。format 为 null 表示本机认不出发送方，保留服务器上的格式。 */
+interface WantedEndpoint {
+  events: readonly string[];
+  format: WebhookFormat | null;
 }
 
 export interface RemoteWebhookBatch {
@@ -67,6 +82,10 @@ class RemoteRequestError extends Error {
 const sameEvents = (a: readonly string[], b: readonly string[]): boolean =>
   [...a].sort().join('\n') === [...b].sort().join('\n');
 
+/** 两边都按同一份校验规整后再比较，键的顺序不影响结果。 */
+const sameFormat = (a: unknown, b: WebhookFormat): boolean =>
+  JSON.stringify(parseWebhookFormat(a)) === JSON.stringify(parseWebhookFormat(b));
+
 function parseEvent(value: unknown): ScheduleWebhookEvent | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -101,7 +120,7 @@ function parseBatch(frame: Record<string, unknown>): (RemoteWebhookBatch & { bat
 }
 
 export class ScheduleWebhookRemote {
-  private wanted = new Map<string, readonly string[]>();
+  private wanted = new Map<string, WantedEndpoint>();
   private readonly views = new Map<string, RemoteEndpointView>();
   private readonly problems = new Map<string, RemoteEndpointProblem>();
   private loaded = false;
@@ -121,9 +140,10 @@ export class ScheduleWebhookRemote {
 
   /** 同步“哪些任务需要接收”。登录后调用；未登录时调用也安全。 */
   sync(schedules: readonly Schedule[]): Promise<void> {
-    const wanted = new Map<string, readonly string[]>();
+    const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
-      if (schedule.webhookTrigger) wanted.set(schedule.id, schedule.webhookTrigger.events ?? []);
+      const trigger = schedule.webhookTrigger;
+      if (trigger) wanted.set(schedule.id, { events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source) });
     }
     this.wanted = wanted;
     this.running = true;
@@ -169,13 +189,28 @@ export class ScheduleWebhookRemote {
     return this.exhausted && this.exhausted.resetAt > now ? this.exhausted : null;
   }
 
-  async rotateSecret(scheduleId: string): Promise<{ secret: string; url: string }> {
+  /** 保存密钥。密钥由本机生成或用户从发送方粘贴，服务器不回显。 */
+  async setSecret(scheduleId: string, secret: string): Promise<void> {
+    const view = await this.currentView(scheduleId);
+    this.views.set(scheduleId, await this.request<RemoteEndpointView>('PUT', `/endpoints/${view.id}/secret`, { secret }));
+    this.deps.onChanged?.();
+  }
+
+  /** 换一个新地址，旧地址立即失效；配置、密钥和暂存事件都保留。 */
+  async rotateUrl(scheduleId: string): Promise<{ url: string }> {
+    const view = await this.currentView(scheduleId);
+    const rotated = await this.request<RemoteEndpointView>('POST', `/endpoints/${view.id}/rotate`);
+    this.views.set(scheduleId, rotated);
+    this.deps.onChanged?.();
+    return { url: rotated.url };
+  }
+
+  /** 先把最新配置同步到服务器，避免在旧格式上设置密钥。 */
+  private async currentView(scheduleId: string): Promise<RemoteEndpointView> {
     await this.enqueueReconcile();
     const view = this.views.get(scheduleId);
     if (!view) throw new Error('Webhook endpoint is not available');
-    const result = await this.request<{ secret: string; endpoint: RemoteEndpointView }>('POST', `/endpoints/${view.id}/secret`);
-    this.views.set(scheduleId, result.endpoint);
-    return { secret: result.secret, url: result.endpoint.url };
+    return view;
   }
 
   private enqueueReconcile(): Promise<void> {
@@ -193,10 +228,12 @@ export class ScheduleWebhookRemote {
         for (const endpoint of endpoints) this.views.set(endpoint.scheduleId, endpoint);
         this.loaded = true;
       }
-      for (const [scheduleId, events] of this.wanted) {
+      for (const [scheduleId, wanted] of this.wanted) {
         const view = this.views.get(scheduleId);
-        if (view && sameEvents(view.events, events)) continue;
-        await this.upsert(scheduleId, events);
+        if (view && sameEvents(view.events, wanted.events) && (wanted.format === null || sameFormat(view.format, wanted.format))) {
+          continue;
+        }
+        await this.upsert(scheduleId, wanted);
       }
       for (const [scheduleId, view] of this.views) {
         if (this.wanted.has(scheduleId)) continue;
@@ -214,9 +251,18 @@ export class ScheduleWebhookRemote {
     this.updateConnection();
   }
 
-  private async upsert(scheduleId: string, events: readonly string[]): Promise<void> {
+  private async upsert(scheduleId: string, { events, format }: WantedEndpoint): Promise<void> {
+    // 本机认不出发送方时沿用服务器上的格式；新建时没有可沿用的，只能报错。
+    const effective = format ?? this.views.get(scheduleId)?.format ?? null;
+    if (!effective) {
+      this.problems.set(scheduleId, 'failed');
+      return;
+    }
     try {
-      const view = await this.request<RemoteEndpointView>('PUT', `/endpoints/by-schedule/${encodeURIComponent(scheduleId)}`, { events });
+      const view = await this.request<RemoteEndpointView>('PUT', `/endpoints/by-schedule/${encodeURIComponent(scheduleId)}`, {
+        events,
+        format: effective,
+      });
       this.views.set(scheduleId, view);
       this.problems.delete(scheduleId);
     } catch (error) {

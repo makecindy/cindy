@@ -15274,7 +15274,15 @@
         "eventsLabel": "対象のイベントのみ（任意）",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "カンマで区切ります。空欄にするとすべてのイベントに応答します。",
-        "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。"
+        "quotaHint": "Webhook の受信回数には 1 日の上限があり、ここでのフィルターでは回数は減りません。送信元（GitHub など）で必要なイベントだけを選択してください。",
+        "sourceLabel": "送信元",
+        "sourceCustom": "カスタム",
+        "customLabel": "形式（JSON）",
+        "customHint": "署名の方法と、イベント名・配信 ID の場所を JSON で記述します。",
+        "customInvalid": "カスタム形式が正しくありません。JSON を確認してください。",
+        "signedLabel": "署名を検証",
+        "signedHint": "シークレットを持つ送信元からのリクエストだけを受け付けます。",
+        "unsignedWarning": "署名をオフにすると、アドレスを知っている人なら誰でもこのタスクを起動でき、1 日の Webhook 受信回数も消費されます。アドレスが漏れた場合は、タスクの詳細でアドレスを変更してください。"
       }
     },
     "chips": {
@@ -15498,7 +15506,20 @@
       "rotateSecret": "シークレットを再生成",
       "secretOnce": "今すぐこのシークレットをコピーしてください。再度表示されません。",
       "secretMissing": "シークレットを生成するまで、イベントは拒否されます。",
-      "rotateFailed": "シークレットを生成できませんでした。シークレットはこのタスクを実行するコンピューターでのみ管理できます。"
+      "rotateFailed": "シークレットを生成できませんでした。シークレットはこのタスクを実行するコンピューターでのみ管理できます。",
+      "genericSender": "送信元",
+      "secretFillHint": "{{sender}} の「{{field}}」に入力してください。",
+      "secretPastePlaceholder": "{{sender}} の「{{field}}」を貼り付け",
+      "secretSave": "シークレットを保存",
+      "secretSaved": "シークレットを保存しました。",
+      "secretSaveFailed": "シークレットを保存できませんでした。シークレットはこのタスクを実行するコンピューターでのみ管理できます。",
+      "secretInvalid": "シークレットの形式が正しくありません。送信元からもう一度コピーしてください。",
+      "secretPasteMissing": "送信元のシークレットを貼り付けるまで、イベントは拒否されます。",
+      "unsignedNotice": "署名がオフです。アドレスを知っている人なら誰でもこのタスクを起動できます。アドレスが漏れた場合は変更してください。",
+      "rotateUrl": "アドレスを変更",
+      "rotateUrlConfirmTitle": "受信アドレスを変更しますか？",
+      "rotateUrlConfirmBody": "古いアドレスはすぐに使えなくなるため、新しいアドレスを送信元に入力してください。設定とシークレットは変わりません。",
+      "rotateUrlFailed": "アドレスを変更できませんでした。しばらくしてからもう一度お試しください。"
     }
   },
   "issueTracker": {

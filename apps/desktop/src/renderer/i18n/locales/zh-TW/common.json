@@ -15274,7 +15274,15 @@
         "eventsLabel": "只回應這些事件（選填）",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "以逗號分隔；留空則回應所有事件。",
-        "quotaHint": "每天的 Webhook 接收次數有上限，這裡的篩選不會減少次數。請在傳送方（如 GitHub）只勾選需要的事件。"
+        "quotaHint": "每天的 Webhook 接收次數有上限，這裡的篩選不會減少次數。請在傳送方（如 GitHub）只勾選需要的事件。",
+        "sourceLabel": "傳送方",
+        "sourceCustom": "自訂",
+        "customLabel": "格式描述（JSON）",
+        "customHint": "用 JSON 描述簽章方式，以及事件名稱和傳遞 ID 的位置。",
+        "customInvalid": "自訂格式不合法，請檢查 JSON 內容。",
+        "signedLabel": "驗證簽章",
+        "signedHint": "只接收持有金鑰的傳送方的請求。",
+        "unsignedWarning": "關閉簽章後，拿到位址的人都能觸發這個任務，並消耗每天的 Webhook 接收次數。位址外洩時請在任務詳情裡更換位址。"
       }
     },
     "chips": {
@@ -15498,7 +15506,20 @@
       "rotateSecret": "重新產生金鑰",
       "secretOnce": "請立即複製此金鑰，之後不會再顯示。",
       "secretMissing": "產生金鑰之前，事件都會被拒絕。",
-      "rotateFailed": "無法產生金鑰。金鑰只能在執行此任務的電腦上管理。"
+      "rotateFailed": "無法產生金鑰。金鑰只能在執行此任務的電腦上管理。",
+      "genericSender": "傳送方",
+      "secretFillHint": "把它填到 {{sender}} 的「{{field}}」。",
+      "secretPastePlaceholder": "貼上 {{sender}} 的「{{field}}」",
+      "secretSave": "儲存金鑰",
+      "secretSaved": "金鑰已儲存。",
+      "secretSaveFailed": "無法儲存金鑰。金鑰只能在執行此任務的電腦上管理。",
+      "secretInvalid": "金鑰格式不正確，請從傳送方重新複製。",
+      "secretPasteMissing": "貼上傳送方提供的金鑰之前，事件都會被拒絕。",
+      "unsignedNotice": "未開啟簽章：拿到位址的人都能觸發這個任務。位址外洩時請更換位址。",
+      "rotateUrl": "更換位址",
+      "rotateUrlConfirmTitle": "更換接收位址？",
+      "rotateUrlConfirmBody": "舊位址會立即失效，需要把新位址填到傳送方。設定和金鑰保持不變。",
+      "rotateUrlFailed": "無法更換位址，請稍後再試。"
     }
   },
   "issueTracker": {

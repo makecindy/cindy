@@ -10,7 +10,10 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import {
   ScheduleWebhookQueue,
+  isValidWebhookSecret,
+  resolveScheduleWebhookFormat,
   scheduleWebhookEventMatches,
+  webhookSecretKind,
   type Schedule,
   type ScheduleWebhookQueueState,
   type Scheduler,
@@ -94,6 +97,12 @@ function writeAtomically(file: string, content: string): void {
     fs.rmSync(tmp, { force: true });
     throw error;
   }
+}
+
+/** whsec 形式给 Standard Webhooks 系发送方（如 GitLab 签名令牌），其余用十六进制。 */
+function generateSecret(whsec: boolean): string {
+  const bytes = randomBytes(32);
+  return whsec ? `whsec_${bytes.toString('base64')}` : bytes.toString('hex');
 }
 
 function secretFile(endpointId: string): string {
@@ -250,18 +259,38 @@ export class ScheduleWebhookHost {
     };
   }
 
-  /** 生成并替换密钥，明文只在这次返回。用户动作触发，可以访问钥匙串。 */
-  async rotateSecret(schedule: Schedule): Promise<{ secret: string; url?: string }> {
-    const endpointId = schedule.webhookTrigger?.endpointId;
-    if (!endpointId) throw new Error('Webhook trigger is not enabled for this schedule');
+  /**
+   * 设置密钥：传入时保存用户从发送方复制的密钥；不传时按发送方格式生成，明文只在这次返回。
+   * 用户动作触发，可以访问钥匙串。
+   */
+  async setSecret(schedule: Schedule, pasted?: string): Promise<{ secret?: string }> {
+    const trigger = schedule.webhookTrigger;
+    if (!trigger) throw new Error('Webhook trigger is not enabled for this schedule');
     const receiver = this.receiver();
-    if (receiver === 'cloud' && this.remote) return this.remote.rotateSecret(schedule.id);
+    if (receiver === 'cloud' && this.remote) {
+      const format = resolveScheduleWebhookFormat(trigger.source);
+      const kind = format ? webhookSecretKind(format) : null;
+      if (!kind) throw new Error('WEBHOOK_UNSIGNED');
+      const secret = pasted ?? generateSecret(kind === 'hmac-whsec');
+      if (!isValidWebhookSecret(kind, secret)) throw new Error('WEBHOOK_SECRET_INVALID');
+      await this.remote.setSecret(schedule.id, secret);
+      return pasted === undefined ? { secret } : {};
+    }
+    // 开发版的本机接收服务只认 GitHub 格式，不看任务的发送方设置。
     if (receiver !== 'local') throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
     if (!secureStorageAvailable()) throw new Error('CREDENTIAL_STORE_UNAVAILABLE');
-    const secret = randomBytes(32).toString('hex');
-    writeAtomically(secretFile(endpointId), safeStorage.encryptString(secret).toString('base64'));
-    this.secrets.set(endpointId, secret);
-    return { secret, ...(this.server && this.port ? { url: this.urlFor(endpointId) } : {}) };
+    const secret = pasted ?? generateSecret(false);
+    if (!isValidWebhookSecret('hmac-text', secret)) throw new Error('WEBHOOK_SECRET_INVALID');
+    writeAtomically(secretFile(trigger.endpointId), safeStorage.encryptString(secret).toString('base64'));
+    this.secrets.set(trigger.endpointId, secret);
+    return pasted === undefined ? { secret } : {};
+  }
+
+  /** 换一个新地址，旧地址立即失效。地址泄露时使用，不签名的地址尤其需要。 */
+  async rotateUrl(schedule: Schedule): Promise<{ url: string }> {
+    if (!schedule.webhookTrigger) throw new Error('Webhook trigger is not enabled for this schedule');
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    return this.remote.rotateUrl(schedule.id);
   }
 
   private urlFor(endpointId: string): string {

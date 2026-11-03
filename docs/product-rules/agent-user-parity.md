@@ -232,7 +232,7 @@ Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full A
 `ghost_cancel_plugin_review` 使用本人版本的精确 revision，区分停止上传与取消审核，沿现有 Full Access/Auto/Ask 授权。
 旧版本包仍可安装，成功提审后的同版本不再支持改包重提。
 
-自动化任务的 Webhook 触发（2026-11-02）：桌面任务表单与 `schedule_create` / `schedule_update` 共用 `webhookTrigger`，`schedule_get` 返回接收地址和状态；只能在任务所在电脑上设置，跨电脑写入明确拒绝。生成和查看密钥只由用户在任务详情操作，这是凭证规则带来的有意差异：明文不能进入对话记录。规则见 [schedule-webhook-trigger.md](schedule-webhook-trigger.md)。使用 Webhook 需要 Cindy 账号：`schedule_get` 的状态带接收方与连接情况，未登录或没有接收服务时 Agent 开启会报错，而表单隐藏开关；是否可用由任务所在电脑决定（`maker:schedule:webhook-receiver`）。
+自动化任务的 Webhook 触发（2026-11-02）：桌面任务表单与 `schedule_create` / `schedule_update` 共用 `webhookTrigger`（含事件筛选和发送方 `source`），`schedule_get` 返回接收地址和状态；只能在任务所在电脑上设置，跨电脑写入明确拒绝。设置密钥（生成或粘贴）和更换地址只由用户在任务详情操作，这是凭证规则带来的有意差异：明文不能进入对话记录，工具参数夹带密钥会被拒绝。规则见 [schedule-webhook-trigger.md](schedule-webhook-trigger.md)。使用 Webhook 需要 Cindy 账号：`schedule_get` 的状态带接收方与连接情况，未登录或没有接收服务时 Agent 开启会报错，而表单隐藏开关；是否可用由任务所在电脑决定（`maker:schedule:webhook-receiver`）。
 
 自动化与例行任务的插件前置检查（2026-10-31）：桌面「前置检查」与 `schedule_create` / `schedule_update` / `routine_save` 共用 `preRunPlugin`（插件实例 id + 出错处理），Agent 与用户能力一致；只能在插件所在的电脑上设置，跨电脑的 `schedule_update` 明确拒绝。
 

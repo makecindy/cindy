@@ -15482,7 +15482,15 @@
         "eventsLabel": "Somente estes eventos (opcional)",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "Separe com vírgulas. Deixe vazio para responder a todos os eventos.",
-        "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários."
+        "quotaHint": "Os recebimentos de Webhook têm limite diário, e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
+        "sourceLabel": "Remetente",
+        "sourceCustom": "Personalizado",
+        "customLabel": "Formato (JSON)",
+        "customHint": "Descreva em JSON como as solicitações são assinadas e onde ficam o nome do evento e o ID de entrega.",
+        "customInvalid": "O formato personalizado não é válido. Verifique o JSON.",
+        "signedLabel": "Verificar assinaturas",
+        "signedHint": "Aceitar apenas solicitações de um remetente que tenha o segredo.",
+        "unsignedWarning": "Sem assinaturas, qualquer pessoa com o endereço pode acionar esta tarefa e gastar seus recebimentos diários de Webhook. Se o endereço vazar, altere-o nos detalhes da tarefa."
       }
     },
     "chips": {
@@ -15706,7 +15714,20 @@
       "rotateSecret": "Gerar segredo novamente",
       "secretOnce": "Copie este segredo agora. Ele não será exibido novamente.",
       "secretMissing": "Os eventos são recusados até que um segredo seja gerado.",
-      "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa."
+      "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa.",
+      "genericSender": "o remetente",
+      "secretFillHint": "Insira em \"{{field}}\" no {{sender}}.",
+      "secretPastePlaceholder": "Cole \"{{field}}\" do {{sender}}",
+      "secretSave": "Salvar segredo",
+      "secretSaved": "Segredo salvo.",
+      "secretSaveFailed": "Não foi possível salvar o segredo. Os segredos só podem ser gerenciados no computador que executa esta tarefa.",
+      "secretInvalid": "Este segredo não está no formato esperado. Copie-o novamente do remetente.",
+      "secretPasteMissing": "Os eventos são recusados até você colar o segredo do remetente.",
+      "unsignedNotice": "As assinaturas estão desativadas: qualquer pessoa com o endereço pode acionar esta tarefa. Se o endereço vazar, altere-o.",
+      "rotateUrl": "Alterar endereço",
+      "rotateUrlConfirmTitle": "Alterar o endereço de recebimento?",
+      "rotateUrlConfirmBody": "O endereço antigo deixa de funcionar na hora, então insira o novo no remetente. As configurações e o segredo continuam iguais.",
+      "rotateUrlFailed": "Não foi possível alterar o endereço. Tente novamente mais tarde."
     }
   },
   "issueTracker": {

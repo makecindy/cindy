@@ -55,6 +55,8 @@ import type {
   PreRunHookRunResult,
   PreRunPluginFailureAction,
 } from '@cindy/maker-scheduler';
+// 子路径只加载这一份无依赖的格式校验，不引入引擎。
+import { normalizeScheduleWebhookSource, type ScheduleWebhookSource } from '@cindy/maker-scheduler/webhook-formats';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -735,6 +737,19 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
   }
 }
 
+/**
+ * 更新版本写入的预设本机可能不认识：原样保留，不当作 GitHub，否则下次同步会覆盖服务器上的格式。
+ */
+function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'source'> {
+  if (value === undefined) return {};
+  try {
+    return { source: normalizeScheduleWebhookSource(value) };
+  } catch {
+    const preset = (value as { preset?: unknown } | null)?.preset;
+    return typeof preset === 'string' && preset ? { source: value as ScheduleWebhookSource } : {};
+  }
+}
+
 function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
   if (!raw) return undefined;
   try {
@@ -743,7 +758,7 @@ function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undef
     const events = Array.isArray(value.events)
       ? value.events.filter((event): event is string => typeof event === 'string')
       : [];
-    return { endpointId: value.endpointId, ...(events.length ? { events } : {}) };
+    return { endpointId: value.endpointId, ...(events.length ? { events } : {}), ...parseWebhookSource(value.source) };
   } catch {
     return undefined;
   }

@@ -15274,7 +15274,15 @@
         "eventsLabel": "唯应此诸事（可略）",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "以逗号相隔；空之则应诸事。",
-        "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。"
+        "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。",
+        "sourceLabel": "发信之方",
+        "sourceCustom": "自定",
+        "customLabel": "格式之述（JSON）",
+        "customHint": "以 JSON 述验签之法，及事名、投递 ID 之所在。",
+        "customInvalid": "自定之格式不合，请察其 JSON。",
+        "signedLabel": "验其签名",
+        "signedHint": "唯受持钥之发信方所请。",
+        "unsignedWarning": "既去签名，凡得此址者皆可触此务，且耗每日 Webhook 受信之数。址若外泄，请于务详中更其址。"
       }
     },
     "chips": {
@@ -15498,7 +15506,20 @@
       "rotateSecret": "更生密钥",
       "secretOnce": "请即复制此钥，后不复示。",
       "secretMissing": "未生密钥之前，诸事皆拒。",
-      "rotateFailed": "密钥未能生成。密钥唯可于行此务之机管理。"
+      "rotateFailed": "密钥未能生成。密钥唯可于行此务之机管理。",
+      "genericSender": "发信之方",
+      "secretFillHint": "请填于 {{sender}} 之「{{field}}」。",
+      "secretPastePlaceholder": "贴 {{sender}} 之「{{field}}」",
+      "secretSave": "存其密钥",
+      "secretSaved": "密钥已存。",
+      "secretSaveFailed": "密钥未能存。密钥唯可于行此务之机管理。",
+      "secretInvalid": "密钥之式不合，请自发信方复取。",
+      "secretPasteMissing": "未贴发信方之钥以前，诸事皆拒。",
+      "unsignedNotice": "未启签名：凡得此址者皆可触此务。址若外泄，请更其址。",
+      "rotateUrl": "更其址",
+      "rotateUrlConfirmTitle": "更受信之址乎？",
+      "rotateUrlConfirmBody": "旧址即刻失效，须以新址填于发信方。设置与密钥如故。",
+      "rotateUrlFailed": "未能更址，请稍后再试。"
     }
   },
   "issueTracker": {

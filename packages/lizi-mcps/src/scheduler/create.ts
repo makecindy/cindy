@@ -19,7 +19,7 @@ import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
-import { assertWebhookReceiverAvailable } from './_webhook.js';
+import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -165,10 +165,11 @@ export function registerScheduleCreateTool(
             .max(32)
             .optional()
             .describe('只响应这些事件，每项为 event 或 event.action，例 "check_suite"、"pull_request.closed"；省略 = 全部'),
+          source: webhookSourceSchema,
         })
         .nullable()
         .optional()
-        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情生成和查看，工具拿不到。只支持本机的定时任务。'),
+        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。只支持本机的定时任务。'),
       preRunHook: z
         .object({
           command: z

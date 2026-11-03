@@ -438,7 +438,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:schedule:create-from-template',
   // script 任务能力选择器的可用性探测:纯只读查询,意识状态在被控端才有意义
   'maker:schedule:script-capability-status',
-  // Status only: maker:schedule:webhook-rotate-secret returns a credential and stays local.
+  // Status only: webhook-set-secret carries a credential and webhook-rotate-url replaces the
+  // address; both stay on the computer that runs the schedule.
   'maker:schedule:webhook-status',
   'maker:schedule:webhook-receiver',
   // —— 会话未读已读回执(控制端真实展示会话内容后,把被控端的会话未读态清掉)——

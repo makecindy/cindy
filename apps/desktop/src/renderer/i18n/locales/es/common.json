@@ -15482,7 +15482,15 @@
         "eventsLabel": "Solo estos eventos (opcional)",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "Sepáralos con comas. Déjalo vacío para responder a todos los eventos.",
-        "quotaHint": "Las entregas de Webhook tienen un límite diario y filtrar aquí no reduce el recuento. En el emisor, como GitHub, selecciona solo los eventos que necesites."
+        "quotaHint": "Las entregas de Webhook tienen un límite diario y filtrar aquí no reduce el recuento. En el emisor, como GitHub, selecciona solo los eventos que necesites.",
+        "sourceLabel": "Remitente",
+        "sourceCustom": "Personalizado",
+        "customLabel": "Formato (JSON)",
+        "customHint": "Describe en JSON cómo se firman las solicitudes y dónde están el nombre del evento y el ID de entrega.",
+        "customInvalid": "El formato personalizado no es válido. Revisa el JSON.",
+        "signedLabel": "Verificar firmas",
+        "signedHint": "Solo aceptar solicitudes de un remitente que tenga el secreto.",
+        "unsignedWarning": "Sin firmas, cualquiera que tenga la dirección puede activar esta tarea y gastar tus recepciones diarias de Webhook. Si la dirección se filtra, cámbiala en los detalles de la tarea."
       }
     },
     "chips": {
@@ -15706,7 +15714,20 @@
       "rotateSecret": "Volver a generar secreto",
       "secretOnce": "Copia este secreto ahora. No se volverá a mostrar.",
       "secretMissing": "Los eventos se rechazan hasta que se genere un secreto.",
-      "rotateFailed": "No se pudo generar el secreto. Los secretos solo se pueden gestionar en el ordenador que ejecuta esta tarea."
+      "rotateFailed": "No se pudo generar el secreto. Los secretos solo se pueden gestionar en el ordenador que ejecuta esta tarea.",
+      "genericSender": "el remitente",
+      "secretFillHint": "Introdúcelo en «{{field}}» de {{sender}}.",
+      "secretPastePlaceholder": "Pega «{{field}}» de {{sender}}",
+      "secretSave": "Guardar secreto",
+      "secretSaved": "Secreto guardado.",
+      "secretSaveFailed": "No se pudo guardar el secreto. Los secretos solo se pueden gestionar en el equipo que ejecuta esta tarea.",
+      "secretInvalid": "Este secreto no tiene el formato esperado. Vuelve a copiarlo desde el remitente.",
+      "secretPasteMissing": "Los eventos se rechazan hasta que pegues el secreto del remitente.",
+      "unsignedNotice": "Las firmas están desactivadas: cualquiera que tenga la dirección puede activar esta tarea. Si la dirección se filtra, cámbiala.",
+      "rotateUrl": "Cambiar dirección",
+      "rotateUrlConfirmTitle": "¿Cambiar la dirección de recepción?",
+      "rotateUrlConfirmBody": "La dirección anterior deja de funcionar al instante, así que introduce la nueva en el remitente. La configuración y el secreto no cambian.",
+      "rotateUrlFailed": "No se pudo cambiar la dirección. Inténtalo más tarde."
     }
   },
   "issueTracker": {

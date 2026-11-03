@@ -15340,7 +15340,15 @@
         "eventsLabel": "Only these events (optional)",
         "eventsPlaceholder": "check_suite, pull_request.closed",
         "eventsHint": "Separate with commas. Leave empty to respond to every event.",
-        "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need."
+        "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
+        "sourceLabel": "Sender",
+        "sourceCustom": "Custom",
+        "customLabel": "Format (JSON)",
+        "customHint": "Describe in JSON how requests are signed and where the event name and delivery ID are.",
+        "customInvalid": "The custom format isn't valid. Check the JSON.",
+        "signedLabel": "Verify signatures",
+        "signedHint": "Only accept requests from a sender that holds the secret.",
+        "unsignedWarning": "Without signatures, anyone with the address can trigger this task and use up your daily Webhook deliveries. If the address leaks, change it in the task details."
       }
     },
     "chips": {
@@ -15564,7 +15572,20 @@
       "rotateSecret": "Regenerate secret",
       "secretOnce": "Copy this secret now. It won't be shown again.",
       "secretMissing": "Events are rejected until a secret is generated.",
-      "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task."
+      "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task.",
+      "genericSender": "the sender",
+      "secretFillHint": "Enter it as \"{{field}}\" in {{sender}}.",
+      "secretPastePlaceholder": "Paste \"{{field}}\" from {{sender}}",
+      "secretSave": "Save secret",
+      "secretSaved": "Secret saved.",
+      "secretSaveFailed": "Couldn't save the secret. Secrets can only be managed on the computer running this task.",
+      "secretInvalid": "This secret isn't in the expected format. Copy it again from the sender.",
+      "secretPasteMissing": "Events are rejected until you paste the secret from the sender.",
+      "unsignedNotice": "Signatures are off: anyone with the address can trigger this task. If the address leaks, change it.",
+      "rotateUrl": "Change address",
+      "rotateUrlConfirmTitle": "Change the receiving address?",
+      "rotateUrlConfirmBody": "The old address stops working right away, so enter the new one in the sender. Settings and the secret stay the same.",
+      "rotateUrlFailed": "Couldn't change the address. Try again later."
     }
   },
   "issueTracker": {

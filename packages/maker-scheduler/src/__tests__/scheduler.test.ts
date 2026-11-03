@@ -1216,6 +1216,21 @@ describe('Scheduler', () => {
     await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
   });
 
+  // Rule: an edit that omits the sender, such as one from a client that predates senders,
+  // must not reset it; resetting would switch the server back to GitHub and reject every delivery.
+  it('keeps the webhook sender when an edit omits it, and rejects unknown senders', async () => {
+    const source = { preset: 'stripe' as const, signed: false };
+    const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['invoice.paid'], source } });
+    const edited = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['pullrequest:created'] } });
+    expect(edited.webhookTrigger).toMatchObject({ events: ['pullrequest:created'], source });
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'unknown' } as never } }),
+    ).rejects.toThrow('invalid webhook source');
+    await expect(
+      h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'custom', format: { version: 1 } } as never } }),
+    ).rejects.toThrow('invalid webhook format');
+  });
+
   // Rule: the event reaches this fire only; a deferred attempt leaves no run and no cron replay.
   it('passes webhook events to the runner, marks the run, and leaves retries to the caller', async () => {
     const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
@@ -2898,10 +2913,11 @@ describe('Scheduler cross-instance dedupe', () => {
       manual: false,
       persistentSession: false,
       silentWhenIdle: false,
-      // CreateScheduleInput.preRunHook / scriptConfig 允许 null(JSON 边界),Schedule 只有两态
+      // CreateScheduleInput.preRunHook / scriptConfig / webhookTrigger 允许 null(JSON 边界),Schedule 只有两态
       preRunHook: undefined,
       preRunPlugin: undefined,
       scriptConfig: undefined,
+      webhookTrigger: undefined,
       workspaceKind: 'dialogue',
       status: 'active',
       createdAt: now,

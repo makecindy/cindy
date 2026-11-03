@@ -31,9 +31,13 @@
 `maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。
 旧主机只保留已知列，会报告成功却丢掉配置，所以能力新增 `supportsScheduleWebhookTrigger`；Agent 工具的
 跨设备写入一律拒绝。同账号 invoke 新增只读的 `maker:schedule:webhook-status`。
-`maker:schedule:webhook-rotate-secret` 返回明文密钥，不进 Device Link 白名单。官方及自建中转沿用通用
-invoke 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。投递格式兼容 GitHub 的 `X-GitHub-Event`、
-`X-GitHub-Delivery`、`X-Hub-Signature-256`。
+`maker:schedule:webhook-set-secret` 携带密钥明文，`maker:schedule:webhook-rotate-url` 更换接收地址，都不进 Device Link
+白名单。官方及自建中转沿用通用 invoke 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。
+
+`webhookTrigger` 新增可选字段 `source`（发送方预设与是否签名，或自定义格式），存在既有 JSON 列里，不加 migration。
+缺 key 表示不修改，旧客户端和手机的编辑不会把它改回 GitHub；本机认不出的预设原样保留，不按 GitHub 同步。服务器
+REST 的地址保存请求新增必填 `format`，密钥改为客户端生成或粘贴后 `PUT /endpoints/:id/secret`，新增
+`POST /endpoints/:id/rotate`；功能尚未发布，两端同批上线，没有存量调用方。
 
 接收改走 webhook-server 后，端点清单纯增可选字段 `webhookApiBaseUrl`，不 bump schemaVersion：老客户端忽略，
 缺失或留空时隐藏入口，也是灰度开关；该字段按区域锁定，不进 `CROSS_REGION_ENDPOINT_KEYS`。REST、长连接帧和

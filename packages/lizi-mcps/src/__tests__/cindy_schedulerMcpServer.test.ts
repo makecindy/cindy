@@ -1115,6 +1115,18 @@ describe('Webhook 触发需要可用的接收方', () => {
     expect((await callCreate('cloud', { webhookTrigger: {} })).env.ok).toBe(true);
     expect((await callCreate('signed-out', {})).env.ok).toBe(true);
   });
+
+  // 规则：docs/product-rules/schedule-webhook-trigger.md。Agent 能选发送方，但密钥不经过模型。
+  it('发送方交给引擎校验；参数里夹带密钥会被拒绝', async () => {
+    const source = { preset: 'stripe', signed: false };
+    const { create, env } = await callCreate('cloud', { webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+
+    const smuggled = await callCreate('cloud', { webhookTrigger: { source: { preset: 'stripe', secret: 'whsec_x' } } });
+    expect(smuggled.env.ok).toBe(false);
+    expect(smuggled.create).not.toHaveBeenCalled();
+  });
 });
 
 // ── schedule_create: bindToCurrentSession 按 ctx 自动绑定 targetSessionId ───────

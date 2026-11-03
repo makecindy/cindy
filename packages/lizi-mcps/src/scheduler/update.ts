@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
-import { assertWebhookReceiverAvailable } from './_webhook.js';
+import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
@@ -116,6 +116,7 @@ export function registerScheduleUpdateTool(
             .max(32)
             .optional()
             .describe('只响应这些事件，每项为 event 或 event.action，例 "check_suite"、"pull_request.closed"；省略 = 全部'),
+          source: webhookSourceSchema,
         })
         .nullable()
         .optional()

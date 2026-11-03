@@ -26,6 +26,7 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
   deriveRunMode,
@@ -337,6 +338,27 @@ describe('buildScheduleInput webhook trigger', () => {
 
   it('omits the key when the form does not carry the field', () => {
     expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+
+  // A sender this build does not know came from a newer version; submitting it as GitHub
+  // would switch the server's format and reject every delivery.
+  it.each([
+    [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
+    [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
+    [{ webhookPreset: 'from-a-newer-version' }, undefined],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+  ])('sender %j', (fields, source) => {
+    const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
+    expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
+  });
+
+  it('round-trips a saved sender through the form fields', () => {
+    const sources = [undefined, { preset: 'stripe', signed: false }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }] as const;
+    for (const source of sources) {
+      const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
+      expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
+    }
   });
 });
 

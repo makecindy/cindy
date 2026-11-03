@@ -127,8 +127,9 @@ it('hides the Webhook switch without a Cindy account and keeps the saved trigger
   const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
   await waitFor(() => expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.label' })).toBeNull());
   form.save();
+  // 没有保存过发送方的任务按默认的 GitHub 写回，接收行为不变。
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-    webhookTrigger: { events: ['check_suite'] },
+    webhookTrigger: { events: ['check_suite'], source: { preset: 'github' } },
   }), true));
 });
 
