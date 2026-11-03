@@ -10418,7 +10418,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 },
               },
               ...taskLiveScreens.map((screen) => ({
-                id: `screen-${screen.id}`,
+                id: `screen-${screen.plugin}-${screen.id}`,
                 label: screen.name,
                 icon: Smartphone,
                 onPress: () => {
