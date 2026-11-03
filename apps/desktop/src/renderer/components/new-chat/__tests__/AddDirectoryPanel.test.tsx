@@ -67,6 +67,16 @@ describe('AddDirectoryPanel', () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  // PR #8602 review：Tab 聚焦某行后按方向键，真实焦点要跟着高亮走，回车才加高亮的那一行。
+  it('moves real focus with the arrow keys once a row has focus', () => {
+    h.options = [dir('ai-gateway'), dir('work-docs')];
+    renderPanel();
+    const first = screen.getByText('ai-gateway').closest('button')!;
+    first.focus();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByText('work-docs').closest('button'));
+  });
+
   it('stays on the page with an error when the directory cannot be authorized', async () => {
     h.options = [dir('ai-gateway')];
     const onSelectRecent = vi.fn(async () => {

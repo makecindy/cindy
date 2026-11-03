@@ -9,6 +9,7 @@ import {
   MAX_EXTRA_DIRS,
   partitionExtraDirs,
   pickAndAddExtraDir,
+  selectableRecentExtraDirs,
 } from '../components/new-chat/extraDirsActions';
 
 afterEach(() => {
@@ -26,6 +27,19 @@ describe('ExtraDirsButton path overlap normalization', () => {
     expect(isSelfOrSubdir('D:\\repo\\app\\src', 'D:/repo/app')).toBe(true);
     expect(isParentOrAncestor('D:\\repo', 'D:/repo/app')).toBe(true);
     expect(isSelfOrSubdir('D:\\repo-other', 'D:/repo')).toBe(false);
+  });
+
+  // PR #8602 review：最近列表直接授权，漏判上级目录 = 不经二次确认就把整个上级目录交给 Agent。
+  // 根目录曾被比成空串；Windows 盘符路径大小写不同也认不出。POSIX 路径仍区分大小写。
+  it.each([
+    ['/', '/home/me/project', []],
+    ['D:/repo', 'D:/Repo/App', []],
+    ['D:/REPO/APP/src', 'D:/Repo/App', []],
+    ['/Users/Me', '/users/me/app', ['/Users/Me']],
+  ])('recent list hides %s for working dir %s unless it is unrelated', (path, workingDir, kept) => {
+    expect(
+      selectableRecentExtraDirs([{ path }], { addedDirs: [], workingDir }).map((o) => o.path),
+    ).toEqual(kept);
   });
 });
 

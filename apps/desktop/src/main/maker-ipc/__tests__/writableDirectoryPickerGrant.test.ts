@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -154,9 +154,11 @@ describe('Main-owned writable directory picker grants', () => {
     { name: 'recent project', recent: true, present: true, expected: null },
     { name: 'path outside the recent list', recent: false, present: true, expected: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' },
     { name: 'recent project removed from disk', recent: true, present: false, expected: 'WRITABLE_DIRECTORY_UNAVAILABLE' },
+    { name: 'recent project replaced by a file', recent: true, present: 'file', expected: 'WRITABLE_DIRECTORY_UNAVAILABLE' },
   ])('issues recent-list grants only for an existing recent project: $name', async ({ recent, present, expected }) => {
     const output = join(fixture, 'output');
-    if (present) mkdirSync(output);
+    if (present === 'file') writeFileSync(output, '');
+    else if (present) mkdirSync(output);
     const issue = issueWritableDirectoryRecentGrant({
       scopeId: 'session-a',
       senderId: 7,

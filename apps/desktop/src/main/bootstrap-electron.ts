@@ -7321,6 +7321,7 @@ const registerIpcHandlers = () => {
   );
 
   // ── 从最近项目列表添加可写目录：与把它选作任务工作目录同等范围，只认列表里原样保存的路径 ──
+  const recentWritableDirectoryLog = createLogger('writable-directory:recent-grant');
   ipcMain.handle('dialog:authorize-recent-writable-directory', async (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     const body = requireObject(input);
@@ -7338,7 +7339,10 @@ const registerIpcHandlers = () => {
       });
     } catch (error) {
       if (error instanceof WritableDirectoryPickerGrantError) throwIpcError(error.code, error.message);
-      throw error;
+      recentWritableDirectoryLog.warn('recent writable directory authorization failed', {
+        error: String(error),
+      });
+      throwIpcError('INTERNAL', 'Writable directory authorization failed');
     }
     return { success: true };
   });

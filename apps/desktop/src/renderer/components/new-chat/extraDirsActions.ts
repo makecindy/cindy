@@ -43,9 +43,16 @@ export function countUserExtraDirs(dirs: readonly string[]): number {
   return dirs.filter((dir) => !isLibraryExtraDirSlot(dir)).length;
 }
 
+/**
+ * 比较用形态：保留根目录(`/`、`D:/`，否则根会被比成空串、认不出它是任何目录的上级)；
+ * Windows 盘符 / UNC 路径不区分大小写，与 Main recent_workdirs 的身份口径一致。
+ */
 function normalizedPathForComparison(raw: string | null | undefined): string | null {
   const normalized = normalizeWorkingDirForStorage(raw);
-  return normalized ? stripTrailingPathSeparators(normalized) : null;
+  if (!normalized) return null;
+  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//')
+    ? normalized.toLowerCase()
+    : normalized;
 }
 
 /**
@@ -57,7 +64,7 @@ function isSelfOrSubdir(candidate: string, base: string): boolean {
   const b = normalizedPathForComparison(base);
   if (!c || !b) return false;
   if (c === b) return true;
-  return c.startsWith(b + '/');
+  return c.startsWith(b.endsWith('/') ? b : `${b}/`);
 }
 
 function isSameStoragePath(a: string, b: string): boolean {

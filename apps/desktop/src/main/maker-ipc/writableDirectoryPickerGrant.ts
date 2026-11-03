@@ -73,6 +73,16 @@ export async function issueWritableDirectoryRecentGrant(input: {
       'Writable directory is not a recent project',
     );
   }
+  // 系统选择器只能选目录；这条来源的路径由 Renderer 传入，目录已被换成文件时同样按不可用处理。
+  const isDirectory = await fs
+    .stat(input.directory)
+    .then((stat) => stat.isDirectory())
+    .catch(() => false);
+  if (!isDirectory) {
+    throw new WritableDirectoryPickerGrantError(
+      'WRITABLE_DIRECTORY_UNAVAILABLE', 'Writable directory is unavailable',
+    );
+  }
   try {
     await issueWritableDirectoryPickerGrant(input);
   } catch {

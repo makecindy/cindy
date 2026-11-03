@@ -34,6 +34,9 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { filterFolderPickerOptions, type FolderPickerOption } from './FolderPickerPopover';
 import { selectableRecentExtraDirs } from './extraDirsActions';
 
+/** 可聚焦行(最近目录 + 「选择其他文件夹」)的标记，按 DOM 顺序与 focusedIndex 对应。 */
+const ROW_ATTR = 'data-add-dir-row';
+
 /** 与项目选择器一致:超过 4 个目录才需要搜索。 */
 const SEARCH_MIN_COUNT = 5;
 
@@ -141,7 +144,12 @@ export function AddDirectoryPanel({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       const step = event.key === 'ArrowDown' ? 1 : -1;
-      setFocusedIndex((index) => (index + step + rowCount) % rowCount);
+      const next = (focusedIndex + step + rowCount) % rowCount;
+      setFocusedIndex(next);
+      // 焦点已在某一行(Tab 进来)时真实焦点跟着走，否则回车会落在原来那行、加的不是高亮目录。
+      if (event.target instanceof HTMLElement && event.target.hasAttribute(ROW_ATTR)) {
+        rootRef.current?.querySelectorAll<HTMLElement>(`[${ROW_ATTR}]`)[next]?.focus();
+      }
       return;
     }
     // 行按钮自己处理 Enter；这里只接搜索框与面板根上的 Enter。
@@ -251,6 +259,8 @@ export function AddDirectoryPanel({
               disabled={pending}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setFocusedIndex(index)}
+              onFocus={() => setFocusedIndex(index)}
+              {...{ [ROW_ATTR]: '' }}
               onClick={() => activate(index)}
               {...menuRowAttrs({ current: index === focusedIndex, disabled: pending })}
               // 与「+」主面板动作行同高的单行：新建任务页面板高度只有 240px，两行行高放不下几个目录。
@@ -288,6 +298,8 @@ export function AddDirectoryPanel({
           disabled={pending}
           onMouseDown={(event) => event.preventDefault()}
           onMouseEnter={() => setFocusedIndex(rowCount - 1)}
+          onFocus={() => setFocusedIndex(rowCount - 1)}
+          {...{ [ROW_ATTR]: '' }}
           onClick={() => activate(rowCount - 1)}
           {...menuRowAttrs({ current: focusedIndex === rowCount - 1, disabled: pending })}
           className={cn(rowClass(pending), 'py-2')}
