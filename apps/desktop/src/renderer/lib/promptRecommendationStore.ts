@@ -30,20 +30,23 @@ const entries = new Map<string, PromptRecommendationSnapshot>();
 /**
  * 已生成的推荐在 session 切换后仍然保留：composer 重新挂载时直接复用，
  * 不重新发起付费预测，也不会因为切走再回来而凭空消失。
- * 只在新的完成轮次、会话删除、账号/偏好切换或 TTL 到期时作废；
- * 发送、换目录等操作只清运行期 entry（渲染层因此隐藏），不会丢掉可用文案。
+ * 只在新的完成轮次、显式消费（Tab / 发送 / 换目录）、会话删除、账号切换或
+ * 偏好关闭时作废；切回会话、新轮开始这类非破坏性失效只清运行期 entry。
  */
-const retainedRecommendations = new Map<
-  string,
-  { snapshot: PromptRecommendationSnapshot; at: number }
->();
-const RETAINED_TTL_MS = 30 * 60 * 1000;
+const retainedRecommendations = new Map<string, PromptRecommendationSnapshot>();
 
-/** 存的是快照对象本身：useSyncExternalStore 要求未变化的读取返回同一引用。 */
+/**
+ * 存的是快照对象本身：useSyncExternalStore 要求未变化的读取返回同一引用。
+ * 不设 TTL —— 运行期 ready entry 本身也没有过期时间，保留区如果自行按时间失效，
+ * 会出现"界面还显示着、但下次读取突然为空"的窗口（没有定时器通知订阅者）。
+ * 生命周期与 entry 一致：新的完成轮次、显式消费、会话删除、账号切换时作废。
+ */
 function retainReadyRecommendation(sessionId: string, revision: number, prompt: string): void {
   retainedRecommendations.set(sessionId, {
-    snapshot: { revision, phase: 'ready', prompt, requestSeq: 0 },
-    at: Date.now(),
+    revision,
+    phase: 'ready',
+    prompt,
+    requestSeq: 0,
   });
 }
 
@@ -51,15 +54,9 @@ function dropRetainedRecommendation(sessionId: string): void {
   retainedRecommendations.delete(sessionId);
 }
 
-/** 切回会话时复用保留的快照对象；超过 TTL 视为过期。 */
+/** 切回会话时复用保留的快照对象。 */
 function retainedSnapshot(sessionId: string): PromptRecommendationSnapshot | undefined {
-  const retained = retainedRecommendations.get(sessionId);
-  if (!retained) return undefined;
-  if (Date.now() - retained.at > RETAINED_TTL_MS) {
-    retainedRecommendations.delete(sessionId);
-    return undefined;
-  }
-  return retained.snapshot;
+  return retainedRecommendations.get(sessionId);
 }
 const sessionListeners = new Map<string, Set<() => void>>();
 const runningSessionIds = new Set<string>();
@@ -402,7 +399,7 @@ export function invalidatePromptRecommendation(sessionId: string): void {
 export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
   const current = entries.get(sessionId);
   const effectiveRevision =
-    current?.revision ?? retainedRecommendations.get(sessionId)?.snapshot.revision;
+    current?.revision ?? retainedRecommendations.get(sessionId)?.revision;
   if (revision != null && effectiveRevision !== revision) return;
   invalidatePromptRecommendation(sessionId);
   dropRetainedRecommendation(sessionId);
