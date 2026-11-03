@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -51,5 +51,25 @@ describe('代输入 screenshot read', () => {
     expect(await readHandoffPicture('avatar.webp', task, authorize, { allowWebp: true, maxBytes: bytes.length }))
       .toEqual({ ok: true, bytes });
     expect(authorize).not.toHaveBeenCalled();
+  });
+
+  it('does not read an outside file swapped in after path authorization', async () => {
+    const task = tempDir();
+    const parent = tempDir();
+    const grantedDir = path.join(parent, 'authorized');
+    const privateDir = tempDir();
+    const grantedPath = path.join(grantedDir, 'avatar.png');
+    const privatePath = path.join(privateDir, 'avatar.png');
+    mkdirSync(grantedDir);
+    writeFileSync(grantedPath, 'authorized');
+    writeFileSync(privatePath, 'private');
+    const authorize = vi.fn(async () => {
+      rmSync(grantedDir, { recursive: true });
+      symlinkSync(privateDir, grantedDir, process.platform === 'win32' ? 'junction' : 'dir');
+      return { allowed: true as const };
+    });
+    const result = await readHandoffPicture(grantedPath, task, authorize, { allowWebp: true });
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
   });
 });

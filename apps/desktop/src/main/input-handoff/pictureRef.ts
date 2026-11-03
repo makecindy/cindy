@@ -1,7 +1,7 @@
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SessionPathAuthorization } from '@cindy/mcps';
+import { authorizedSessionPathStillBound, type SessionPathAuthorization } from '@cindy/mcps';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import * as imageCacheStore from '../imageCacheStore.js';
@@ -56,6 +56,35 @@ async function readFile(file: string, maxBytes = MAX_BYTES, allowWebp = false): 
   }
 }
 
+async function readAuthorizedFile(file: string, workingDir: string | undefined, maxBytes: number, allowWebp: boolean): Promise<HandoffPictureRead> {
+  const root = workingDir ?? path.dirname(file);
+  if (!await authorizedSessionPathStillBound(root, file))
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: '图片路径或任务权限已变化，请重试。' };
+  try {
+    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size === 0 || stat.size > maxBytes) return notFound(allowWebp);
+      const bytes = Buffer.alloc(stat.size + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const read = await handle.read(bytes, length, bytes.length - length, length);
+        if (read.bytesRead === 0) break;
+        length += read.bytesRead;
+      }
+      const bound = await fs.stat(file);
+      if (length !== stat.size || bound.dev !== stat.dev || bound.ino !== stat.ino
+        || !await authorizedSessionPathStillBound(root, file))
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: '读取期间图片路径或内容已变化，请重试。' };
+      return { ok: true, bytes: bytes.subarray(0, length) };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return notFound(allowWebp);
+  }
+}
+
 export async function readHandoffPicture(
   ref: string,
   workingDir: string | undefined,
@@ -76,5 +105,5 @@ export async function readHandoffPicture(
     const grant = await authorize(source.absPath);
     if (!grant.allowed) return { ok: false, errorCode: 'PERMISSION_DENIED', message: grant.reason };
   }
-  return readFile(source.absPath, maxBytes, options.allowWebp);
+  return readAuthorizedFile(source.absPath, workingDir, maxBytes, options.allowWebp ?? false);
 }
