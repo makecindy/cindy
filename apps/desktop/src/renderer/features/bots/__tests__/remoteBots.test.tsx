@@ -205,6 +205,86 @@ it('updates unread consumers from another window and ignores old-owner reads aft
   expect(readRemoteBots()).toEqual([]);
 });
 
+// Unit / review4456333373: a failed secondary refresh must not replace the
+// main window's newer reply/membership cache, including when marking a reply read.
+it('preserves the shared roster through stale secondary refreshes and offline restoration', async () => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  h.devices = [host('a')];
+  const first = collection();
+  Object.assign(first.items[0].display, { lastReplyAt: 100 });
+  h.invoke.mockResolvedValue(first);
+  const view = renderHook(useRoster);
+  await waitFor(() => expect(view.result.current[0]?.lastReplyAt).toBe(100));
+  const account = h.owner;
+  const key = 'cindy.remoteBots.v1.' + account;
+  // The main window has received a newer reply and a new companion. No read
+  // position changes, so the secondary's storage handler need not publish.
+  const newer = [
+    { ...view.result.current[0], name: 'New name', preview: 'New reply', lastReplyAt: 200, activityAt: 200 },
+    { ...view.result.current[0], id: 'new-bot', name: 'New companion' },
+  ].map(bot => ({ ...bot, online: false }));
+  window.localStorage.setItem(key, JSON.stringify(newer));
+  h.invoke.mockRejectedValue(new Error('temporary host failure'));
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
+  act(() => markRemoteBotRead('a', 'same-bot', 150));
+  expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
+  expect(JSON.parse(window.localStorage.getItem('cindy.remoteBotReads.v1.' + account)!))
+    .toEqual([{ deviceId: 'a', id: 'same-bot', readAt: 150 }]);
+  view.unmount();
+  // Re-enter the account with no live host response, using the real cache load.
+  h.owner = 'other-offline-owner';
+  h.devices = [];
+  renderHook(useRoster).unmount();
+  h.owner = account;
+  h.devices = [host('a', false)];
+  const restored = renderHook(useRoster);
+  expect(restored.result.current.map(bot => bot.name)).toEqual(['New name', 'New companion']);
+  expect(restored.result.current[0].lastReplyAt).toBe(200);
+  expect(restored.result.current[0].readAt).toBe(150);
+  expect(isRemoteBotUnread(restored.result.current[0])).toBe(true);
+});
+
+it('retains a secondary-only companion read across main roster writes without resurrecting its row', async () => {
+  window.history.replaceState(null, '', '/?secondaryWindow=1');
+  h.devices = [host('a')];
+  const secondaryOnly = collection();
+  secondaryOnly.items[0].ref.id = 'only-secondary';
+  Object.assign(secondaryOnly.items[0].display, { lastReplyAt: 100 });
+  h.invoke.mockResolvedValue(secondaryOnly);
+  const secondary = renderHook(useRoster);
+  await waitFor(() => expect(secondary.result.current[0]?.id).toBe('only-secondary'));
+  const account = h.owner;
+  const key = 'cindy.remoteBots.v1.' + account;
+  const mainRows = [{ ...secondary.result.current[0], id: 'same-bot', name: 'Main companion', online: false }];
+  window.localStorage.setItem(key, JSON.stringify(mainRows));
+  act(() => markRemoteBotRead('a', 'only-secondary', 300));
+  expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(mainRows);
+  secondary.unmount();
+  h.owner = 'between-window-owners'; h.devices = [];
+  renderHook(useRoster).unmount();
+  h.owner = account; h.devices = [host('a')];
+  h.invoke.mockResolvedValue(collection('Main companion'));
+  window.history.replaceState(null, '', '/');
+  const main = renderHook(useRoster);
+  await waitFor(() => expect(main.result.current[0]?.online).toBe(true));
+  expect(JSON.parse(window.localStorage.getItem(key)!).map((bot: { id: string }) => bot.id)).toEqual(['same-bot']);
+  // The read event is also consumed by the production main hook once the bot
+  // becomes visible there; its independently newer reply stays unread.
+  Object.assign(secondaryOnly.items[0].display, { lastReplyAt: 400 });
+  h.invoke.mockResolvedValue(secondaryOnly);
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(main.result.current[0]?.id).toBe('only-secondary'));
+  expect(main.result.current[0].readAt).toBe(300);
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(true);
+  const readsKey = 'cindy.remoteBotReads.v1.' + account;
+  const newValue = JSON.stringify([{ deviceId: 'a', id: 'only-secondary', readAt: 400 }]);
+  window.localStorage.setItem(readsKey, newValue);
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: readsKey, newValue, storageArea: window.localStorage })));
+  expect(isRemoteBotUnread(main.result.current[0])).toBe(false);
+});
+
 it('merges a newer shared read before a stale refresh writes the roster cache', async () => {
   h.devices = [host('a')];
   const { result } = renderHook(useRoster);

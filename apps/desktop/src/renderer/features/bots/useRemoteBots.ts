@@ -6,12 +6,14 @@ import {
 } from '@cindy/device-link';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
 import { parseRemoteBots, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
+const READ_PREFIX = 'cindy.remoteBotReads.v1.';
 let owner: string | null = null;
 let snapshot: RemoteBot[] = [];
 let cindyIds = new Set<string>();
@@ -42,11 +44,16 @@ const publish = (next: RemoteBot[]) => {
   // A sibling may have marked a reply read before its storage event arrives.
   // Every cache writer must merge that position rather than rewind it.
   let stored: string | null = null;
+  let reads: string | null = null;
   try { if (owner) stored = window.localStorage.getItem(CACHE_PREFIX + owner); } catch { /* unavailable cache */ }
+  try { if (owner) reads = window.localStorage.getItem(READ_PREFIX + owner); } catch { /* unavailable cache */ }
   next = mergeReadPositions(next, cachedReadPositions(stored));
+  next = mergeReadPositions(next, cachedReadPositions(reads));
   next = next.map(bot => cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot);
   snapshot = next;
-  if (owner) {
+  // Keep roster membership/replies single-writer. A stale secondary mirror may
+  // update its own projection, but must not replace the main window's cache.
+  if (owner && !isSecondaryWindow()) {
     try { const value = JSON.stringify(next.map((bot) => ({ ...bot, online: false })));
       if (value.length <= 256 * 1024 && value !== stored) window.localStorage.setItem(CACHE_PREFIX + owner, value);
     } catch { /* display cache may be unavailable */ }
@@ -94,7 +101,7 @@ export function useRemoteBotSync(): void {
     const requestOwner = isAuthenticated ? dataOwnerId : null;
     if (!requestOwner) return;
     const onStorage = (event: StorageEvent) => {
-      if (owner !== requestOwner || event.key !== CACHE_PREFIX + requestOwner || event.newValue === null
+      if (owner !== requestOwner || (event.key !== CACHE_PREFIX + requestOwner && event.key !== READ_PREFIX + requestOwner) || event.newValue === null
         || (event.storageArea !== null && event.storageArea !== window.localStorage)) return;
       const positions = cachedReadPositions(event.newValue);
       // Only read positions cross windows here; stale roster or connection data
@@ -114,7 +121,7 @@ export function useRemoteBotSync(): void {
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
-          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX)) window.localStorage.removeItem(key);
+          for (const key of Object.keys(window.localStorage)) if (key.startsWith(CACHE_PREFIX) || key.startsWith(READ_PREFIX)) window.localStorage.removeItem(key);
         } else {
           const raw = window.localStorage.getItem(CACHE_PREFIX + nextOwner);
           if (raw && raw.length <= 256 * 1024) {
@@ -174,11 +181,13 @@ export function useRemoteBotSync(): void {
         );
         if (!current() || generations.get(deviceId) !== epoch) return;
         const previous = new Map(snapshot.filter(bot => bot.deviceId === deviceId).map(bot => [bot.id, bot]));
+        let savedReads = new Map<string, number>();
+        try { savedReads = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + nextOwner)); } catch { /* unavailable cache */ }
         const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => ({
           ...bot,
           delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
           templateId: previous.get(bot.id)?.templateId,
-          readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
+          readAt: previous.get(bot.id)?.readAt ?? savedReads.get(readKey(bot)) ?? bot.lastReplyAt ?? 0,
         }));
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
         // Older released hosts already expose the task-card list, even when their
@@ -278,5 +287,19 @@ export function useRemoteBotSync(): void {
 export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
   if (!Number.isFinite(at) || at < 0) return;
   if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
+  // Read positions must survive even if the main window has not discovered
+  // this companion yet. Store only identities/positions, never another roster.
+  if (owner) {
+    try {
+      const positions = cachedReadPositions(window.localStorage.getItem(READ_PREFIX + owner));
+      const key = readKey({ deviceId, id: botId });
+      positions.set(key, Math.max(positions.get(key) ?? 0, at));
+      const value = JSON.stringify([...positions].map(([identity, readAt]) => {
+        const [deviceId, id] = JSON.parse(identity) as [string, string];
+        return { deviceId, id, readAt };
+      }));
+      if (value.length <= 256 * 1024) window.localStorage.setItem(READ_PREFIX + owner, value);
+    } catch { /* Keep the current window readable when storage is unavailable. */ }
+  }
   publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
 }
