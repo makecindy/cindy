@@ -133,12 +133,17 @@ export class GhostSessionActivityTracker {
   /**
    * 意识回应点击时原地换了被点的根卡、没给衍生卡位供片:根卡的 done 也就结束了
    * 这次点击,否则会话要白白呼吸到 TTL。已经给衍生卡供过片的点击照旧等它自己的 done。
+   * 一次 done 只回应一次点击(最早的那次):同一张根卡上并发的另一个动作还在干活,
+   * 不能因此被一并结束而让会话提前熄灭;多答复的那次最坏等到 TTL。
    */
   private endClicksAnsweredInPlace(rootKey: string): void {
     if (rootKey.includes(GHOST_CARD_SPAWN_SEP)) return;
     const prefix = rootKey + GHOST_CARD_SPAWN_SEP;
-    for (const [key, entry] of [...this.entries]) {
-      if (key.startsWith(prefix) && !entry.updated) this.end(key);
+    for (const [key, entry] of this.entries) {
+      if (key.startsWith(prefix) && !entry.updated) {
+        this.end(key);
+        return;
+      }
     }
   }
 

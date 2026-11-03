@@ -43,6 +43,16 @@ describe('fillGhostCardPrStatus', () => {
     expect(slot.querySelectorAll('svg')).toHaveLength(3);
   });
 
+  it('fills every declared slot from its own PR, not only the first one', () => {
+    document.body.innerHTML = '<div data-ghost-pr-status="Octo/Repo#9"><div>one</div></div><div data-ghost-pr-status="Octo/Repo#10"><div>two</div></div>';
+    const [first, second] = Array.from(document.querySelectorAll('div[data-ghost-pr-status]'));
+    const statuses = new Map([['octo/repo#9', status()], ['octo/repo#10', status({ unresolvedCount: 0, mergeState: 'CLEAN', reviewDecision: 'APPROVED' })]]);
+    fillGhostCardPrStatus(document, (key) => statuses.get(key), t);
+    expect(first.textContent).toContain('unresolved:2');
+    expect(second.textContent).not.toContain('unresolved');
+    expect(second.textContent).not.toBe('two');
+  });
+
   it('keeps the snapshot when the host has no usable status, and never guesses merge state for older hosts', () => {
     const slot = card();
     fillGhostCardPrStatus(document, () => undefined, t);

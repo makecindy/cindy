@@ -123,6 +123,16 @@ describe('GhostSessionActivityTracker', () => {
     expect(tracker.isSessionBusy('s1')).toBe(false);
   });
 
+  it('同一张根卡上并发的两次点击:一次根卡 done 只结束最早的那次', () => {
+    const { tracker } = makeTracker();
+    tracker.begin('root::sp1', 's1');
+    tracker.begin('root::sp2', 's1');
+    tracker.noteCardUpdate('root', 's1', 'done');
+    expect(tracker.isSessionBusy('s1')).toBe(true);
+    tracker.noteCardUpdate('root', 's1', 'done');
+    expect(tracker.isSessionBusy('s1')).toBe(false);
+  });
+
   it('TTL 静默超时兜底熄呼吸', () => {
     const { tracker, broadcast, pendingTimerIds, fire } = makeTracker();
     tracker.begin('k1', 's1');

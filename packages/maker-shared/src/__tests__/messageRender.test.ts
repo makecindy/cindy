@@ -71,6 +71,16 @@ describe('message render shared model', () => {
     expect(artifacts([tool, { ...answer, body: removed }])).toHaveLength(2);
   });
 
+  it('still drops media the reply shows when the same tool result also carries a turn-end card', () => {
+    const url = 'cindy-media://blobs/video.mp4';
+    const body = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: url } }) + '\n```';
+    const tool = message({ kind: 'tool', source: source('video', {}, 1), media: [{ kind: 'video', url }, { kind: 'image', url: 'other.png' }],
+      cardIds: ['turn-end-card'], turnEndCardIds: ['turn-end-card'] });
+    const answer = message({ kind: 'assistant', source: source('answer', body, 2), body, turnCompleted: true });
+    const media = buildMessageRenderItems([tool, answer]).flatMap(item => item.type === 'tool_media' ? item.tools.flatMap(t => t.media ?? []) : []);
+    expect(media.map(m => m.url)).toEqual(['other.png']);
+  });
+
   it('keeps sealed work folded while subsequent work in the same turn remains active', () => {
     const messages = [
       message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),

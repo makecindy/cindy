@@ -19,7 +19,8 @@ export function createTaskWorktreeHost(): CreateTaskWorktree {
     suggestName: WorktreeManager.suggestName,
     listBranches: WorktreeManager.listBranches,
     resolveCommit: WorktreeManager.revParseCommit,
-    createWorktree: WorktreeManager.createWorktree,
+    // The agent that asked is already running: hand it the directory only once the tree is fully there.
+    createWorktree: (req: Parameters<typeof WorktreeManager.createWorktree>[0]) => WorktreeManager.createWorktree(req, { awaitFullCheckout: true }),
     resolveFreshSource: resolveFreshSourceBranch,
   };
   return ({ callerSessionId, repoDir }) => {

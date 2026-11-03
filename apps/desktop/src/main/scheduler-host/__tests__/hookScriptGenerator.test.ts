@@ -153,6 +153,12 @@ describe('hookScriptSlug / parseGeneratedScriptPath / buildHookCommand', () => {
     // 没有投影入口指向它(插件已停用等):保留原路径,不猜测。
     const stale = path.join(state, 'skill-snapshots', 'cindy-github', 'rev-0', 'skills', 'pr', 'scripts', 'gate.mjs');
     expect(stabilizeManagedSkillLinks(`node "${stale}" x`, realpath, () => false, readdir)).toBe(`node "${stale}" x`);
+
+    // 不带空格的 shell 运算符不并入路径。
+    const bare = path.join(snapshot, 'scripts', 'gate.mjs');
+    for (const operator of ['&&exit 0', ';exit 0', '|cat', '>/dev/null']) {
+      expect(stabilizeManagedSkillLinks(`node ${bare}${operator}`, realpath, () => false, readdir)).toBe(`node ${shellQuote(gate)}${operator}`);
+    }
   });
 
   it('stabilizeHookCommand 在文件不存在或缺少原 cwd 时明确报错', () => {

@@ -45,9 +45,20 @@ function decodeText(value: string): string {
   });
 }
 
+/** Apply a removal until nothing changes, so pieces left behind by one pass cannot join into a new tag. */
+function replaceUntilStable(value: string, replace: (input: string) => string): string {
+  let current = value;
+  for (let pass = 0; pass < 8; pass += 1) {
+    const next = replace(current);
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
 /** Sanitized card HTML to plain text: block ends become line breaks. */
 function cardText(html: string, inlineLinks: boolean): string {
-  return decodeText(html.replace(/<[^>]+>/g, (tag) => {
+  return decodeText(replaceUntilStable(html, (input) => input.replace(/<[^>]+>/g, (tag) => {
     // Keep destinations and image descriptions readable without an executable link. When the
     // plugin may open links, the phone gets the link as its own control, so the text keeps only
     // the link's words instead of a raw address in front of them.
@@ -56,12 +67,12 @@ function cardText(html: string, inlineLinks: boolean): string {
     if (link) return inlineLinks && isGhostCardLinkAllowed(decodeText(link)) ? '' : ` ${link} `;
     if (alt) return ` ${alt} `;
     return /^(?:<br\b|<hr\b|<\/(?:p|div|h[1-4]|li|tr|section|header|footer|blockquote|pre)\b)/i.test(tag) ? '\n' : /^<\/(?:td|th)\b/i.test(tag) ? '\t' : '';
-  }))
+  })))
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function stripStyleAndScript(html: string): string {
-  return html.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  return replaceUntilStable(html, (input) => input.replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/gi, ''));
 }
 
 /** Project persisted, sanitized cards into inert text and managed media. No HTML,
@@ -155,9 +166,17 @@ export function projectRichCardParts(html: string): RichCardParts {
     if (m) prStatus.push({ key: `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}`, fallback: cardLines(source.slice(el.innerStart, el.innerEnd)).slice(0, 8) });
     cuts.push([el.innerStart, el.innerEnd]);
   }
-  cuts.sort((a, b) => b[0] - a[0]);
+  // Marked elements can nest or share an element: merge overlapping ranges first, then cut from the
+  // back so earlier offsets stay valid.
+  cuts.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: Array<[number, number]> = [];
+  for (const [from, to] of cuts) {
+    const last = merged[merged.length - 1];
+    if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
   let textHtml = source;
-  for (const [from, to] of cuts) textHtml = textHtml.slice(0, from) + textHtml.slice(to);
+  for (let i = merged.length - 1; i >= 0; i -= 1) textHtml = textHtml.slice(0, merged[i][0]) + textHtml.slice(merged[i][1]);
   return { textHtml, toggles, ...(live ? { live } : {}), prStatus: prStatus.slice(0, 4) };
 }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../cardStoreDb.js', () => ({ getGhostCard: vi.fn(), upsertGhostCard: vi.fn() }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcastScope: vi.fn(), isDataOwnerBroadcastScopeCurrent: vi.fn(), tapWindowBroadcast: vi.fn(), getSafeDataOwnerPushStamp: vi.fn() }));
-import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
+import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectRichCardParts, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
 import { buildAttachmentOssRef } from '@cindy/device-link';
@@ -141,6 +141,10 @@ describe('read-only plugin card projection', () => {
     expect(blocks.filter((b) => b.data).map((b) => b.data)).toEqual([{ url: image }, { url: audio }]);
     expect(JSON.stringify(blocks)).not.toMatch(/<|secret|color:red|data-ghost-action/);
   });
+  it('does not let tags assembled from leftover pieces survive the text projection', () => {
+    const blocks = projectGhostCardBlocks('<p>a<scr<b></b>ipt>x</scr<b></b>ipt>b</p><sc<script></script>ript>y</sc<script></script>ript>');
+    expect(blocks[0].fallbackMarkdown).not.toMatch(/<|script/i);
+  });
   it('preserves image descriptions and declared destinations as inert text', () => {
     const blocks = projectGhostCardBlocks(`<img src="${image}" alt="A chart"/><a data-ghost-link="https://example.com/?a=1&amp;b=2">Report</a>`);
     expect(blocks[0].fallbackMarkdown).toContain('A chart');
@@ -266,6 +270,11 @@ describe('plugin-card-rich projection', () => {
     return { text, data: resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown> };
   };
 
+  it('cuts nested and doubly marked parts once, keeping the text after them', () => {
+    const parts = projectRichCardParts('<p>before</p><div data-ghost-pr-status="o/r#1"><span data-ghost-live-label="live">inner</span> tail</div><p>after</p>'
+      + '<span data-ghost-live-label="x" data-ghost-pr-status="o/r#2">both</span><p>end</p>');
+    expect(parts.textHtml).toBe('<p>before</p><div data-ghost-pr-status="o/r#1"></div><p>after</p><span data-ghost-live-label="x" data-ghost-pr-status="o/r#2"></span><p>end</p>');
+  });
   it('keeps older phones on the plain projection without the raw link address', async () => {
     const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms']);
     expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号\n指定模型Opus高');

@@ -359,12 +359,13 @@ function buildLinearItems<
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
     const mediaTools = pendingTools.map((tool) => {
+      // Look the inline URLs up by the original message: splitting off the turn-end card copies it.
+      const urls = inlineMediaByMessage.get(tool);
       const turnEnd = tool.turnEndCardIds?.length ? new Set(tool.turnEndCardIds) : undefined;
       if (turnEnd && tool.cardIds?.some((id) => turnEnd.has(id))) {
         pendingTurnEndTools.push({ ...tool, media: [], files: [], cardIds: tool.cardIds.filter((id) => turnEnd.has(id)) });
         tool = { ...tool, cardIds: tool.cardIds.filter((id) => !turnEnd.has(id)) };
       }
-      const urls = inlineMediaByMessage.get(tool);
       if (!urls?.size || !tool.media?.some(media => urls.has(media.url))) return tool;
       return { ...tool, media: tool.media.filter(media => !urls.has(media.url)) };
     }).filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);

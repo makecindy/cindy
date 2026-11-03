@@ -8,6 +8,10 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 
+/** How often a visible card that shows a PR's live status is read again. The Host only pushes when the card is
+ * saved, but the PR's checks and merge state change on GitHub without it. Matches the Host's status cache TTL. */
+const PR_STATUS_REFRESH_MS = 60_000;
+
 /** Card content and Host-projected actions are scoped to account + device + task.
  * Refresh after foreground/reconnect and host invalidation; stale replies cannot
  * replace a recycled row or another account's card. */
@@ -33,6 +37,7 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
     let disposed = false;
     let generation = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let statusTimer: ReturnType<typeof setTimeout> | undefined;
     const id = JSON.stringify([sessionId, callId]);
     let resolvedId = id;
     const load = async () => {
@@ -66,6 +71,10 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
         if (valid()) {
           resolvedId = JSON.stringify([sessionId, next]);
           setState({ binding, callId: next, blocks: resource.blocks ?? [], title: typeof resource.display.title === 'string' ? resource.display.title : resource.display.title.fallback, error: kind === 'card' && !resource.blocks?.length });
+          if (statusTimer) clearTimeout(statusTimer);
+          const showsPrStatus = resource.blocks?.some(block => block.primitive === 'plugin-card-actions' &&
+            Array.isArray((block.data as { prStatus?: unknown } | undefined)?.prStatus) && ((block.data as { prStatus: unknown[] }).prStatus.length > 0));
+          statusTimer = showsPrStatus ? setTimeout(() => { statusTimer = undefined; void load(); }, PR_STATUS_REFRESH_MS) : undefined;
         }
       } catch (error) {
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
@@ -81,7 +90,7 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `${collectionId}:${id}:${subscriberId}`, topic: 'sessions', subscribe, unsubscribe });
     const listener = AppState.addEventListener('change', (next) => { generation += 1; if (next === 'active') void load(); });
     void load();
-    return () => { disposed = true; generation += 1; offPush(); offTopic(); listener.remove(); if (timer) clearTimeout(timer); };
+    return () => { disposed = true; generation += 1; offPush(); offTopic(); listener.remove(); if (timer) clearTimeout(timer); if (statusTimer) clearTimeout(statusTimer); };
   }, [subscriberId, focused, binding, deviceId, sessionId, callId, collectionId, kind, followMailReplacement, attempt, connectionEpoch, status, invoke, onRemoteResourceChanged, subscribe, unsubscribe]);
   return { callId: state?.binding === binding ? state.callId : undefined, title: state?.binding === binding ? state.title : undefined, blocks: state?.binding === binding ? state.blocks : undefined, error: !deviceId || status !== 'online' || (state?.binding === binding && state.error), retry };
 }

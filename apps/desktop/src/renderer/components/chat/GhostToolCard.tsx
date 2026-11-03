@@ -66,7 +66,7 @@ import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
 import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
 import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
-import { usePrStatus } from '@/contexts/PrRefsContext';
+import { usePrStatuses } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -331,11 +331,12 @@ function GhostCardCanvas({
   const renderedCardHtml = running && animatedHtml ? animatedHtml : html;
   // PR 状态位:用标题栏同一份状态(随它定时刷新)替换插件的兜底快照。
   const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
-  const prStatus = usePrStatus(sessionId ?? '', prSlotKey ?? '');
-  const prStatusRef = useRef(prStatus);
-  prStatusRef.current = prStatus;
+  // 卡片可以声明多个 PR 的状态位:订阅会话的整张状态表,每个位各取各的。
+  const { statuses: prStatuses } = usePrStatuses(prSlotKey ? (sessionId ?? '') : '');
+  const prStatusesRef = useRef(prStatuses);
+  prStatusesRef.current = prStatuses;
   const fillPrStatus = useCallback((doc: Document) => {
-    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => (key === prSlotKey ? prStatusRef.current : undefined), t);
+    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t);
   }, [prSlotKey, t]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
@@ -711,7 +712,7 @@ function GhostCardCanvas({
     if (!doc?.body || !prSlotKey) return;
     fillPrStatus(doc);
     measureHeight();
-  }, [prStatus, prSlotKey, fillPrStatus, measureHeight]);
+  }, [prStatuses, prSlotKey, fillPrStatus, measureHeight]);
 
   // 权威实测的高度提交落地后才放开缓动开关:依赖 measuredHeight = 只在
   // 新高度**已渲染提交**的那次 commit 之后翻闸——若挂在"每次渲染后跑",

@@ -322,7 +322,8 @@ export function stabilizeManagedSkillLinks(
   exists: (filePath: string) => boolean = existsSync,
   readdir: (dirPath: string) => string[] = (dirPath) => readdirSync(dirPath),
 ): string {
-  return command.replace(/"([^"]*)"|'([^']*)'|(\S+)/g, (token, doubled?: string, single?: string, bare?: string) => {
+  // A bare word ends at whitespace or a shell operator, so `…/gate.mjs&&exit 0` keeps `&&exit` out of the path.
+  return command.replace(/"([^"]*)"|'([^']*)'|([^\s;&|<>()]+)/g, (token, doubled?: string, single?: string, bare?: string) => {
     const value = doubled ?? single ?? bare ?? '';
     const segments = value.split(/[\\/]/);
     const at = segments.findIndex((segment) => MANAGED_SKILL_LINK_SEGMENT.test(segment));

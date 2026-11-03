@@ -56,6 +56,28 @@ describe('plugin card lifecycle on Mobile', () => {
     await act(async () => { h.push?.('mac', { collectionId: 'plugin-results', resourceRefs: [{ kind: 'card', id: '["s","new"]' }] }); await vi.advanceTimersByTimeAsync(250); });
     expect(current.callId).toBe('latest'); expect(current.hidden).toBe(false);
   });
+  // The card's PR status only changes on the Host when the card is saved or the phone reads it again,
+  // so a card left open on a PR would show a stale "CI running" after it passed or merged.
+  it('reads a card that shows PR status again every minute, and stops with the card', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    h.get.mockResolvedValue(live);
+    await render();
+    expect(h.get).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+    act(() => root?.unmount()); root = undefined;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.get).toHaveBeenCalledTimes(3);
+  });
+  it('does not poll a card without PR status', async () => {
+    vi.useFakeTimers();
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
   it.each(['plugin', 'account', 'draft', 'cycle', 'missing'])('rejects a %s replacement instead of exposing another draft', async boundary => {
     const replacement = draft(undefined, boundary === 'account' ? { accountId: 'other' } : boundary === 'draft' ? { draftId: 'other' } : {});
     if (boundary === 'plugin') replacement.blocks[0].data.pluginId = 'other';
