@@ -62,7 +62,7 @@ const restorationJs = ts.transpileModule(restorationSource, {
 }).outputText;
 const createRestorer = new Function('resolveFastSupported', 'env', `
   const {catalogDeviceId, remoteProviders, providers, currentModelAgentKind,
-    ccCaps, codexCaps, piCaps, modelMemory} = env;
+    ccCaps, codexCaps, piCaps, zcodeCaps, modelMemory} = env;
   const useCallback = fn => fn;
   ${restorationJs}
   return resolveFast;
@@ -79,7 +79,7 @@ const switchFastJs = ts.transpileModule(switchFastSource, {
 }).outputText;
 const resolveSwitchFast = new Function('resolveFastSupported', 'env', `
   const {deviceLinkDeviceId, remoteProviders, providers, targetAgentKind,
-    ccCaps, codexCaps, piCaps, providerId, newModelId, modelMemory,
+    ccCaps, codexCaps, piCaps, zcodeCaps, providerId, newModelId, modelMemory,
     overrides, fromOtherCatalog} = env;
   ${switchFastJs}
   return targetFast;
@@ -192,6 +192,7 @@ it.each([undefined, 'remote-host'])('composer restores speed by the target accou
     providers: deviceId ? [account('eligible', true), account('standard', true)] : executionProviders,
     currentModelAgentKind: 'codex',
     ccCaps: capability, codexCaps: capability, piCaps: capability,
+    zcodeCaps: { capabilities: caps(false, false) },
     modelMemory: { getFast: () => remembered },
   }) as (modelId: string, providerId: string) => boolean | 'ultrafast';
   const selection = (providerId: string) => composeAtomicModelSelection({
@@ -236,6 +237,7 @@ it.each([undefined, 'remote-host'])('agent switch constrains restored and overri
     providers: deviceId ? [account('eligible', true), account('standard', true)] : executionProviders,
     targetAgentKind: 'codex',
     ccCaps: { capabilities: caps(false, false) }, codexCaps: capability, piCaps: capability,
+    zcodeCaps: { capabilities: caps(false, false) },
     newModelId: 'opus', modelMemory: { getFast: () => remembered },
     fromOtherCatalog: false,
   };
@@ -262,4 +264,29 @@ it.each([undefined, 'remote-host'])('agent switch constrains restored and overri
     ...env, providerId: 'standard', fromOtherCatalog: true,
     overrides: { fastMode: 'ultrafast' },
   })).toBe('ultrafast');
+});
+
+// PR #8022: the production composer must use the native engine capability,
+// rather than another engine's Fast-capable snapshot. Existing tests exercised
+// only cc/codex; minimal unit input is a saved Fast preference on a ZCode model.
+it('composer rejects remembered Fast when the native ZCode engine has no Fast capability', () => {
+  const native: ProviderView = {
+    ...localViews[0],
+    id: 'zcode-native',
+    nativeAgent: 'zcode',
+    agents: ['zcode'],
+    routing: {},
+    models: { zcode: [localViews[0].models['claude-code']![0]] },
+  };
+  const capable = { capabilities: caps(true, true) };
+  const restore = createRestorer(resolveFastSupported, {
+    catalogDeviceId: undefined,
+    remoteProviders: { providers: [] },
+    providers: [native],
+    currentModelAgentKind: 'zcode',
+    ccCaps: capable, codexCaps: capable, piCaps: capable,
+    zcodeCaps: { capabilities: caps(false, false) },
+    modelMemory: { getFast: () => true },
+  }) as (modelId: string, providerId: string) => boolean | 'ultrafast';
+  expect(restore('opus', 'zcode-native')).toBe(false);
 });

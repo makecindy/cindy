@@ -20,7 +20,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 |---|---|---|
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
-| [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
+| [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 登记事实（稳定 ID / 平台 / 标题 / 入口 / 路由覆盖）+ 人工迁移状态；组件、样式来源与 Token / 裸值统计不入库 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`，统计报告 `pnpm design:inventory:report`） |
 | [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
@@ -44,7 +44,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 5. 需要改设计值时读 [Token README](../../packages/design-tokens/README.md)：Desktop 已接管族从 DTCG 生成到原生产入口；同源维护方法与保留清单在该处。Mobile 接口待新重构方案明确后共同确认，以后独立接管；新观感先查治理 §10 待决项，不因数值相同而删除局部主题覆盖。
 
 6. 对未提交候选运行 `pnpm check:design-colors --base-ref <实际基线> --worktree`；单用默认命令只检查提交范围。报告的文件/行号指向待核位置，`report` 不代表违规或批准，来源引用也须符合组件用途。间距优先使用既有 `p-4` / `gap-x-2` 等尺度；不要猜 `--spacing-*` 变量。分类与盲区见治理 §8/13。
-7. 新增/改名入口后运行 `pnpm design:inventory` 和 `pnpm check:design-inventory`；只手工更新对应 surface 的 owner、状态、下一动作，不编辑生成区，不因共用组件已经迁移就把整页标 migrated。
+7. 新增/改名入口后运行 `pnpm design:inventory` 和 `pnpm check:design-inventory`（只改样式不改入口时台账不变，无需重新生成；想看统计跑 `pnpm design:inventory:report`）；只手工更新对应 surface 的 owner、状态、下一动作，不编辑生成区，不因共用组件已经迁移就把整页标 migrated。
 8. 提交前按开发工作流跑根 `pnpm test:unit:related` 及涉及包的 typecheck。遇到失败先分清源/生成物过期、真实新增违规、仅报告待核；从现有源或消费者修复，不增加整文件豁免。维护和回退入口见 [Token README](../../packages/design-tokens/README.md) 与 [治理 §8](./design-governance.md#8-治理接线纪律)。
 
 9. 改 Mobile 界面文字时，先查 [Mobile 设计指南 §3「文字规范速查」](../../apps/mobile/docs/mobile-design-guide.md#3-字体与排版)：按角色整行照抄字号、行高、字重、字色；守护测试会拦下阶梯外取值、缺行高和浅色字配粗字重，角色选错要靠 review。
@@ -53,6 +53,9 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 
 ## 版本记录
 
+- **2026-11-02（台账只保留登记与人工区）**：`design-inventory.md` 的 GENERATED 区块移除可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计，只留 surface ID、平台、标题、生产入口与路由覆盖；统计改由 `pnpm design:inventory:report` 按需输出到 `tmp/`。原因：统计随任意样式改动变化，每个 surface 只占一行，改到同一 surface 的 PR 合并时必然冲突，且只能重跑生成器解决；这项检查也不拦欠账增加。登记检查与人工区不变，拦新增裸色仍由 `check:design-colors` 负责。落点：治理 §2.1 / §9。
+
+- **2026-10-29（规范内部矛盾与过时说法清理，纯文档）**：`DESIGN.md` 主文字色改为 `--text-primary`（纯黑不再是普通文字层级，只留给已登记的 CTA 底与反相前景）；§7 / §9 的「零阴影 / 零渐变」改为指向 §6 与 §2 已登记例外；§9 设置页、Tabs、代码块示例对齐 §4 现行规则；Focus Blue 写明文本输入框例外；品牌红不再列「运行中」（§15.10 / §15.14）；Button 规格块补齐 28 / 24 / 22px；颜色审计、Toast 警告色、ConfirmDialog 危险色、motion token 位置、半透明 token、数值权威与 §13 待决指向按现状改写；§10 生成表 `--text-tertiary` 用途改源重生成。手机指南的圆角、颜色与交叉引用自相矛盾处一并修正；token 决策表与治理合同补取代 / 合并状态。不改任何界面数值。
 - **2026-10-27（登录页面板、控件与主按钮并入墨水口径）**：`DESIGN.md §16.1 / §16.5` 改写——登录面板、控件、描边、主按钮与 hover / pressed 取 CINDY 主界面对应角色（`loginInkLadder.test.ts` 逐项守护），2026-07-24 Figma 按钮状态矩阵与禁用叠层退役（ID 保留）；新增 `pnpm ui:check --page login-skin` 截图场景。详见 `design-decision-log.md` 10-27。
 - **2026-10-23（登录页文字并入墨水阶梯；移除 Figma 组件读取记录）**：`DESIGN.md §16` 改为登录域唯一现行规则来源，登录文字 token 与主界面墨水档同值（`loginInkLadder.test.ts` 守护）；`figma-component-spec.md` 移除，按钮族状态矩阵迁入 §16.5。详见 `design-decision-log.md` 10-23。
 

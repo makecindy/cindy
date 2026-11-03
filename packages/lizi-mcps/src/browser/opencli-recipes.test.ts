@@ -15,7 +15,7 @@ import { runRecipe } from "./recipe-runner.js";
 import { executeAdapter, type IPage } from '@jackwener/opencli/cindy';
 import { saveBase64ToFile } from '@jackwener/opencli/utils';
 import { withRecipeHost, recipeDiagnosticPath, recipeOutputPath, recipeCopySource, readRecipeFileSync, readSecretJSON, writeSecretJSON } from '@jackwener/opencli/cindy/host';
-import { mkdtemp, mkdir, writeFile, rm, readFile, realpath, access, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, realpath, access, readdir, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 // @ts-expect-error Pinned upstream adapter helpers ship JavaScript without declarations.
@@ -32,6 +32,7 @@ import { prepareChatGPTFilePaths } from '../../../opencli-vendor/clis/chatgpt/ut
 import { readFileSync, writeFileSync, openSync, fstatSync } from 'node:fs';
 import * as childProcess from 'node:child_process';
 import { AsyncResource } from 'node:async_hooks';
+import { runInNewContext } from 'node:vm';
 // @ts-expect-error Upstream JavaScript helpers have no declarations.
 import { validateLocalReferences } from '../../../opencli-vendor/clis/midjourney/utils.js';
 // @ts-expect-error Pinned upstream JavaScript uploader has no declarations.
@@ -77,6 +78,120 @@ afterEach(() => {
 });
 
 describe("bundled OpenCLI recipes", () => {
+  // User-requested X video support, unit. executeAdapter + the actual page
+  // expressions must not post a preview while upload/processing is pending.
+  // Existing tests never exercised twitter/post. Minimal input: one local MP4
+  // with a preview, an enabled button and a still-active media progressbar.
+  it.each(['ready', 'fallback-mp4', 'fallback-mov', 'rejected', 'timeout', 'image'])(
+    'publishes X attachments only after processing succeeds (%s)', async mode => {
+      vi.useFakeTimers();
+      const dir = await mkdtemp(path.join(tmpdir(), 'cindy-x-video-'));
+      const file = path.join(dir, mode === 'image' ? 'photo.png' : mode === 'fallback-mov' ? 'clip.MOV' : 'clip.mp4');
+      await writeFile(file, 'fixture bytes');
+      let attached = false;
+      let sent = false;
+      let processing = true;
+      let probes = 0;
+      let text = '';
+      const injected: File[] = [];
+      const visible = { offsetParent: {}, getClientRects: () => [{}] };
+      const toast = { ...visible, textContent: 'Your post was sent', hasAttribute: () => false,
+        setAttribute: () => {}, querySelectorAll: () => [] };
+      const error = { ...visible, textContent: 'Your media file could not be processed' };
+      const button = { ...visible, disabled: false, getAttribute: () => null, click: () => {
+        expect(attached).toBe(true);
+        if (mode !== 'image') expect(processing).toBe(false);
+        sent = true;
+      } };
+      const attachments = { ...visible,
+        querySelector: () => attached ? visible : null,
+        querySelectorAll: () => {
+          if (mode === 'image') return attached ? [visible] : [];
+          probes++;
+          processing = mode === 'timeout' || probes < 3;
+          return processing ? [visible] : [];
+        },
+      };
+      const input: { files?: File[]; dispatchEvent: () => void } = {
+        dispatchEvent: () => { attached = true; injected.splice(0, injected.length, ...(input.files ?? [])); },
+      };
+      const box = { ...visible, focus: () => {}, closest: () => document,
+        get innerText() { return text; }, get textContent() { return text; } };
+      const document = {
+        querySelector: (selector: string) => selector.includes('tweetTextarea') ? box
+          : selector.includes('attachments') ? attachments : selector.includes('fileInput') ? input : null,
+        querySelectorAll: (selector: string): unknown[] => {
+          if (selector.includes('tweetTextarea')) return [box];
+          if (selector.includes('tweetButton')) return [button];
+          if (selector.includes('alert')) return sent ? [toast] : attached && mode === 'rejected' ? [error] : [];
+          // X's character-count progressbar remains present even when media is ready.
+          if (selector.includes('progressbar')) return [visible];
+          return [];
+        },
+      };
+      class DataTransfer {
+        files: File[] = [];
+        items = { add: (file: File) => this.files.push(file) };
+      }
+      const page = { goto: async () => {}, wait: async () => {},
+        setFileInput: async () => {
+          if (mode.startsWith('fallback')) throw new Error('setFileInput not supported');
+          attached = true;
+        },
+        nativeType: async (value: string) => { text = value; },
+        evaluate: async (js: string) => runInNewContext(js, {
+          document, window: { location: { origin: 'https://x.com' } }, URL,
+          setTimeout, DataTransfer, File, Event, atob,
+        }),
+      } as unknown as IPage;
+      try {
+        const recipe = loadRecipes().get('opencli:twitter/post')!;
+        expect(recipe.inputs?.video).toMatchObject({ type: 'string', required: false });
+        const running = executeAdapter('twitter/post', { text: 'Video fixture',
+          [mode === 'image' ? 'images' : 'video']: file }, page, undefined, undefined,
+        { read: readFileSync, open: file => openSync(file, 'r'), temporaryRoot: dir });
+        const checked = running.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+        // Allow the host's asynchronous cleanup to schedule before draining time.
+        await vi.runAllTimersAsync();
+        const outcome = await checked;
+        if (mode === 'rejected' || mode === 'timeout') {
+          expect(sent).toBe(false);
+          expect(outcome.error?.message).toContain(mode === 'rejected' ? 'could not be processed' : 'timed out');
+        } else {
+          expect(outcome.error).toBeUndefined();
+          expect(outcome.value).toMatchObject([{ status: 'success', text: 'Video fixture' }]);
+          expect(sent).toBe(true);
+          if (mode.startsWith('fallback')) {
+            expect(injected).toHaveLength(1);
+            expect(injected[0].type).toBe(mode === 'fallback-mov' ? 'video/quicktime' : 'video/mp4');
+            expect(await injected[0].text()).toBe('fixture bytes');
+          }
+        }
+      } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+
+  // Same feature/entry, unit: malformed input must fail before navigation or
+  // upload. The prior image-only sender had no video validation at all.
+  it.each(['format', 'empty', 'oversize', 'mixed'])('rejects invalid X video input before opening the composer (%s)', async mode => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'cindy-x-video-input-'));
+    const file = path.join(dir, mode === 'format' ? 'clip.webm' : 'clip.mp4');
+    await writeFile(file, mode === 'empty' ? '' : 'fixture bytes');
+    if (mode === 'oversize') {
+      await truncate(file, 100 * 1024 * 1024 + 1);
+    }
+    const goto = vi.fn();
+    const executionStarted = vi.fn();
+    try {
+      await expect(executeAdapter('twitter/post', { text: 'Fixture', video: file,
+        ...(mode === 'mixed' ? { images: 'photo.jpg' } : {}) }, { goto } as unknown as IPage,
+      undefined, executionStarted, { read: readFileSync, open: file => openSync(file, 'r') }))
+        .rejects.toThrow(mode === 'format' ? 'Unsupported video format' : mode === 'empty'
+          ? 'Not a valid video file' : mode === 'oversize' ? '100 MiB' : 'either video or images');
+      expect(goto).not.toHaveBeenCalled();
+      expect(executionStarted).not.toHaveBeenCalled();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   // #6826 / 4354589825, unit: the real publishing entries must retain the
   // original failure without advertising an already-cleaned diagnostic file.
   // Existing temporary-file tests covered cleanup, but never adapter errors.

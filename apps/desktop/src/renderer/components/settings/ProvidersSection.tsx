@@ -111,7 +111,7 @@ import {
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { ProviderImportDialog } from './ProviderImportDialog';
+import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -2571,7 +2571,7 @@ export function ProvidersSection() {
     modelId: string;
     agent?: AgentKind;
   } | null>(null);
-  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | string[] | null>(null);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
   const finishProviderImport = useCallback(
     (providerId: string) => {
@@ -3343,7 +3343,7 @@ export function ProvidersSection() {
               )}
             </div>
             <div id="settings-search-settings-providers-addProvider"
-              className="border-t p-2"
+              className="flex flex-col gap-2 border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
               <Button
@@ -3357,6 +3357,10 @@ export function ProvidersSection() {
                 <Plus size={15} />
                 {t('settings.providers.addProvider')}
               </Button>
+              <ProviderImportFileButton
+                key={`${dataOwnerId}:${ownerGeneration}`}
+                onImported={setProviderImportId}
+              />
             </div>
           </div>
 
@@ -3635,15 +3639,22 @@ export function ProvidersSection() {
           entry={wizard.entry}
           detected={wizard.detected}
           onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
+          onEntryUnavailable={dialog?.mode === 'create' ? (reason) => {
+            setWizard(null);
+            if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
+          } : undefined}
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
-            await refetch();
-            setWizard(null);
+            // 退出已完成；先卸载本实例，让刷新期间的新入口挂载全新向导。
+            setWizard(current => current === wizard ? null : current);
+            // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
+            setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
+            await refetch();
           }}
         />
       )}
@@ -3652,6 +3663,9 @@ export function ProvidersSection() {
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
+          providers={providers}
+          suspended={dialog.mode === 'create' && !!wizard}
+          onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}
@@ -3666,7 +3680,14 @@ export function ProvidersSection() {
         />
       )}
 
-      {providerImportId && (
+      {Array.isArray(providerImportId) ? (
+        <ProviderImportBatchDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId.join(',')}`}
+          importIds={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
+        />
+      ) : providerImportId && (
         <ProviderImportDialog
           key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
           importId={providerImportId}

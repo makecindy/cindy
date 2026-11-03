@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Maker, createConsoleLogger, type BaseAgent } from '@cindy/maker-core';
 
-import { createPiRuntimeRecovery } from '../pi-runtime-recovery.js';
+import {
+  createPiRuntimeRecovery,
+  prepareOptionalPiRuntime,
+  PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS,
+} from '../pi-runtime-recovery.js';
 
 describe('Pi runtime recovery', () => {
   it('retries after the network returns and registers Pi once', async () => {
@@ -39,9 +44,10 @@ describe('Pi runtime recovery', () => {
   it('deduplicates concurrent recovery and keeps retryable failure disabled', async () => {
     let resolvePrepare!: (value: { ready: boolean; path?: string; error?: string }) => void;
     const prepare = vi.fn(
-      () => new Promise<{ ready: boolean; path?: string; error?: string }>((resolve) => {
-        resolvePrepare = resolve;
-      }),
+      () =>
+        new Promise<{ ready: boolean; path?: string; error?: string }>((resolve) => {
+          resolvePrepare = resolve;
+        }),
     );
     const recovery = createPiRuntimeRecovery({
       isOnline: () => true,
@@ -54,7 +60,9 @@ describe('Pi runtime recovery', () => {
     });
 
     recovery.markUnavailable('manifest_failed');
-    const first = recovery.retryNow();
+    const focusStart = performance.now();
+    const first = recovery.retryNow('window-focus');
+    expect(performance.now() - focusStart).toBeLessThan(100);
     const second = recovery.retryNow();
     expect(first).toBe(second);
     expect(prepare).toHaveBeenCalledOnce();
@@ -103,5 +111,145 @@ describe('Pi runtime recovery', () => {
     expect(schedule).toHaveBeenCalledOnce();
     expect(recovery.isDisabled()).toBe(true);
     recovery.dispose();
+  });
+
+  it('backs off consecutive timer failures, while immediate triggers keep the current step', async () => {
+    vi.useFakeTimers();
+    let ready = false;
+    const prepare = vi.fn(async () =>
+      ready ? { ready: true, path: '/tmp/pi' } : { ready: false, error: 'manifest_failed' },
+    );
+    const recovery = createPiRuntimeRecovery({
+      isOnline: () => true,
+      prepare,
+      register: () => true,
+      onRegistered: vi.fn(),
+    });
+
+    try {
+      recovery.markUnavailable('manifest_failed');
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      const focused = recovery.retryNow('window-focus');
+      expect(prepare).toHaveBeenCalledTimes(2);
+      await expect(focused).resolves.toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(300_000);
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(prepare).toHaveBeenCalledTimes(6);
+      expect(PI_RUNTIME_RECOVERY_RETRY_DELAYS_MS).toEqual([30_000, 60_000, 120_000, 300_000]);
+
+      ready = true;
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(prepare).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(prepare).toHaveBeenCalledTimes(7);
+      expect(vi.getTimerCount()).toBe(0);
+
+      ready = false;
+      recovery.markUnavailable('manifest_failed');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(prepare).toHaveBeenCalledTimes(8);
+    } finally {
+      recovery.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares an in-flight timer attempt and does not register after disposal', async () => {
+    let resolvePrepare!: (value: { ready: boolean; path: string }) => void;
+    const prepare = vi.fn(
+      () =>
+        new Promise<{ ready: boolean; path: string }>((resolve) => {
+          resolvePrepare = resolve;
+        }),
+    );
+    const register = vi.fn(() => true);
+    const recovery = createPiRuntimeRecovery({
+      isOnline: () => true,
+      prepare,
+      register,
+      onRegistered: vi.fn(),
+      retryDelayMs: 1,
+    });
+
+    recovery.markUnavailable('manifest_failed');
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+    const focused = recovery.retryNow('window-focus');
+    recovery.dispose();
+    resolvePrepare({ ready: true, path: '/tmp/pi' });
+
+    await expect(focused).resolves.toBe(false);
+    expect(register).not.toHaveBeenCalled();
+  });
+});
+
+// Startup used to report Pi ready without registering it in a Maker created by IM/plugins.
+// Existing recovery tests only covered failed prepare. These unit cases exercise the
+// production startup boundary with controlled readiness, without downloads or Electron.
+describe('optional Pi startup', () => {
+  it('registers an already-created Maker only after managed preparation succeeds', async () => {
+    let resolvePrepare!: (result: { ready: boolean; path: string }) => void;
+    const maker = new Maker({
+      agents: {},
+      storage: {
+        create: vi.fn(), get: vi.fn(), list: vi.fn(), update: vi.fn(),
+        compareAndClearSdkSessionId: vi.fn(), delete: vi.fn(),
+      },
+      logger: createConsoleLogger('pi-startup-test'),
+    });
+    const pi = {
+      getBinaryPath: () => '/managed/pi',
+      getAuthState: async () => ({ authenticated: true }),
+    } as unknown as BaseAgent;
+    const register = vi.fn(() => maker.registerAgent('pi', pi));
+    const startup = prepareOptionalPiRuntime({
+      prepare: () => new Promise((resolve) => { resolvePrepare = resolve; }),
+      register,
+    });
+    await expect(maker.getAgentStatus('pi')).resolves.toMatchObject({ binaryReady: false });
+    expect(register).not.toHaveBeenCalled();
+    resolvePrepare({ ready: true, path: '/managed/pi' });
+    await expect(startup).resolves.toEqual({ status: 'passed', path: '/managed/pi' });
+    await expect(maker.getAgentStatus('pi')).resolves.toMatchObject({
+      binaryReady: true, binaryPath: '/managed/pi', authReady: true,
+    });
+    await prepareOptionalPiRuntime({
+      prepare: async () => ({ ready: true, path: '/managed/pi' }),
+      register,
+    });
+    expect(maker.listAvailableAgents()).toEqual(['pi']);
+    expect(register.mock.results.map((result) => result.value)).toEqual([true, false]);
+  });
+
+  it('keeps a prepared runtime available when Maker has not been constructed yet', async () => {
+    const register = vi.fn(() => false);
+    await expect(prepareOptionalPiRuntime({
+      prepare: async () => ({ ready: true, path: '/managed/pi' }),
+      register,
+    })).resolves.toEqual({ status: 'passed', path: '/managed/pi' });
+    expect(register).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { ready: false, error: 'manifest_failed' },
+    { ready: true },
+    new Error('NETWORK'),
+  ])('does not register an unavailable runtime: %j', async (result) => {
+    const register = vi.fn(() => true);
+    const info = await prepareOptionalPiRuntime({
+      prepare: async () => { if (result instanceof Error) throw result; return result; },
+      register,
+    });
+    expect(info).toEqual({
+      status: 'failed',
+      error: result instanceof Error ? result.message : result.error ?? 'pi binary not available',
+    });
+    expect(register).not.toHaveBeenCalled();
   });
 });

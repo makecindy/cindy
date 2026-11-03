@@ -46,6 +46,7 @@ type ElectronApiStub = {
     ensureReady: ReturnType<typeof vi.fn<ElectronAPI['localDb']['ensureReady']>>;
   };
   appReadyForBot: ReturnType<typeof vi.fn>;
+  copyTextToClipboard: ReturnType<typeof vi.fn>;
   getUpdateStatus: ReturnType<typeof vi.fn>;
   onUpdateStatus: ReturnType<typeof vi.fn>;
 };
@@ -56,6 +57,7 @@ function stubElectronApi(): ElectronApiStub {
       ensureReady: vi.fn<ElectronAPI['localDb']['ensureReady']>().mockResolvedValue({ ready: true }),
     },
     appReadyForBot: vi.fn().mockResolvedValue(undefined),
+    copyTextToClipboard: vi.fn().mockResolvedValue(undefined),
     // fatal 分支挂载 LocalDbFatalScreen → useUpdateStatus 需要这两个 API。
     getUpdateStatus: vi.fn().mockResolvedValue({ status: 'idle' }),
     onUpdateStatus: vi.fn(() => () => {}),
@@ -133,6 +135,23 @@ describe('LocalDbGate 有限重试', () => {
     await flushAsync();
     expect(screen.getByTestId('main-content')).toBeTruthy();
     expect(api.localDb.ensureReady).toHaveBeenNthCalledWith(2, 'user-1');
+  });
+
+  // #6870 review: the copy action must report through the main-process clipboard and, when that
+  // fails (no clipboard access, Wayland), open the technical details so the user can copy by hand.
+  it('init-failed 的复制按钮走主进程剪贴板,失败时展开技术细节供手动复制', async () => {
+    const api = stubElectronApi();
+    api.localDb.ensureReady.mockResolvedValue({ ready: false, error: { code: 'DB_INIT_FAILED', message: 'plugin dir EPERM' } });
+    renderGate();
+    await flushAsync();
+    const details = () => document.querySelector('details') as HTMLDetailsElement;
+    expect(details().open).toBe(false);
+    api.copyTextToClipboard.mockRejectedValueOnce(new Error('clipboard unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'localDbFatal.corrupt.copy' }));
+    await flushAsync();
+    expect(api.copyTextToClipboard).toHaveBeenCalledWith({ text: 'DB_INIT_FAILED\nplugin dir EPERM' });
+    expect(details().open).toBe(true);
+    expect(details().textContent).toContain('plugin dir EPERM');
   });
 
   it('transient 失败 2 次后成功 → 重试后放行,不落 fatal', async () => {

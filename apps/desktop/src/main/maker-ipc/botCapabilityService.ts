@@ -16,9 +16,12 @@ import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
+import {
+  isBotSystemSkillId, isBotSystemSkillOn, readBotSystemSkillsOff, withBotSystemSkill, type BotSystemSkillId,
+} from '../../shared/botSystemSkills.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
-type Input = { callerSessionId: string; kind: Kind };
+type Input = { callerSessionId: string; kind: Kind | 'feature' };
 type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean };
 export interface BotCapabilityServiceDeps {
   readConversationConnections?(botId: string): Promise<NonNullable<BotControlState['conversations']>['connections']>;
@@ -39,6 +42,20 @@ const fields: Record<Kind, { list: string; mode: string }> = {
   mcp: { list: 'mcpServers', mode: 'mcpMode' },
   toolset: { list: 'toolsets', mode: 'toolsetMode' },
 };
+/** `kind=feature`: this teammate's own switches. Memory keeps its own field; the rest are system Skills. */
+const FEATURES: { id: 'memory' | BotSystemSkillId; name: string; description: string }[] = [
+  { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
+  { id: 'todo', name: '待办', description: '系统技能：记录与提醒主人交代的和发现的待办。' },
+  { id: 'routine', name: '例行任务', description: '系统技能：建立和维护自己的定期或事件触发的例行任务。' },
+  { id: 'follow', name: '工作台与跟进', description: '系统技能：关注主人的任务近况，跟进交给自己的任务。' },
+];
+function featureEntries(config: Record<string, unknown>): Entry[] {
+  return FEATURES.map((item) => ({
+    ...item,
+    available: true,
+    joined: item.id === 'memory' ? config.memory !== false : isBotSystemSkillOn(config, item.id),
+  }));
+}
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
@@ -112,7 +129,7 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
   } };
 }
 
-async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
+async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
   options?: { modelChain?: BotModelRoute[]; forceReload?: boolean; agentKind?: AgentKind }): Promise<Entry[]> {
   const joined = new Set(strings(ctx.config[fields[input.kind].list]).filter(
     (id) => input.kind !== 'toolset' || !BOT_BASELINE_PLUGIN_IDS.has(id),
@@ -194,7 +211,8 @@ async function findBotCapabilities(input: Input & { query?: string }, deps: BotC
   try {
     const ctx = await context(input.callerSessionId, { readScope: 'owner' });
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
-    const capabilities = (await catalog(input, ctx, deps)).filter(
+    const entries = input.kind === 'feature' ? featureEntries(ctx.config) : await catalog({ ...input, kind: input.kind }, ctx, deps);
+    const capabilities = entries.filter(
       (item) =>
         !query || `${item.id} ${item.name} ${item.description}`.toLocaleLowerCase().includes(query),
     );
@@ -213,24 +231,43 @@ async function findBotCapabilities(input: Input & { query?: string }, deps: BotC
 async function selectBotCapability(input: Input & { id: string; joined: boolean }, deps: BotCapabilityServiceDeps) {
   try {
     const ctx = await context(input.callerSessionId);
-    if (input.kind === 'toolset' && BOT_BASELINE_PLUGIN_IDS.has(input.id)) {
+    if (input.kind === 'feature') {
+      const feature = input.id === 'memory' ? 'memory' : isBotSystemSkillId(input.id) ? input.id : null;
+      if (!feature) {
+        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、todo、routine、follow' };
+      }
+      ctx.assertOwner();
+      await updateBotProfile({
+        id: ctx.botId,
+        capabilities: feature === 'memory'
+          ? { memory: input.joined }
+          : { systemSkillsOff: withBotSystemSkill(ctx.config.systemSkillsOff, feature, input.joined) },
+      }, ctx.version);
+      ctx.assertOwner();
+      return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
+    }
+    const kind = input.kind;
+    if (kind === 'toolset' && BOT_BASELINE_PLUGIN_IDS.has(input.id)) {
       return {
         ok: false as const,
         errorCode: 'CAPABILITY_NOT_SELECTABLE',
         message: '该工具集是伙伴固定能力，无需加入且不能移除',
       };
     }
-    const field = fields[input.kind];
-    const previous = input.kind !== 'skill' && ctx.config[field.mode] === 'inherit'
-      ? (await catalog(input, ctx, deps)).filter((item) => item.joined).map((item) => item.id)
+    const field = fields[kind];
+    const previous = kind !== 'skill' && ctx.config[field.mode] === 'inherit'
+      ? (await catalog({ ...input, kind }, ctx, deps)).filter((item) => item.joined).map((item) => item.id)
       : strings(ctx.config[field.list]);
     if (input.joined) {
-      const item = (await catalog(input, ctx, deps, { forceReload: true })).find((entry) => entry.id === input.id);
+      const item = (await catalog({ ...input, kind }, ctx, deps, { forceReload: true })).find((entry) => entry.id === input.id);
       if (!item?.available)
         return {
           ok: false as const,
           errorCode: 'CAPABILITY_UNAVAILABLE',
-          message: '该能力未安装、已停用或当前运行引擎不可用',
+          // Weaker models guess kind=skill for todo/memory; point them at the right switch.
+          message: !item && FEATURES.some((feature) => feature.id === input.id)
+            ? `${input.id} 是伙伴自己的功能开关，请改用 kind=feature`
+            : '该能力未安装、已停用或当前运行引擎不可用',
         };
     }
     ctx.assertOwner();
@@ -300,6 +337,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
           model: { source: explicit === null ? 'default' : 'override', candidates },
           memory: { enabled: ctx.config.memory !== false, scope: 'self' },
+          systemSkillsOff: readBotSystemSkillsOff(ctx.config.systemSkillsOff),
           references: { skills: strings(ctx.config.skills), mcpServers: strings(ctx.config.mcpServers),
             toolsets: strings(ctx.config.toolsets) },
         };
@@ -364,7 +402,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     },
     list: (input: Input & { query?: string }) => findBotCapabilities(input, deps),
     /** Settings use the complete catalog, including removable unavailable references. */
-    async forSettings(input: Input) {
+    async forSettings(input: { callerSessionId: string; kind: Kind }) {
       const ctx = await context(input.callerSessionId, { allowPaused: true });
       return catalog(input, ctx, deps);
     },

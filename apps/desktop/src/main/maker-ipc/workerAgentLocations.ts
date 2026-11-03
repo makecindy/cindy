@@ -1,8 +1,9 @@
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getReceivedShares, providerShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isExecutionDeviceCandidate } from './orcaRemoteWorkers.js';
+import type { ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 
-export type WorkerAgentLocation = { agentDeviceId: string; name: string };
+export type WorkerAgentLocation = ControlledModelLocation;
 export type WorkerAgentLocationsReadResult =
   | { status: 'complete'; locations: WorkerAgentLocation[] }
   | { status: 'degraded'; locations: WorkerAgentLocation[] };
@@ -13,7 +14,7 @@ export type WorkerAgentLocationsReadResult =
  * 那台没开放供应商时按位置再列模型会是空的。分享不写分享者的电脑名
  * （provider-sharing.md §6），写「供应商 · 分享者」。不含本机。
  */
-export async function readWorkerAgentLocations(): Promise<WorkerAgentLocationsReadResult> {
+export async function readWorkerAgentLocations(options?: { favoriteSources?: boolean }): Promise<WorkerAgentLocationsReadResult> {
   let devices: Awaited<ReturnType<typeof handleListDevices>>['devices'] = [];
   let complete = true;
   try {
@@ -31,6 +32,10 @@ export async function readWorkerAgentLocations(): Promise<WorkerAgentLocationsRe
         return [{
           agentDeviceId: providerShareAgentDeviceId(share.shareId),
           name: `${share.providerLabel} · ${share.owner.displayName}`,
+          ...(options?.favoriteSources ? { favoriteSource: {
+            shareId: share.shareId, memberId: share.memberId, providerId: share.providerId,
+            owner: { region: share.owner.region },
+          } } : {}),
         }];
       } catch {
         return [];

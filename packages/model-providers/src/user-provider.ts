@@ -315,6 +315,8 @@ function toCatalogModel(
     userModelConfig: { ...m },
     id: m.id,
     discoveredMetadata: m.discoveredMetadata,
+    ...(m.discoveredSource ? { discoveredSource: m.discoveredSource } : {}),
+    ...(m.opaqueModelId ? { opaqueModelId: true as const } : {}),
     ...(m.discoveredCost ? { cost: m.discoveredCost } : {}),
     nameExplicit: m.nameExplicit,
     name: m.name,

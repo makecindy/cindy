@@ -8,7 +8,7 @@
  *   停用/卸载即休眠)与 2026-10-27 桥接迁入宿主的决定(翻译等转交必须到达插件)。
  * - 现有覆盖缺口:新槽。
  * - 最小失败输入:未声明能力的插件发请求;策略文件存在但桥接未恢复;逻辑页离线且拉起失败。
- * - tier:unit(假桥接、临时目录);实测耗时 < 1 秒。
+ * - tier:unit(假桥接、临时目录);Windows 单文件 2.14 秒、用例执行 1.20 秒(2026-10-30)。
  */
 
 import fs from 'node:fs/promises';
@@ -251,15 +251,15 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
 
   // Native hosts run outside the sandbox and share one registration per account, so a plugin that
   // is not the official Cindy Chrome must not get one, even under the official name.
-  it('只有官方 Cindy Chrome 能装 native host;其它插件声明了也只开桥接', async () => {
+  it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
     const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
-    expect(bridges[0].options.nativeToken).toBeUndefined();
-    expect(natives).toHaveLength(0);
+    expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
+    expect(natives).toHaveLength(1);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {
@@ -274,17 +274,29 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
   });
 
   // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
-  it('其它插件声明 pageControl 也不会成为「我的浏览器」', async () => {
+  it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
-    expect(slot.getPageControl()).toBeNull();
+    expect(slot.getPageControl()?.ghostId).toBe('other-browser');
   });
 });
 
 describe('browserExtensionSlot · 管子上行', () => {
+  it('selects a page-control instance explicitly without borrowing another instance pairing', async () => {
+    const ghosts = [extGhost({ id: 'first', nativeHost: false }), extGhost({ id: 'second', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__second')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__second');
+    ghosts[1].enabled = false;
+    h.slot.reconcile(ghosts);
+    expect(h.slot.getPageControl()).toBeNull();
+  });
   it('未声明能力 / 未启用的插件一律 PERMISSION_DENIED;桥接未就绪 HOST_NOT_READY', async () => {
     const ghosts = [
       extGhost(),
@@ -405,6 +417,8 @@ describe('browserExtensionSlot · 管子上行', () => {
     slot.reconcile(ghosts);
     await settle();
     expect(installs).toBe(1);
+    // A manually paired bridge remains usable while optional native registration is unavailable.
+    expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
     await slot.handleRequest('_root__my-browser', { kind: 'status' });
     expect(installs).toBe(2);
     expect(bridges).toHaveLength(1);
@@ -492,7 +506,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): a package that only claims the official id cannot pair browsers.
-  it('只自称官方 id 的未核验包不能保存配对', async () => {
+  it('任何批准实例都能保存自己的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -507,10 +521,9 @@ describe('browserExtensionSlot · 管子上行', () => {
     expect(
       await slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients }),
     ).toMatchObject({
-      ok: false,
-      errorCode: 'PERMISSION_DENIED',
+      ok: true,
     });
-    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
+    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(true);
     // Another plugin id is not an official claimant: its pairings work as before.
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
     const b = await makeSlot({ isVerifiedOfficial: () => false }, other);
@@ -525,7 +538,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): raw DevTools commands from a plugin that is not the verified official one.
-  it('非官方插件不能经管子发原始 DevTools 命令', async () => {
+  it('没有 node 的沙箱插件不能经管子发原始 DevTools 命令', async () => {
     const payload = {
       kind: 'act',
       action: 'cdp',
@@ -538,6 +551,7 @@ describe('browserExtensionSlot · 管子上行', () => {
       },
     };
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
+    delete other[0].manifest.node;
     const a = await makeSlot({}, other);
     a.slot.reconcile(other);
     await a.settle();
@@ -569,7 +583,7 @@ describe('browserExtensionSlot · 管子上行', () => {
 
   // Review 2026-10-30 (Codex P1): a manifest that merely claims the official id must not get the native
   // host, My browser or saved pairings.
-  it('未核验来源的包不装 native host、不接管「我的浏览器」、不继承配对', async () => {
+  it('普通插件可提供浏览器能力，但不继承其它来源的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -581,16 +595,19 @@ describe('browserExtensionSlot · 管子上行', () => {
     const { slot, bridges, natives, dir } = await makeSlot({ isVerifiedOfficial: () => false });
     await fs.writeFile(
       path.join(dir, encodeURIComponent('_root__my-browser') + '.json'),
-      JSON.stringify({ version: 1, source: '[null,null]', trustedClients: clients }),
+      JSON.stringify({ version: 1, source: 'different-package-source', trustedClients: clients }),
     );
     slot.reconcile([extGhost()]);
     await vi.waitFor(() => expect(bridges[0]?.started).toBe(true));
-    expect(natives).toHaveLength(0);
-    expect(slot.getPageControl()).toBeNull();
+    expect(natives).toHaveLength(1);
+    expect(slot.getPageControl()?.instanceId).toBe('_root__my-browser');
     expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
   });
 
   // A pairing cache written before sources were recorded is stamped when first read.
+  // Windows CI #41050204850: polling the destination races the background rename
+  // (and may hold the file open during replacement). Wait for the real rename,
+  // then verify both provenance and retained clients without another write request.
   it('没有来源记录的旧配对缓存读到后立即补上来源', async () => {
     const clients = [
       {
@@ -603,11 +620,35 @@ describe('browserExtensionSlot · 管子上行', () => {
     const { slot, bridges, dir } = await makeSlot();
     const file = path.join(dir, encodeURIComponent('_root__my-browser') + '.json');
     await fs.writeFile(file, JSON.stringify({ version: 1, trustedClients: clients }));
-    slot.reconcile([extGhost()]);
-    await vi.waitFor(() => expect(bridges[0]?.started).toBe(true));
-    await vi.waitFor(async () =>
-      expect(JSON.parse(await fs.readFile(file, 'utf8')).source).toBe('[null,null]'),
-    );
+    const originalRename = fs.rename.bind(fs);
+    let complete!: () => void;
+    let fail!: (error: unknown) => void;
+    const persisted = new Promise<void>((resolve, reject) => {
+      complete = resolve;
+      fail = reject;
+    });
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      try {
+        await originalRename(from, to);
+        if (to === file) complete();
+      } catch (error) {
+        if (to === file) fail(error);
+        throw error;
+      }
+    });
+    try {
+      slot.reconcile([extGhost()]);
+      await persisted;
+      await vi.waitFor(() => expect(bridges[0]?.started).toBe(true));
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({
+        version: 1,
+        source: '[null,null]',
+        trustedClients: clients,
+      });
+    } finally {
+      await slot.dispose();
+      rename.mockRestore();
+    }
   });
 
   // Review 2026-10-29 (Codex P1): a package from another source reused the old package's pairings.

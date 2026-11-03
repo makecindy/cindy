@@ -45,6 +45,19 @@ async function loadModule() {
 }
 
 describe('newMakerDraft store', () => {
+  // PR #8022: hydration must preserve a native explicit model choice so that a
+  // late default write from another surface cannot replace the selected model.
+  it('keeps a hydrated ZCode model choice across a late preserving default update', async () => {
+    memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({
+      vendor: 'zcode', defaultTupleCustomized: true, modelChosenByVendor: { zcode: true },
+      lastByVendor: { zcode: { model: 'native-chosen', providerId: 'zcode-native' } },
+    }));
+    const draft = await loadModule();
+    expect(draft.getDraft().modelChosenByVendor.zcode).toBe(true);
+    draft.patchVendorPrefsPreservingModelChoice('zcode', { model: 'stale-default', providerId: 'zcode-native' });
+    expect(draft.getDraft().lastByVendor.zcode.model).toBe('native-chosen');
+  });
+
   // Upgrade hydration is a production entrypoint: older drafts have no native
   // slot, and the generic Auto default cannot be sent to the ZCode harness.
   it.each(['auto', 'bypassPermissions'] as const)('hydrates legacy drafts with a supported ZCode permission for %s', async (permissionMode) => {

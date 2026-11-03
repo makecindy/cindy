@@ -8,6 +8,30 @@ const window = (patch: Partial<WindowGeometry> = {}): WindowGeometry => ({
   regularWidth: true, regularHeight: true, barEdge: 'right', regions: [], reservedRegionsSupported: true, ...patch,
 });
 describe('adaptive window regions', () => {
+  // Android FoldingFeature reports a crease as a zero-width/height line.
+  // Existing Duo cases only cover positive-area hinges. Exercise the production
+  // pane/control layouts so Android cannot silently fall back to one pane.
+  it('splits at zero-thickness Android folds without inventing a hinge gap', () => {
+    const g = window({ width: 700, height: 900, insets: { top: 24, bottom: 24, left: 0, right: 0 },
+      regions: [{ kind: 'division', x: 340, y: 0, width: 0, height: 900 }] });
+    const panes = sessionPaneLayout(g);
+    expect(panes.persistent).toBe(true);
+    expect(panes.sidebarWidth).toBe(340);
+    expect(panes.sidebarGap).toBe(0);
+    expect(panes.detail).toEqual({ x: 340, y: 24, width: 360, height: 852 });
+    const tabletop = { ...g, regions: [{ kind: 'division' as const, x: 0, y: 450, width: 700, height: 0 }] };
+    expect(foldDesktopLayout(tabletop, 0, 240, false)?.media).toEqual({ x: 0, y: 24, width: 700, height: 426 });
+    expect(controlRegion(tabletop)).toEqual({ x: 0, y: 450, width: 700, height: 426 });
+  });
+  it('rejects empty points, negative dimensions and folds that do not cross the window', () => {
+    for (const region of [
+      { x: 300, y: 300, width: 0, height: 0 },
+      { x: 300, y: 0, width: -1, height: 700 },
+      { x: 0, y: 300, width: 900, height: -1 },
+      { x: 300, y: 800, width: 0, height: 700 },
+      { x: 1000, y: 300, width: 900, height: 0 },
+    ]) expect(windowDivision(window({ regions: [{ ...region, kind: 'division' }] }))).toBeNull();
+  });
   it('reserves independent safe edges and room for both navigation and content', () => {
     const p = sessionPaneLayout(window());
     expect(p.persistent).toBe(true);

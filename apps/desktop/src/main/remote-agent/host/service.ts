@@ -83,6 +83,8 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.makerMemoryScopeKey ? { makerMemoryScopeKey: options.makerMemoryScopeKey } : {}),
     // 记忆在对方电脑上：没有快照时也给空快照，本机不读自己的记忆库。
     ...(options.makerMemoryEnabled ? { makerMemoryIndexSnapshot: options.makerMemoryIndexSnapshot ?? '' } : {}),
+    // 插件同理在对方电脑上：Agent 用对方给的花名册快照(空串表示对方没有可用插件，也要原样传下去)。
+    ...(options.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: options.ghostRosterSnapshot } : {}),
     ...(options.permissionMode ? { permissionMode: options.permissionMode as StartSessionOptions['permissionMode'] } : {}),
     ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
     ...(options.displayReasoning ? { displayReasoning: options.displayReasoning as StartSessionOptions['displayReasoning'] } : {}),
@@ -111,12 +113,18 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
       ...(input.guest && input.guestProvider
         ? { guestProvider: { ...input.guestProvider, modelIds: [...input.guestProvider.modelIds] } }
         : {}),
+      ...(input.controllerManagedSkills
+        ? { controllerManagedSkills: { claudePluginRoots: [...input.controllerManagedSkills.claudePluginRoots] } }
+        : {}),
     },
     ...(input.onInvalidResumeSession ? { onInvalidResumeSession: input.onInvalidResumeSession } : {}),
   };
 }
 
 let host: RemoteAgentHost | null = null;
+// resetMaker can install a replacement while the previous host is still deleting
+// its shadow workspaces. Preserve that boundary across repeated resets.
+let hostDisposal: Promise<void> = Promise.resolve();
 let stopFastPolicySync: (() => void) | undefined;
 let stopDirectRouteWatch: (() => void) | undefined;
 let stopDirectModelWatch: (() => void) | undefined;
@@ -247,8 +255,14 @@ export function createProviderShareMemberPurger(options: {
   return purgeMemberControllers;
 }
 
-export function installRemoteAgentHost(options: { getMaker: () => Maker; userDataDir: string }): void {
+export function installRemoteAgentHost(options: {
+  getMaker: () => Maker;
+  userDataDir: string;
+  /** 这台自己启用中的 Cindy 托管 Skill(与本机任务同一来源)。 */
+  managedSkills?: () => Promise<Array<{ command: string; dir: string }>>;
+}): void {
   if (host) return;
+  const previousHostDisposal = hostDisposal;
   const usage = installProviderShareUsageStore(options.userDataDir);
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
@@ -877,6 +891,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
         return false;
       }
     },
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     startHosted: async (input) => {
       if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
       return options.getMaker().startHostedAgentSession(input.kind, {
@@ -908,7 +923,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
           return rule.models !== null || rule.providerModels !== null || !!(rule.memberBudget?.enabled && rule.memberBudget.rules.length);
         } catch { return true; }
       },
-      resolve: async (kind, model, providerId, controller, sessionId) => {
+      resolve: async (kind, model, providerId, controller, sessionId, context) => {
         const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         const memberId = access?.memberId;
@@ -928,6 +943,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
             kind,
             model,
             delegated ? undefined : providerId,
+            context,
           );
         }
         return resolveSharedProviderId(views, allowed, kind, model, providerId);
@@ -1445,7 +1461,11 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   });
   stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
-    handle: (controller, raw) => current.handle(controller, raw),
+    handle: async (controller, raw) => {
+      await previousHostDisposal;
+      if (host !== current) throw new Error('[REMOTE_AGENT_UNAVAILABLE] remote agent host has been replaced');
+      return current.handle(controller, raw);
+    },
     abortAll: (reason) => {
       void current.abortAll(reason);
     },
@@ -1486,7 +1506,7 @@ export function disposeRemoteAgentHost(): void {
   stopFastPolicySync?.();
   stopFastPolicySync = undefined;
   setRemoteAgentHandler(null);
-  host?.dispose();
+  if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
   void flushProviderShareUsage();

@@ -24,7 +24,7 @@ describe('account-scoped home navigation overrides', () => {
     expect(await readHomeNavigationPreferences('account-a')).toEqual({});
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
-  // Unit: old collapsed records are not avatar opt-ins; explicit false survives account switches.
+  // Unit: old collapsed records do not acquire an explicit avatar override; explicit false survives account switches.
   // No prior test covered an independently persisted avatar setting.
   it('keeps explicit avatar choices per account without inferring them from an old collapsed state', async () => {
     await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });

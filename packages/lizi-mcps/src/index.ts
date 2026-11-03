@@ -48,6 +48,9 @@ export * from './android/index.js';
 export * from './browser/index.js';
 export * from './computer/index.js';
 
-export * from './contacts/approval.js';
 
-export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState } from './xdt-helper/bot_capabilities.js';
+export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
+export {
+  TEAMMATE_SYSTEM_SKILL_IDS, TEAMMATE_SYSTEM_SKILLS, TEAMMATE_SYSTEM_SKILL_TOOLS, TEAMMATE_CORE_TOPICS,
+  teammateDeniedTools, teammateSystemSkillsOff, type TeammateSystemSkillId,
+} from './xdt-helper/teammate_skills.js';

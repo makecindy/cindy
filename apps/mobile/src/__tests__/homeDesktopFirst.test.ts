@@ -500,9 +500,9 @@ describe('mobile home desktop-first surface', () => {
     expect(providerMarkSource).not.toContain('CLAUDE_AGENT_PATH');
     expect(providerMarkSource).not.toContain('CODEX_AGENT_FLOWER_PATH');
     expect(vendorIconSource).toContain("import { MobileAgentMark } from './MobileAgentMark';");
-    // vendor → Agent mark 的映射要带上 pi,不能把 π 吞成 Claude 脸。
+    // 跨端 Agent 身份契约：Pi 和 ZCode 不能退回 Claude 图标（DESIGN.md §15 品牌与身份）。
     expect(vendorIconSource).toContain(
-      "const agentKind: AgentMarkKind = vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code';",
+      "const agentKind: AgentMarkKind = vendor === 'codex' || vendor === 'pi' || vendor === 'zcode' ? vendor : 'claude-code';",
     );
     expect(vendorIconSource).toContain('<MobileAgentMark agentKind={agentKind} color={color} size={size} />');
     expect(vendorIconSource).not.toContain('viewBox="136 137 282 158"');

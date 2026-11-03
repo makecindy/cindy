@@ -14,9 +14,10 @@ describe('one-run automation model preferences', () => {
     effort: ScheduledModelSelection['effort'] | '' = 'high',
     fastMode: ScheduledModelSelection['fastMode'] = true,
     agentDeviceId: string | null = null,
+    agentKind: ScheduledModelSelection['agentKind'] = 'codex',
   ) {
     const original: ScheduledModelSelection = {
-      agentKind: 'codex', model: 'owner-model', providerId: 'owner-provider',
+      agentKind, model: 'owner-model', providerId: agentKind === 'zcode' ? 'zcode-native' : 'owner-provider',
       effort: effort || null, fastMode,
       ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
     };
@@ -35,7 +36,7 @@ describe('one-run automation model preferences', () => {
       }),
     };
     return { original, deps, scope: createScheduledModelScope(deps),
-      automate: () => { profile = { ...selection }; },
+      automate: () => { profile = agentKind === 'zcode' ? { ...original, model: 'native-automation' } : { ...selection }; },
       state: () => ({ profile, baseline }),
       choose: () => { baseline = null; profile = { ...original, model: 'new-owner-model' }; },
     };
@@ -53,8 +54,13 @@ describe('one-run automation model preferences', () => {
     await expect(scope.restore('task')).rejects.toThrow('changed');
     expect(h.state().baseline).not.toBeNull();
   });
-  it.each(['same-process', 'restart'])('restores all owner settings after %s', async (mode) => {
-    const h = scopeFixture();
+  // PR #8022: a native automation must restore its previous model too; the
+  // baseline parser used to reject zcode and leave the override permanently.
+  it.each([
+    { mode: 'same-process', agentKind: 'codex' }, { mode: 'restart', agentKind: 'codex' },
+    { mode: 'same-process', agentKind: 'zcode' }, { mode: 'restart', agentKind: 'zcode' },
+  ] as const)('restores all owner settings after $mode ($agentKind)', async ({ mode, agentKind }) => {
+    const h = scopeFixture(agentKind === 'zcode' ? null : 'high', agentKind !== 'zcode', null, agentKind);
     await h.scope.begin('task');
     h.automate();
     const scope = mode === 'restart' ? createScheduledModelScope(h.deps) : h.scope;

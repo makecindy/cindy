@@ -134,6 +134,70 @@ describe('peer attachment upload preflight', () => {
 });
 
 describe('authorized file peer source', () => {
+  // Oct 30: a healthy but slow TURN connection was reused forever. Unit coverage
+  // uses real receive/write/cleanup entrypoints; existing tests only cover stalls.
+  it.each(['direct', 'relay', 'failed', 'cancel', 'revoked'] as const)(
+    'reprobes between slow files and preserves the usable connection when candidate is %s',
+    async candidatePath => {
+      const realNow = Date.now.bind(Date);
+      let offset = 0, offers = 0;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+      const abort = new AbortController();
+      const closed: string[] = [];
+      const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+        const request = args[0] as { action: string; connection?: string };
+        if (request.action === 'caps') return { ok: true, result: { version: 1, streaming: true, sessionBound: true } };
+        if (request.action === 'close') { closed.push(request.connection!); return { ok: true }; }
+        if (request.action === 'open') return { ok: true, result: { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 5, mimeType: 'text/plain' } };
+        offers++;
+        if (offers === 2 && candidatePath === 'failed') throw new Error('offer failed');
+        if (offers === 2 && candidatePath === 'cancel') abort.abort();
+        if (offers === 2 && candidatePath === 'revoked') stopFilePeers('route-peer');
+        return { ok: true, result: { connection: offers === 1 ? 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' : 'cccccccc-cccc-cccc-cccc-cccccccccccc', sdp: 'v=0' } };
+      });
+      mock.commandReply.mockImplementation(action => action === 'stats'
+        ? JSON.stringify({ path: offers > 1 ? candidatePath : 'relay' }) : 'v=0');
+      const finish = async () => {
+        await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+        await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGVsbG8=');
+        mock.receiving!.reply();
+        mock.receiving = undefined;
+      };
+      try {
+        const first = tryPeerFile('route-peer', 'xdt-file://test', invoke);
+        await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+        offset += 16_000; // A completed low-throughput sample, never a stalled download.
+        await finish();
+        await (await first)?.dispose();
+        const other = await connect('other-peer');
+        const oldConnection = mock.commands.find(c => c.action === 'receive')!.connection;
+        const second = tryPeerFile('route-peer', 'xdt-file://test', invoke, abort.signal);
+        if (candidatePath === 'cancel' || candidatePath === 'revoked') {
+          await expect(second).rejects.toThrow('FILE_PEER_CANCELLED');
+          expect(mock.commands.filter(c => c.action === 'receive')).toHaveLength(1);
+          expect(closed).toContain('cccccccc-cccc-cccc-cccc-cccccccccccc');
+          const source = await open(other.connection, 'other-peer');
+          expect(await read(other.connection, source.ticket, 0)).toBe('aGVsbG8=');
+          return;
+        }
+        await finish();
+        await (await second)?.dispose();
+        expect(offers).toBe(2);
+        const source = await open(other.connection, 'other-peer');
+        expect(await read(other.connection, source.ticket, 0)).toBe('aGVsbG8=');
+        const current = mock.commands.filter(c => c.action === 'receive').at(-1)!.connection;
+        expect(current === oldConnection).toBe(candidatePath !== 'direct');
+        expect(closed.includes('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')).toBe(candidatePath === 'direct');
+        // No repeated negotiation on the next file while the route-check budget is warm.
+        // A successful direct upgrade must stay reusable beyond that budget too.
+        if (candidatePath === 'direct') offset += 61_000;
+        const third = tryPeerFile('route-peer', 'xdt-file://test', invoke);
+        await finish();
+        await (await third)?.dispose();
+        expect(offers).toBe(2);
+      } finally { clock.mockRestore(); }
+    },
+  );
   it.each([0, 15_001])(
     'preserves a file receive after concurrent RPC failure (reply delay %i)',
     async (delay) => {

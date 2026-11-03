@@ -1,4 +1,5 @@
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
+import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
 import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
@@ -157,6 +158,11 @@ function emit(channel: string, payload: unknown): void {
   } catch (error) {
     log.warn('provider share broadcast failed', { channel, error: String(error) });
   }
+}
+
+function notifyControlledModelCatalogChanged(): void {
+  emit(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }
 
 function focusMainWindow(): void {
@@ -412,9 +418,13 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
     },
   }, { readWatchedShares: readInvoke ? (hostDeviceId) => readProviderManagementShares(readInvoke, hostDeviceId) : undefined });
   startProviderShareGuest({
-    catalogChanged(deviceId) { emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} }); },
+    catalogChanged(deviceId) {
+      emit(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed', payload: {} });
+      notifyControlledModelCatalogChanged();
+    },
     changed(received) {
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
+      notifyControlledModelCatalogChanged();
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -442,6 +452,7 @@ export function stopProviderShareRuntime(): void {
   stopProviderShareGuest();
   emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
   emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, [] satisfies ProviderShareReceived[]);
+  notifyControlledModelCatalogChanged();
 }
 
 // ─── 命令 ───────────────────────────────────────────────────────

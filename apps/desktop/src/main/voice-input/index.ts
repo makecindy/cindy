@@ -37,6 +37,7 @@ import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolv
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { publishMicrophonePermissionSnapshot, registerMicrophonePermissionIpc } from './microphonePermissionIpc.js';
 import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
@@ -1488,6 +1489,7 @@ function readMicrophonePermissionSnapshot(): VoiceInputMicrophonePermissionCache
 
 function refreshMicrophonePermissionCache(): VoiceInputMicrophonePermissionCache {
   cachedMicrophonePermission = readMicrophonePermissionSnapshot();
+  publishMicrophonePermissionSnapshot(cachedMicrophonePermission);
   return cachedMicrophonePermission;
 }
 
@@ -1894,7 +1896,7 @@ export function registerVoiceInputIpc(): void {
     // Reuse dictation's opt-in setting, local enrollment and strictness. A new
     // microphone run (including unmute) reads current settings; ASR rotation
     // keeps the same gate. No separate companion voiceprint or audio storage.
-    createAudioGate: () => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings()),
+    createAudioGate: (onFiltered) => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), onFiltered),
     updateSettings: patch => voiceInputDataStore.updateSettings(patch),
     hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
     createProvider: async () => {
@@ -1925,6 +1927,10 @@ export function registerVoiceInputIpc(): void {
     app.once('before-quit', () => {
       void systemAudioMuteGuard.restoreAll();
     });
+    // 用户去系统设置里授权或撤销后回到应用:缓存跟着刷新,长按语音按最新授权状态生效。
+    app.on('browser-window-focus', () => {
+      refreshMicrophonePermissionCache();
+    });
   }
   const modelSelection = readActiveVoiceInputModelSelection('register');
   log.info('voice input model selection active', {
@@ -1950,9 +1956,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.on('voice-input:get-microphone-permission-cached', (event) => {
-    event.returnValue = getCachedMicrophonePermission();
-  });
+  registerMicrophonePermissionIpc(getCachedMicrophonePermission);
 
   ipcMain.handle('voice-input:set-renderer-microphone-permission-verified', async (_event, verified: boolean) => {
     rendererVerifiedMicrophonePermission = verified;
@@ -2388,7 +2392,9 @@ export function registerVoiceInputIpc(): void {
     });
 
     // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
-    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), () => {
+      if (runId) emit({ type: 'speaker-filtered', runId });
+    });
     const controller = new VoiceInputController({
       asr: provider,
       refiner,

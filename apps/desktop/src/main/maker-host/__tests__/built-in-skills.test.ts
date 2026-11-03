@@ -21,6 +21,7 @@ import {
   activeCindyBuiltInAgentSkills,
   BUILT_IN_SKILLS_BUNDLE_VERSION,
   builtInSkillDescriptors,
+  builtInSkillDescriptorsAsync,
   markCindyBuiltInAgentSkills,
   prepareBuiltInSkills,
   refreshBuiltInClaudeSkillLinks,
@@ -117,7 +118,7 @@ describe('built-in Skills', () => {
       expect(fs.statSync(path.join(plugin.absolutePath, relative)).isFile()).toBe(true);
     }
     const references = path.join(plugin.absolutePath, 'references');
-    const chapters = fs.readdirSync(references).sort();
+    const chapters = fs.readdirSync(references).filter(file => file.endsWith('.md')).sort();
     // The legacy tool and native Skill loaders consume the same shipped bytes,
     // even though capability filenames no longer encode the legacy chapter order.
     let remainingGuide = FORGE_GUIDE;
@@ -125,6 +126,11 @@ describe('built-in Skills', () => {
       const chapter = fs.readFileSync(path.join(references, file), 'utf8');
       expect(remainingGuide).toContain(chapter);
       remainingGuide = remainingGuide.replace(chapter, '');
+    }
+    // Shipped examples are executable assets, not guide chapters. They must also
+    // survive the production Skill copy (a link to a missing example is unusable).
+    for (const example of ['static/ghost.json', 'static/main.js', 'static/ui/page.html', 'loader/main.js', 'loader/ui/page.html', 'files/main.js', 'REFERENCE.md', 'README.md']) {
+      expect(fs.statSync(path.join(references, 'examples/interactive-pages', example)).isFile()).toBe(true);
     }
     expect(remainingGuide.trim()).toBe('');
     expect(new Set(referencePaths.map((file) => path.basename(file)))).toEqual(new Set(chapters));
@@ -583,6 +589,7 @@ describe('built-in Skills', () => {
       const skillPath = path.join(active, 'cindy-skill-creator');
       expect(prepared.projectionSafe).toBe(true);
       expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(3);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
       if (damage === 'modified-content') {
         fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nChanged');
       } else if (damage === 'missing-manifest') {
@@ -609,6 +616,7 @@ describe('built-in Skills', () => {
       }
       const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
       expect(descriptors).toEqual([]);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
       const [command] = markCindyBuiltInAgentSkills([{
         kind: 'agent-skill', name: 'cindy-skill-creator', source: 'skill',
         path: path.join(skillPath, 'SKILL.md'), scope: 'user', enabled: true, builtIn: true,
@@ -621,6 +629,63 @@ describe('built-in Skills', () => {
       const scanned = await scanAllSkills({}, maker, [], descriptors);
       expect(scanned.skills).toHaveLength(1);
       expect(scanned.skills[0]?.builtIn).not.toBe(true);
+    },
+  );
+
+  // Unit: yielding identity verification must reject a publication that changes
+  // while bytes are being read; synchronous tampering coverage has no such race.
+  it('withholds official identity when the manifest changes during async verification', async () => {
+    const input = fixture();
+    await prepareBuiltInSkills(input);
+    const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
+    await expect(pending).resolves.toEqual([]);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
+  });
+
+  // Unit, PR #8493: changes to an already-hashed Skill must be rejected even
+  // when its manifest and active target stay unchanged. Mutate during a later
+  // Skill read, without sleeps; earlier corruption tests only changed pre-read data.
+  // A linked app-data parent exercises the logical/physical path difference seen
+  // under macOS /var folders on every platform (engineering conventions section 3.3).
+  it.each(['rewrite', 'add-file', 'replace-directory'] as const)(
+    'rejects %s in an earlier Skill while a later Skill is being hashed', async damage => {
+      const input = fixture();
+      fs.mkdirSync(input.appDataDir, { recursive: true });
+      const linkedAppData = path.join(path.dirname(input.appDataDir), 'linked-app-data');
+      fs.symlinkSync(input.appDataDir, linkedAppData, process.platform === 'win32' ? 'junction' : 'dir');
+      input.appDataDir = linkedAppData;
+      await prepareBuiltInSkills(input);
+      const descriptors = builtInSkillDescriptors(input.userDataDir, input.appDataDir);
+      const first = fs.realpathSync.native(descriptors[0]!.absolutePath);
+      const later = fs.realpathSync.native(descriptors[1]!.absolutePath);
+      const readFile = fs.promises.readFile.bind(fs.promises);
+      let changed = false;
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (...args) => {
+        const result = await readFile(...args);
+        if (!changed && fs.realpathSync.native(String(args[0])).startsWith(later + path.sep)) {
+          changed = true;
+          if (damage === 'rewrite') {
+            const file = path.join(first, 'SKILL.md');
+            const stat = fs.statSync(file);
+            const bytes = fs.readFileSync(file);
+            bytes[0] = bytes[0]! ^ 1;
+            fs.writeFileSync(file, bytes);
+            fs.utimesSync(file, stat.atime, stat.mtime);
+          } else if (damage === 'add-file') {
+            fs.writeFileSync(path.join(first, 'added.txt'), 'changed');
+          } else {
+            const backup = first + '-previous';
+            fs.renameSync(first, backup);
+            fs.cpSync(backup, first, { recursive: true });
+          }
+        }
+        return result;
+      });
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toEqual([]);
+      expect(changed).toBe(true);
     },
   );
 

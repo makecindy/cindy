@@ -100,6 +100,7 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
@@ -1419,13 +1420,22 @@ export function buildPiNativeProvidersFromConfigs(
         // Public/default/discovery/user precedence was resolved by the active catalog.
         // Carry those facts to the serializer instead of reintroducing SDK precedence.
         // Endpoint, protocol and credentials remain exclusively connection-owned.
-        const resolved = resolvedCatalog?.providers.find(p => p.id === cfg.id)
-          ?.models.pi?.find(model => model.id === configuredModel.id);
+        const runtimeProvider = resolvedCatalog?.providers.find(p => p.id === runtimeCustomProviderId(cfg.id));
+        const catalogProvider = resolvedCatalog?.providers.find(p => p.id === cfg.id);
+        const runtimeModel = runtimeProvider?.models.pi?.find(model => model.id === configuredModel.id);
+        const catalogModel = catalogProvider?.models.pi?.find(model => model.id === configuredModel.id);
+        const resolved = runtimeModel ?? catalogModel;
+        const resolvedProvider = runtimeModel ? runtimeProvider : catalogProvider;
         const m = resolved ? {
           ...configuredModel,
           name: resolved.name,
           contextWindow: resolved.contextWindow,
-          supportsImageInput: resolved.supportsImageInput ?? configuredModel.supportsImageInput,
+          // A same-id built-in row is only a fallback. A user projection already
+          // includes form edits and the higher-priority local catalog overrides.
+          // Sparse user rows still inherit a declared catalog image capability.
+          supportsImageInput: resolvedProvider?.source === 'user'
+            ? resolved.supportsImageInput ?? configuredModel.supportsImageInput ?? catalogModel?.supportsImageInput
+            : configuredModel.supportsImageInput ?? resolved.supportsImageInput,
           reasoning: resolved.efforts.length > 0,
           reasoningEfforts: resolved.efforts.filter((effort): effort is PiReasoningEffort =>
             (PI_REASONING_EFFORTS as readonly string[]).includes(effort)),
@@ -1461,6 +1471,10 @@ export function buildPiNativeProvidersFromConfigs(
           nativeAnthropicBaseUrl ??
           (m.api && m.route ? m.route.baseUrl :
             m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
+        // Model-level defaults follow the final endpoint. Putting them on the
+        // provider would leak them to a model routed to a different service.
+        const modelHeaders = authMethod === 'oauth' ? bundledModel?.headers
+          : withProviderAppAttribution(modelBaseUrl ?? rt.baseUrl, headers, bundledModel?.headers);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1505,7 +1519,7 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(resolved?.cost ? { cost: catalogCostForPiNative(resolved.cost) }
             : bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
-          ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
+          ...(modelHeaders && Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
           ...(bundledModel?.compat
             ? { compat: structuredClone(bundledModel.compat) }
             : !bundledModel && modelApi === 'openai-completions'

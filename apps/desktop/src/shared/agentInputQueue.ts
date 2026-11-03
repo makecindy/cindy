@@ -394,6 +394,8 @@ export interface AgentInputQueuedMessage {
   fromMobileClient?: boolean;
   /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
   uiLanguage?: string;
+  /** Main-stamped classical output style for this turn (only a catalog id; see classical-reply). */
+  classicalStyle?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
   /**

@@ -74,7 +74,7 @@ function error(code: ZCodeNativeErrorCode): never { throw new ZCodeNativeError(c
 export function createZCodeNativeHost(options: ZCodeNativeHostOptions) {
   const env = { ...(options.env ?? process.env) };
   const platform = options.platform ?? process.platform;
-  const paths = platform === 'win32' ? path.win32 : path;
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   const homeDir = options.homeDir ?? env.ZCODE_DESKTOP_HOME_DIR?.trim() ?? env.HOME?.trim() ?? env.USERPROFILE?.trim() ?? os.homedir();
   const nativeDataDir = env.ZCODE_DATA_BASE_DIR?.trim() || homeDir;
   const nativeConfigDir = paths.join(nativeDataDir, '.zcode', 'v2');

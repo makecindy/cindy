@@ -330,6 +330,17 @@ export const ConversationShareSvg = forwardRef<
                 }}
               />
             ))}
+            {layout.bubbles.flatMap((bubble, bubbleIndex) =>
+              (bubble.vectors ?? [])
+                .filter((vector) => vector.overlay)
+                .map((vector, index) => (
+                  <ShareVectorView
+                    key={`overlay-${bubbleIndex}-${index}`}
+                    item={vector}
+                    clipId={`share-overlay-${bubbleIndex}-${index}`}
+                  />
+                )),
+            )}
             {layout.gaps.map((gap, gapIndex) => (
               <SvgText
                 fill={gap.color}
@@ -426,13 +437,15 @@ function SvgBubbleView({
           strokeWidth={SHARE_BUBBLE_STROKE_WIDTH}
         />
       ))}
-      {bubble.vectors?.map((vector, index) => (
-        <ShareVectorView
-          key={`vector-${index}`}
-          item={vector}
-          clipId={`${clipIdPrefix}-vector-${index}`}
-        />
-      ))}
+      {bubble.vectors
+        ?.filter((vector) => !vector.overlay)
+        .map((vector, index) => (
+          <ShareVectorView
+            key={`vector-${index}`}
+            item={vector}
+            clipId={`${clipIdPrefix}-vector-${index}`}
+          />
+        ))}
       {bubble.textBlocks.map((block, blockIndex) => (
         <SvgText
           fill={block.color}

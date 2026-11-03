@@ -23,7 +23,7 @@ vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => (
   subscribeSessionActivity: () => () => {},
 }) }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: true }) }));
-vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: 'owner', mode: 'cloud', generation: mocks.auth.ownerGeneration }), isAppSessionBoundaryPending: () => false }));
+vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: 'cloud', generation: mocks.auth.ownerGeneration }), isAppSessionBoundaryPending: () => false }));
 vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: () => () => {} }));
 vi.mock('../../billing/projection.js', () => ({}));
 vi.mock('../../clientEndpointsService.js', () => ({}));
@@ -53,7 +53,10 @@ vi.mock('../MacMenubarNativeHost.js', () => ({ MacMenubarNativeHost: class {
 vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { return []; } }, estimateDailyBurn: () => null }));
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
+import { getQuotaOverviewService, QuotaOverviewService, readUsageWidgetSnapshot } from '../../quota-overview/service';
+let overview: QuotaOverviewService;
 beforeEach(() => {
+  overview = new QuotaOverviewService();
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
@@ -66,7 +69,7 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 // Unit: unread updates bypass slow usage collection, survive rebuilds and detach on stop.
 it('updates the native count immediately while a usage rebuild is still pending', async () => {
-  const service = new MenubarService({ openNewTask() {} });
+  const service = new MenubarService({ openNewTask() {}, overview });
   const collected = emptyMenubarInputs(Date.now(), 'Fixture');
   mocks.activities = [activity('one'), activity('two')];
   subscriptions.subscribe('phone', ['session:chat']);
@@ -76,7 +79,7 @@ it('updates the native count immediately while a usage rebuild is still pending'
   expect(mocks.publish).toHaveBeenLastCalledWith(expect.objectContaining({ attentionCount: 2, remotelyControlled: true }));
   let resolve!: (value: typeof collected) => void;
   mocks.collect.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
-  service.refreshLocalization();
+  overview.rebuildSoon();
   await vi.advanceTimersByTimeAsync(0);
   mocks.activities = [];
   for (const listener of mocks.attentionListeners) listener();
@@ -100,7 +103,7 @@ function activity(sessionId: string): AgentIslandSessionSnapshot {
 
 // Unit: the old count-only subscription misses content changes and cannot route remote companions.
 it('updates same-count unread content immediately and opens through the island handoff', async () => {
-  const service = new MenubarService({ openNewTask() {} });
+  const service = new MenubarService({ openNewTask() {}, overview });
   mocks.activities = [activity('remote-companion')];
   mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
   service.init();
@@ -121,7 +124,7 @@ it('updates same-count unread content immediately and opens through the island h
 
 // Unit: privacy applies to live message previews as well as the older usage list.
 it('masks companion names and message bodies in privacy mode', async () => {
-  const service = new MenubarService({ openNewTask() {} });
+  const service = new MenubarService({ openNewTask() {}, overview });
   mocks.activities = [{ ...activity('companion'), companion: { name: 'Private name', hue: 'blue', glyph: 'P', glyphIsInitial: true } }];
   mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
   service.init();
@@ -139,7 +142,7 @@ it('masks companion names and message bodies in privacy mode', async () => {
 // Existing coverage only used packaged builds; exercise the published state in both modes.
 it.each([true, false])('lights only for active controllers and clears on exit (packaged=%s)', async (isPackaged) => {
   mocks.app.isPackaged = isPackaged;
-  const service = new MenubarService({ openNewTask() {} });
+  const service = new MenubarService({ openNewTask() {}, overview });
   mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
   subscriptions.subscribe('phone', ['sessions', 'fs-watch:/repo']);
   service.init();
@@ -175,57 +178,88 @@ function clearQuota() {
   for (const listener of mocks.listeners) listener();
 }
 it.each(['unlimited', 'invalidated'])('evicts cached quota and schedules rebuilding on %s clear', async () => {
-  const service = new MenubarService({ openNewTask() {} });
-  const schedule = vi.spyOn(service as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
+  const service = new MenubarService({ openNewTask() {}, overview });
+  const schedule = vi.spyOn(overview as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
   service.init();
-  expect((await service['readBalance'](false, Date.now()))?.available).toBe(8);
+  expect((await overview['readBalance'](false, Date.now()))?.available).toBe(8);
   schedule.mockClear();
   clearQuota();
   expect(schedule).toHaveBeenCalledWith(0);
-  expect(await service['readBalance'](false, Date.now())).toBeNull();
+  expect(await overview['readBalance'](false, Date.now())).toBeNull();
   service.stop(); expect(mocks.listeners.size).toBe(0);
 });
 it('rejects the cache even when the clear happened while the menu bar was stopped', async () => {
-  const service = new MenubarService({ openNewTask() {} });
-  expect((await service['readBalance'](false, Date.now()))?.available).toBe(8);
+  const service = new MenubarService({ openNewTask() {}, overview });
+  expect((await overview['readBalance'](false, Date.now()))?.available).toBe(8);
   clearQuota();
-  expect(await service['readBalance'](false, Date.now())).toBeNull();
+  expect(await overview['readBalance'](false, Date.now())).toBeNull();
 });
 it('does not restore the captured cache after an in-flight read fails across clear', async () => {
-  const service = new MenubarService({ openNewTask() {} });
-  await service['readBalance'](false, Date.now());
+  const service = new MenubarService({ openNewTask() {}, overview });
+  await overview['readBalance'](false, Date.now());
   let reject!: (error: Error) => void;
   mocks.refresh.mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail; }));
-  const pending = service['readBalance'](true, Date.now());
+  const pending = overview['readBalance'](true, Date.now());
   clearQuota(); reject(new Error('unavailable'));
   expect(await pending).toBeNull();
-  expect(await service['readBalance'](false, Date.now())).toBeNull();
+  expect(await overview['readBalance'](false, Date.now())).toBeNull();
 });
 it('does not publish a view collected before clear', async () => {
-  const service = new MenubarService({ openNewTask() {} });
-  const schedule = vi.spyOn(service as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
-  const publish = vi.spyOn(service as never, 'publish' as never).mockImplementation(() => undefined);
+  const service = new MenubarService({ openNewTask() {}, overview });
+  const schedule = vi.spyOn(overview as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
+  const publish = vi.spyOn(overview as never, 'publish' as never).mockImplementation(() => undefined);
   service.init();
   let resolve!: (value: unknown) => void;
   mocks.collect.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
-  const pending = service['collectAndPublish'](Date.now(), false, () => {});
+  const pending = overview['collectAndPublish'](Date.now(), false, () => {});
   clearQuota(); resolve({}); await pending;
   expect(publish).not.toHaveBeenCalled(); expect(schedule).toHaveBeenCalledWith(0);
   service.stop();
 });
 
 it('rebuilds when finite quota arrives after invalidation cached a temporary null', async () => {
-  const service = new MenubarService({ openNewTask() {} });
-  const schedule = vi.spyOn(service as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
+  const service = new MenubarService({ openNewTask() {}, overview });
+  const schedule = vi.spyOn(overview as never, 'scheduleRebuild' as never).mockImplementation(() => undefined);
   service.init();
-  expect((await service['readBalance'](false, Date.now()))?.available).toBe(8);
+  expect((await overview['readBalance'](false, Date.now()))?.available).toBe(8);
   clearQuota();
-  expect(await service['readBalance'](false, Date.now())).toBeNull();
+  expect(await overview['readBalance'](false, Date.now())).toBeNull();
   schedule.mockClear();
   mocks.quota = { spend: 3, maxBudget: 20, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
   mocks.revision++;
   for (const listener of mocks.listeners) listener();
   expect(schedule).toHaveBeenCalledWith(0);
-  expect((await service['readBalance'](false, Date.now()))?.available).toBe(17);
+  expect((await overview['readBalance'](false, Date.now()))?.available).toBe(17);
   service.stop();
+});
+
+// Regression: the widgets only had data while the macOS panel ran, so other platforms and a
+// disabled panel answered nothing. A request alone now collects, then stops after its lease.
+it('answers a widget request with no panel running and stops collecting when the lease ends', async () => {
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  const pending = readUsageWidgetSnapshot();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await pending).toMatchObject({ ok: true, snapshot: { version: 1, sources: [] } });
+  expect(mocks.collect).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  expect(getQuotaOverviewService().latest()).toBeNull();
+});
+
+// Regression: a build is the account's data; after a switch a phone must get nothing rather than it.
+it('never serves a build read for the previous account', async () => {
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  const pending = readUsageWidgetSnapshot();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await pending).toMatchObject({ ok: true });
+  const old = getQuotaOverviewService().latest();
+  expect(old).not.toBeNull();
+  mocks.auth.dataOwnerId = 'other';
+  try {
+    expect(getQuotaOverviewService().latest()).toBeNull();
+    const next = getQuotaOverviewService().fresh(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await next).not.toBe(old);
+  } finally {
+    mocks.auth.dataOwnerId = 'owner';
+  }
 });

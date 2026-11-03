@@ -253,6 +253,8 @@ import {
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
+import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
@@ -2445,7 +2447,6 @@ function ExpandedView({
     if (onScheduleMatch || onNewMakerMatch) handleClearSelection();
   }, [onScheduleMatch, onNewMakerMatch, handleClearSelection]);
 
-  const [linkingCodexProject, setLinkingCodexProject] = useState<string | null>(null);
 
   // 远程会话的已读回执有两类首发即失的场景,都靠本 memo 的 key 变化驱动重跑补发:
   //  1. 恢复 / 深链直开:effect 先于 remoteProjectsStore 完成 sessionId→deviceId 起源
@@ -2831,39 +2832,11 @@ function ExpandedView({
     [handleClearSelection, navigate, selectedDialogueDeviceResolution],
   );
 
-  const handleLinkCodexProject = useCallback(
-    async (project: ProjectNode) => {
-      if (linkingCodexProject) return;
-      setLinkingCodexProject(project.projectKey);
-      try {
-        const result = await window.electronAPI.localDb.sessionImport.linkCodexProject(
-          project.workingDir,
-        );
-        if (result.inserted > 0 || result.updated > 0) {
-          toast.success(
-            t('ccAgent.sidebar.projectAction.syncCodexDone', {
-              inserted: result.inserted,
-              updated: result.updated,
-            }),
-          );
-          emitRefresh();
-        } else if (result.matched > 0) {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexAlreadyLinked'));
-        } else {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexNone'));
-        }
-      } catch (err) {
-        log.error('[link codex project]', err);
-        toast.error(
-          t('ccAgent.sidebar.projectAction.syncCodexFailed', {
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      } finally {
-        setLinkingCodexProject(null);
-      }
+  const handleImportFromTools = useCallback(
+    (project: ProjectNode) => {
+      navigate(`/settings?tab=import&project=${encodeURIComponent(project.workingDir)}`);
     },
-    [linkingCodexProject, t],
+    [navigate],
   );
 
   /* ---- Project 行内的 Open Explorer 按钮：在系统文件管理器中打开 workingDir ----
@@ -3062,6 +3035,20 @@ function ExpandedView({
   useLayoutEffect(() => {
     collapsedProjectsForMoveRef.current = collapse.collapsed;
   }, [collapse.collapsed]);
+  const [newProjectSessionId, setNewProjectSessionId] = useState<string | null>(null);
+  const closeNewProjectDialog = useCallback((open: boolean) => {
+    if (!open) setNewProjectSessionId(null);
+  }, []);
+  const handleProjectCreated = useCallback(
+    (sessionId: string, result: CreateProjectFromTaskResult) => {
+      patchLocal(sessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+      const normalized = normalizeWorkingDir(result.workingDir);
+      if (normalized) collapse.expand(projectIdentityKey('local', normalized, null));
+      void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+      toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
+    },
+    [collapse.expand, patchLocal, t],
+  );
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -3082,6 +3069,11 @@ function ExpandedView({
         }
       } catch {
         // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+      }
+
+      if (target.kind === 'newProject') {
+        setNewProjectSessionId(sessionId);
+        return;
       }
 
       let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
@@ -3904,8 +3896,7 @@ function ExpandedView({
                       onCreateInProject={handleCreateInProject}
                       onOpenConversationSearch={handleOpenConversationSearch}
                       onOpenInExplorer={handleOpenInExplorer}
-                      onLinkCodexProject={handleLinkCodexProject}
-                      linkingCodexProject={linkingCodexProject === project.projectKey}
+                      onImportFromTools={handleImportFromTools}
                       onBrowseFiles={handleBrowseFiles}
                       onArchiveAll={handleArchiveAllInProject}
                     />
@@ -3964,8 +3955,7 @@ function ExpandedView({
                   onCreateInProject={handleCreateInProject}
                   onOpenConversationSearch={handleOpenConversationSearch}
                   onOpenInExplorer={handleOpenInExplorer}
-                  onLinkCodexProject={handleLinkCodexProject}
-                  linkingCodexProject={linkingCodexProject}
+                  onImportFromTools={handleImportFromTools}
                   onBrowseFiles={handleBrowseFiles}
                   onArchiveAll={handleArchiveAllInProject}
                   onSearchDialogues={handleSearchDialogues}
@@ -3993,6 +3983,14 @@ function ExpandedView({
           if (!open) setOrganizeMenuPos(null);
         }}
       />
+
+      {newProjectSessionId && (
+        <NewProjectFromTaskDialog
+          sessionId={newProjectSessionId}
+          onOpenChange={closeNewProjectDialog}
+          onCreated={(result) => handleProjectCreated(newProjectSessionId, result)}
+        />
+      )}
 
       {/* Delete confirm dialog */}
       <ConfirmDialog

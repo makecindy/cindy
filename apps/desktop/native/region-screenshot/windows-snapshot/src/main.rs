@@ -1,7 +1,10 @@
 //! Region screenshot snapshot helper (Windows).
 //!
 //! Long-lived during one screenshot: reads one JSON request per stdin line and
-//! answers with one JSON line on stdout. All rectangles are physical screen
+//! answers with one JSON line on stdout. Opt-in `frame` requests with
+//! `encoding: "bgra"` receive a JSON header then exactly `byteLength` raw bytes,
+//! without a trailing newline. Other replies retain the original JSON format.
+//! All rectangles are physical screen
 //! pixels `[left, top, right, bottom]` (the process is per-monitor DPI aware),
 //! Electron converts them to DIP.
 //!
@@ -63,7 +66,18 @@ fn main() {
             Some("scroll") => json!({ "id": id, "ok": scroll_region(&request) }),
             Some("keys") => json!({ "id": id, "keys": pressed_keys() }),
             Some("frame") => match capture_region(&request) {
-                Some((width, height, pixels)) => json!({ "id": id, "width": width, "height": height, "pixels": STANDARD.encode(pixels) }),
+                Some((width, height, pixels)) => {
+                    if request.get("encoding").and_then(Value::as_str) == Some("bgra") {
+                        let header = json!({ "id": id, "width": width, "height": height,
+                            "encoding": "bgra", "byteLength": pixels.len() });
+                        if writeln!(stdout, "{header}")
+                            .and_then(|_| stdout.write_all(&pixels))
+                            .and_then(|_| stdout.flush()).is_err() { break; }
+                        continue;
+                    }
+                    // Older hosts still expect one base64 JSON line.
+                    json!({ "id": id, "width": width, "height": height, "pixels": STANDARD.encode(pixels) })
+                },
                 None => json!({ "id": id, "error": "capture-unavailable" }),
             },
             Some("windows") => json!({ "id": id, "windows": enumerate_windows() }),

@@ -126,9 +126,11 @@ export const sessions = sqliteTable(
     id: text('id').primaryKey(),
     title: text('title').notNull().default('New Maker'),
     workingDir: text('working_dir'),
+    /** Explicit project membership; null retains the legacy cwd-based grouping. */
+    projectDir: text('project_dir'),
     /**
      * 产品归属语义, 与 working_dir 解耦:
-     * - project: working_dir 是项目目录, 参与侧边栏 Projects 分组。
+     * - project: 按 project_dir 归组；旧任务缺省回落 working_dir。
      * - dialogue: working_dir 是对话自己的运行/文件目录, 不作为项目展示。
      */
     workspaceKind: text('workspace_kind', { enum: ['project', 'dialogue'] })
@@ -1111,6 +1113,12 @@ export const sessionPrRefs = sqliteTable(
     url: text('url').notNull(),
     firstSeenAt: integer('first_seen_at').notNull(), // unix ms
     lastSeenAt: integer('last_seen_at').notNull(), // unix ms
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    priority: integer('priority').notNull().default(0),
+    manuallyAdded: integer('manually_added', { mode: 'boolean' }).notNull().default(false),
+    associationSource: text('association_source').notNull().default('legacy'),
+    associationOrigin: text('association_origin'),
+    removedAt: integer('removed_at'),
   },
   (t) => ({
     uniqRef: uniqueIndex('uniq_session_pr_refs').on(t.sessionId, t.owner, t.repo, t.prNumber),
@@ -1118,6 +1126,38 @@ export const sessionPrRefs = sqliteTable(
       t.sessionId,
       t.lastSeenAt,
     ),
+  }),
+);
+
+/**
+ * 从其他工具导入的任务的来源记录（session-import）。一行对应一个导入任务。
+ *
+ * - (source, source_session_id) 唯一：同一来源任务只导入一次，中断后重试据此续上；
+ * - mode：native = 已复制原生历史、用同名引擎原样续做；handoff = 记录转成消息，
+ *   由 Cindy 引擎经交接接着做；
+ * - status：importing（任务行仍隐藏）/ ready / action（需要用户处理，issue 写原因）/ failed；
+ * - 只导入、不同步：source_fingerprint 记录导入时源文件的状态，之后不再读取源文件。
+ */
+export const sessionImports = sqliteTable(
+  'session_imports',
+  {
+    sessionId: text('session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    sourceSessionId: text('source_session_id').notNull(),
+    sourceFingerprint: text('source_fingerprint'),
+    sourceVersion: text('source_version'),
+    mode: text('mode', { enum: ['native', 'handoff'] }).notNull(),
+    status: text('status', { enum: ['importing', 'ready', 'action', 'failed'] }).notNull(),
+    issue: text('issue'),
+    originalCwd: text('original_cwd'),
+    requestId: text('request_id'),
+    importedAt: integer('imported_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSource: uniqueIndex('uniq_session_imports_source').on(t.source, t.sourceSessionId),
   }),
 );
 
@@ -1504,6 +1544,13 @@ export const schedules = sqliteTable(
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
+    /**
+     * 插件前置检查:用户为本任务选定的插件实例 id。NULL = 未启用。与 preRunHookCommand
+     * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
+     */
+    preRunPluginId: text('pre_run_plugin_id'),
+    /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
+    preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**
      * 跳过留痕承载会话 id(runner 管理)。前置检查拦截时合成的"已跳过"消息写进
      * 该会话;首次跳过创建、后续复用,避免高频任务每次跳过都新建会话。
@@ -2436,3 +2483,10 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
+
+/** Account-local observed facts and independent consumer cursors, never credentials. */
+export const githubObservations = sqliteTable('github_observations', {
+  key: text('key').primaryKey(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});

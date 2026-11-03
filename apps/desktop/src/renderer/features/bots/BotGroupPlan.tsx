@@ -44,7 +44,7 @@ import {
   type BotGroupPlanFollowUp,
 } from './botGroupPresentation';
 
-type AvatarIdentity = { name: string; avatar: string | null; avatarColor: string | null };
+type AvatarIdentity = { name: string; avatar: string | null; avatarUrl?: string | null; avatarColor: string | null };
 
 export type BotGroupPlanCardAction = 'start' | 'dismiss' | 'edit';
 
@@ -54,6 +54,7 @@ function stepIdentity(step: BotGroupPlanStepView, members: readonly BotGroupMemb
   return {
     name: step.botName.trim() || member?.name || '',
     avatar: member?.avatar ?? null,
+    avatarUrl: member?.avatarUrl ?? null,
     avatarColor: member?.avatarColor ?? null,
   };
 }

@@ -24,12 +24,16 @@ export function safeWindowRect(g: WindowGeometry): LayoutRect {
 export function windowDivision(g: WindowGeometry): { axis: 'vertical' | 'horizontal'; first: LayoutRect; second: LayoutRect } | null {
   const safe = safeWindowRect(g);
   for (const r of g.regions) {
-    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite)) continue;
-    if (r.height >= safe.height * 0.8 && r.width > 0 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
+    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite) || r.width < 0 || r.height < 0) continue;
+    // Android flexible displays report a line, not an occluding rectangle.
+    // Check the actual overlap as a feature may lie outside a resized window.
+    const spanY = Math.min(r.y + r.height, safe.y + safe.height) - Math.max(r.y, safe.y);
+    const spanX = Math.min(r.x + r.width, safe.x + safe.width) - Math.max(r.x, safe.x);
+    if (r.height > 0 && spanY >= safe.height * 0.8 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
       return { axis: 'vertical', first: { ...safe, width: r.x - safe.x },
         second: { ...safe, x: r.x + r.width, width: safe.x + safe.width - r.x - r.width } };
     }
-    if (r.width >= safe.width * 0.8 && r.height > 0 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
+    if (r.width > 0 && spanX >= safe.width * 0.8 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
       return { axis: 'horizontal', first: { ...safe, height: r.y - safe.y },
         second: { ...safe, y: r.y + r.height, height: safe.y + safe.height - r.y - r.height } };
     }

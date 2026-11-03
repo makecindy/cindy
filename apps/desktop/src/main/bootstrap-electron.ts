@@ -1,3 +1,4 @@
+import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
@@ -8,7 +9,9 @@ import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
-import { initMenubarService, refreshMenubarControlState, refreshMenubarLocalization, stopMenubarService } from './menubar/service.js';
+import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
+import { getQuotaOverviewService } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -74,6 +77,7 @@ import {
   session,
   shell,
   Tray,
+  webContents,
 } from 'electron';
 import {
   resolveVibrancyConfig,
@@ -343,10 +347,7 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import {
-  invalidatePiEnvironment,
-  shutdownPiEnvironment,
-} from './mcp-integrations/piEnvironment.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
 import { readCachedImage } from './cindy-media/readCachedImage';
@@ -458,7 +459,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
+import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
@@ -606,18 +607,26 @@ import {
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
+import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
+import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
-import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
+import {
+  issueWritableDirectoryPickerGrant,
+  issueWritableDirectoryRecentGrant,
+  WritableDirectoryPickerGrantError,
+} from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
   getDeviceLinkStatus,
   isSharedTaskAvailable,
+  isSharedTaskRelayOnline,
+  waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
   getControllerName,
@@ -712,8 +721,12 @@ import {
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
 } from './maker-host/index.js';
-import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
+import {
+  createPiRuntimeRecovery,
+  prepareOptionalPiRuntime,
+} from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
+import { makerStartupGate } from './maker-host/startup-gate.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
@@ -793,7 +806,6 @@ import {
   suspendUsageLimitWaits,
   flushUsageLimitWaits,
   reconcileScheduledUsageLimitWaits,
-  scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   flushPluginTaskLifecycle,
@@ -818,6 +830,10 @@ import {
   withSendToSessionLock,
 } from './maker-ipc/register.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
+import {
+  createLocalProjectFromTaskHandlers,
+  createProjectsRootSettingsHandlers,
+} from './createProjectFromTaskHost.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -970,8 +986,6 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
-import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
-import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -995,7 +1009,7 @@ import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
-import { initRegionScreenshot, stopRegionScreenshot } from './region-screenshot/index.js';
+import { initRegionScreenshot, setRegionScreenshotLocale, stopRegionScreenshot } from './region-screenshot/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
 import { getRenderWatchdogContext } from './renderWatchdogContext.js';
 import {
@@ -1054,7 +1068,9 @@ import {
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
+  cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
 } from './mainWindowCloseBehavior.js';
 import {
@@ -1154,6 +1170,9 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
   getGhostBrowserExtensionSlot,
+  screenGhostControlPoint,
+  resolveGhostControlPointPlugin,
+  getLiveScreenHost,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1174,8 +1193,9 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { setMainLocale, t } from './i18n.js';
-import { requireObject, throwIpcError } from './utils/ipcValidate.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
+import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
 // splash check-environment / user login (触发 ensureReady) 谁先到不固定。
@@ -1191,6 +1211,8 @@ import {
 } from './scheduler-host/index.js';
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
+import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
+import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
@@ -1247,17 +1269,36 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
 configureRoutineHost({
+  deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
   assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   ensureRoutineSession: ensureBotRoutineLaneSession,
   closeRoutineSession: async (sessionId) => {
     await getMakerIfReady()?.closeSession(sessionId);
   },
+  // fresh 任务未被派发即回收：复用普通任务同一条删除写入（不另起并行写链）。
+  deleteRoutineSession: async (sessionId) => {
+    await patchSessionMetaInDb(sessionId, { status: 'deleted' });
+  },
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
+  screenControlPoint: screenGhostControlPoint,
+  resolvePreRunPlugin: resolveGhostControlPointPlugin,
 });
 // 伙伴自主跟进：跟随例行任务引擎生命周期（引擎每次创建后重新登记 host:sessions 事件源）。
 configureBotAutonomyHost({ getMainWindow: () => mainWindowRef });
+voiceCallCoordinator.configure({
+  hostSender: () => {
+    const win = mainWindowRef;
+    return win && !win.isDestroyed() && !win.webContents.isDestroyed() ? win.webContents.id : null;
+  },
+  send: (sender, channel, payload) => {
+    const target = webContents.fromId(sender);
+    if (target && !target.isDestroyed()) target.send(channel, payload);
+  },
+  onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
+  leaseHeld: hasVoiceConversationLease,
+});
 initBotAutonomy();
 
 /**
@@ -1334,6 +1375,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       feishuIm,
       logger: createSchedulerLogger('scheduler-host'),
       ...automationGitBaselineHooks,
+      screenControlPoint: screenGhostControlPoint,
+      resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
@@ -2003,11 +2046,6 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetLearnController();
     } catch (err) {
       authBoundaryLog.error(`resetLearnController on ${reason} failed (non-fatal):`, err);
-    }
-    try {
-      disposeDesktopContactsManager();
-    } catch (err) {
-      authBoundaryLog.error(`dispose contacts manager on ${reason} failed (non-fatal):`, err);
     }
     // Maker session storage resolves the current DbClient lazily. A late callback
     // from the previous owner must not survive long enough to write into the next
@@ -2860,6 +2898,7 @@ function dispatchApplicationMenuCommand(
   if (mainWindow.isDestroyed()) return;
   const activateWindow = options.activateWindow ?? true;
   if (activateWindow) {
+    cancelPendingWindowHide(mainWindow);
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -3088,6 +3127,10 @@ function installApplicationMenu(
       label: labels.helpMenu,
       submenu: [
         createOpenLogsMenuItem(),
+        {
+          label: labels.performanceTrace,
+          click: () => dispatchApplicationMenuCommand(mainWindow, 'open-performance-trace'),
+        },
         { type: 'separator' },
         {
           label: labels.help,
@@ -3144,13 +3187,22 @@ ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
 // 详见 deepLink.ts 的 pending buffer 段。
 ipcMain.handle('deep-link:take-pending', takePendingDeepLinkFromRenderer);
 
+ipcMain.handle('app-locale:set-classical-style', (_event, style: unknown): { ok: true } => {
+  // Unknown values keep the current style; only catalog ids reach the reply note.
+  if (isClassicalReplyStyle(style)) setMainClassicalStyle(style);
+  return { ok: true };
+});
+
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   const previousLocale = currentApplicationMenuLocale;
+  // Real previous locale (OS fallback before the first sync), not the menu cache that starts null.
+  const previousResolvedLocale = getResolvedMainLocale();
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
     typeof locale === 'string' ? locale : null,
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  setRegionScreenshotLocale(currentApplicationMenuLocale);
   if (previousLocale !== currentApplicationMenuLocale) {
     // Identity names are localized on the source host; refresh its cached views
     // and linked devices through the existing provider-change notification.
@@ -3161,14 +3213,14 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   sidebarTabWindowsController.setLocale(currentApplicationMenuLocale);
-  refreshGhostLocalization();
+  refreshGhostLocalization(previousResolvedLocale);
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
   }
   refreshDesktopTrayMenus();
   getAgentIslandService()?.refreshLocalization();
-  refreshMenubarLocalization();
+  getQuotaOverviewService().rebuildSoon();
   return { ok: true };
 });
 
@@ -3213,6 +3265,8 @@ const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
   },
 });
 let mainWindowBackgroundThrottlingAllowed = true;
+let mainWindowHasRunningTurn = false;
+let mainWindowHasVoiceCall = false;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
 let updatePresentationRecoveryInitialized = false;
@@ -3511,6 +3565,22 @@ function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
   return choice === 1 ? 'quit' : 'tray';
 }
 
+function minimizeWindow(window: BrowserWindow): void {
+  minimizeDesktopWindow(window, {
+    platform: process.platform,
+    env: process.env,
+    isMainWindow: window === mainWindowRef,
+    ensureTray: () => linuxTray.ensure(),
+    onTrayError: () => {
+      dialog.showMessageBoxSync(window, {
+        type: 'error',
+        title: t('settings.windowBehavior.trayError.title'),
+        message: t('settings.windowBehavior.trayError.message'),
+      });
+    },
+  });
+}
+
 function showNativeLinuxCloseBehaviorPrompt(): LinuxCloseBehavior {
   const options = {
     type: 'question' as const,
@@ -3576,7 +3646,12 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+        applyLinuxMainWindowCloseBehavior(
+          mainWindow,
+          behavior,
+          () => app.quit(),
+          () => minimizeWindow(mainWindow),
+        );
       } else {
         app.quit();
       }
@@ -3710,7 +3785,18 @@ function applyMainWindowBackgroundThrottling(): void {
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
-  const nextAllowed = !hasRunningTurn;
+  mainWindowHasRunningTurn = hasRunningTurn;
+  syncMainWindowBackgroundThrottling();
+}
+
+/** The live call runs in the main window, including while that window is hidden. */
+function setMainWindowBackgroundThrottlingForVoiceCall(active: boolean): void {
+  mainWindowHasVoiceCall = active;
+  syncMainWindowBackgroundThrottling();
+}
+
+function syncMainWindowBackgroundThrottling(): void {
+  const nextAllowed = !mainWindowHasRunningTurn && !mainWindowHasVoiceCall;
   if (mainWindowBackgroundThrottlingAllowed === nextAllowed) return;
   mainWindowBackgroundThrottlingAllowed = nextAllowed;
   applyMainWindowBackgroundThrottling();
@@ -3719,6 +3805,7 @@ function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean)
 function focusMainWindow(): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
+  cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   win.focus();
@@ -3746,11 +3833,9 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 }
 
 // ── Custom URL scheme (cindy://... + 历史 xdt-maker://...) ───────────────
-// 必须在 app.whenReady() 之前注册:
-//   - registerDeepLinkProtocol() 调 setAsDefaultProtocolClient (Windows/Linux
-//     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
+//   - registerDeepLinkProtocol() 仅为 packaged client 注册 OS 协议，dev 不改变系统关联
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
-//     提前 attach 才能接住
+//     必须在 app.whenReady() 之前 attach；dev 仍接收显式投递的事件
 watchCindyVersionStartupResult();
 if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
@@ -4095,7 +4180,7 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
+    // Hyprland has no native minimize surface, so it uses the Linux tray.
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -4112,7 +4197,12 @@ const createWindow = () => {
         linuxClosePromptFallback.request();
         return;
       }
-      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      applyLinuxMainWindowCloseBehavior(
+        mainWindow,
+        behavior,
+        () => app.quit(),
+        () => minimizeWindow(mainWindow),
+      );
       return;
     }
     app.quit();
@@ -4120,8 +4210,7 @@ const createWindow = () => {
   void ensureMainAppPresence('main-window-created', mainWindow);
   // Keep diagnostics reachable from the tray even before login or if the renderer fails.
   if (process.platform === 'win32') ensureWindowsTray();
-  // Tray construction is not proof that a Linux panel hosts the icon. Keep the
-  // existing minimize/quit close choices so an absent tray never strands a hidden window.
+  // Register before the first hide; activation and second-instance both reveal the main window.
   if (process.platform === 'linux') linuxTray.ensure();
 
   installApplicationMenu(
@@ -5194,14 +5283,6 @@ const registerIpcHandlers = () => {
     return { effective: 'next-session' as const };
   });
 
-  // 智能通讯录 IPC —— 设置开关 + 数据 CRUD(设置页管理 UI 通道), 提前注册。
-  registerContactsIpc({
-    restartCodexAfterAuthModeChange,
-    shutdownCodexEnvironment,
-    scheduleDeferredCodexRestart,
-    invalidatePiEnvironment,
-  });
-
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:
   // renderer 启动 bootstrap 同步 localStorage 镜像, 远早于 splash 完成。
   // SET 路径既落 JSON 也立即把 chat-history-embedder 的运行时 enabled 切换 ——
@@ -5546,7 +5627,8 @@ const registerIpcHandlers = () => {
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
   ipcMain.on('window-minimize', (event) => {
-    (BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef)?.minimize();
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
+    if (window) minimizeWindow(window);
   });
   ipcMain.on('window-maximize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
@@ -6114,6 +6196,14 @@ const registerIpcHandlers = () => {
           },
         })
         .finally(() => authCredentialRecovery.request());
+      // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
+      // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
+      // 以后台完成的那次登录为准。
+      const markAuthMilestone = (s: authManager.AuthState) => {
+        if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+      };
+      markAuthMilestone(state);
+      void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
       // Plugin downloads/reconciliation retain their owner-scoped retries, but
       // must not delay AuthContext starting the owner DB or showing the app.
       authManager.requestStableOwnerPostCommit('auth-initialize');
@@ -6384,6 +6474,9 @@ const registerIpcHandlers = () => {
     // (见 anthropic-compat-proxy-host / anthropic-responses-bridge-host),纯内存懒装配,
     // 无独立 server、无启动 / 关停生命周期。
     await ensureAnthropicCompatProxyReady();
+    // Pi has settled before this function is called. Keep early plugin callers
+    // behind the catalog/proxy prerequisites as well as binary preparation.
+    makerStartupGate.complete();
     // codex proxy 两种 spawn 形态(oauth-bearer / env-key)都经它出口,首个 codex session spawn 时
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
@@ -6713,23 +6806,15 @@ const registerIpcHandlers = () => {
       : undefined;
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
-    let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    try {
-      const piRes = await binaryPrepare('pi', {
-        ...stepOptsFor('pi'),
-        broadcastFailure: false,
-        signal: piInstallSignal,
-      });
-      piInfo =
-        piRes.ready && piRes.path
-          ? { status: 'passed' as const, path: piRes.path }
-          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-    } catch (err: unknown) {
-      piInfo = {
-        status: 'failed' as const,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+    const piInfo = await prepareOptionalPiRuntime({
+      prepare: () =>
+        binaryPrepare('pi', {
+          ...stepOptsFor('pi'),
+          broadcastFailure: false,
+          signal: piInstallSignal,
+        }),
+      register: registerPiAgentIfAvailable,
+    });
     if (piInfo.status === 'failed') {
       piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
@@ -6737,7 +6822,7 @@ const registerIpcHandlers = () => {
       );
     }
 
-    // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
+    // Required binaries are ready and the first optional Pi attempt has settled.
     await registerMakerIpcsAfterSplash();
     startBinaryBackgroundUpdates();
 
@@ -7237,6 +7322,33 @@ const registerIpcHandlers = () => {
     },
   );
 
+  // ── 从最近项目列表添加可写目录：与把它选作任务工作目录同等范围，只认列表里原样保存的路径 ──
+  const recentWritableDirectoryLog = createLogger('writable-directory:recent-grant');
+  ipcMain.handle('dialog:authorize-recent-writable-directory', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input);
+    const directory = requireString(body.directory, 'directory');
+    const writableGrantScope = requireString(body.writableGrantScope, 'writableGrantScope');
+    if (writableGrantScope.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'invalid writable directory grant scope');
+    }
+    try {
+      await issueWritableDirectoryRecentGrant({
+        scopeId: writableGrantScope,
+        senderId: event.sender.id,
+        directory,
+        isRecentProject: (candidate) => hasRecentWorkdir(candidate),
+      });
+    } catch (error) {
+      if (error instanceof WritableDirectoryPickerGrantError) throwIpcError(error.code, error.message);
+      recentWritableDirectoryLog.warn('recent writable directory authorization failed', {
+        error: String(error),
+      });
+      throwIpcError('INTERNAL', 'Writable directory authorization failed');
+    }
+    return { success: true };
+  });
+
   // ── Dialog: 文件选择器(前置检查脚本选取等通用场景;与目录选择器同形) ──
   ipcMain.handle(
     'dialog:show-open-file',
@@ -7621,14 +7733,17 @@ const registerIpcHandlers = () => {
     'fs:resolve-path-batch',
     async (
       _event: Electron.IpcMainInvokeEvent,
-      params: { hrefs: string[]; workingDir: string },
+      params: { hrefs: string[]; workingDir: string; revalidateNegative?: boolean },
     ): Promise<
       Record<string, { status: 'unique' | 'multiple' | 'none'; candidates: string[] }>
     > => {
       try {
-        return await resolveWorkspacePathBatchCached(params.hrefs, params.workingDir, {
-          isPathAllowed,
-        });
+        return await resolveWorkspacePathBatchCached(
+          params.hrefs,
+          params.workingDir,
+          { isPathAllowed },
+          params.revalidateNegative === true,
+        );
       } catch (err) {
         createLogger('fs:resolve-path-batch').error('failed', { error: String(err) });
         const fallback: Record<
@@ -8396,10 +8511,13 @@ const registerIpcHandlers = () => {
 
     const lightboxMedia = createLightboxMediaHandlers({
       isPathAllowed,
+      realpath: (absPath) => fs.promises.realpath(absPath),
       resolveImageCacheUrl: (url) =>
         url.startsWith('cindy-media://')
           ? cindyMediaBlobStore.resolveSafe(url)
-          : imageCacheStore.resolveSafe(url),
+          : url.startsWith('xdt-video://')
+            ? videoCacheStore.resolveSafe(url)
+            : imageCacheStore.resolveSafe(url),
       // 规则 25:lightbox「发送到对话」的缓存写同样进媒体总仓(草稿语义,
       // 发送时统一由 register.ts 挂引用),与 IPC from-path/from-buffer 一致。
       cacheImageFromPath: (params) =>
@@ -8791,6 +8909,52 @@ const registerIpcHandlers = () => {
           if (isIpcError(error)) throw error;
           dbClientLog.warn('dialogue workspace settings request failed', { action });
           throwIpcError('INTERNAL', 'dialogue workspace settings request failed');
+        }
+      });
+    }
+
+    // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
+    const chooseProjectsFolder = async () => {
+      const options: Electron.OpenDialogOptions = {
+        title: t('settings.about.storage.projectsRootChoose'),
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+      const result =
+        ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    };
+    const projectsRootHandlers = createProjectsRootSettingsHandlers({ chooseDirectory: chooseProjectsFolder });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('projects-root:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectsRootHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('projects root settings request failed', { action });
+          throwIpcError('INTERNAL', 'projects root settings request failed');
+        }
+      });
+    }
+    const projectFromTaskHandlers = createLocalProjectFromTaskHandlers({
+      isSessionBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
+      chooseDirectory: chooseProjectsFolder,
+    });
+    for (const action of ['prepare', 'chooseParent', 'create'] as const) {
+      ipcMain.handle('create-project-from-task:' + action, async (event, input: unknown) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectFromTaskHandlers[action](input);
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('create project from task failed', {
+            action,
+            code: (error as NodeJS.ErrnoException)?.code,
+          });
+          throwIpcError('INTERNAL', 'create project from task failed');
         }
       });
     }
@@ -9207,6 +9371,7 @@ app.on('ready', async () => {
   if (!(await initClientEndpoints())) {
     return; // 用户在错误框选择退出,app.exit 已调用
   }
+  markStartupMilestone('client-endpoints-ready');
   registerClientEndpointsIpc();
 
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
@@ -9504,7 +9669,16 @@ app.on('ready', async () => {
           });
         });
       }
-      await refreshPluginUsageBindings();
+      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
+      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
+      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
+      try {
+        await refreshPluginUsageBindings();
+      } catch (error) {
+        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       checkDatabaseSizeWarningAtStartup();
       // Bot recovery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,
@@ -9920,6 +10094,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
   // sidebar's synchronous legacy migration reads can consume an exact proof.
@@ -9928,6 +10103,7 @@ app.on('ready', async () => {
   }
   startupWindowCreationAllowed = true;
   createWindow();
+  markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start
   // its tiny helper after the first window exists so drag latency never pays
   // a dev swiftc compile or process-spawn cost.
@@ -9942,7 +10118,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
-    onControlledStateChanged: refreshMenubarControlState,
+    onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
@@ -9968,7 +10144,7 @@ app.on('ready', async () => {
       drain: drainPersistQueue,
     },
   );
-  registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
+  registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
@@ -9976,10 +10152,11 @@ app.on('ready', async () => {
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
-  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {
-    name: getControllerName,
-    revoke: revokeController,
-  });
+  registerRemoteDesktopIpc(
+    isGlobalVoiceInputOverlaySender,
+    { name: getControllerName, revoke: revokeController },
+    getLiveScreenHost,
+  );
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
@@ -10083,11 +10260,18 @@ onQuit(
   },
   'sync',
 );
+let schedulerQuit: Promise<void> | undefined;
 onQuit(
   'session-active-turn-freeze',
   () => {
     suspendUsageLimitWaits();
     freezeSessionActiveTurnMarkers();
+    // Fence scheduler completion before process reapers / Maker close emit
+    // terminal events. Keep the write alive until the async quit phase drains.
+    schedulerQuit = getSchedulerIfInitialized()?.stop({ interrupted: true });
+    void schedulerQuit?.catch((error) => {
+      createSchedulerLogger('scheduler-host').error?.('scheduler quit persistence failed', error);
+    });
   },
   'sync',
 );
@@ -10264,6 +10448,7 @@ onQuit(
 onQuit(
   'shutdown-maker',
   async () => {
+    await schedulerQuit?.catch(() => {});
     // Not try/finally: a rejection here can predate `maker.shutdown` entirely
     // (see `makerShutdownSettled`), so it must not read as "the parent is down".
     const { piSessionFailures } = await shutdownMaker();

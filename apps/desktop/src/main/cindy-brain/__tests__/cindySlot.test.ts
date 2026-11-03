@@ -7,6 +7,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { importPickedFiles } from '../pickedFiles.js';
 
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { getActiveCatalog, setActiveCatalog, setOpenAiImagesApiKeyConfigured } from '../../maker-host/active-catalog.js';
@@ -1581,6 +1585,46 @@ describe('寄存(deposit_media / release_media)', () => {
     ...extra,
   });
   const releaseReq = (hash: unknown) => ({ type: 'cindy-request', kind: 'release_media', hash });
+
+  // #7924 / 4423005283, unit: real pick importer + cindy-request entry.
+  // Existing single-entry quota tests miss a legacy deposit started by pick progress.
+  // Only one PNG fits; both used to pass the same balance. A failed import must also
+  // release the quota operation so the following legacy deposit can succeed.
+  it.each([false, true])('shares quota with a picked import (import fails: %s)', async failImport => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-shared-deposit-'));
+    try {
+      const file = path.join(root, 'input.png');
+      await fs.writeFile(file, PNG);
+      let used = GHOST_CINDY_DEPOSIT_QUOTA_BYTES - PNG.length;
+      const { slot } = makeSlot({
+        depositUsageBytes: async () => used,
+        depositMedia: async () => {
+          used += PNG.length;
+          return { url: 'cindy-media://blobs/legacy.png', hash: 'd'.repeat(64), ext: '.png', bytes: PNG.length, deduplicated: false };
+        },
+      });
+      let second: ReturnType<typeof slot.handleModelRequest> | undefined;
+      const picked = await importPickedFiles({
+        tempRoot: root,
+        usageBytes: async () => used,
+        deposit: async () => {
+          if (failImport) throw new Error('disk write failed');
+          used += PNG.length;
+          return { url: 'cindy-media://blobs/picked.png' };
+        },
+        importLibrary: async () => { throw new Error('not used'); },
+        progress: () => bytes => {
+          if (bytes !== undefined && !second) second = slot.handleModelRequest('art', depositReq(b64(PNG)));
+        },
+      }, 'art', [file], { into: 'media', assertCurrent() {} });
+      expect(second).toBeDefined();
+      const legacy = await second!;
+      expect(picked.ok).toBe(!failImport);
+      expect(legacy.ok).toBe(failImport);
+      expect(used).toBe(GHOST_CINDY_DEPOSIT_QUOTA_BYTES);
+      expect((await fs.readdir(root)).filter(name => name.startsWith('cindy-pick-'))).toEqual([]);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
 
   it('happy path:字节 → 指纹,mime 由主机判定,配额口径随结果回传', async () => {
     const { slot, depositMedia } = makeSlot();

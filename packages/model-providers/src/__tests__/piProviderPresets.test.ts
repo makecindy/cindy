@@ -7,18 +7,18 @@ import { modelProtocolComparison } from '../modelProtocol.js';
 
 const nativeApis: Record<string, Record<string, string>> = {
   openrouter: { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
-  deepseek: { 'claude-code': 'anthropic-messages' },
-  'moonshot-kimi-code': { codex: 'openai-completions' },
+  deepseek: { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
+  'moonshot-kimi-code': { codex: 'openai-responses' },
   'minimax-global': { codex: 'openai-responses' },
   'minimax-cn': { codex: 'openai-responses' },
   'moonshot-kimi-global': { 'claude-code': 'anthropic-messages' },
   'moonshot-kimi-cn': { 'claude-code': 'anthropic-messages' },
-  'aliyun-bailian-token-plan-cn': { 'claude-code': 'anthropic-messages' },
+  'aliyun-bailian-token-plan-cn': { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
   'vercel-ai-gateway': { codex: 'openai-responses' },
-  'xiaomi-mimo-api-cn': { 'claude-code': 'anthropic-messages' },
-  'xiaomi-mimo-token-plan-cn': { 'claude-code': 'anthropic-messages' },
-  'zai-coding-plan-global': { 'claude-code': 'anthropic-messages' },
-  'zhipu-coding-plan-cn': { 'claude-code': 'anthropic-messages' },
+  'xiaomi-mimo-api-cn': { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
+  'xiaomi-mimo-token-plan-cn': { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
+  'zai-coding-plan-global': { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
+  'zhipu-coding-plan-cn': { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
   baseten: { 'claude-code': 'anthropic-messages' },
   groq: { codex: 'openai-responses' },
   huggingface: { codex: 'openai-responses' },
@@ -26,28 +26,27 @@ const nativeApis: Record<string, Record<string, string>> = {
 };
 const generated = appendPiProviderPresets([]);
 describe('Pi supplier connection import', () => {
-  it('projects every generated model into all three harnesses with its actual API and metadata', () => {
-    for (const preset of generated.filter(p => p.id !== 'nous')) {
-      const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, { ...runtime, catalogPresetId: preset.id }])) }, { presets: generated });
-      const source = sourceProviderForPreset(preset.id);
-      const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => preset.runtimes.pi!.models.some(model => model.id === row.id));
-      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-        expect(provider.models[agent], `${preset.id}/${agent}`).toHaveLength(rows.length);
-        rows.forEach((row, index) => {
-          // Cindy's Coding route declarations supersede the imported Pi source
-          // limits; other supplier rows retain their original metadata contract.
-          const kimiCode = preset.id === 'moonshot-kimi-code';
-          const codingWindow = kimiCode && ['k3', 'k3-256k'].includes(row.id);
-          const codingResponses = kimiCode && agent === 'codex' && ['k3', 'k3-256k', 'kimi-for-coding'].includes(row.id);
-          expect(provider.models[agent]![index], `${preset.id}/${agent}/${row.id}`).toMatchObject({
-            id: row.id, api: codingResponses ? 'openai-responses' : nativeApis[preset.id]?.[agent] ?? row.execution.pi.api,
-            ...(agent === 'pi' ? { piApi: row.execution.pi.api } : {}),
-            ...(row.contextWindow === undefined ? {} : { contextWindow: codingWindow ? 262144 : row.contextWindow }),
-            ...(row.maxOutput === undefined ? {} : { maxOutput: codingWindow ? 262144 : row.maxOutput }),
-            ...(row.supportsImageInput === undefined ? {} : { supportsImageInput: row.supportsImageInput }),
-          });
+  it.each(generated.filter(p => p.id !== 'nous'))('projects $id models into all three harnesses with their actual API and metadata', preset => {
+    const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, { ...runtime, catalogPresetId: preset.id }])) }, { presets: generated });
+    const source = sourceProviderForPreset(preset.id);
+    const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => preset.runtimes.pi!.models.some(model => model.id === row.id));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(provider.models[agent], `${preset.id}/${agent}`).toHaveLength(rows.length);
+      rows.forEach((row, index) => {
+        // Cindy's Coding route declarations supersede the imported Pi source
+        // limits; other supplier rows retain their original metadata contract.
+        const kimiCode = preset.id === 'moonshot-kimi-code';
+        const codingWindow = kimiCode && ['k3', 'k3-256k'].includes(row.id);
+        // Kimi platform serves Responses for the K3 series only; K2 models keep Chat for Codex.
+        const kimiPlatformK3 = preset.id.startsWith('moonshot-kimi-') && !kimiCode && agent === 'codex' && /^kimi-k3/.test(row.id);
+        expect(provider.models[agent]![index], `${preset.id}/${agent}/${row.id}`).toMatchObject({
+          id: row.id, api: kimiPlatformK3 ? 'openai-responses' : nativeApis[preset.id]?.[agent] ?? row.execution.pi.api,
+          ...(agent === 'pi' ? { piApi: row.execution.pi.api } : {}),
+          ...(row.contextWindow === undefined ? {} : { contextWindow: codingWindow ? 262144 : row.contextWindow }),
+          ...(row.maxOutput === undefined ? {} : { maxOutput: codingWindow ? 262144 : row.maxOutput }),
+          ...(row.supportsImageInput === undefined ? {} : { supportsImageInput: row.supportsImageInput }),
         });
-      }
+      });
     }
   });
   it('keeps the model-specific routes of mixed-protocol suppliers', () => {
@@ -89,9 +88,10 @@ it('selects a direct Messages endpoint for a Messages model and carries its cont
     }],
   } });
   expect(provider.models['claude-code']![0]).toMatchObject({ api: 'anthropic-messages', contextWindow: 128000, defaultEnabled: true, route: { baseUrl: 'https://gateway.example/anthropic' } });
-  expect(provider.models.codex![0]).toMatchObject({ contextWindow: 64000, defaultEnabled: false });
+  // The gateway offers Responses: Codex uses it as is and is enabled (Chris 2026-10-30).
+  expect(provider.models.codex![0]).toMatchObject({ contextWindow: 64000, defaultEnabled: true });
   expect(modelProtocolComparison(provider, { codex: provider.models.codex![0] }).forAgent('codex')).toMatchObject({
-    outbound: 'openai-responses', mode: 'compatibility', localConversion: false,
+    outbound: 'openai-responses', mode: 'matching', localConversion: false,
   });
   expect(provider.models.pi![0].defaultEnabled).toBe(true);
 });

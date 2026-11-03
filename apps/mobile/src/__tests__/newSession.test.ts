@@ -1770,7 +1770,9 @@ describe('new session model', () => {
     expect(scrollParents[0].openingElement.getText(source)).toContain('styles.workspaceProjectList');
   });
 
-  it('builds recent workspace quick picks from mirrored remote sessions', () => {
+  // #7972, unit: both creation pickers share this production projection. Existing
+  // cwd-only fixtures missed persisted membership differing from the checkout.
+  it('builds recent workspace quick picks from project membership with legacy cwd fallback', () => {
     const options = buildRecentWorkspaceOptions([
       remoteSession('old', {
         workingDir: '/repo/old',
@@ -1778,18 +1780,27 @@ describe('new session model', () => {
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('latest-a', {
-        workingDir: '/repo/app',
+        projectDir: '/repo/app',
+        workingDir: '/tmp/checkout-a',
         userSendAt: '2026-01-01T00:05:00.000Z',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('latest-b', {
+        projectDir: '/repo/app',
+        workingDir: '/repo/code/.cindy-worktrees/branch',
+        userSendAt: '2026-01-01T00:06:00.000Z',
+        deviceLinkDeviceId: 'mac-a',
+      }),
+      remoteSession('legacy', {
+        projectDir: null,
         workingDir: '/repo/app',
         userSendAt: '2026-01-01T00:06:00.000Z',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('dialogue', {
         workspaceKind: 'dialogue',
-        workingDir: null,
+        projectDir: '/repo/app',
+        workingDir: '/tmp/dialogue',
         deviceLinkDeviceId: 'mac-a',
       }),
       remoteSession('other-device', {
@@ -1808,7 +1819,7 @@ describe('new session model', () => {
       {
         workingDir: '/repo/app',
         title: 'app',
-        sessionCount: 2,
+        sessionCount: 3,
         lastActivityAt: '2026-01-01T00:06:00.000Z',
       },
       {
@@ -1822,7 +1833,7 @@ describe('new session model', () => {
 
   // #6916, unit: the production picker must display host metadata without changing its path.
   it('uses the selected host alias for recent workspace quick picks', () => {
-    const sessions = [remoteSession('app', { workingDir: '/repo/app', deviceLinkDeviceId: 'mac-a' })];
+    const sessions = [remoteSession('app', { projectDir: '/repo/app', workingDir: '/tmp/checkout', deviceLinkDeviceId: 'mac-a' })];
     const aliases = new Map([
       ['device:mac-a:/repo/app', 'Customer Portal'],
       ['device:mac-b:/repo/app', 'Other Portal'],

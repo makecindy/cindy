@@ -50,7 +50,6 @@ import {
   DEFAULT_AGENT_ISLAND_MASCOT_SKIN,
   cloneAgentIslandDisplayTarget,
   cloneAgentIslandSoundSettings,
-  computeAgentIslandContentHeight,
   createDefaultAgentIslandDisplayConfig,
   createEmptyAgentIslandPillSnapshot,
   getAgentIslandDefaultContentWidth,
@@ -111,6 +110,7 @@ import {
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   completedReplySummary,
@@ -197,12 +197,14 @@ interface AgentIslandSessionMeta {
   sessionId: string;
   agentKind?: string;
   workingDir?: string | null;
+  projectDir?: string | null;
   workspaceKind?: string | null;
 }
 
 interface AgentIslandCachedMetadata {
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** undefined until the Session row has been read; null for non-companion Sessions. */
   companion?: AgentIslandCompanionIdentity | null;
@@ -227,7 +229,11 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
-  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  /**
+   * Optional process-local consumer for task activity, such as hardware status lighting.
+   * Unlike the relay payload it also carries tasks mirrored from other devices, so it sees
+   * the same tasks Agent Island shows.
+   */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
@@ -330,6 +336,31 @@ function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string 
   if (latestKind === 'assistant') return '正在生成回复';
   if (latestKind === 'user') return '正在处理新消息';
   return '正在运行';
+}
+
+function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
+  return {
+    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
+    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
+    ...projectSessionActivity({
+      sessionId: s.sessionId,
+      recordStatus: 'active',
+      title: s.title,
+      source: 'live',
+      livePhase: s.phase,
+      startedAtMs: s.startedAt,
+      lastActivityAtMs: s.lastActivityAt,
+      currentActionSummary: safeSessionActionSummary(s),
+      interactionKind: s.interactionKind,
+      attention: s.attention,
+    }),
+    phase: s.phase,
+    interactionKind: s.interactionKind,
+    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
+    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
+    summaryFormat: 'plain-text',
+    workingPhase: s.workingPhase,
+  };
 }
 
 function canonicalSessionActivity(
@@ -1574,7 +1605,7 @@ export class AgentIslandService {
 
   handleSessionMetadataPatch(
     sessionId: string,
-    patch: { title?: string | null; workingDir?: string | null; workspaceKind?: string | null },
+    patch: { title?: string | null; workingDir?: string | null; projectDir?: string | null; workspaceKind?: string | null },
   ): void {
     const current: AgentIslandCachedMetadata = this.metadataCache.get(sessionId) ?? {
       title: null,
@@ -1585,6 +1616,7 @@ export class AgentIslandService {
       ...current,
       title: patch.title !== undefined ? patch.title : current.title,
       workingDir: patch.workingDir !== undefined ? patch.workingDir : current.workingDir,
+      projectDir: patch.projectDir !== undefined ? patch.projectDir : current.projectDir,
       workspaceKind: patch.workspaceKind !== undefined ? patch.workspaceKind : current.workspaceKind,
     };
     this.commitMetadata(sessionId, next);
@@ -1688,6 +1720,8 @@ export class AgentIslandService {
       // 原始标题:投影只在 publish 构建 payload 时做(见 commitMetadata 的说明)。
       title: cached?.title ?? null,
       workingDir: cached?.workingDir ?? meta.workingDir,
+      // A persisted clear must win over stale event metadata as well.
+      projectDir: cached?.projectDir !== undefined ? cached.projectDir : meta.projectDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
       ...(cached?.companion !== undefined ? { companion: cached.companion?.companion ?? null } : {}),
     };
@@ -1769,6 +1803,7 @@ export class AgentIslandService {
         this.commitMetadata(sessionId, {
           title: row?.title ?? null,
           workingDir: row?.workingDir ?? null,
+          projectDir: row?.projectDir ?? null,
           workspaceKind: row?.workspaceKind ?? null,
           companion,
         });
@@ -1828,6 +1863,7 @@ export class AgentIslandService {
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
     return event.agentMeta?.botTaskCoordination === true
+      || event.agentMeta?.botPrivateReply === true
       || this.isGroupLaneEvent(sessionId, event)
       || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
@@ -1916,28 +1952,21 @@ export class AgentIslandService {
    * attention=true 投给远程侧栏,直到真正已读。
    */
   private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
-    return buildAllSessionActivitySnapshots(this.state).map((s) => ({
-      ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-      ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-      ...projectSessionActivity({
-        sessionId: s.sessionId,
-        recordStatus: 'active',
-        title: s.title,
-        source: 'live',
-        livePhase: s.phase,
-        startedAtMs: s.startedAt,
-        lastActivityAtMs: s.lastActivityAt,
-        currentActionSummary: safeSessionActionSummary(s),
-        interactionKind: s.interactionKind,
-        attention: s.attention,
-      }),
-      phase: s.phase,
-      interactionKind: s.interactionKind,
-      // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-      compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-      summaryFormat: 'plain-text',
-      workingPhase: s.workingPhase,
-    }));
+    return buildAllSessionActivitySnapshots(this.state).map(toSessionActivity);
+  }
+
+  /**
+   * 本机活动之外再加上其它设备任务的岛面镜像，只交给本进程内的消费方(键盘状态灯),
+   * 使它与灵动岛看到同一批任务；relay、renderer 与订阅方仍只拿本机活动。
+   */
+  private buildProcessLocalActivityPayload(
+    local: readonly AgentIslandSessionActivity[],
+  ): AgentIslandSessionActivity[] {
+    const localIds = new Set(local.map((activity) => activity.sessionId));
+    const device = buildDeviceSessionActivitySnapshots(this.state)
+      .filter((snapshot) => !localIds.has(snapshot.sessionId))
+      .map(toSessionActivity);
+    return [...local, ...device];
   }
 
   /** Current public activity only; avoids scanning historical Bot Session links. */
@@ -2055,7 +2084,7 @@ export class AgentIslandService {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
     this.emitSessionActivityTransitions(payload, Date.now());
-    this.notifySessionActivityConsumer(payload);
+    this.notifySessionActivityConsumer(this.buildProcessLocalActivityPayload(payload));
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
     const windows = BrowserWindow.getAllWindows().filter(isAppContentWindow);
@@ -2415,27 +2444,53 @@ export class AgentIslandService {
   }
 
   private computeNativeFrame(displayState: AgentIslandDisplayState, display: Display): AgentIslandNativeFrame {
-    const rawScreenMetrics = this.getScreenLayoutMetrics(display);
     const layoutPreference = this.getLayoutPreferenceForDisplay(display);
     const expanded = displayState.notchStatus === 'expanded';
     const hasSession = displayState.totalCount > 0;
+    const contentWidthFor = (mode: { expanded: boolean; hasSession: boolean }) => this.computeNativeContentWidth({
+      displayState,
+      display,
+      layoutPreference,
+      ...mode,
+    });
+    const contentWidth = contentWidthFor({ expanded, hasSession });
+    // The carrier keeps one size for both modes: macOS animates every window resize
+    // while Mission Control is open, which made expanding and collapsing jump. The
+    // expanded width assumes a session so the first task does not resize it either.
+    const carrierContentWidth = Math.max(
+      expanded ? contentWidthFor({ expanded: false, hasSession }) : contentWidth,
+      contentWidthFor({ expanded: true, hasSession: true }),
+    );
+    return {
+      ...computeAgentIslandWindowBounds(display, {
+        expanded: true,
+        centerXRatio: layoutPreference.centerXRatio,
+        contentWidth: carrierContentWidth,
+        minimumContentWidth: carrierContentWidth,
+      }),
+      displayId: display.id,
+      displayBounds: display.bounds,
+      contentWidth,
+    };
+  }
+
+  private computeNativeContentWidth(input: {
+    displayState: AgentIslandDisplayState;
+    display: Display;
+    layoutPreference: AgentIslandLayoutPreference;
+    expanded: boolean;
+    hasSession: boolean;
+  }): number {
+    const { displayState, display, layoutPreference, expanded, hasSession } = input;
     const screenMetrics = this.getEffectiveScreenLayoutMetrics({
       display,
       expanded,
       layoutPreference,
-      screenMetrics: rawScreenMetrics,
-    });
-    const contentHeight = computeAgentIslandContentHeight({
-      mode: displayState.mode,
-      displaySurface: displayState.displaySurface,
-      hasSession,
-      totalCount: displayState.totalCount,
-      measuredContentHeight: displayState.measuredContentHeight,
+      screenMetrics: this.getScreenLayoutMetrics(display),
     });
     const rawPreferredContentWidth = expanded
       ? layoutPreference.expandedContentWidth
       : layoutPreference.compactContentWidth;
-    const expandedPreferredContentWidth = layoutPreference.expandedContentWidth;
     const defaultContentWidth = getAgentIslandDefaultContentWidth({
       expanded,
       hasSession,
@@ -2460,39 +2515,14 @@ export class AgentIslandService {
         pillSnapshot: displayState.pillSnapshot,
       })
       : null;
-    const contentWidth = preferredContentWidth !== null
-      ? preferredContentWidth
-      : defaultContentWidth;
-    const expandedClampContentWidth = typeof expandedPreferredContentWidth === 'number'
-      ? expandedPreferredContentWidth
-      : getAgentIslandDefaultContentWidth({
-        expanded: true,
-        hasSession,
-        displayWidth: display.bounds.width,
-        screenMetrics,
-      });
-    const carrierSize = computeAgentIslandCarrierSize(
+    return computeAgentIslandCarrierSize(
       display,
       expanded,
-      contentHeight,
-      contentWidth,
+      undefined,
+      preferredContentWidth ?? defaultContentWidth,
       defaultContentWidth,
       minimumContentWidth,
-    );
-    return {
-      ...computeAgentIslandWindowBounds(display, {
-        expanded,
-        contentHeight,
-        centerXRatio: layoutPreference.centerXRatio,
-        contentWidth,
-        defaultContentWidth,
-        minimumContentWidth,
-        expandedClampContentWidth,
-      }),
-      displayId: display.id,
-      displayBounds: display.bounds,
-      contentWidth: carrierSize.contentWidth,
-    };
+    ).contentWidth;
   }
 
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {

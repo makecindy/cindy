@@ -129,6 +129,7 @@ export function resolveSharedProviderId(
  * 供应商分享的受邀者：来源只能是分享给它的那个供应商(没指定时也落到它上面)，而且这个供应商
  * 要为本 Agent 提供所选模型(口径同上：新路由优先，再按实际路由)。只看分享的这一个供应商，
  * 不会因为本机别的供应商有同名模型而放行。返回 null = 不允许。
+ * groupRouting 只给宿主分配组员或向已确认的组员转发时核对来源：本机登录不代表整组的可用性；本机执行不带它核对。
  */
 export function resolveGuestProviderId(
   views: readonly ProviderView[],
@@ -137,11 +138,13 @@ export function resolveGuestProviderId(
   kind: AgentKind,
   model: string,
   providerId: string | null | undefined,
+  context: { groupRouting?: boolean } = {},
 ): string | null {
   if (!sharedProviderId || !isAllowed(sharedProviderId)) return null;
   if (providerId && providerId !== sharedProviderId) return null;
   if (!model) return null;
-  const shared = views.filter((view) => view.id === sharedProviderId);
+  const shared = views.filter((view) => view.id === sharedProviderId)
+    .map((view) => context.groupRouting ? { ...view, connected: true } : view);
   return effectiveSourceIdForModel(shared, sharedProviderId, model, kind)
     ?? actualSourceIdForModel(shared, sharedProviderId, model, kind);
 }

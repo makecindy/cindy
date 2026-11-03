@@ -11,14 +11,17 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  requireNativeViewManager: () => () => null,
+}));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const view = ({ children, testID, accessibilityLabel }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
+  const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
@@ -169,7 +172,7 @@ describe('running work group expansion', () => {
       expect(html).not.toContain('Thinking step 0');
     }
   });
-  it.each([undefined, []])('requests an old-Host preview only when running lines are absent: %j', (lines) => {
+  it.each([undefined, []])('shows cached old-Host activity only when running lines are absent: %j', (lines) => {
     const setVisible = vi.fn();
     const items = buildMobileMessageRenderItems([
       msg('thought', 'thinking', { text: 'Cached thinking', durationMs: 1 }),
@@ -177,7 +180,8 @@ describe('running work group expansion', () => {
       .map(item => ({ ...item, deferred: { owner: {}, key: item.key, expanded: false,
         loading: false, failed: false, lines, setVisible, toggle() {}, retry() {} } }));
     const html = renderClient(<MessageRenderer items={companionConversationItems(items)} companion isSessionStreaming />);
-    expect(setVisible).toHaveBeenCalledWith(false, lines === undefined);
+    // The controller, not this regrouped row, decides from the Host lines whether a tail is read.
+    expect(setVisible).toHaveBeenCalledWith(false, true);
     expect(html.includes('Cached thinking')).toBe(lines === undefined);
   });
   const render = (awaitingDetails: boolean) => {
@@ -298,6 +302,65 @@ describe('partner conversation presentation', () => {
   });
 });
 
+// Regression (#8379 review): LegendList redraws a kept row only when its item or `extraData` changes.
+// Cross-row companion state (which reply is the last for its message, five-minute stamps) must
+// therefore reach `extraData`, now that the plugin-work map no longer changes on every flush.
+it.each([
+  ['a later reply to the same message moves the reply target', (messages: RemoteMessage[]) => [...messages,
+    msg('a2', 'assistant', 'Also', { createdAt: '2026-01-01T09:02:00Z', agentMeta: { replyToClientId: 'u1' } })]],
+  ['a corrected earlier time regroups the following rows', (messages: RemoteMessage[]) => [
+    msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T08:00:00Z' }), ...messages.slice(1)]],
+])('refreshes kept companion rows when %s', async (_name, change) => {
+  const { createRoot } = await import('react-dom/client');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const messages = [
+    msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),
+    msg('a1', 'assistant', 'Hello', { createdAt: '2026-01-01T09:01:00Z', agentMeta: { replyToClientId: 'u1' } }),
+  ];
+  const quote = { names: { owner: 'Me', companion: 'Cindy' }, showReplyTargets: true, onQuote: vi.fn(), onLocate: vi.fn() };
+  const view = (rows: RemoteMessage[]) => <MessageRenderer
+    items={buildMobileMessageRenderItems(rows, { isSessionStreaming: false })} companion companionQuote={quote} />;
+  const root = createRoot(document.createElement('div'));
+  act(() => root.render(view(messages)));
+  const before = viewportHarness.list.extraData;
+  act(() => root.render(view(change(messages))));
+  expect(viewportHarness.list.extraData).not.toBe(before);
+  act(() => root.unmount());
+});
+
+// Regression (#8379 review): copy text is memoized per row, but its attachment prefix is localized.
+// A kept row must copy in the language the UI shows now, not the one it first rendered in.
+it('copies a kept row with the attachment prefix of the current UI language', async () => {
+  const [{ createRoot }, { i18n }, { copyMessageText }] = await Promise.all([
+    import('react-dom/client'), import('@/i18n'), import('@/session/messageActions')]);
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.mocked(copyMessageText).mockResolvedValue('copied' as never);
+  const previous = i18n.language;
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const items = buildMobileMessageRenderItems([msg('u', 'user', JSON.stringify({
+    text: 'Look', files: [{ name: 'sample.txt', path: '/tmp/sample.txt' }] }))], { isSessionStreaming: false });
+  const copy = async () => {
+    // The copy control is labelled by its state (Copy / Copied / Failed) in the current language.
+    const labels = ['copyStateCopy', 'copyStateCopied', 'copyStateFailed'].map((key) => i18n.t(`message.renderer.${key}`));
+    const button = [...host.querySelectorAll('[aria-label]')].find((node) => labels.includes(node.getAttribute('aria-label') ?? ''));
+    expect(button).toBeTruthy();
+    await act(async () => { button!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    return vi.mocked(copyMessageText).mock.calls.at(-1)?.[0];
+  };
+  try {
+    await act(async () => { await i18n.changeLanguage('en'); });
+    act(() => root.render(<MessageRenderer items={items} />));
+    expect(await copy()).toContain('Attachments: sample.txt');
+    await act(async () => { await i18n.changeLanguage('de'); });
+    expect(await copy()).toContain('Anhänge: sample.txt');
+  } finally {
+    act(() => root.unmount());
+    await i18n.changeLanguage(previous);
+    vi.mocked(copyMessageText).mockReset();
+  }
+});
+
 describe('companion native read position', () => {
   it('leaves ordinary task lists without the companion viewability observer', () => {
     const acknowledge = vi.fn();
@@ -371,3 +434,5 @@ describe('companion native read position', () => {
     }
   });
 });
+
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));

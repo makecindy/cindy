@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 
 import {
   TOOL_RESULT_PERSIST_CONTENT_LIMIT,
@@ -20,6 +21,17 @@ describe('capToolResultTextForPersist', () => {
     expect(capped.length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
     expect(capped.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
     expect(capped.startsWith('aaa')).toBe(true);
+  });
+
+  // CU-008: flags can appear after the discarded body; inspect the original structured result.
+  it('retains only bounded diagnostic fields before truncation', () => {
+    const text = JSON.stringify({ body: 'x'.repeat(9000), ok: false, errorCode: 'STALE_SNAPSHOT', message: 'PRIVATE' });
+    const capped = capToolResultTextForPersist(text);
+    expect(capped.length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(capped).not.toContain('PRIVATE');
+    expect(extractToolResultDiagnostics(capped)).toEqual({ ok: false, errorCode: 'STALE_SNAPSHOT' });
+    expect(capToolResultTextForPersist(capped)).toBe(capped);
+    expect(extractToolResultDiagnostics(capToolResultTextForPersist(text, 100))).toBeUndefined();
   });
 
   it('is idempotent', () => {
@@ -48,9 +60,12 @@ describe('capToolResultTextForPersist', () => {
   // Check the actual persistence entry point, including phone byte budgets.
   it('preserves card references as valid bounded JSON when the body is oversized', () => {
     const input = JSON.stringify({ ok: true, result: { bodyHtml: '你好\\"😀'.repeat(4000) },
-      xdt_card_id: 'draft-card', xdt_anchor_card_id: 'original-card' });
+      xdt_card_id: 'draft-card', xdt_anchor_card_id: 'original-card',
+      afterSnapshot: { ok: false, errorCode: 'ACT_INVALID_REQUEST', message: 'PRIVATE' } });
     const stored = capToolResultTextForPersist(input);
     expect(JSON.parse(stored)).toMatchObject({ ok: true, xdt_card_id: 'draft-card', xdt_anchor_card_id: 'original-card' });
+    expect(stored).not.toContain('PRIVATE');
+    expect(extractToolResultDiagnostics(stored)).toEqual({ ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' });
     expect(new TextEncoder().encode(stored).length).toBeLessThanOrEqual(8192);
     expect(capToolResultTextForPersist(stored)).toBe(stored);
   });

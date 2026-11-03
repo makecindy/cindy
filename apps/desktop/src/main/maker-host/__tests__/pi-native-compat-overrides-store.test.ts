@@ -11,12 +11,20 @@ const root = vi.hoisted(() => ({ path: '' }));
 vi.mock('electron', () => ({ app: { getPath: () => root.path } }));
 vi.mock('../logger-adapter.js', () => ({ desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) } }));
 import { readPiNativeCompatOverride as read, recordPiNativeCompatOverride as record } from '../pi-native-compat-overrides-store.js';
-root.path = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-compat-'));
-const file = path.join(root.path, 'pi-native-compat-overrides.json');
+let file: string;
+const fixtureDirs: string[] = [];
 const a = 'a'.repeat(64), b = 'b'.repeat(64);
 const fix = { supportsLongCacheRetention: false };
-afterAll(() => fs.rmSync(root.path, { recursive: true, force: true }));
-beforeEach(() => { fs.rmSync(file, { force: true }); });
+afterAll(() => {
+  for (const dir of fixtureDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+beforeEach(() => {
+  // Each case needs its own lock path: a killed child can leave an advisory
+  // record that Windows cannot reclaim within the next case's wait budget.
+  root.path = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-compat-'));
+  fixtureDirs.push(root.path);
+  file = path.join(root.path, 'pi-native-compat-overrides.json');
+});
 describe('learned cache compatibility', () => {
   it('expires untimed legacy learning from stable file time and preserves its deadline across writes', async () => {
     const writtenAt = Date.now() - 86400000;

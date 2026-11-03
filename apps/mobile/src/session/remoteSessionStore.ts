@@ -151,6 +151,8 @@ export interface RemoteSessionRunStatus {
   isRunning: boolean;
   /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
   hasTerminalError?: boolean;
+  /** Existing maker:event identity, retained locally for live/history error deduplication. */
+  terminalError?: { clientId: string; message: string } | null;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -3314,7 +3316,13 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
     // invalidation, or actual device removal will retire them.
     changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, indexedDeviceId) || changed;
     changed = writeMakerTurnRunning(sessionId, false) || changed;
-    changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+    // Soft offline keeps history. Keep its known terminal identity too: reconnect
+    // restores the error projection without replaying the terminal maker event.
+    // The next running transition or session/device removal still retires it.
+    const terminalError = readSessionRunStatus(sessionId).terminalError;
+    changed = writeSessionRunStatus(sessionId, terminalError
+      ? { ...EMPTY_SESSION_RUN_STATUS, hasTerminalError: true, terminalError }
+      : EMPTY_SESSION_RUN_STATUS) || changed;
   }
   for (const [sessionId, pendingAnchors] of pendingHostAnchorLiveAssistantClientIds) {
     for (const identity of pendingAnchors.values()) {
@@ -5186,6 +5194,9 @@ export const remoteSessionStore = {
         && writeSessionRunStatus(sessionId, {
           ...readSessionRunStatus(sessionId),
           hasTerminalError: true,
+          terminalError: persistId && readString(event.data, 'message')
+            ? { clientId: persistId, message: readString(event.data, 'message')! }
+            : null,
         });
       this.setSessionRunning(
         sessionId,
@@ -5388,6 +5399,7 @@ export const remoteSessionStore = {
       const next: RemoteSessionRunStatus = {
         isRunning,
         ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
+        ...(current.terminalError !== undefined ? { terminalError: current.terminalError } : {}),
         reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
@@ -6064,7 +6076,7 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
   if (next.isRunning && !current.isRunning && current.hasTerminalError) {
-    next = { ...next, hasTerminalError: false };
+    next = { ...next, hasTerminalError: false, terminalError: null };
   }
   if (shallowRecordEqual(current as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)) {
     return false;
@@ -6432,6 +6444,9 @@ function useSessionMessageCacheSync(
 ): void {
   const hydratedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when the debounce was skipped because a reply was still streaming: there is no timer,
+  // but the latest snapshot is still unsaved, so unmount must flush it like a pending timer.
+  const persistDeferredWhileStreamingRef = useRef(false);
   const retention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -6490,11 +6505,20 @@ function useSessionMessageCacheSync(
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     if (!deviceId || !sessionId || retention !== 'regular') return;
     const key = `${deviceId}::${sessionId}`;
     // 空内存可能只是 regular LRU 淘汰，绝不能据此删除磁盘缓存。真正的远端
     // 删除由 removeMessages / 权威空窗显式处理。
     if (messages.length === 0) return;
+    // A streaming reply rewrites this snapshot every flush, and each write re-reads, normalizes
+    // and stringifies the whole window on the JS thread. Wait for the final flush (the row loses
+    // isStreaming), which changes `messages` again and schedules the write; unmount flushes the
+    // deferred snapshot via the ref below.
+    if (messages.some((message) => message.agentMeta?.isStreaming === true)) {
+      persistDeferredWhileStreamingRef.current = true;
+      return;
+    }
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
     persistTimerRef.current = setTimeout(() => {
       persistTimerRef.current = null;
@@ -6508,9 +6532,10 @@ function useSessionMessageCacheSync(
 
   // 卸载时把尚未落盘的最新快照立即 flush(防止快速返回导致最后一次更新丢失)。
   useEffect(() => () => {
-    if (!persistTimerRef.current) return;
-    clearTimeout(persistTimerRef.current);
+    if (!persistTimerRef.current && !persistDeferredWhileStreamingRef.current) return;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     const ctx = ctxRef.current;
     if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;

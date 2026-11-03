@@ -14,9 +14,12 @@ import { sharedTaskGuestPeer } from '@cindy/device-link';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
+  createDirectRuntimeBridge,
+  createDirectRuntimeHost,
   SHARED_TASK_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
@@ -24,6 +27,8 @@ import {
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   resolveRemoteInvokeTimeoutMs,
   type Envelope,
+  type DirectRuntime,
+  type DirectRuntimeEvents,
 } from '@cindy/device-link';
 
 vi.mock('electron', () => ({
@@ -52,6 +57,8 @@ vi.mock('../../logger', async (importOriginal) => ({
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
+// Observe dispatch's teardown calls without loading the unrelated desktop runtime.
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -73,8 +80,11 @@ import {
   setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   wireInboundDispatch,
+  hasRemoteInvokeWorkForPeer,
 } from '../dispatch';
+import { __testing as invokeRegistry } from '../invoke-registry';
 import * as subscriptions from '../subscriptions';
+import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
 import { remoteDesktop } from '../../remote-desktop';
 
 function mkClient(
@@ -148,6 +158,7 @@ class DispatchTestWs {
 }
 
 class DispatchTestRelay {
+  constructor(private readonly asyncDelivery = false) {}
   private readonly sockets = new Map<string, DispatchTestWs>();
   private holdPredicate: ((senderId: string, envelope: Envelope) => boolean) | null = null;
   private readonly held: Array<{ senderId: string; envelope: Envelope }> = [];
@@ -175,6 +186,7 @@ class DispatchTestRelay {
   }
 
   route(senderId: string, socket: DispatchTestWs, envelope: Envelope): void {
+    if (envelope.kind === 'ping') { socket.push({ v: PROTOCOL_VERSION, kind: 'pong' }); return; }
     if (envelope.kind === 'hello') {
       socket.push({
         v: PROTOCOL_VERSION,
@@ -211,12 +223,16 @@ class DispatchTestRelay {
   private deliver(senderId: string, envelope: Envelope): void {
     const destination = envelope.dst ? this.sockets.get(envelope.dst) : undefined;
     if (!destination) return;
-    destination.push({ ...envelope, src: senderId });
+    const deliver = () => destination.push({ ...envelope, src: senderId });
+    if (this.asyncDelivery) queueMicrotask(deliver);
+    else deliver();
   }
 }
 
-function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string): DeviceLinkClient {
+function makeDispatchTestClient(relay: DispatchTestRelay, deviceId: string,
+  options: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'directRuntime' | 'isPeerBusy'> = {}): DeviceLinkClient {
   return new DeviceLinkClient({
+    ...options,
     getWsUrl: () => 'ws://test/api/device-link/ws',
     getToken: async () => 'jwt-token',
     getHello: () => ({
@@ -253,6 +269,49 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  const backgroundOpen = {
+    controllerName: 'background catalog reader', protocolVersion: PROTOCOL_VERSION, appVersion: '1.0.0',
+    capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+  };
+  // #8028 r4429989407 / unit: C sends empty catalog invalidations to B's
+  // already-accepted background link, without sessions/control subscriptions.
+  it.each(['maker:provider:changed', 'maker:agents:changed'])('notifies background catalog readers of %s without controlling C', async channel => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'host-b', 'open-b', backgroundOpen);
+    __testing.handleLinkOpen(client as never, 'host-d', 'open-d', backgroundOpen);
+    expect(__testing.getActiveControllers()).toEqual([]);
+    expect(subscriptions.getControllersForTopic('sessions')).toEqual([]);
+    tapWindowBroadcast(channel, { privateSourceDetails: 'must not leave C' });
+    expect(client.sendPush.mock.calls).toEqual([
+      ['host-b', channel, {}], ['host-d', channel, {}],
+    ]);
+    client.sendPush.mockClear();
+    deviceLinkSettings.value.revokedControllers = ['host-b'];
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush.mock.calls).toEqual([['host-d', channel, {}]]);
+    client.sendPush.mockClear();
+    handleControllerOffline('host-d');
+    tapWindowBroadcast(channel, {});
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
+  it('forwards C invalidation through B once, without source payloads or a C control subscription', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    __testing.handleLinkOpen(client as never, 'controller-a', 'open-a', undefined);
+    __testing.handleLinkOpen(client as never, 'source-c', 'open-c', backgroundOpen);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:provider:changed', false);
+    expect(client.sendPush.mock.calls).toEqual([['controller-a', 'maker:model-catalog:changed', {}]]);
+    expect(__testing.getActiveControllers().map(controller => controller.deviceId)).toEqual(['controller-a']);
+    client.sendPush.mockClear();
+    tapRemoteModelCatalogChange('source-c', 'maker:model-catalog:changed', false);
+    tapRemoteModelCatalogChange('source-c', 'maker:agents:changed', true);
+    tapRemoteModelCatalogChange(sharedTaskGuestPeer('task', 'guest', 'pc'), 'maker:agents:changed', false);
+    expect(client.sendPush).not.toHaveBeenCalled();
+  });
+
   it('notifies only the successfully accepted ordinary peer after a failed inbound open', () => {
     const accepted = vi.fn();
     setOrdinaryPeerLinkAcceptedListener(accepted);
@@ -453,6 +512,8 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
     ).toBe(true);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
     expect(sendInvokeResult).toHaveBeenCalledTimes(1);
+    expect(hasRemoteInvokeWorkForPeer('ctrl-a')).toBe(true);
+    expect(hasRemoteInvokeWorkForPeer('ctrl-other')).toBe(false);
 
     // 离线期间多轮慢扫描:不再尝试发送(无 NOT_CONNECTED 自旋)
     vi.advanceTimersByTime(20_000);
@@ -465,6 +526,7 @@ describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
     expect(sendInvokeResult).toHaveBeenCalledTimes(2);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
     expect(diagnosticLog.warn).toHaveBeenCalledWith(expect.stringContaining('request=req-1 queueMessages=1'));
+    expect(hasRemoteInvokeWorkForPeer('ctrl-a')).toBe(false);
     expect(diagnosticLog.info).toHaveBeenCalledWith(expect.stringContaining('request=req-1 queuedMs=20000'));
     expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain('PRIVATE_RESPONSE_BODY');
     expect(JSON.stringify(diagnosticLog.info.mock.calls)).not.toContain('PRIVATE_RESPONSE_BODY');
@@ -735,6 +797,74 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
 });
 
 describe('[6] active controller 生命周期与故障半径', () => {
+  // Unit, #8408 idle-retirement contract: transport ACKs do not cover the lifetime
+  // of fire-and-forget host execution. Previous RTC tests returned handler promises
+  // to transport, hiding this gap. One >5-minute compact, one idle neighbor and one
+  // waiter must retire only the idle neighbor; the active result stays on direct.
+  it('protects a long-running inbound dispatch while reclaiming an idle neighbor for a waiter', async () => {
+    const pairs = new Map<string, Array<{ events: DirectRuntimeEvents; closed: boolean }>>();
+    const runtime = (maxPeers = 16): DirectRuntime => {
+      const bridge = createDirectRuntimeBridge({ maxPeers });
+      const native: DirectRuntime = { create(id, events) {
+        const row = { events, closed: false }, pair = pairs.get(id) ?? [];
+        pairs.set(id, pair); pair.push(row);
+        return { offer: async () => id, accept: async () => id,
+          answer: async () => { queueMicrotask(() => pair.forEach(p => { if (!p.closed) p.events.open(); })); },
+          send: text => { queueMicrotask(() => { const other = pair.find(p => p !== row && !p.closed); other?.events.message(text); }); },
+          bufferedAmount: 0,
+          close: () => pair.forEach(p => { if (!p.closed) { p.closed = true; p.events.closed(); } }),
+        };
+      } };
+      const host = createDirectRuntimeHost(native, event => bridge.receive(event));
+      const detach = bridge.attach(command => { void host.command(command); });
+      return { ...bridge.runtime, suspend() { detach(); host.dispose(); } };
+    };
+    const relay = new DispatchTestRelay(true), routed = vi.spyOn(relay, 'route');
+    const target = makeDispatchTestClient(relay, 'a-target', { directRuntime: runtime(2), isPeerBusy: hasRemoteInvokeWorkForPeer });
+    const busy = makeDispatchTestClient(relay, 'b-busy', { directRuntime: runtime() });
+    const idle = makeDispatchTestClient(relay, 'c-idle', { directRuntime: runtime() });
+    const waiting = makeDispatchTestClient(relay, 'd-waiting', { directRuntime: runtime() });
+    const clients = [target, busy, idle, waiting];
+    let finish!: (value: unknown) => void;
+    const compact = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    invokeRegistry.register('maker:compact-session', compact);
+    const unbind = wireInboundDispatch(target);
+    const pump = () => vi.advanceTimersByTimeAsync(1);
+    const open = async (client: DeviceLinkClient) => {
+      const opening = client.openLink('a-target', { controllerName: 'fixture', protocolVersion: 1, appVersion: '1' });
+      void opening.catch(() => {});
+      await vi.waitFor(() => expect(client.isLinkReady('a-target')).toBe(true));
+      await opening; await pump();
+    };
+    try {
+      clients.forEach(client => client.start()); await pump();
+      for (const client of [busy, idle]) {
+        await open(client);
+        await vi.waitFor(() => expect(target.getPeerPath(client.getSelfDeviceId()!)).toBe('direct'));
+      }
+      expect(target.getPeerPath('b-busy')).toBe('direct');
+      expect(target.getPeerPath('c-idle')).toBe('direct');
+      const originalBusySessions = [...pairs.values()][0];
+      const result = busy.invoke('a-target', { channel: 'maker:compact-session', args: ['fixture-session'] },
+        INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session']);
+      void result.catch(() => {});
+      await pump(); expect(compact).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      await open(waiting);
+      expect(target.getPeerPath('d-waiting')).toBe('relay');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(originalBusySessions.every(session => !session.closed)).toBe(true);
+      expect(target.getPeerPath('b-busy')).toBe('direct');
+      expect(target.getPeerPath('c-idle')).toBe('relay');
+      expect(target.getPeerPath('d-waiting')).toBe('direct');
+      const before = routed.mock.calls.length;
+      finish({ compacted: true }); await pump();
+      await expect(result).resolves.toMatchObject({ ok: true, result: { compacted: true } });
+      expect(routed.mock.calls.slice(before).filter(([src, , env]) => src === 'a-target' && env.dst === 'b-busy' && env.kind === 'invoke-result')).toEqual([]);
+      expect(compact).toHaveBeenCalledOnce();
+      expect(target.getPeerPath('d-waiting')).toBe('direct');
+    } finally { finish?.({ compacted: true }); await pump(); clients.forEach(client => client.stop()); unbind(); invokeRegistry.reset(); }
+  });
   it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
     const lost = vi.spyOn(remoteDesktop, 'signalingLost');
     const stop = vi.spyOn(remoteDesktop, 'stop');
@@ -830,6 +960,21 @@ describe('[6] active controller 生命周期与故障半径', () => {
     expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
     expect(__testing.controllerSupports('ctrl-b', 'cap-b')).toBe(true);
     expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
+  });
+
+  // 故障半径:走自建中转时访客在官方连接上,自建中转断开不能让访客静默收不到推送(反之亦然)。
+  it('跨账号控制端在独立连接上时,一条连接断开只清这条连接上的控制端', () => {
+    const guest = sharedTaskGuestPeer('task-a', 'member-a', 'guest-device');
+    const activeIds = () => __testing.getActiveControllers().map((controller) => controller.deviceId);
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    subscriptions.subscribe(guest, ['session:b'], 'Guest', []);
+
+    deactivateAllControllers('relay-disconnected', 'same-account');
+    expect(activeIds()).toEqual([guest]);
+
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    deactivateAllControllers('cross-account-relay-disconnected', 'cross-account');
+    expect(activeIds()).toEqual(['ctrl-a']);
   });
 
   it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {

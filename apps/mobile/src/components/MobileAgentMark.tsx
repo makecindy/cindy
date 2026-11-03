@@ -4,7 +4,7 @@
  */
 import Svg, { G, Path } from 'react-native-svg';
 
-import { iconSize } from '@/theme';
+import { iconSize, iconStroke } from '@/theme';
 
 import {
   CLAUDE_AGENT_PATH,
@@ -30,7 +30,7 @@ export function MobileAgentMark({ agentKind, color, size = iconSize.sm }: Mobile
   return (
     <Svg accessible={false} height={size} viewBox="0 0 24 24" width={size}>
       {agentKind === 'zcode' ? (
-        <Path d="M5 6h14L5 18h14" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d="M5 6h14L5 18h14" fill="none" stroke={color} strokeWidth={iconStroke.regular} strokeLinecap="round" strokeLinejoin="round" />
       ) : agentKind === 'pi' ? (
         // Keep all three strokes in one native path. Separate horizontal/vertical
         // paths have degenerate bounds and can disappear in the iOS SVG renderer.

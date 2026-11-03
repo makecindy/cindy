@@ -54,6 +54,20 @@ allowlist、重试或 relay 生命周期；手机端完整保留“主机 + 路�
 实现与回归：`device-link/remote-workdir-guard.ts`、`device-link/dispatch.ts`、
 `maker-ipc/register.ts` 与 `__tests__/deviceLinkHostDispatch.test.ts`（均相对 Desktop main）。
 
+## 远程供应商任务导出
+
+远程供应商任务的消息保存在发起任务的电脑，允许从任务菜单导出 `.cshare`，
+保留对话记录与本机可用媒体，沿用 `db-only` 提示说明导入后无法无缝续聊。
+原生转录在运行 Agent 的电脑上，不查找本机同名文件，也不保留不可恢复的原生会话 ID，
+包括历史 Agent 切换记录里的停泊 ID；切换记录的展示与交接内容仍保留。
+协同包包含这类 Worker 时同样不能标为完整。完整任务迁移仍要求原生历史。
+
+此路径复用本机导出 IPC 与文件选择，不新增跨设备协议。SSH 工作区与设备互联镜像任务
+仍不提供本机导出，手机端没有该本机文件导出入口；不能把它们当成远程供应商任务。
+实现见 [sessionShareExport.ts](../../apps/desktop/src/main/session-share/sessionShareExport.ts)，
+回归见 [导出测试](../../apps/desktop/src/main/session-share/__tests__/sessionShareExport.test.ts)
+与 [菜单测试](../../apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/SessionCard.visual.test.ts)。
+
 ## 远程任务存档的即时反馈
 
 桌面与手机的远程任务列表在点击存档后立即乐观移走任务行，不能等待远程预检或写入
@@ -77,8 +91,9 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 
 产品规则见 [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。三种形态的落点：
 
-- **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；`request_input_handoff`
-  在带 `remoteHostId` 的任务里返回 `CAPABILITY_NOT_AVAILABLE`，由 Agent 改为直接告诉主人需要什么。
+- **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；带 `remoteHostId` 的任务里
+  `ask_owner` 不列出 fill／scan，直接调用（含旧名 `request_input_handoff`）返回 `CAPABILITY_NOT_AVAILABLE`，
+  由 Agent 改为直接告诉主人需要什么。
 - **设备互联远程控制**：卡片快照随既有交互推送（`kind: "input_handoff"`）到所有控制端；交还、取消、
   停留、刷新、接手、看画面等**不带值**的决定走既有 `resolveInteraction`；**带值**的提交与截图只走插件
   授权 v3 加密交换（`plugin-oauth:submit-input` / `plugin-oauth:open-input-picture` /
@@ -121,10 +136,30 @@ Desktop 与 Mobile 的整文件 peer 下载共用 `fileTransferPolicy.ts`。数�
 的 30 秒请求超时。直接、TURN 和未知路径使用同一停滞判断，路径变化不影响它。
 每次取件旁路采样实际路径用于诊断，不阻塞握手或文件首字节；进度检查不依赖 Debug 开关。
 
+共享文件 runtime 遇到 ICE `disconnected` 保留连接最多 15 秒，恢复则取消计时；
+`failed`、`closed`、显式取消和撤权仍立即清理。重复断连事件不延长窗口，计时只作用于
+该连接。Desktop 对已完成且持续至少 15 秒、平均低于 128 KiB/s 的中继下载，在下一次
+取件前最多每 60 秒试建一个候选连接；保留旧连接，只有候选确认直连且旧连接没有在途
+RPC 时才替换。候选失败或仍走中继继续用旧连接；受现有四连接上限、账号与 peer 代次
+约束，不改变 wire 协议或旧端能力协商。升级后停止探路，除非后来再次出现慢中继样本。
+诊断记录断连原因和最多八个 ICE 检查结果，不记录地址、候选 ID、SDP 或凭证。
+
 故障仅影响该 peer 的文件通道；复用已有按设备冷却（30 秒起、最多 5 分钟）避免
 紧接着的文件重新走同一慢链路，不重连共享 WSS、不影响另一控制端的文件或请求。
 取消、退后台、切账号依然是取消，不触发 OSS；不并行竞速或预先上传用户文件。
 回归包含两台控制端一台停滞、另一台持续写入并完成，以及旧端缺能力字段的兼容。
+
+### 共享连接静默与请求隔离
+
+2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接
+静默时复用现有有界网络探测，不直接累加某台电脑的熔断失败。任一 peer 的有效回包
+都能结束探测；只有共享探测本身超时才恢复整条连接。探测期间后台刷新以未发送的
+背压结果退出，前台操作继续按原预算执行。Desktop/Mobile 的 `waitUntilOnline` 保留
+原有立即重连入口；已有握手不重复打断，relay 1013 拥塞冷却仍按原规则执行。
+
+相同的列表读取沿用独立请求和发送前取消／账号检查，一个调用方取消不能拖累另一个。
+本次恢复不新增请求合并或应用层重试。回归覆盖两台 peer，一台静默时另一台仍能完成
+前台请求且共享连接不被拆除。
 
 设备互联是 1:N 拓扑：被控端与 relay 之间只有一条连接，同账号的全部控制端共用它。
 故障域从小到大分四层——单个请求、单个 peer 的 link、整条 relay 连接、**relay 聚合
@@ -184,8 +219,17 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   复用同一条数据路径。手机退后台、WebView 崩溃、账号/区域切换立即释放旧通道。
 - **兼容**：双方都声明 `direct-link-v1` 才尝试。信令以既有 relay push 承载，绑定两端
   当前 stream；旧端、平台尚未就绪或协商失败均继续使用 relay。每对设备只有字典序较小的
-  deviceId 发起 offer，失败按 5–60 秒退避；最多 16 个 peer，单次协商 15 秒。
+  deviceId 发起 offer，失败按 5–60 秒退避；单次协商 15 秒。桌面共享数据进程预算 64，
+  同账号设备与分享各预留 8；手机维持 16。满额继续 relay、释放后按公平队列补建；
+  候选、等待 offer、失败重试与压力下空闲回收的边界见
+  [`protocol-compatibility.md`](protocol-compatibility.md#device-link-局域网优先直连)。
   relay 断线仍复位链路，直连暂不独立维持；不新增服务端依赖或 Mobile 原生依赖/配置。
+- **容量恢复的故障半径三问**：① 单 peer 的直连准入满额／协商失败；② 仅该 peer 排队、
+  释放直连资源并改用既有 relay，不重开控制 link、不重连共享 socket、不改任务分配或授权；
+  只有无在途工作且长期无活动的通道才可在容量压力下让位；③ `directRuntimeBridge.test.ts`
+  覆盖共享预算、分类公平、迟到 offer、撤权与回收，`client.test.ts` 验证满额期间请求仍只执行
+  一次、名额释放后自动升级且不新建 socket。真实浏览器 `--capacity` 同时验证第 65 个等待者
+  补建时其余 63 条通道不被替换；自建 relay 互通验证签名、加入与重连不受影响。
 - **验证**：`client.test.ts` 的自动协商矩阵覆盖新旧端、平台不可用、远程 Agent 调用和两个
   控制端隔离回退；`directRuntimeBridge.test.ts` 覆盖桥接背压、迟到事件与流代次；
   `scripts/direct-link-smoke.mjs <Chrome路径>` 运行真实 WebRTC 与手机静态 runtime，验证
@@ -205,7 +249,10 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
-首次收尾再回收。新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
+首次收尾再回收。`dispose()` 返回同一份清理完成 Promise，包含正在启动的任务与巡检已开始的删除；
+服务重建后先等待前一 host 的清理，再派发新请求，等待期间再次重建的旧入口不再接单。
+这只约束本进程 Maker 重置后的 host 交接，不重连共享链路、不改变线上协议。
+新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 
@@ -382,6 +429,17 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    Lead 的未消费派活，保留用户消息；覆盖混排、消费竞态、丢回执、重启及其它控制端。
 
 ## 共享恢复与请求策略
+
+Desktop 同账号互控的双向请求共用一个 peer 链路。对端 relay 重连清掉订阅登记后，
+可能由任一端先发起建链；仅监听本端出站 accept 会遗漏“对端先开链”的恢复。
+出站握手确认，以及同账号入站 link-open 通过权限检查并成功发送 accept 后，都按
+目标 peer 请求重放本端仍持有的订阅。复用现有订阅调度器的串行、合并与退避，
+实际发送前继续复验当前引用、目标权限和关闭代次；无订阅快照的 peer 不发请求。
+入站触发沿用 ordinary peer 通知，不扩大供应商分享或共享任务访客的权限方向；
+不重启共享 relay、不重放其他 peer。入站 accept 尚待确认时，发送路径仍可复用
+既有单飞建链完成恢复，不把 accept 已发出误当成双向业务已经就绪。
+接线与注册恢复回归见 Desktop `deviceLinkVoiceCredentialBootstrap.test.ts`，
+入站准入边界见 `deviceLinkDispatch.test.ts`。
 
 Desktop 向曾协商可靠传输、当前发送链路未就绪的设备发起新 invoke、订阅或响应性探测时，
 先复用该设备既有的单飞建链入口，再发送请求。轻量列表也适用，避免请求尚未写出就反复
