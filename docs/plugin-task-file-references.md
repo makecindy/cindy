@@ -111,3 +111,7 @@ await cindy.observe.openFile({ project, taskId, fileId }); // {opened:true}
 本接口不保存交付时快照，也不对文件系统并发修改提供原子快照保证。
 Light/Dark 使用既有语义组件；隔离单页验证覆盖 12 种语言、深浅色及 320px 窄屏共 48 个组合，
 并目检中文窄屏两种主题。未在运行中的正式客户端验证整条插件安装与文件预览链路。
+
+聊天链接词法规则共用 shared/markdownLocalHref.ts：支持 canonical xdt-file://local/?path=、
+sandbox: 绝对路径与行/列后缀；规范化后仍完整执行本接口的目录、文件类型和授权校验。
+达到返回上限后立即停止解析剩余历史并标为 partial，仍执行最终来源与授权复核。

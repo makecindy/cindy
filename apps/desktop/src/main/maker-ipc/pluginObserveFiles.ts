@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
+import { normalizeSandboxHref, splitLocalLineSuffix } from '../../shared/markdownLocalHref.js';
+import { extractMediaPathQuery } from '../../shared/remoteMediaUrl.js';
 import type { PluginObserveFile, PluginObserveFiles as ObserveFilesResult } from '../../shared/pluginObserve.js';
 import { detectSensitivePath } from '../security/sensitivePath.js';
 import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
@@ -37,9 +39,11 @@ function fileLinks(content: string): string[] {
     if ((token.type !== 'link' && token.type !== 'image') || !/^!?\[/.test(token.raw)) return;
     const href = token.href;
     if (!href || href.startsWith('#')) return;
+    // Normalize source locations before scheme detection (report.md:10:2 is a file).
+    const target = splitLocalLineSuffix(normalizeSandboxHref(href)).href;
     // Web links (including Issue/PR links) are not local file references.
-    if (/^[a-z][a-z\d+.-]*:/i.test(href) &&
-        !/^(?:file|xdt-file|cindy-media):/i.test(href) && !/^[a-z]:[\/\\]/i.test(href)) return;
+    if (/^[a-z][a-z\d+.-]*:/i.test(target) &&
+        !/^(?:file|xdt-file|cindy-media|sandbox):/i.test(target) && !/^[a-z]:[\/\\]/i.test(target)) return;
     if (!links.includes(href)) links.push(href);
   });
   return links;
@@ -48,10 +52,16 @@ function fileLinks(content: string): string[] {
 type Resolution = { status: PluginObserveFile['status']; name: string; relativePath?: string; root?: string };
 
 async function resolveFile(root: string | null, href: string): Promise<Resolution> {
-  let candidate = href;
-  if (/^cindy-media:/i.test(candidate)) return { status: 'unsupported', name: 'media' };
+  let candidate = normalizeSandboxHref(href);
+  if (/^(?:cindy-media|sandbox):/i.test(candidate)) return { status: 'unsupported', name: 'media' };
   try {
-    if (/^(?:file|xdt-file):/i.test(candidate)) {
+    if (/^xdt-file:\/\/local\//i.test(candidate)) {
+      const url = new URL(candidate);
+      if (url.username || url.password || url.port) return { status: 'not-local', name: 'file' };
+      const local = extractMediaPathQuery(candidate);
+      if (!local) return { status: 'blocked', name: 'file' };
+      candidate = local;
+    } else if (/^(?:file|xdt-file):/i.test(candidate)) {
       const url = new URL(candidate.replace(/^xdt-file:/i, 'file:'));
       if (url.hostname || url.username || url.password) return { status: 'not-local', name: 'file' };
       candidate = fileURLToPath(url);
@@ -60,7 +70,7 @@ async function resolveFile(root: string | null, href: string): Promise<Resolutio
     }
   } catch { return { status: 'blocked', name: 'file' }; }
   // Cindy's Markdown file links may carry a source line suffix.
-  candidate = candidate.replace(/:\d+(?:-\d+)?$/, '');
+  candidate = splitLocalLineSuffix(candidate).href;
   const name = path.win32.basename(candidate).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200) || 'file';
   const result = (status: Resolution['status']): Resolution => ({ name, status });
   if (/^[\/\\]{2}|^[\/\\]\?\?[\/\\]/.test(candidate) ||
@@ -106,11 +116,12 @@ export class PluginObserveFiles {
     guard();
     const entries: Array<{ file: PluginObserveFile; href: string; resolution: Resolution }> = [];
     let partial = source.partial;
-    for (const row of source.rows) {
+    rows: for (const row of source.rows) {
+      if (entries.length === MAX_FILES) { partial = true; break; }
       if (!isFinalAnswer(row.agentMeta)) continue;
       if (row.content.length > MAX_MESSAGE_CHARS) { partial = true; continue; }
       for (const href of fileLinks(row.content)) {
-        if (entries.length === MAX_FILES) { partial = true; break; }
+        if (entries.length === MAX_FILES) { partial = true; break rows; }
         if (href.length > MAX_LINK_LENGTH) { partial = true; continue; }
         const resolution = await resolveFile(source.root, href);
         guard();

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { marked } from 'marked';
 import { PluginObserveFiles, type ObserveFileSource } from '../pluginObserveFiles.js';
 
 // Unit: public list/open contract, real temporary files. Existing observe tests
@@ -102,4 +103,38 @@ it('marks bounded history, oversized replies and excess links as partial', async
   const result = await list();
   expect(result.partial).toBe(true);
   expect(result.files).toHaveLength(100);
+});
+
+// Existing chat spellings must resolve through the same lexical helpers, then
+// still face the Host's stricter directory/permission checks (PR review #8628).
+it('opens canonical local media URLs, sandbox paths and line-column references', async () => {
+  const absolute = path.join(root, 'report.md');
+  const refs = ['xdt-file://local/?path=' + encodeURIComponent(absolute),
+    'sandbox:' + absolute.replaceAll(String.fromCharCode(92), '/'), 'report.md:10:2'];
+  for (const href of refs) {
+    source.rows = [final('[Report](<' + href + '>)')];
+    const result = await list();
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]?.status).toBe('available');
+    await openFile(result.files[0]!.fileId);
+  }
+  expect(open).toHaveBeenCalledTimes(3);
+  expect(open).toHaveBeenLastCalledWith('task', 'report.md', expect.any(Function));
+  source.rows = [final('[escape](xdt-file://local/?path=' + encodeURIComponent(path.join(root, '..', 'outside.md')) + ')')];
+  expect((await list()).files[0]?.status).toBe('blocked');
+});
+
+it('stops parsing history once the result budget is exhausted and still rechecks authority', async () => {
+  const first = Array.from({ length: 100 }, (_, i) => '[file](missing' + i + '.pdf)').join(' ');
+  source.rows = [final(first), ...Array.from({ length: 199 }, (_, i) => final('x'.repeat(128000), 'old' + i))];
+  const parse = vi.spyOn(marked, 'lexer');
+  const current = vi.fn(async () => {});
+  source.assertCurrent = current;
+  try {
+    const result = await list();
+    expect(result.files).toHaveLength(100);
+    expect(result.partial).toBe(true);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(current).toHaveBeenCalledOnce();
+  } finally { parse.mockRestore(); }
 });
