@@ -753,45 +753,52 @@ describe('maker SEND transaction', () => {
     );
   });
 
-  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
-    const grant = {
-      version: 1 as const,
-      sessionInstanceId: 'session-instance-1',
-      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
-    };
-    const captureCindyLearnInvocation = vi.fn(async () => grant);
-    const claudeSession = createSession({ agentKind: 'claude-code' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => claudeSession),
-      captureCindyLearnInvocation,
-    });
+  // #8549 (unit): provider dispatch must retain the direct command as well as
+  // its pin. Checking only the pin missed environment notes preceding /learn.
+  it.each(['/learn release flow', '/skill:learn release flow', '/cindy:learn'])(
+    'forwards the exact Learn pin and command to Claude: %s', async (command) => {
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: 'session-instance-1',
+        resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+      };
+      const captureCindyLearnInvocation = vi.fn(async () => grant);
+      const claudeSession = createSession({ agentKind: 'claude-code' });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => claudeSession),
+        captureCindyLearnInvocation,
+      });
 
-    await createMakerSendTransaction(deps).sendToAgentAccepted(
-      'session-1',
-      { type: 'user', content: '/learn release flow' },
-      undefined,
-      {
-        persistUserMessage: {
-          clientId: 'claude-learn-1',
-          content: '/learn release flow',
+      await createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: command },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'claude-learn-1',
+            content: command,
+          },
         },
-      },
-    );
+      );
 
-    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
-    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
-    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
-      name: 'learn',
-      path: grant.resolvedSkillPath,
-    });
-    expect(deps.createDbMessage).toHaveBeenCalledWith(
-      'session-1',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
-      }),
-      undefined,
-    );
-  });
+      expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(claudeSession.send).mock.calls[0]?.[0]).toEqual({
+        type: 'user', content: command,
+      });
+      const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
+      expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn',
+        path: grant.resolvedSkillPath,
+      });
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({
+          agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+        }),
+        undefined,
+      );
+    },
+  );
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
     const { deps, session } = createDeps();
