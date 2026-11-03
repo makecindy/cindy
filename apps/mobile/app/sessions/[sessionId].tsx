@@ -38,7 +38,7 @@ import { CloudHomeUnreachableNotice, isMessageWaitingForCloudHome, useSustained 
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from '@/session/ChatIdentityHeader';
 import { useHiddenHistoryChase } from '@/session/hiddenHistoryChase';
-import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { collectCompanionPluginInvocations, companionPluginSourceMessages } from '@/session/pluginInvocations';
 import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionDisplayResource, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
@@ -125,6 +125,8 @@ import { PromptRecommendation } from '@/session/PromptRecommendation';
 import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
+import { useStableValue } from '@/utils/useStableValue';
+import { sameArrayIdentity } from '@/utils/valueEquality';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
@@ -936,6 +938,7 @@ const COMPOSER_ACTIVITY_SETTLE_MS = 600;
 const MOBILE_AGENT_PREWARM_INTERVAL_MS = 30_000;
 /** 另一台电脑的目录还没读到时的空供应商列表(稳定引用,不触发下游 memo 重算)。 */
 const EMPTY_PROVIDER_VIEWS: readonly ProviderView[] = [];
+const EMPTY_PLUGIN_SOURCE_MESSAGES: readonly RemoteMessage[] = [];
 
 /** 落定集合 / 基线的空值(模块级常量:引用稳定,不让 memo 每帧失效)。 */
 const EMPTY_SETTLING_ITEMS: readonly QueuedRemoteMessage[] = [];
@@ -6345,8 +6348,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionInteractionIdentity = useMemo(() => companionChat && companionName
     ? { name: companionName, avatar: companionPortrait(COMPANION_AVATAR_SIZE) } : null,
   [companionChat, companionName, companionPortrait]);
-  const companionPluginInvocations = useMemo(() => companionChat ? collectCompanionPluginInvocations(projectedMessages) : undefined,
-    [companionChat, projectedMessages]);
+  // Plugin invocations only depend on user / tool rows. `projectedMessages` is a new array on every
+  // streaming flush, so narrow it to those rows (keeping legacy pairing boundaries) and keep the
+  // previous array while they are the same objects; otherwise every flush re-pairs tool results
+  // and re-stringifies their content.
+  const pluginSourceMessages = useStableValue(
+    useMemo(() => companionChat ? companionPluginSourceMessages(projectedMessages) : EMPTY_PLUGIN_SOURCE_MESSAGES,
+      [companionChat, projectedMessages]),
+    sameArrayIdentity,
+  );
+  const companionPluginInvocations = useMemo(() => companionChat ? collectCompanionPluginInvocations(pluginSourceMessages) : undefined,
+    [companionChat, pluginSourceMessages]);
   const companionWorkGroupLabel = companionChat && activePendingKind
     ? t(`devices.presentation.sessionList.preview.${activePendingKind === 'permission' ? 'permission'
       : activePendingKind === 'ask_user_question' ? 'answer'
@@ -10070,9 +10082,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [deviceId, invoke, maker, openLink]);
 
+  // Read messages through the ref: this callback reaches every row via `actions`, so a
+  // `messages` dependency would re-render all visible rows (Markdown included) on every
+  // streaming flush. The lookup only needs the list as it is at tap time.
   const addMessageToComposer = useCallback((clientId: string) => {
     if (!sessionId || !canUseComposer) return;
-    const target = messages.find((message) => message.clientId === clientId || message.id === clientId,
+    const target = latestMessagesRef.current.find((message) => message.clientId === clientId || message.id === clientId,
       );
     const summary = target ? mobileSessionMessageDisplayText(target) : null;
     const bounded = summary ? boundAgentReferenceText(summary) : null;
@@ -10087,7 +10102,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (editor) editor.insertNode(node);
     else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
     requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, canUseComposer, currentSession, deviceId, messages, sessionId]);
+  }, [applyComposerDocument, canUseComposer, currentSession, deviceId, sessionId]);
 
   // 伙伴近况里点一条待办：作为待办引用放进输入框，主人写一句话交代，伙伴按话更新它。
   const quoteTodoInComposer = useCallback((todo: { id: string; title: string }) => {
@@ -10679,7 +10694,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     providerGroup: remoteProviderGroup,
                   },
                 }
-                : {}),
+                : { remote: undefined }),
             }}
             activeModelId={modelSheetSelection.model}
             existingSessionRoute
@@ -10759,7 +10774,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                       selectedDeviceId: collab.workerForm.form.agentDeviceId ?? null,
                     },
                   }
-                : {}),
+                : { remote: undefined }),
             }}
             activeModelId={collab.workerForm.form.model?.id ?? ''}
             activePermissionMode=""

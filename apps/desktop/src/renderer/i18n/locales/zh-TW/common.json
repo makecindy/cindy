@@ -2625,6 +2625,13 @@
       "storage": {
         "dialogueDirectoryTitle": "對話工作區",
         "dialogueDirectoryDescription": "僅用於新建任務，現有檔案保留原位置。",
+        "projectsRootTitle": "新專案存放位置",
+        "projectsRootInferred": "推薦",
+        "projectsRootDefault": "預設",
+        "projectsRootChoose": "變更目錄",
+        "projectsRootReset": "恢復推薦位置",
+        "projectsRootDescription": "在任務裡新建專案時，專案資料夾會放在這裡。未設定時，依你現有專案所在的資料夾推薦。",
+        "projectsRootFailed": "無法更新新專案存放位置",
         "dialogueDirectoryOpen": "開啟目錄",
         "dialogueDirectoryChoose": "變更目錄",
         "dialogueDirectoryReset": "恢復預設位置",
@@ -2949,7 +2956,7 @@
         },
         "accessibility": {
           "label": "自動輸入",
-          "tooltip": "輔助功能權限用於在其他 App 中自動輸入語音結果、讀取游標附近文字作為潤色上下文，並識別外部修改以改進詞典。"
+          "tooltip": "輔助使用權限用於在其他 App 中自動輸入語音結果、讀取游標附近文字作為潤色上下文，並識別外部修改以改進詞典。"
         }
       },
       "interactionSound": {
@@ -5216,14 +5223,14 @@
       },
       "presetHints": {
         "full": "不限制（預設），Agent 全速使用系統資源；從其他檔位切回時，已在跑的 Agent 重啟後才完全恢復全速。",
-        "balanced": "命令排隊 + 低優先順序 + 工具鏈限核：Agent 照常幹活，前臺操作永遠優先。",
+        "balanced": "命令排隊 + 低優先順序 + 工具鏈限核：Agent 照常幹活，前景操作永遠優先。",
         "background": "最低優先順序（macOS 上壓到能效核）+ 嚴格限併發：機器安靜流暢，Agent 明顯變慢。",
         "custom": "當前為自定義組合，可直接調節下方各項。"
       },
       "maxConcurrent": "併發命令上限",
       "maxConcurrentHint": "Claude Code 引擎所有命令的併發上限，超出的排隊等待；0 表示不限。Codex 命令在自身沙箱內執行、不經此閘門，由優先順序與限核層覆蓋。",
       "priority": "程序優先順序",
-      "priorityHint": "調低後 Agent 只用空閒資源，前臺應用優先；約 15 秒內對執行中的 Agent 生效，調回正常只對新啟動的 Agent 生效。",
+      "priorityHint": "調低後 Agent 只用空閒資源，前景應用優先；約 15 秒內對執行中的 Agent 生效，調回正常只對新啟動的 Agent 生效。",
       "priorityOptions": {
         "normal": "正常",
         "low": "低",
@@ -5559,11 +5566,11 @@
         "daemonStopped": "後臺服務未執行，會在呼叫時自動啟動",
         "notDetected": "未檢測到 cua-driver。首次啟用時會自動安裝；安裝並授權後即可使用直接電腦控制。",
         "installing": "正在安裝 cua-driver…",
-        "authorizing": "正在等待系統授權。請在彈出的 Cua Driver 授權視窗中完成「輔助功能」和「螢幕錄製」授權。",
+        "authorizing": "正在等待系統授權。請在彈出的 Cua Driver 授權視窗中完成「輔助使用」和「螢幕錄製」授權。",
         "permissionIntro": {
           "title": "啟用自動操作電腦",
           "description": "{{appName}} 將在本機安裝或啟動 Cua Driver，用於讀取螢幕並執行點選、輸入等操作。請僅在你主動發起自動操作電腦任務時啟用。",
-          "macosDescription": "接下來 {{appName}} 會安裝或開啟 Cua Driver 的授權流程，並可能跳轉到 macOS 系統設定。請先為 CuaDriver 授予「輔助功能」和「螢幕錄製」核心權限；之後在使用過程中，macOS 可能還會按目標 App 或具體動作彈出額外確認。只有在你主動發起 Computer Use 任務時才應確認這些請求。完成後回到 {{appName}}，它會自動檢查並啟用。",
+          "macosDescription": "接下來 {{appName}} 會安裝或開啟 Cua Driver 的授權流程，並可能跳轉到 macOS 系統設定。請先為 CuaDriver 授予「輔助使用」和「螢幕錄製」核心權限；之後在使用過程中，macOS 可能還會按目標 App 或具體動作彈出額外確認。只有在你主動發起 Computer Use 任務時才應確認這些請求。完成後回到 {{appName}}，它會自動檢查並啟用。",
           "confirm": "繼續",
           "cancel": "稍後再說"
         },
@@ -5584,23 +5591,23 @@
         },
         "permissions": {
           "title": "系統授權",
-          "macosHint": "電腦使用需要「輔助功能」和「螢幕錄製」。實際使用時，macOS 仍可能按目標 App 或具體動作彈出額外確認。",
-          "accessibilityLabel": "輔助功能",
+          "macosHint": "電腦使用需要「輔助使用」和「螢幕錄製」。實際使用時，macOS 仍可能按目標 App 或具體動作彈出額外確認。",
+          "accessibilityLabel": "輔助使用",
           "screenRecordingLabel": "螢幕錄製",
           "grant": "去授權",
-          "accessibility": "輔助功能：{{status}}",
+          "accessibility": "輔助使用：{{status}}",
           "screenRecording": "螢幕錄製：{{status}}",
           "runtimeConfirmations": "核心權限已就緒。實際使用時，macOS 仍可能按目標 App 或具體動作彈出額外確認；只有在你剛剛主動發起 Computer Use 任務時才應確認。",
           "granted": "已授權",
           "missing": "未授權",
           "unknown": "未知",
           "notRequired": "無需授權",
-          "openAccessibility": "開啟輔助功能設定",
+          "openAccessibility": "開啟輔助使用設定",
           "openScreenRecording": "開啟螢幕錄製設定",
           "recheck": "重新檢查",
           "moreDetails": "更多說明",
           "hideDetails": "收起說明",
-          "windowsHint": "Windows 不需要額外系統授權。使用時請保持目標應用在當前活動桌面中可見，Agent 會接管前臺操作。",
+          "windowsHint": "Windows 不需要額外系統授權。使用時請保持目標應用在當前活動桌面中可見，Agent 會接管前景操作。",
           "linuxHint": "Linux 不需要 macOS 的 TCC 授權；請確保當前桌面會話允許視窗讀取和輸入自動化。"
         },
         "toggleHint": "這個開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
@@ -7477,6 +7484,8 @@
         "cancel": "取消",
         "updateNeedsConsent": "需確認新權限",
         "targetIdentity": "安裝位置：{{name}}",
+        "localTarget": "本機開發版",
+        "localOidcUnavailable": "此開發副本不會取得企業身分。需要自測時，請透過 Forge 明確安裝到目前企業。",
         "personalTarget": "個人",
         "sourceChanged": "這次更新會改為本機來源。舊帳號和資料會隔離保留，需要重新連接帳號。",
         "otherCopies": "已有 {{count}} 份同名插件；它們不會被覆蓋或停用。另裝的插件需要單獨連接帳號。"
@@ -7560,6 +7569,8 @@
         "nodeResident": "Node 程式可常駐後臺",
         "nodeResidentDetail": "插件啟用期間會一直執行；停用、更新、解除安裝或退出 Cindy 時關閉。",
         "tool": "工具「{{name}}」",
+        "toolAutoApprove": "Agent 呼叫工具「{{name}}」時無需確認",
+        "toolAutoApproveDetail": "Agent 呼叫這個工具時直接執行，不再逐次詢問或審閱。",
         "command": "對話指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 顯示在側邊欄",
         "panelTab": "面板「{{title}}」· 插件頁內開啟",
@@ -7628,6 +7639,8 @@
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
         "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
         "browserExtension": "可讓它自帶的瀏覽器擴充功能連線到 Cindy",
+        "browserNativeHost": "可註冊瀏覽器連線「{{name}}」",
+        "browserNativeHostDetail": "註冊的程式在沙箱外執行，依你的系統帳號與系統授權存取本機。",
         "browserExtensionDetail": "只有下方列出的擴充功能能連線；連線經本機回環位址，由 Cindy 把擴充功能發起的請求轉交給這個插件。",
         "browserExtensionPageControlDetail": "只有下方列出的擴充功能能連線。該擴充功能還實作頁面控制：選擇「我的瀏覽器」後，Agent 可經它讀取和操作你正在使用的瀏覽器頁面。",
         "nodeChildSpawn": "Node 程式可請宿主再啟動包內申報過的子處理程序",
@@ -7722,6 +7735,18 @@
         "settingsTitle": "{{name}} 設定",
         "settingsUnavailableUntilRestore": "恢復插件後可繼續使用這項配置。",
         "oauthScopeStale": "當前授權未包含插件新增權限，請重新連線補齊授權。",
+        "localDevelopment": "本機開發版",
+        "publicInstall": "公開市集",
+        "organizationInstall": "企業：{{name}}",
+        "browserUse": "使用此瀏覽器擴充功能",
+        "browserActivated": "已選擇此瀏覽器擴充功能",
+        "browserActivationFailed": "無法選擇此擴充功能，請確認擴充功能已啟用，並完成連線切換確認。",
+        "browserSwitchTitle": "切換瀏覽器擴充功能連線？",
+        "browserSwitchMessage": "將此瀏覽器連線交給「{{name}}」？",
+        "browserSwitchDetail": "實例：{{instance}}\n註冊名稱：{{host}}\n這會取代目前的註冊，擴充功能將連線到此擴充功能。",
+        "portReclaimTitle": "結束佔用回呼連接埠的程式？",
+        "portReclaimMessage": "「{{name}}」需要使用連接埠 {{port}}，是否結束以下程式？",
+        "portReclaimDetail": "結束程式可能中斷其工作或遺失未儲存的資料。取消後可自行關閉佔用程式。",
         "configurationTitle": "配置",
         "sidebarEntryTitle": "導航入口",
         "showInSidebar": "顯示在左側導航",
@@ -10713,6 +10738,18 @@
         "reactorFormer": "{{name}}（已不在群組中）",
         "reactorsUnavailable_one": "另有 {{count}} 位成員的資訊暫不可用",
         "reactorsUnavailable_other": "另有 {{count}} 位成員的資訊暫不可用",
+        "readStatusSent": "已傳送",
+        "readStatusRead": "已讀",
+        "readersCount_one": "{{count}} 人已讀",
+        "readersCount_other": "{{count}} 人已讀",
+        "readersView": "查看已讀",
+        "readersTooLarge": "群組成員太多，暫不顯示已讀名單",
+        "readersNone": "無人已讀",
+        "readersLoading": "載入中…",
+        "readersFailed": "無法載入已讀名單",
+        "readersHeading": "已讀",
+        "readersOfTotal": "已讀 {{read}}/{{total}}",
+        "readerUnknown": "未知成員",
         "invite": "邀請加入群聊",
         "groupCreated": "群聊已建立",
         "inviteFriends": "邀請朋友加入，一起使用夥伴",
@@ -12609,7 +12646,7 @@
       "empty": "沒有可輸入的語音文字。",
       "unavailable": "當前應用無法自動輸入。你可以複製文字後手動輸入。",
       "unconfirmed": "無法確認是否已經自動輸入。你可以複製文字後手動輸入。",
-      "permission": "需要開啟輔助功能權限，才能自動把語音輸入到當前應用。授權後可再次嘗試。",
+      "permission": "需要開啟輔助使用權限，才能自動把語音輸入到當前應用。授權後可再次嘗試。",
       "failed": "未能自動輸入。你可以複製文字後手動輸入。"
     },
     "permissionPrompts": {
@@ -12618,7 +12655,7 @@
         "hint": "授權後再按快捷鍵即可開始錄音。"
       },
       "accessibility": {
-        "message": "需要開啟輔助功能權限，才能自動輸入到當前應用。",
+        "message": "需要開啟輔助使用權限，才能自動輸入到當前應用。",
         "hint": "授權後再按快捷鍵即可自動輸入。"
       }
     },
@@ -14369,6 +14406,26 @@
           "cancel": "取消"
         }
       },
+      "newProjectDialog": {
+        "title": "新建專案",
+        "description": "新建一個專案資料夾，並把這個任務移到新專案。",
+        "descriptionMoveFiles": "新建一個專案資料夾，把這個任務裡的檔案搬進去，並把任務移到新專案。",
+        "nameLabel": "專案名稱",
+        "namePlaceholder": "例如 my-app",
+        "targetPath": "將建立 {{path}}",
+        "location": "位置",
+        "locationInferred": "依你現有的專案推薦",
+        "locationWillCreate": "這個資料夾還不存在，確認後會自動建立",
+        "changeLocation": "變更…",
+        "remember": "以後新建專案都放這裡",
+        "cancel": "取消",
+        "create": "新建專案",
+        "nameTaken": "已有同名資料夾，換一個名稱",
+        "nameInvalid": "名稱不能包含 \\ / : * ? \" < > |，也不能以句點或空格結尾",
+        "loadFailed": "無法讀取專案位置",
+        "failed": "新建專案失敗",
+        "done": "已新建專案並移入任務"
+      },
       "sessionMenu": {
         "moreActions": "更多",
         "rename": "重新命名",
@@ -14382,6 +14439,7 @@
         "moveToProject": "移動任務",
         "moveToProjectHeading": "目前電腦的專案",
         "browseProjectFolder": "選擇專案資料夾",
+        "newProject": "新建專案…",
         "moveToDialogue": "移到對話",
         "noProjects": "暫無最近專案",
         "moveToProjectDone": "已移動到專案",
@@ -15782,6 +15840,7 @@
     "agentControlled": "這個介面由 Agent 開啟。填寫前請確認它確實是你要登入的地方。",
     "agentPicture": "這張 QR 碼來自 Agent 的截圖，Cindy 看不到原本的畫面，掃完也不會自動繼續。請確認它指向的網站是你要登入的地方，掃完點「交還給 Agent」。",
     "error": {
+      "raise": "無法開啟視窗，請在電腦上切換到它。",
       "decision": "操作沒有送達，請重試。",
       "stale": "介面已經變化，請依最新內容操作。",
       "submit": "輸入沒有送達，請重試。"
@@ -15817,6 +15876,9 @@
       "picture": "看畫面",
       "backToForm": "回到表單",
       "liveView": "即時畫面",
+      "openWindow": "開啟登入視窗",
+      "openRemoteDesktop": "開啟遠端桌面",
+      "useForm": "改用表單填寫",
       "fill": "填寫",
       "skip": "略過",
       "continue": "繼續",
@@ -15824,6 +15886,9 @@
       "showPassword": "顯示密碼",
       "hidePassword": "隱藏密碼",
       "scan": "掃碼"
+    },
+    "directSignIn": {
+      "hint": "請直接在視窗裡登入，完成後會自動繼續。"
     },
     "remoteUnavailable": "這台電腦無法從遠端接收輸入。請在主機電腦上完成這一步，再交還給 Agent。",
     "unnamedField": "輸入框",
@@ -16137,7 +16202,7 @@
       "chipAll": "全部",
       "chipMine": "我的管理",
       "ownerGroupPersonal": "個人",
-      "noManagePermission": "你在該團隊是隻讀成員，無法修改此 Skill。如需變更請聯絡團隊管理員。",
+      "noManagePermission": "你在該團隊是只讀成員，無法修改此 Skill。如需變更請聯絡團隊管理員。",
       "categoryAll": "全部",
       "categoryLabel": "分類：{{name}}",
       "loadFailed": "載入失敗：{{error}}",
@@ -18778,6 +18843,9 @@
     "failed": "操作未完成，請重試或查看本機檔案。"
   },
   "attachmentPreview": {
+    "fitWidth": "適應寬度",
+    "fitPage": "適應頁面",
+    "pageNumber": "頁碼",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖片",

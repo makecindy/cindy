@@ -132,7 +132,7 @@ import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.j
 import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
-import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
+import { FORGE_GUIDE, FORGE_PAGE_MANUAL, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import {
   completeForgePackStaging,
   getForgePackStagingController,
@@ -1853,7 +1853,12 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
     return {
       id: ghost.manifest.id,
       ...(ghost.namespaceState === 'pending' ? {} : deliveryNamespaceFields(ghost)),
-      name: ghost.manifest.name,
+      name: ghost.namespace === 'local'
+        ? `${ghost.manifest.name} (${t('settings.ghosts.detail.localDevelopment')})`
+        : typeof ghost.namespace === 'string'
+          ? `${ghost.manifest.name} (${ghost.namespace})`
+          : ghost.publishingSource?.kind === 'public-market'
+            ? `${ghost.manifest.name} (${t('settings.ghosts.detail.publicInstall')})` : ghost.manifest.name,
       ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
       ...(recall ? { recall } : {}),
     };
@@ -2847,6 +2852,9 @@ export function getCindyGhostsMcpDeps(
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;
+    },
+    async forgePageManual(): Promise<string> {
+      return FORGE_PAGE_MANUAL;
     },
     async forgeScaffold(request): Promise<CindyForgeScaffoldResult> {
       // C-4:owner lease 在首个 await 前捕获并持到副作用结束;workingDir 取权威

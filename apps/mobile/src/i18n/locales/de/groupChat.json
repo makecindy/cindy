@@ -2,6 +2,12 @@
   "progress": {
     "stop": "Stoppen"
   },
+  "work": {
+    "queued": "In Warteschlange {{count}}",
+    "active": "In Bearbeitung {{count}}",
+    "expand": "Aktivität der Teammitglieder ausklappen",
+    "collapse": "Aktivität der Teammitglieder einklappen"
+  },
   "title": "Gruppenchats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} Mitglied",
@@ -189,6 +195,7 @@
     "allDone": "Alles erledigt"
   },
   "speaking": {
+    "queued": "In der Warteschlange",
     "stopping": "Wird gestoppt…",
     "planning": "Arbeit wird aufgeteilt…",
     "step": "In Arbeit…"

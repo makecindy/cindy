@@ -195,6 +195,18 @@ export function findCatalogModel(
   return undefined;
 }
 
+/** Resolve one renamed bridge ID for a saved session. Ambiguous catalogs stay unchanged. */
+export function uniqueRenamedSessionModelId(
+  provider: Provider | ProviderView | undefined,
+  savedModelId: string,
+  agent: AgentKind,
+): string | null {
+  if (!provider || getModel(provider, savedModelId, agent)) return null;
+  const matches = (provider.models[agent] ?? []).filter(candidate =>
+    candidate.id !== savedModelId && unifiedModelKeyId(candidate.id) === savedModelId);
+  return matches.length === 1 ? matches[0]!.id : null;
+}
+
 /**
  * 该 (provider, agent) 下这个逻辑模型真正要发出去的 **wire model id**;不提供则 null。
  * 面板选中某引擎后写 draft / 建会话 / 切模型,一律用本函数(或 `capabilities[agent].wireModelId`)

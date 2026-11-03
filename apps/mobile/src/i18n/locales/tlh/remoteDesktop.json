@@ -45,7 +45,6 @@
   "functionKeys": "Function keys",
   "inputMethod": "wabwI' ngItlh mo",
   "computerKeyboard": "De'wI' ngItlh mo",
-  "comboMode": "Combination keys",
   "showMouseButtons": "tu' mouse buttons",
   "leftClick": "Left click",
   "middleClick": "Middle click",
@@ -183,5 +182,12 @@
   "hostMuteFailed": "Couldn't choH the nov computer's mute setting",
   "handoffEnded": "poS qem — rInlu'pu'; Qorwagh tu'be'.",
   "handoffUnavailable": "janvam — Qorwaghvam neH bejlaHbe'. janDaq Cindy choH, joq nov De'wI' chu'moH.",
-  "handoffWindow": "poS qem · {{app}}"
+  "handoffWindow": "poS qem · {{app}}",
+  "skin_keyboard": "keyboard",
+  "keyUndo": "yIvangHa'",
+  "keyRedo": "yIta'qa'",
+  "keyAppWindows": "app windowmey",
+  "keySearch": "nej",
+  "keyTaskView": "Qu' legh",
+  "keySpace": "space"
 }

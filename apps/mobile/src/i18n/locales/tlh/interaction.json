@@ -305,7 +305,9 @@
       "close": "mev",
       "showPassword": "tu' ngItlh",
       "hidePassword": "So' ngItlh",
-      "scan": "Scan"
+      "scan": "Scan",
+      "openRemoteDesktop": "remote desktop poSmoH",
+      "useForm": "form yIlo'"
     },
     "remoteUnavailable": "This De'wI' can't receive input remotely. Finish this step chu' the host De'wI', then hand chegh to the Agent.",
     "unnamedField": "Field",
@@ -373,6 +375,9 @@
       "loading": "Getting the QR code…",
       "failed": "Couldn't get the QR code. Tap to try again.",
       "scanned": "Scanned. vang chu' your wabwI'; Cindy continues once you do."
+    },
+    "directSignIn": {
+      "hint": "windowDaq Hotlh. bIghItlhchugh Cindy nIteb taH."
     }
   },
   "presentation": {

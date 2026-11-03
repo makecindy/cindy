@@ -191,7 +191,8 @@
   "speaking": {
     "stopping": "Stopping…",
     "planning": "Splitting the work…",
-    "step": "SengtaH chu' it…"
+    "step": "SengtaH chu' it…",
+    "queued": "loS"
   },
   "task": {
     "state": {
@@ -595,5 +596,11 @@
       "uncertain": "poS result not confirmed"
     },
     "externalFormatError": "Reopen the complete He from the original QIn."
+  },
+  "work": {
+    "queued": "{{count}} loS",
+    "active": "{{count}} vangtaH",
+    "expand": "teammate vang yIpoSmoH",
+    "collapse": "teammate vang yISoQmoH"
   }
 }

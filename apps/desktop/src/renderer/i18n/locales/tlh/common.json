@@ -565,7 +565,10 @@
     "source": "chen yIbej",
     "rendered": "De' yIbej",
     "wrap": "tlhegh ruS",
-    "lineNumbers": "tlhegh mI'pmey"
+    "lineNumbers": "tlhegh mI'pmey",
+    "fitPage": "page naQ",
+    "fitWidth": "juch naQ",
+    "pageNumber": "page mI'"
   },
   "mailReader": {
     "showExternalImages": "Hur bejjoq bej",
@@ -1986,7 +1989,8 @@
     "error": {
       "decision": "qapbe'. yIvangqa'.",
       "stale": "bej choHlu'. chu' juv lo'.",
-      "submit": "poSlIj qapbe'. yIvangqa'."
+      "submit": "poSlIj qapbe'. yIvangqa'.",
+      "raise": "window poSlaHbe'. janDaq window yIlegh."
     },
     "terminal": {
       "succeeded": "agentvaD cheghmoHlu'.",
@@ -2025,7 +2029,10 @@
       "close": "mev",
       "showPassword": "ngItlh bej",
       "hidePassword": "ngItlh So'",
-      "scan": "bej'"
+      "scan": "bej'",
+      "openRemoteDesktop": "remote desktop poSmoH",
+      "openWindow": "Hotlh window poSmoH",
+      "useForm": "form yIlo'"
     },
     "remoteUnavailable": "janvam — novvo' poS qonlaHbe'. qom janDaq rInmoH, agentvaD cheghmoH.",
     "unnamedField": "och",
@@ -2090,6 +2097,9 @@
       "openFailed": "He poSlaHbe'. wabwI' je code bejlaH.",
       "alt": "janDaq QR code. tlheq — naDev codevam Daq tlheq.",
       "failed": "QR code ghorghlaHbe'. tlheq — vangqa'."
+    },
+    "directSignIn": {
+      "hint": "windowDaq Hotlh. bIghItlhchugh Cindy nIteb taH."
     }
   },
   "orca": {
@@ -9080,7 +9090,8 @@
         "compactFailed": "Compaction Qagh",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Qu' branches",
-        "copySessionLink": "nIb Qu' He"
+        "copySessionLink": "nIb Qu' He",
+        "newProject": "project chu'…"
       },
       "sessionBranches": {
         "title": "Qu' branches",
@@ -9150,6 +9161,26 @@
         "priority": "Priority",
         "activity": "Recent Activity",
         "created": "Creation poH"
+      },
+      "newProjectDialog": {
+        "cancel": "qIl",
+        "changeLocation": "choH…",
+        "create": "project chenmoH",
+        "description": "project folder chenmoH, Qu'vam project chu'Daq vIH.",
+        "descriptionMoveFiles": "project folder chenmoH, Qu'vam De' vIH, 'ej Qu' project chu'Daq vIH.",
+        "done": "project chenmoHlu', Qu' vIHlu'",
+        "failed": "project chenmoHlaHbe'",
+        "loadFailed": "project juH laDlaHbe'lu'",
+        "location": "juH",
+        "locationInferred": "project lIngbogh Daqvo' nup",
+        "locationWillCreate": "folder vam tu'lu'be' — chenmoHlu'",
+        "nameInvalid": "pongDaq \\ / : * ? \" < > | tu'laHbe', 'ej pong period joq space vo' rInlaHbe'.",
+        "nameLabel": "project pong",
+        "namePlaceholder": "e.g. my-app",
+        "nameTaken": "pongvetlh folder tu'lu'",
+        "remember": "project chu' vaD juHvam yIlo'",
+        "targetPath": "{{path}} chenmoHlu'",
+        "title": "project chu'"
       }
     },
     "search": {
@@ -11503,7 +11534,19 @@
           "accessToolsHint": "Can use {{name}}'s existing tools and your private info. Results are visible to everyone. Approvals still lo'; finished actions can't be undone after you revoke access.",
           "capabilitiesRow": "{{name}}'s tools and access",
           "accessMenu": "chawmey here"
-        }
+        },
+        "readStatusRead": "laDlu'ta'",
+        "readStatusSent": "ngeHlu'ta'",
+        "readerUnknown": "membar Sovbe'lu'",
+        "readersFailed": "laDpu' 'Iv — laDlaHbe'lu'",
+        "readersHeading": "laDpu'",
+        "readersLoading": "laDlu'taH…",
+        "readersNone": "pagh laDpu'",
+        "readersOfTotal": "laD {{read}}/{{total}}",
+        "readersTooLarge": "ghunvam tIn law' — laDpu' tetlhlaHbe'lu'",
+        "readersView": "laDpu' yIlegh",
+        "readersCount_one": "{{count}} laDpu'",
+        "readersCount_other": "{{count}} laDpu'"
       },
       "lifecycle": {
         "dissolve": "Dissolve ghun",
@@ -12647,7 +12690,9 @@
         "targetIdentity": "chagh for: {{name}}",
         "personalTarget": "Personal",
         "sourceChanged": "This choHqa' switches to a local source. Existing accounts and data are archived separately. Connect your accounts again after updating.",
-        "otherCopies": "There are {{count}} other copies of this Plugin. They will stay installed and qon their current chu'lu' state. A separate nIb needs its own account rarmey."
+        "otherCopies": "There are {{count}} other copies of this Plugin. They will stay installed and qon their current chu'lu' state. A separate nIb needs its own account rarmey.",
+        "localOidcUnavailable": "chenmoH copyvam organization identity lo'laHbe'. testmeH — Forgevo' organization DaH Daq yIlan.",
+        "localTarget": "local chenmoH"
       },
       "controlPoints": {
         "title": "Pre-run checks",
@@ -12792,7 +12837,11 @@
         "mcpUi": "bej interactive pages in the conversation",
         "mcpUiDomains": "Page Web domains: {{domains}}",
         "mcpAppOnly": "Page only",
-        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools DuH to pages: {{tools}}"
+        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools DuH to pages: {{tools}}",
+        "browserNativeHost": "browser connection “{{name}}” chelmoHlaH",
+        "browserNativeHostDetail": "sandbox HurDaq program chelmoH. juHDaq access account 'ej system permission 'oH.",
+        "toolAutoApprove": "Agent tool \"{{name}}\" confirmation Hutlh laH",
+        "toolAutoApproveDetail": "Agent toolvam lo'taHvIS — 'opleS joq each call review Hutlh — vang."
       },
       "detail": {
         "enable": "Enable",
@@ -12868,7 +12917,19 @@
         "viewAllPermissions": "See naQ",
         "permissionsDialogDescription": "naQ {{count}} chawmey requested by this Plugin",
         "closeDialog": "SoQmoH Dialog",
-        "resetPlacement": "chegh to qav position"
+        "resetPlacement": "chegh to qav position",
+        "browserActivated": "browser extension wIvlu'",
+        "browserActivationFailed": "extension wIvlaHbe'lu'. chu'lu' 'e' yIbej 'ej connection choH yIchup.",
+        "browserSwitchDetail": "instance: {{instance}}\nregistration: {{host}}\nregistration vam choH. extension PluginvamDaq rar.",
+        "browserSwitchMessage": "browser connectionvam vaD “{{name}}” yIlo'?",
+        "browserSwitchTitle": "browser extension connection choH?",
+        "browserUse": "browser extensionvam yIlo'",
+        "localDevelopment": "local chenmoH",
+        "organizationInstall": "organization: {{name}}",
+        "portReclaimDetail": "rInmoHlu'chugh Qu'vam qotlhlaH joq De' chuvbe'laH. qIl 'ej program yISoQmoH.",
+        "portReclaimMessage": "“{{name}}” port {{port}} poQ. programvam rInmoH'a'?",
+        "portReclaimTitle": "callback port lo'bogh program rInmoH?",
+        "publicInstall": "public marketplace"
       },
       "contents": {
         "mainView": "Main view",
@@ -14266,7 +14327,14 @@
         "reconcileButton": "Check",
         "reconcileFailed": "Check Qagh",
         "reconcileHealthy": "Ledger and disk match. Qo' Issuemey found.",
-        "reconcileIssues": "Issuemey found: {{orphans}} untracked navmey ({{orphanSize}}), {{missing}} missing navmey, {{stray}} unrecognized entries. See the app De' QIn for the full list."
+        "reconcileIssues": "Issuemey found: {{orphans}} untracked navmey ({{orphanSize}}), {{missing}} missing navmey, {{stray}} unrecognized entries. See the app De' QIn for the full list.",
+        "projectsRootChoose": "He choH",
+        "projectsRootDefault": "motlh",
+        "projectsRootDescription": "Qu'vo' project chenmoHtaHvIS project folder nuqDaq 'el. choHbe'chugh — DaHlIj project mI'vo' mIch nup.",
+        "projectsRootFailed": "project juH chu' choHlaHbe'lu'",
+        "projectsRootInferred": "nup",
+        "projectsRootReset": "nup juH yIcheghmoH",
+        "projectsRootTitle": "project juH chu'"
       },
       "piKernel": {
         "manage": "Manage Pi juv",

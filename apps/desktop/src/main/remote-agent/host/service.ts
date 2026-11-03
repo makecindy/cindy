@@ -914,7 +914,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
           return rule.models !== null || rule.providerModels !== null || !!(rule.memberBudget?.enabled && rule.memberBudget.rules.length);
         } catch { return true; }
       },
-      resolve: async (kind, model, providerId, controller, sessionId) => {
+      resolve: async (kind, model, providerId, controller, sessionId, context) => {
         const views = await getDesktopProviderService().listProviders({ allowSideEffects: false });
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
         const memberId = access?.memberId;
@@ -934,6 +934,7 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
             kind,
             model,
             delegated ? undefined : providerId,
+            context,
           );
         }
         return resolveSharedProviderId(views, allowed, kind, model, providerId);
