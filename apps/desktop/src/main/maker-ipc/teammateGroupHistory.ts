@@ -1,5 +1,5 @@
 import { chatGroupMemberName } from '@cindy/maker-shared/botGroupPresentation';
-import { readImportedBotGroupRuntimeFailureCode, readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
+import { readImportedBotGroupRuntimeFailureCode, readBotGroupProcessCard, readBotGroupTaskCard, readBotGroupThreadShareCard, readBotGroupQuoteCard, readBotGroupQuote,
   botGroupQuoteExcerpt, botGroupQuoteAttachmentName, type BotGroupMessageView } from '../../shared/botGroupChat.js';
 
 /** Read as the companion actor, never as its owner. No local history cache or read receipts. */
@@ -19,10 +19,10 @@ interface Message {
   id: string; seq: string; deleted: boolean; createdAt: string; threadRootId: string | null;
   author: { name: string; kind: string };
   maskAttribution?: BotGroupMessageView['maskAttribution'];
-  content: Array<{ type: string; text?: string; fallback?: string; caption?: string }>;
+  content: Array<{ type: string; text?: string; fallback?: string; caption?: string; namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
 type HistoryQuote = { messageId: string; deleted: true } | {
-  messageId: string; authorId?: string; authorKind?: string; origin?: string; from: string; text: string; attachmentCount: number;
+  messageId: string; authorId?: string; authorKind?: string; origin?: string; maskAttribution?: BotGroupMessageView['maskAttribution']; from: string; text: string; attachmentCount: number;
   attachmentName: string | null; snapshot?: true;
 };
 // Match promptMessage/messageView: only the HTTP message's server origin can
@@ -34,7 +34,9 @@ const historySource = (message: Message) => ({
 // Match the execution context: recognized references never contribute their fallback
 // to the author's own words. Unknown card revisions remain ordinary readable content.
 const historyText = (message: Message) => readImportedBotGroupRuntimeFailureCode(message) || readBotGroupThreadShareCard(message) ? ''
-  : message.content.filter(block => block.type !== 'media' && !readBotGroupQuoteCard(block))
+  : message.content.filter(block => block.type !== 'media' && !readBotGroupProcessCard(block)
+    && (block.namespace !== 'cindy.local-history' || block.data?.activity === true)
+    && !readBotGroupQuoteCard(block) && !(message.author.kind === 'bot' && readBotGroupTaskCard(block)))
     .map(block => block.text ?? block.fallback ?? '').join('\n');
 function historyQuote(message: Message, known: ReadonlyMap<string, Message>, authorName: (message: Message) => string): HistoryQuote | undefined {
   const quote = readBotGroupQuote(message.content);
@@ -45,7 +47,7 @@ function historyQuote(message: Message, known: ReadonlyMap<string, Message>, aut
   if (!original) return { messageId: quote.messageId, from: quote.authorName, text: quote.excerpt,
     attachmentCount: quote.attachmentCount, attachmentName: quote.attachmentName, snapshot: true };
   const files = original.content.filter(block => block.type === 'media').map(block => ({ name: block.caption ?? '' }));
-  return { messageId: quote.messageId, ...(original.authorId ? { authorId: original.authorId } : {}), ...historySource(original), from: authorName(original), text: botGroupQuoteExcerpt(historyText(original)),
+  return { messageId: quote.messageId, ...(original.authorId ? { authorId: original.authorId } : {}), ...historySource(original), ...(original.maskAttribution ? { maskAttribution: original.maskAttribution } : {}), from: authorName(original), text: botGroupQuoteExcerpt(historyText(original)),
     attachmentCount: files.length, attachmentName: botGroupQuoteAttachmentName(files) };
 }
 export interface TeammateGroupHistoryResult {

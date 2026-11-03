@@ -1163,10 +1163,52 @@ describe('Chat Server result delivery and refresh', () => {
     const input = { botId: 'local-bot', groupId: roomId };
     const hidden = mode === 'metadata' || mode === 'legacy-prefix';
     const page = await service.teammateHistory!(input);
-    expect(page.messages![0].text).toBe(hidden ? '' : [marker, marker].join('\n'));
+    expect(page.messages![0].text).toBe(hidden ? '' : marker);
     expect(page.messages![0].authorKind).toBe(hidden ? 'system' : 'bot');
     const search = await service.teammateHistory!({ ...input, query: marker });
     expect(search.messages).toHaveLength(hidden ? 0 : 1);
+  });
+  // #8433 follow-up: quoted originals loaded only in the snapshot never appear
+  // as standalone history rows, so their server mask attribution must stay on quote.
+  it('retains AI reply attribution on a snapshot-only quoted original', async () => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    const originalId = '70000000-0000-4000-8000-000000000003';
+    const maskAttribution = { self: { id: selfId, name: 'Alice', avatarUrl: null },
+      companion: { id: botId, name: 'Cindy', avatarUrl: null }, sourceMessageId: 'source-message' };
+    const base = { deleted: false, createdAt: '2026-11-03T00:00:00Z', threadRootId: null,
+      authorId: selfId, author: { name: 'Alice', kind: 'human' } };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [
+        { ...base, id: originalId, seq: '41', maskAttribution, content: [{ type: 'text', text: 'I will do it' }] },
+      ] } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [{ ...base, id: 'quoting-message', seq: '42',
+        content: [buildBotGroupQuoteCard({ messageId: originalId, authorName: 'Alice', authorKind: 'user',
+          excerpt: 'I will do it', attachmentCount: 0, attachmentName: null, sequence: 41 })] }] };
+      return response(route);
+    });
+    const result = await service.teammateHistory!({ botId: 'local-bot', groupId: roomId });
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages![0]).toMatchObject({ id: 'quoting-message', quote: { maskAttribution } });
+  });
+  it.each([false, true])('keeps migration metadata out of history except activity (%s)', async activity => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const members = [{ id: botId, kind: 'bot', state: 'joined' }];
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members } };
+      if (route.endsWith('/members')) return { body: members };
+      if (route.includes('/messages?all=true')) return { body: [{ id: 'migrated', seq: '41', deleted: false,
+        createdAt: '2026-11-03T00:00:00Z', threadRootId: null, origin: 'import', author: { name: 'Bot', kind: 'bot' },
+        content: [{ type: 'text', text: 'Budget approved' }, { type: 'card', namespace: 'cindy.local-history',
+          schemaRevision: 1, fallback: activity ? 'Activity words' : '历史消息', data: { kind: 'message', activity } }] }] };
+      return response(route);
+    });
+    const input = { botId: 'local-bot', groupId: roomId };
+    expect((await service.teammateHistory!(input)).messages![0].text)
+      .toBe(activity ? 'Budget approved\nActivity words' : 'Budget approved');
+    expect((await service.teammateHistory!({ ...input, query: '历史消息' })).messages).toHaveLength(0);
+    expect((await service.teammateHistory!({ ...input, query: 'Activity words' })).messages).toHaveLength(activity ? 1 : 0);
   });
   // #8433 review / message-source.md, unit: production HTTP adapter + reader.
   // A deleted original's old share fallback must not survive in history/search;
