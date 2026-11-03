@@ -1439,6 +1439,10 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partilhado",
+      "note": "Esta quota é partilhada pela conta, não está reservada para si."
+    },
     "balance": {
       "name": "Saldo de Cindy",
       "quotaName": "Quota de Cindy",

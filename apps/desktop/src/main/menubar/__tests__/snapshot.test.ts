@@ -386,3 +386,15 @@ describe('buildUsageWidgetSnapshot', () => {
     expect(buildUsageWidgetSnapshot(view, NOW, () => null)).toBeNull();
   });
 });
+
+// Shared quota details are read-only and must not offer a local task on the host's provider id.
+it('shows the account-wide sharing notice and no local subscription management actions', () => {
+  const source = codex('share:one', 54, {
+    family: 'shared', account: null, brand: 'Claude', plan: 'Shared',
+    shared: { label: 'Claude', note: 'Account-wide allowance' },
+  });
+  const view = buildMenubarView(input([source]));
+  expect(view.sources[0]).toMatchObject({ value: '46', name: 'Claude' });
+  expect(view.details[source.id]).toMatchObject({ plan: 'Shared', saySecondary: 'Account-wide allowance', action: { kind: 'open-app' } });
+  expect(view.details[source.id].facts.some(fact => /credits|resets left/i.test(fact.label))).toBe(false);
+});

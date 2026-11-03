@@ -1439,6 +1439,10 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partagé",
+      "note": "Ce crédit est partagé au niveau du compte et ne vous est pas réservé."
+    },
     "balance": {
       "name": "Solde Cindy",
       "quotaName": "Quota Cindy",

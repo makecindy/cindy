@@ -1408,6 +1408,10 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共有",
+      "note": "アカウント全体で共有する利用枠です。あなた専用の枠ではありません。"
+    },
     "balance": {
       "name": "Cindy 残高",
       "quotaName": "Cindy の今期クォータ",

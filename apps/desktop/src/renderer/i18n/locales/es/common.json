@@ -1439,6 +1439,10 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted."
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",

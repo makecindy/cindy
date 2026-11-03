@@ -650,6 +650,8 @@ The usage heatmap, daily-token bars and their separate interaction indicators fo
 
 ### macOS menu bar quota panel (owner-approved v6 prototype, 2026-10-11)
 
+Received shared subscriptions (2026-11-03): while the panel is open, authorized single-account weekly allowances use the existing tube and detail layout. The provider label identifies the tube; the detail plan says “Shared” and explains that the allowance belongs to the whole account. Use neutral detail rings, without account email, device identity, reset-credit controls or local-provider task selection. Groups and unknown/expired allowances do not become a combined percentage. Closing the panel clears these readings. The same layout and existing translated account-wide notice apply in every locale and appearance.
+
 Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):
 [Light/Dark before and after](assets/menubar-icon-refinement.png).
 

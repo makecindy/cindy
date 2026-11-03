@@ -6,6 +6,7 @@ import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland';
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true },
   auth: { mode: 'cloud', dataOwnerId: 'owner', ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
+  sharedRead: vi.fn(), sharedChanged: null as null | (() => void),
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
@@ -28,6 +29,11 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthS
 vi.mock('../../billing/projection.js', () => ({}));
 vi.mock('../../clientEndpointsService.js', () => ({}));
 vi.mock('../../deepLink.js', () => ({ openMainWindowRemoteControlSettings: mocks.openRemoteSettings, openMainWindowSession: mocks.openLocalSession }));
+vi.mock('../../device-link/providerShareGuest.js', () => ({
+  getReceivedShares: () => [{ shareId: 'share-one', memberId: 'member', providerId: 'anthropic', providerLabel: 'Claude', status: 'active', hostOnline: true, hostCapable: true }],
+  onProviderShareReceivedChanged: (callback: () => void) => { mocks.sharedChanged = callback; return () => { mocks.sharedChanged = null; }; },
+}));
+vi.mock('../../device-link/providerShareRuntime.js', () => ({ readReceivedProviderShareQuota: (...args: unknown[]) => mocks.sharedRead(...args) }));
 vi.mock('../../device-link/index.js', () => ({}));
 vi.mock('../../device-link/dispatch.js', () => ({ getActiveControllers: () => subscriptions.getControlControllers() }));
 vi.mock('../../device-link/ipc.js', () => ({}));
@@ -35,7 +41,7 @@ vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' 
 vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../maker-host/createDesktopProviderService.js', () => ({}));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [] }) }));
 vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
 vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
@@ -262,4 +268,29 @@ it('never serves a build read for the previous account', async () => {
   } finally {
     mocks.auth.dataOwnerId = 'owner';
   }
+});
+
+// Integration of the new reader with the actual panel controller: the panel gets the share,
+// while the reusable overview (also consumed by phone widgets) remains owner-only.
+it('adds received quotas to the open native panel and clears them on close', async () => {
+  mocks.sharedRead.mockResolvedValue({ version: 1, capabilities: { quota: true, usage: false },
+    status: { quota: 'ready', usage: 'disabled' }, usage: null,
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week', remainingPercent: 46, resetsAt: Date.now() + 60_000, windowMinutes: 10080, label: null }] }] },
+  });
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  const service = new MenubarService({ openNewTask() {}, overview });
+  service.init();
+  await vi.advanceTimersByTimeAsync(0);
+  mocks.onHelperMessage?.({ type: 'panel', open: true });
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '46' }));
+  expect(overview.latest()?.input.sources).toEqual([]);
+  mocks.onHelperMessage?.({ type: 'panel', open: false });
+  expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
+  const calls = mocks.sharedRead.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(calls);
+  service.stop();
 });

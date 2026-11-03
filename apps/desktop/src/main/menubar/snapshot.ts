@@ -39,7 +39,7 @@ import {
 } from '../../shared/menubarQuota.js';
 
 export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
-export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi';
+export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'shared';
 
 export interface MenubarWindowInput {
   kind: 'session' | 'week' | 'scoped' | 'period';
@@ -59,6 +59,8 @@ export interface MenubarSubscriptionInput {
   logoSvg: string;
   /** Brand shown as the detail title: Claude, Codex, Grok. */
   brand: string;
+  /** Received share label; never an account identity or a real device name. */
+  shared?: { label: string; note: string };
   /** Account email when the provider exposes one (Codex accounts). */
   account: string | null;
   plan: string | null;
@@ -221,12 +223,13 @@ const MIN_PACE_ELAPSED = 0.03;
 const ROOMY_CELL_LIMIT = 4;
 /** Settings' soft daily limit for a period quota: period total / 30 × 4.5 (a display hint, not a cap). */
 const DAILY_SOFT_LIMIT_FACTOR = 4.5;
-const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3 };
+const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, shared: 4 };
 const FAMILY_COLORS: Record<MenubarFamily, MenubarColor[]> = {
   claude: ['claude', 'claude2', 'claude3'],
   codex: ['codex'],
   grok: ['fill'],
   kimi: ['fill'],
+  shared: ['fill'],
 };
 const HARNESS_ORDER: MenubarHarness[] = ['claude-code', 'codex', 'pi'];
 
@@ -489,13 +492,13 @@ class Builder {
 
   /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
   private who(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return source.shared?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return source.shared?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t(source.quota ? 'balance.quotaName' : 'balance.name');
     return source.name;
   }
@@ -880,10 +883,10 @@ class Builder {
     const handle = this.handle(source);
     const resets = source.resetCredits?.count ?? 0;
     // An account on another computer runs there; this computer cannot start a task on it directly.
-    let actionLabel = source.device
+    let actionLabel = source.device || source.shared
       ? this.t('action.openApp')
       : this.t('action.newTask', { name: handle ?? source.brand });
-    let action: MenubarDetailAction = source.device
+    let action: MenubarDetailAction = source.device || source.shared
       ? { kind: 'open-app' }
       : { kind: 'new-task', providerId: source.providerId };
     if (!limit) {
@@ -1023,7 +1026,7 @@ class Builder {
           }))
         : [],
       sayPrimary,
-      saySecondary,
+      saySecondary: source.shared?.note ?? saySecondary,
       facts,
       actionLabel,
       action,
@@ -1033,6 +1036,7 @@ class Builder {
   private accountFacts(source: MenubarSubscriptionInput): MenubarFact[] {
     const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
     const facts: MenubarFact[] = [];
+    if (source.shared) facts.push({ label: source.shared.label, value: updated, sub: '' });
     if (source.device) facts.push({ label: this.t('fact.device'), value: source.device.name, sub: this.t('fact.deviceSub') });
     if (source.account) facts.push({ label: this.t('fact.account'), value: this.email(source), sub: updated });
     else if (source.device) facts[0] = { ...facts[0]!, sub: updated || this.t('fact.deviceSub') };

@@ -18,7 +18,7 @@ import type {
   MenubarView,
 } from '../../shared/menubarQuota.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   focusMainWindow,
   openMainWindowBillingTopUp,
@@ -33,9 +33,11 @@ import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import { buildMenubarActivities } from '../menubar/activity.js';
-import { isLowOnEverything, type MenubarBuildInput } from '../menubar/snapshot.js';
+import { buildMenubarView, isLowOnEverything, type MenubarBuildInput, type MenubarSubscriptionInput } from '../menubar/snapshot.js';
 import { createMenubarTranslate } from '../menubar/strings.js';
 import { getQuotaOverviewService, type QuotaOverviewBuild, type QuotaOverviewService } from './service.js';
+
+import { SharedQuotaReader } from '../menubar/sharedSubscriptions.js';
 
 const log = createLogger('quota-panel');
 
@@ -69,6 +71,11 @@ export function refreshQuotaPanelsControlState(): void {
 export class QuotaPanelController {
   private readonly overview: QuotaOverviewService;
   private started = false;
+  private panelOpen = false;
+  private sharedSources: MenubarSubscriptionInput[] = [];
+  private sharedScope: string | null = null;
+  private sharedReader: SharedQuotaReader | null = null;
+  private sharedLoading: Promise<void> | null = null;
   private lastView: MenubarView | null = null;
   /** Null until the first build, so launching while low does not notify. */
   private wasLow: boolean | null = null;
@@ -119,6 +126,8 @@ export class QuotaPanelController {
         // Listener already gone.
       }
     }
+    this.panelOpen = false;
+    this.sharedReader?.setOpen(false);
     this.overview.setInteractive(false);
     this.lastView = null;
     this.lowNotification?.close();
@@ -139,10 +148,15 @@ export class QuotaPanelController {
   handle(command: QuotaPanelCommand): void {
     switch (command.type) {
       case 'panel':
-        if (this.started) this.overview.setInteractive(command.open);
+        if (this.started) {
+          this.panelOpen = command.open;
+          this.overview.setInteractive(command.open);
+          void this.setSharedOpen();
+        }
         return;
       case 'refresh':
         this.overview.refresh(true);
+        this.sharedReader?.refresh();
         return;
       case 'open-app':
         showMainWindow();
@@ -176,13 +190,58 @@ export class QuotaPanelController {
 
   private publish(build: QuotaOverviewBuild): void {
     const gate = build.view.gate ?? undefined;
-    this.show({ ...build.view, ...this.taskOverview(gate), ...controlState(gate) });
+    // Received quotas belong only to this visible panel, never the overview/widget cache.
+    const owner = getActiveAppSession();
+    const sources = this.panelOpen && !gate && !isAppSessionBoundaryPending()
+      && this.sharedScope === `${owner.dataOwnerId}:${owner.generation}` ? this.sharedSources.map(source => ({
+      ...source, plan: build.input.t('shared.label'),
+      shared: { label: `${source.brand} · ${build.input.t('shared.label')}`, note: build.input.t('shared.note') },
+    })) : [];
+    const view = sources.length ? buildMenubarView({ ...build.input, nowMs: Date.now(), sources: [...build.input.sources, ...sources] }) : build.view;
+    this.show({ ...view, ...this.taskOverview(gate), ...controlState(gate) });
     if (gate) {
       // The first real build after signing in counts as a first build again.
       this.wasLow = null;
       return;
     }
     this.updateLowAlert(isLowOnEverything(build.input), build.input);
+  }
+
+  private async setSharedOpen(): Promise<void> {
+    if (!this.panelOpen) { this.sharedReader?.setOpen(false); return; }
+    if (!this.sharedReader) {
+      // Keep the sharing runtime out of panel startup; loading it does not start an Agent.
+      this.sharedLoading ??= Promise.all([
+        import('../device-link/providerShareGuest.js'),
+        import('../device-link/providerShareRuntime.js'),
+        import('../authManager.js'),
+      ]).then(([guest, runtime, auth]) => {
+        this.sharedReader = new SharedQuotaReader({
+          scope: () => {
+            const scope = getActiveAppSession();
+            return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
+          },
+          shares: () => guest.getReceivedShares(),
+          read: shareId => runtime.readReceivedProviderShareQuota(shareId),
+          subscribe: changed => {
+            const offShares = guest.onProviderShareReceivedChanged(changed);
+            const offAuth = auth.onAuthStateChange(changed);
+            return () => { offShares(); offAuth(); };
+          },
+          publish: sources => {
+            this.sharedSources = sources;
+            const owner = getActiveAppSession();
+            this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
+            const build = this.overview.latest();
+            if (this.started && build) this.publish(build);
+          },
+        });
+      }).catch(error => {
+        log.warn('shared quota reader unavailable', { error: errorMessage(error) });
+      }).finally(() => { this.sharedLoading = null; });
+      await this.sharedLoading;
+    }
+    this.sharedReader?.setOpen(this.started && this.panelOpen);
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */

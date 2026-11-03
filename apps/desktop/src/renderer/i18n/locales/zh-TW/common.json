@@ -1408,6 +1408,10 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "這是帳號共用額度，不是分配給你的專屬額度。"
+    },
     "balance": {
       "name": "Cindy 餘額",
       "quotaName": "Cindy 本期配額",
