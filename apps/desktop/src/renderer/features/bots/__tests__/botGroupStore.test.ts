@@ -1,17 +1,31 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { AppWindowSync } from '@/components/layout/AppWindowSync';
 
 import type { BotGroupChangedPayload, BotGroupSummary } from '../../../../shared/botGroupChat';
-import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups } from '../botGroupStore';
+import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups, useBotGroupList } from '../botGroupStore';
 import { getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 
-const dataOwner = vi.hoisted(() => ({ generation: 1 }));
+const dataOwner = vi.hoisted(() => ({ generation: 1, dataOwnerId: 'owner' }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: dataOwner.generation }),
+  getDataOwnerGeneration: () => ({ dataOwnerId: dataOwner.dataOwnerId, generation: dataOwner.generation }),
   isDataOwnerGenerationCurrent: (owner: { generation: number }) => owner.generation === dataOwner.generation,
-  isDataOwnerPushCurrent: () => true,
+  isDataOwnerPushCurrent: (stamp?: { ownerGeneration: number }) => !stamp || stamp.ownerGeneration === dataOwner.generation,
 }));
+// Keep the production window -> unread sync -> group store mount chain. The
+// badge and unrelated roster sources are isolated; no manual refresh starts it.
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
+vi.mock('@/components/layout/AppBadgeAttentionSync', () => ({ AppBadgeAttentionSync: () => null }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBotSync: () => {} }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => bots, refreshBotProfiles: () => {} }));
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
+  subscribeAll: () => () => {}, getRunningSnapshot: () => running,
+} }));
+const bots: never[] = [];
+const running = new Map();
 
 const summary = (name: string): BotGroupSummary => ({
   id: 'g1', name, replyMode: 'all', speakingMode: 'auto', members: [], organizerBotId: null, projectDir: null,
@@ -21,25 +35,85 @@ const summary = (name: string): BotGroupSummary => ({
 let push: (payload: BotGroupChangedPayload, stamp?: unknown) => void = () => {};
 const listBotGroups = vi.fn();
 const chatDisplayCache = vi.fn();
+const unsubscribePush = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers();
   dataOwner.generation = 1;
+  dataOwner.dataOwnerId = 'owner';
+  window.history.replaceState(null, '', '/');
+  unsubscribePush.mockClear();
   resetBotGroupStoreForTests();
   listBotGroups.mockReset().mockResolvedValue({ ok: true, groups: [summary('周末出游')] });
   chatDisplayCache.mockReset().mockResolvedValue(null);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { maker: { listBotGroups, chatDisplayCache, onBotGroupChanged: (cb: typeof push) => { push = cb; return () => {}; } } },
+    value: { maker: { listBotGroups, chatDisplayCache, onBotGroupChanged: (cb: typeof push) => { push = cb; return unsubscribePush; } } },
   });
 });
 
 afterEach(() => {
+  cleanup();
   resetBotGroupStoreForTests();
   vi.useRealTimers();
 });
 
 describe('group list mirror', () => {
+  // Regression: task menu -> open in new window previously never started the
+  // mirror. Existing store-only tests acquired it manually and missed the mount
+  // guard. Unit tier, real hooks/store + in-memory IPC; no Electron/user data.
+  it('loads and updates groups in a secondary window, then releases its subscription', async () => {
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    function GroupList() {
+      return useBotGroupList().groups.filter(group => !group.archived).map(group => group.name).join(',');
+    }
+    const view = render(createElement('div', null, createElement(AppWindowSync), createElement(GroupList)));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText('周末出游')).toBeTruthy();
+    expect(listBotGroups).toHaveBeenCalledTimes(1);
+    for (const [change, groups, text] of [
+      ['created', [summary('周末出游'), { ...summary('新群'), id: 'g2' }], '周末出游,新群'],
+      ['updated', [summary('读书会')], '读书会'],
+      ['updated', [{ ...summary('读书会'), archived: true }], ''],
+    ] as const) {
+      listBotGroups.mockResolvedValue({ ok: true, groups });
+      act(() => push({ groupId: 'g1', change }));
+      await act(() => vi.advanceTimersByTimeAsync(300));
+      expect(view.container.textContent).toBe(text);
+    }
+    act(() => push({ groupId: 'g1', change: 'updated' }));
+    view.unmount();
+    expect(unsubscribePush).toHaveBeenCalledTimes(1);
+    const reads = listBotGroups.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(listBotGroups).toHaveBeenCalledTimes(reads);
+  });
+
+  it('clears the secondary window on owner change and ignores old list responses and pushes', async () => {
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    const view = render(createElement(AppWindowSync));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(getBotGroupListSnapshot().groups[0]?.name).toBe('周末出游');
+    let finishOld!: (result: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+    act(() => push({ groupId: 'g1', change: 'updated' }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    const oldPush = push;
+    let finishNew!: (result: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+    dataOwner.generation = 2;
+    dataOwner.dataOwnerId = 'other-owner';
+    view.rerender(createElement(AppWindowSync));
+    expect(getBotGroupListSnapshot().groups).toEqual([]);
+    await act(async () => finishOld({ ok: true, groups: [summary('旧账号')] }));
+    expect(getBotGroupListSnapshot().groups).toEqual([]);
+    act(() => oldPush({ groupId: 'g1', change: 'updated' }, { ownerGeneration: 1 }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(listBotGroups).toHaveBeenCalledTimes(3);
+    await act(async () => finishNew({ ok: true, groups: [summary('新账号')] }));
+    expect(getBotGroupListSnapshot().groups[0]?.name).toBe('新账号');
+  });
+
   // #8084: a deletion observed while a different room is open must also release thread media.
   // Unit: real sync push entry, without mounting the deleted group's chat view.
   it.each(['deleted', 'hidden'] as const)('discards closed thread drafts on an authoritative %s push', async boundary => {

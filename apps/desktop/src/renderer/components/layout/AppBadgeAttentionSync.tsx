@@ -17,9 +17,9 @@ import { useOrcaLeadWorkerAttention } from '@/features/cc-agent/lib/orcaLeadWork
 import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
 import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
-import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
+import { startBotGroupOutbox } from '@/features/bots/botGroupOutbox';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
-import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -30,8 +30,6 @@ const log = createLogger('AppBadgeAttentionSync');
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
   useAuth();
-  useBotUnreadSync();
-  useRemoteBotSync();
   const cloud = useCompanionCloud();
   // Count each companion once, where it runs (same rows as the teammate list).
   const allBots = useBotProfiles();
@@ -46,6 +44,7 @@ export function AppBadgeAttentionSync() {
     + groups.filter(group => !group.archived && isBotGroupUnread(group)).length;
   const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
   const owner = getDataOwnerGeneration();
+  useEffect(() => startBotGroupOutbox(), [owner]);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
   const history = useCCSessions({ includeArchived: 'all' });

@@ -53,7 +53,7 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
-/** One subscription owner in the main window; a failed host cannot erase another host. */
+/** One subscription owner per app renderer; a failed host cannot erase another host. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
   const devices = useDeviceLinkDeviceList();

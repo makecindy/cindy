@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AppWindowSync } from '@/components/layout/AppWindowSync';
+vi.mock('@/components/layout/AppBadgeAttentionSync', () => ({ AppBadgeAttentionSync: () => null }));
+vi.mock('../useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
 const h = vi.hoisted(() => ({
   owner: 'owner-a',
   devices: [] as any[],
@@ -70,9 +73,23 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  window.history.replaceState(null, '', '/');
   vi.unstubAllGlobals();
 });
 describe('remote teammate roster', () => {
+  // Unit: the per-window production mount must populate the roster too; direct
+  // hook tests alone missed the main-window-only parent guard.
+  it('loads remote teammates when a secondary app window mounts', async () => {
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    function Roster() { return <output>{useRemoteBots().map(bot => bot.name).join(',')}</output>; }
+    const view = render(<><AppWindowSync /><Roster /></>);
+    await waitFor(() => expect(screen.getByText('Writer,Writer')).toBeTruthy());
+    view.unmount();
+    const reads = h.invoke.mock.calls.length;
+    act(() => h.status({ status: 'online' }));
+    await act(async () => {});
+    expect(h.invoke).toHaveBeenCalledTimes(reads);
+  });
   it('keeps identical bot ids on two hosts distinct and retains only the offline host as offline', async () => {
     const { result, rerender } = renderHook(useRoster);
     await waitFor(() => expect(result.current).toHaveLength(2));
