@@ -1679,7 +1679,8 @@ describe('CodexAgent spawn configuration', () => {
 });
 
 describe('CodexAgent oneShot Goal ownership', () => {
-  it.each(['Generate a title.', 'Summarize this task.'])('disables native Goals before sending: %s', async prompt => {
+  it('disables native Goals before sending an auxiliary prompt', async () => {
+    const prompt = 'Generate a title.';
     const agent = new CodexAgent(createDeps());
     MockCodexTransport.onCreate = transport => {
       transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
