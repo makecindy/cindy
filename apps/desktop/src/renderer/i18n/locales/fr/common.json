@@ -10342,6 +10342,7 @@
       "continueEditing": "Continuer l'édition"
     },
     "profileSaveFailed": "Impossible d'enregistrer les paramètres du coéquipier. Aucune modification n'a été appliquée.",
+    "profileSaveOffline": "Impossible de joindre l’ordinateur du coéquipier. Rétablissez la connexion, puis enregistrez à nouveau.",
     "modelLabel": "Modèle",
     "modelUnavailable": "{{model}} (actuellement indisponible)",
     "codexAutomaticCompact": "Les coéquipiers Codex compactent leur contexte d'eux-mêmes, et /new conserve la tâche en cours. Ne démarrez une nouvelle tâche que si vous avez réellement besoin de repartir de zéro.",

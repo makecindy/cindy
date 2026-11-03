@@ -347,6 +347,9 @@ Cindy 应用，也不取消伙伴已委派的独立任务。操作中禁用重�
 
 离线、对方未响应、动作不支持与冲突都不引起布局跳动：离线提示浮在页面底部边缘（不占位，在线时页面与本机设置在同一位置），页面保留已读内容；写入失败沿用自动保存的失败与重试，
 记忆 / 例行任务的 revision 冲突沿用各自页面的冲突提示（失败以数据形式返回，保留 `PRECONDITION_FAILED` 与冲突标记）。
+主模型与备用模型均可保存远程供应商位置；主模型额外保留的顶层位置字段与链首项一致，
+切回本机或恢复本机默认时清空，不影响备用项。保存失败按已知错误区分参数、模型不可用、
+伙伴电脑离线与配置冲突；超时只说明保存结果未确认，未知异常保留通用提示，不显示原始错误。
 实现见 `RemoteTeammateSettings.tsx`、`remoteBotSettingsTarget.ts`、`localBotSettingsTarget.ts`、`BotSettingsDrawer.tsx`，
 主机侧见 `main/localDb/ipc/botRemoteSettingsHost.ts` 与 `botRemoteSettingsOps.ts`；手机见 Mobile `CompanionProfileSheet.tsx`。
 

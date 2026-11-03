@@ -10263,6 +10263,7 @@
       "continueEditing": "Weiter bearbeiten"
     },
     "profileSaveFailed": "Die Einstellungen des Teammitglieds konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveOffline": "Der Computer des Teammitglieds ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",
     "codexAutomaticCompact": "Codex-Teammitglieder komprimieren ihren Kontext selbstständig, und /new behält die aktuelle Aufgabe bei. Starte nur dann eine neue Aufgabe, wenn du wirklich ganz von vorn beginnen musst.",

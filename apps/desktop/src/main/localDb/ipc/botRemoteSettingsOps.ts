@@ -138,7 +138,15 @@ export function projectBotSettingsProfile(raw: unknown): Record<string, unknown>
 export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record<string, unknown> {
   const patch = record(value, 'patch');
   keysWithin(patch, BOT_SETTINGS_PATCH_FIELDS, 'patch');
-  if (patch.capabilities !== undefined) keysWithin(record(patch.capabilities, 'capabilities'), BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+  if (patch.capabilities !== undefined) {
+    const capabilities = record(patch.capabilities, 'capabilities');
+    keysWithin(capabilities, BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+    const location = capabilities.agentDeviceId;
+    if (location !== undefined && location !== null
+      && (typeof location !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(location))) {
+      fail('Invalid model execution location');
+    }
+  }
   if (patch.capabilityBaseline !== undefined) record(patch.capabilityBaseline, 'capabilityBaseline');
   if (!allowEmpty && !Object.keys(patch).length) fail('patch is empty');
   return patch;

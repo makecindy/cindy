@@ -10218,6 +10218,7 @@
       "continueEditing": "編集を続ける"
     },
     "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
+    "profileSaveOffline": "仲間がいるパソコンに接続できません。再接続してから、もう一度保存してください。",
     "modelLabel": "モデル",
     "modelUnavailable": "{{model}}（現在利用できません）",
     "codexAutomaticCompact": "Codex の相棒は自分で文脈を圧縮し、/new でも今のタスクは残ります。本当に仕切り直したいときだけ新しいタスクを始めてください。",

@@ -10218,6 +10218,7 @@
       "continueEditing": "续修"
     },
     "profileSaveFailed": "同僚之设未能存，变更未生效。",
+    "profileSaveOffline": "同僚所在之电脑未能连通，请复连后再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
     "codexAutomaticCompact": "Codex 同僚自能压缩上下文，/new 亦存当前差事。唯确须从头始之，方新开差事。",
