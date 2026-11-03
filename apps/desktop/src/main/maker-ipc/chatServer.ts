@@ -2040,7 +2040,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             return;
           }
           await new Promise<void>(resolve => {
-            const timer = setTimeout(() => { capabilityNoticeRetries.delete(timer); resolve(); }, 1000 * (attempt + 1));
+            const delay = Math.max(1000 * (attempt + 1),
+              error instanceof ChatResponseError ? (error.retryAt ?? 0) - Date.now() : 0);
+            const timer = setTimeout(() => { capabilityNoticeRetries.delete(timer); resolve(); }, delay);
             capabilityNoticeRetries.set(timer, resolve);
           });
         }

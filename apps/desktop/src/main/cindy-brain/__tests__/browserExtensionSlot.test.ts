@@ -399,7 +399,7 @@ describe('browserExtensionSlot · 管子上行', () => {
     let now = 1_000_000;
     let installs = 0;
     let state: 'ready' | 'unavailable' = 'unavailable';
-    const { slot, bridges, settle, ghosts } = await makeSlot({
+    const { slot, bridges, ghosts } = await makeSlot({
       now: () => now,
       createNativeBinding: () => ({
         token: 'f'.repeat(64),
@@ -415,8 +415,9 @@ describe('browserExtensionSlot · 管子上行', () => {
       }),
     });
     slot.reconcile(ghosts);
-    await settle();
-    expect(installs).toBe(1);
+    // Windows CI can finish policy-file IO after 25ms; wait for the observable
+    // installation boundary instead of guessing when bridge startup has run.
+    await vi.waitFor(() => expect(installs).toBe(1));
     // A manually paired bridge remains usable while optional native registration is unavailable.
     expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
     await slot.handleRequest('_root__my-browser', { kind: 'status' });

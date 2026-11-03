@@ -1092,6 +1092,51 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
+  // #8443 review: real POST/429 parsing must keep each retry outside Retry-After,
+  // preserving the payload/clientId and the three-attempt budget (unit fake clock).
+  it.each([false, true])('honors Retry-After for capability notices (exhausted: %s)', async exhausted => {
+    let invalid = false;
+    const posted: Array<{ at: number; body: unknown }> = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route.endsWith('/members')) return invalid ? { status: 503, body: { code: 'UNAVAILABLE' } } : { body: [
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', accessRevision: 1 },
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined' },
+      ] };
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        posted.push({ at: Date.now(), body });
+        return exhausted || posted.length === 1
+          ? { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } }
+          : { body: { id: 'notice' } };
+      }
+      return response(route);
+    });
+    await start();
+    invalid = true;
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+    invalid = false;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posted).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(posted).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(posted).toHaveLength(2);
+    expect(posted[1].at - posted[0].at).toBeGreaterThanOrEqual(120000);
+    expect(posted[1].body).toEqual(posted[0].body);
+    if (exhausted) {
+      await vi.advanceTimersByTimeAsync(119999);
+      expect(posted).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(posted).toHaveLength(3);
+      expect(posted[2].body).toEqual(posted[0].body);
+      invalid = true;
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+      await vi.advanceTimersByTimeAsync(240000);
+      expect(posted).toHaveLength(3);
+    }
+    expect(deliveries()).toHaveLength(0);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+  });
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
   const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
