@@ -6,7 +6,7 @@
 //
 // 退出码:0 通过(可能列出新警告);1 有 ERROR;2 无法判定(日志缺失、Metro 不属于本
 // worktree、还没有打包记录)。规则见 docs/simulator-debugging.md 的 Logs。
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { analyzeMetroLog, logcheckExitCode } from "./lib/sim-logcheck.mjs";
@@ -44,16 +44,21 @@ const logPath =
   owner && resolve(owner.worktreeRoot ?? "") === worktreeRoot
     ? owner.metroLogPath
     : null;
-if (!logPath || !existsSync(logPath)) {
-  inconclusive(
-    "这次启动的 Metro 没有可用的日志(没能建出日志,或日志已丢失)。请用 pnpm mobile:sim:start 重新启动 Metro 后再检查。",
-  );
+const NO_LOG =
+  "这次启动的 Metro 没有可用的日志(没能建出日志,或日志已丢失)。请用 pnpm mobile:sim:start 重新启动 Metro 后再检查。";
+if (!logPath) inconclusive(NO_LOG);
+// 不先 existsSync:检查之后 Metro 可能退出并删掉日志,读失败本身就是无法判定。
+let logText;
+try {
+  logText = readFileSync(logPath, "utf8");
+} catch {
+  inconclusive(NO_LOG);
 }
 
 const known = JSON.parse(
   readFileSync(resolve(scriptsDir, "sim-logcheck-known-warnings.json"), "utf8"),
 );
-const result = analyzeMetroLog(readFileSync(logPath, "utf8"), known);
+const result = analyzeMetroLog(logText, known);
 const print = ({ line, message, count }) =>
   console.log(
     `  L${line}${count > 1 ? ` ×${count}` : ""}  ${message.slice(0, 300)}`,
