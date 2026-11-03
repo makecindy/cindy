@@ -185,7 +185,6 @@ export function createMessageSink(params: {
       if (firstCreatedAt === 0) firstCreatedAt = createdAt;
       params.beforeWrite?.();
       const row = await toRow({ ...message, createdAt }, params.sessionId, params.agentKind);
-
       batch.push(row);
       batchBytes += row.content.length + (row.agentMeta?.length ?? 0);
       if (batch.length >= BATCH_ROWS || batchBytes >= BATCH_BYTES) await flush();

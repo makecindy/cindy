@@ -408,6 +408,8 @@ export interface BotGroupPlanStepView {
 
 export interface BotGroupPlanView {
   id: string;
+  /** Direct Chat Server snapshot revision; absent on legacy computer projections. */
+  revision?: number;
   status: BotGroupPlanStatus;
   organizerBotId: string;
   organizerName: string;
