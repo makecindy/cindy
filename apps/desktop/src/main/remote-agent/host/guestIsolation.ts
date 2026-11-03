@@ -169,7 +169,7 @@ export function neutralizeExternalImports(
   }).join('');
 }
 
-function guestInstructionAsset(file: RemoteAgentWireFile): RemoteAgentWireFile[] {
+export function guestInstructionAsset(file: RemoteAgentWireFile): RemoteAgentWireFile[] {
   if (!/\.md$/i.test(file.path)) return [file];
   const text = decodeText(file.data);
   if (declaresFrontmatterHooks(text)) return [];

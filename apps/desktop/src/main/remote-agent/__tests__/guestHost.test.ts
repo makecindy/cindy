@@ -296,6 +296,52 @@ describe('imported instruction files', () => {
 describe('guest agents', () => {
   // 受邀者只看到 Cindy 内置 Skill 的指纹(不透露这台装了哪些插件)；报「与你那份一样」的复制这台自己的，
   // 指纹对不上的不带。
+  // 不变量：同一份内容，复用提供者自己那份与受邀者传输过来，落到任务里的结果逐字节相同——复用不能成为绕过
+  // Markdown 检查与落地改写的入口(`!` 预执行、越界 `@` 导入、带 hooks 的文件)。
+  it.each([
+    ['a Skill with shell syntax, outside imports and a hooked reference', {
+      'SKILL.md': '---\nname: pr\n---\nRun !`whoami` and read @~/.ssh/config',
+      'references/hooked.md': '---\nname: h\nhooks: {}\n---\n',
+      'references/ok.md': 'Hello',
+      'run.mjs': 'console.log(1)',
+    }],
+    ['a Skill whose entry declares hooks', { 'SKILL.md': '---\nname: pr\nhooks: {}\n---\nBody', 'run.mjs': 'console.log(1)' }],
+  ])('lands %s the same whether the guest reuses it or sends it', async (_label, content) => {
+    const own = path.join(root, 'own', 'pr');
+    for (const [file, data] of Object.entries(content)) {
+      fs.mkdirSync(path.dirname(path.join(own, file)), { recursive: true });
+      fs.writeFileSync(path.join(own, file), data);
+    }
+    const digest = await managedSkillDigest(own);
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [{ command: 'cindy:pr', dir: own }] });
+    const dir = '.claude/skills/cindy-pr';
+    const open = async (runId: string, task: string, personal: Record<string, unknown>) => {
+      await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(task, { personal }) } });
+      await waitForStarted(host, GUEST, runId);
+      const skill = path.join(shadowDir(GUEST, task), '.cindy', 'managed-skills', 'cindy', 'skills', 'pr');
+      return fs.existsSync(skill)
+        ? Object.fromEntries((fs.readdirSync(skill, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(skill, f)).isFile())
+            .map((f) => [f, fs.readFileSync(path.join(skill, f), 'utf8')]))
+        : null;
+    };
+    const reused = await open(RUN_1, 'task-1', { files: [], managedSkills: [{ command: 'cindy:pr', dir, digest, reuse: true }] });
+    const sent = await open(RUN_2, 'task-2', {
+      files: [],
+      managedSkills: [{ command: 'cindy:pr', dir, digest }],
+      managedFiles: Object.entries(content).map(([file, data]) => ({ path: `${dir}/${file}`, data: b64(data) })),
+    });
+    expect(reused).toEqual(sent);
+    // 检查确实生效了：没有留下带 hooks 的文件，也没有原样的 `!` 预执行与越界 `@`。
+    expect(JSON.stringify(reused)).not.toContain('hooks: {}');
+    if (reused) {
+      expect(reused['SKILL.md']).not.toMatch(/!`whoami`/);
+      // 越界的 `@` 导入改成代码样式，不再是导入。
+      expect(reused['SKILL.md']).toContain('`@~/.ssh/config`');
+    }
+    host.dispose();
+  });
+
   it('reuses only matching built-in managed skills for a guest', async () => {
     const write = (dir: string, text: string) => {
       fs.mkdirSync(dir, { recursive: true });

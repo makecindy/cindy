@@ -103,6 +103,7 @@ import {
 import {
   GUEST_SUPPORTED_AGENTS,
   confineGuestDirs,
+  guestInstructionAsset,
   neutralizeExternalImports,
   sanitizeGuestOpenPayload,
   sanitizeGuestVendorOptions,
@@ -1404,9 +1405,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           continue;
         }
         for (const file of files) {
-          const target = path.join(shadowDir, ...skill.dir.split('/'), ...file.relative.split('/'));
+          const relative = `${skill.dir}/${file.relative}`;
+          const target = path.join(shadowDir, ...relative.split('/'));
           if (!inside(target, shadowDir)) continue;
-          await writeNew(target, await fsp.readFile(file.local));
+          // 与传输过来的同一份内容落地结果相同：受邀者任务里同样过 Markdown 检查与落地改写(不变量：复用 ≡ 传输)。
+          const own = { path: relative, data: (await fsp.readFile(file.local)).toString('base64') };
+          for (const asset of trust === 'guest' ? guestInstructionAsset(own) : [own]) {
+            await writeNew(target, markdownBytes(projectBytes(Buffer.from(asset.data, 'base64')), target));
+          }
         }
       }
     }
