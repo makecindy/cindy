@@ -8,6 +8,8 @@ export default {
     'src/renderer/contexts/PluginReviewUpdatesContext': `const value = { updates: [], refresh: async () => {}, markRead: async () => {} }; export const usePluginReviewUpdates = () => value;`,
   },
   cases: {
+    'file-permission': { about: 'Independent file-reference consent after existing observe approval' },
+    'file-narrow': { about: 'File-reference consent at minimum width', viewport: { width: 320, height: 900 } },
     default: { about: 'Development instance and browser selection' },
     narrow: { about: 'Development details at phone width', viewport: { width: 360, height: 900 } },
     authoring: { about: 'Choose the exact local or market instance before submission', viewport: { width: 360, height: 900 } },
@@ -15,6 +17,14 @@ export default {
     permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('file-')) {
+      const button = page.getByRole('button', { name: await ui.t('settings.ghosts.perm.agentObserveFilesRequest'), exact: true });
+      await button.scrollIntoViewIfNeeded();
+      await ui.capture('file-consent');
+      await button.click();
+      assert.equal(await page.locator('html').getAttribute('data-file-approval'), 'observeFiles');
+      return;
+    }
     if (ui.case === 'permissions') return;
     if (ui.case === 'authoring') {
       const local = page.getByRole('region', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true });
