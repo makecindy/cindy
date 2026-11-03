@@ -45,7 +45,7 @@ import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
-  isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -3287,7 +3287,7 @@ export class AgentInputCoordinator {
         : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
     const continuationOnly = providerRestart || Boolean(
-      opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
+      opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
     // Group inputs are hidden in the transcript and omitted by engine handoff.
     // Carry the actual interrupted request as context, even on CONTINUE-only
@@ -6750,7 +6750,7 @@ export class AgentInputCoordinator {
   isContinuationOnlyAutoResume(sessionId: string): boolean {
     const state = this.states.get(sessionId);
     if (!state) return false;
-    if (isAcceptedTurnContinuationOnlyReason(state.autoResumePending?.reason)) return true;
+    if (isContinuationOnlyAutoResumeReason(state.autoResumePending?.reason)) return true;
     const activeItem =
       state.activeTurn?.item && !isActiveTurnDispatched(state.activeTurn)
         ? state.activeTurn.item
@@ -6759,7 +6759,7 @@ export class AgentInputCoordinator {
     return items.some(
       (item) =>
         item.autoResume === true &&
-        isAcceptedTurnContinuationOnlyReason(item.autoResumeInfo?.reason),
+        isContinuationOnlyAutoResumeReason(item.autoResumeInfo?.reason),
     );
   }
 
