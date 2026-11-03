@@ -19,6 +19,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBl
 import { chatSendJournal } from '../chatSendJournal.js';
 import { accessBotGroupOutbox } from '../botGroupOutboxStorage.js';
 import { accessChatDisplayCache } from '../chatDisplayCache.js';
+import { extractIpcError } from '../../../shared/ipcError.js';
 
 beforeEach(() => {
   state.root = mkdtempSync(path.join(tmpdir(), 'cindy-chat-persistence-'));
@@ -105,6 +106,17 @@ it.each(['render-process-gone', 'destroyed', 'did-navigate'])('restores only orp
   await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, sender(secondary));
   state.owner = { ...state.owner, generation: 2 };
   expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
+  // review4457346624: both mutations retain a decodable error after Electron
+  // strips Error.code. Contention must not look like an unknown storage failure.
+  for (const request of [
+    { action: 'put', owner: state.owner, entry },
+    { action: 'remove', owner: state.owner, groupId: 'room', clientId: 'owned' },
+  ]) {
+    const error: unknown = await accessBotGroupOutbox(request, sender(main)).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    const transported = new Error(`Error invoking remote method 'botGroup:outbox': Error: ${(error as Error).message}`);
+    expect.soft(extractIpcError(transported)).toEqual({ code: 'PRECONDITION_FAILED', message: 'OUTBOX_ENTRY_OWNED' });
+  }
   await accessBotGroupOutbox({ action: 'remove', owner: state.owner, groupId: 'room', clientId: 'owned' }, sender(secondary));
   expect(await accessBotGroupOutbox({ action: 'list', owner: state.owner }, sender(main))).toEqual([]);
   await accessBotGroupOutbox({ action: 'put', owner: state.owner, entry }, sender(secondary));

@@ -8,6 +8,7 @@ import type { BotGroupChangedPayload, BotGroupSummary } from '../../../../shared
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups, useBotGroupList } from '../botGroupStore';
 import { getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
+import { botGroupReadKey, getBotLastReadAt, isBotGroupUnread, markBotRead, resetBotReadStateForTests, setBotReadStateOwner } from '../botReadState';
 
 const dataOwner = vi.hoisted(() => ({ generation: 1, dataOwnerId: 'owner' }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -159,6 +160,44 @@ describe('group list mirror', () => {
     render(createElement(AppWindowSync));
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(getBotGroupListSnapshot().groups).toEqual([created]);
+  });
+
+  // Unit / review4457346603: a stale secondary list or visibility push must not
+  // delete a newer group's shared read mark and silently read its next reply.
+  it.each(['list', 'visibility'] as const)('preserves group read marks after a stale secondary %s', async boundary => {
+    window.localStorage.removeItem('cindy.bots.readState.v1.owner');
+    resetBotReadStateForTests();
+    setBotReadStateOwner('owner');
+    markBotRead(botGroupReadKey('g1'), 50);
+    const created = { ...summary('New group'), id: 'g2', lastReplyAt: 200 };
+    window.history.replaceState(null, '', '/?secondaryWindow=1');
+    let finish!: (value: unknown) => void;
+    listBotGroups.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const secondary = render(createElement(AppWindowSync));
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      if (boundary === 'list') markBotRead(botGroupReadKey('g2'), 100);
+      await act(async () => finish({ ok: true, groups: [summary('Old group')] }));
+      if (boundary === 'visibility') {
+        // Main learns about the new group after this renderer's old list settled.
+        markBotRead(botGroupReadKey('g2'), 100);
+        act(() => push({ groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } }));
+      }
+      expect(getBotLastReadAt(botGroupReadKey('g2'))).toBe(100);
+      secondary.unmount();
+      resetBotGroupStoreForTests();
+      window.history.replaceState(null, '', '/');
+      listBotGroups.mockResolvedValue({ ok: true, groups: [created] });
+      render(createElement(AppWindowSync));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(isBotGroupUnread(getBotGroupListSnapshot().groups[0])).toBe(true);
+      expect(getBotLastReadAt(botGroupReadKey('g1'))).toBeNull(); // Main still prunes.
+      act(() => { markBotRead(botGroupReadKey('g2'), 200); });
+      expect(isBotGroupUnread(created)).toBe(false);
+    } finally {
+      cleanup(); resetBotReadStateForTests();
+      window.localStorage.removeItem('cindy.bots.readState.v1.owner');
+    }
   });
 
   // #8084: a deletion observed while a different room is open must also release thread media.

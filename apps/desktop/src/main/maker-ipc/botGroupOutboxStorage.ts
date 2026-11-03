@@ -8,6 +8,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { parseBlobUrl } from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BotGroupOutboxStoredEntry } from '../../shared/botGroupOutboxStorage.js';
 
 const identifier = z.string().min(1).max(200);
@@ -92,7 +93,7 @@ export function accessBotGroupOutbox(input: unknown, sender?: WebContents): Prom
     const filename = file(identity.groupId, identity.clientId);
     const key = ownershipKey(identity.groupId, identity.clientId);
     const held = entryOwners.get(key);
-    if (renderer && held?.live && held !== renderer) throw new Error('OUTBOX_ENTRY_OWNED');
+    if (renderer && held?.live && held !== renderer) throwIpcError('PRECONDITION_FAILED', 'OUTBOX_ENTRY_OWNED');
     const refId = `outbox:${hash(JSON.stringify([identity.groupId, identity.clientId]))}`;
     const db = getDbClient().drizzle;
     if (request.action === 'remove') {
