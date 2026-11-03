@@ -731,6 +731,7 @@ function GhostCardCanvas({
     setImgMenu(null);
     setAudioMenu(null);
     setLinkAsk(null);
+    setModelAsk(null);
   }, [html]);
 
   /** 图片右键菜单动作(与 ChatImageView 同一对 IPC;cindy-media 地址直用)。 */
